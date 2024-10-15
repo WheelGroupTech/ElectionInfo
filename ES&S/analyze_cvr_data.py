@@ -14,20 +14,31 @@
 """analyze_cvr_data.py""" # for pylint
 # pylint: disable=line-too-long,unused-variable,too-many-branches
 # pylint: disable=too-many-nested-blocks
-import pprint
 import re
 import shelve
 
 
 MACHINES = {}
-CONTESTS = {}
 
+CANDIDATES = ['Trump', 'Haley', 'Cruz', 'Biden', 'Allred',
+              'Blacklock','Jones','Devine','Weems','Bland','Goldstein']
 
 #-----------------------------------------------------------------------------
-# process_ballot_cvr_contests()
+# process_ballot_cvr_contests_for_machine()
 #-----------------------------------------------------------------------------
-def process_ballot_cvr_contests(ballot_cvr_data):
+def process_ballot_cvr_contests_for_machine(machine, machine_details):
     """Processes all of the ballot CVR objects looking at the contest data"""
+
+    print(f"Analyzing ballot CVRs for {machine}")
+
+    # Set things up to process the ballot CVR objects
+    ballot_cvr_data = machine_details['BallotCVRs']
+    contests = {}
+
+    # First add in the candidates we are looking for into the details
+    # with the values set to zero
+    for candidate in CANDIDATES:
+        machine_details[candidate] = 0
 
     # Process every contest in every ballot_cvr object
     for ballot_cvr in ballot_cvr_data:
@@ -45,7 +56,7 @@ def process_ballot_cvr_contests(ballot_cvr_data):
 
             try:
                 # Find the contest in the master list of contests
-                contest = CONTESTS[contest_name]
+                contest = contests[contest_name]
 
                 # We found it in the master list
                 try:
@@ -82,9 +93,18 @@ def process_ballot_cvr_contests(ballot_cvr_data):
                     contest = {}
                     contest['Undervoted'] = 0
                     contest['Overvoted'] = 1
-                CONTESTS[contest_name] = contest
+                contests[contest_name] = contest
 
-    pprint.pp(CONTESTS)
+    # Now we can look at every contest
+    for contest, contest_details in contests.items():
+
+        # We'll look at every value (i.e. candidate) for the contest
+        for key, value in contest_details.items():
+
+            # We'll see if the value is a match with the candidates we're looking for
+            for candidate in CANDIDATES:
+                if re.search(candidate, key):
+                    machine_details[candidate] = value
 
 
 #-----------------------------------------------------------------------------
@@ -109,11 +129,13 @@ def analyze_ballot_cvr_machines(ballot_cvr_data):
             # Find the machine serial number in the list of machines
             machine = MACHINES[serial]
 
-            # We found it, check to see if the reporting group is different
-            if machine['ReportingGroup'] != reporting_group:
-                print(f"Machine {serial} report group error {machine['ReportingGroup']} != {reporting_group}")
-            if machine['PollPlace'] != poll_place:
-                print(f"Machine {serial} poll place error {machine['PollPlace']} != {poll_place}")
+            # We found it, check to see if the reporting group is different, however we will
+            # ignore this for now since central count scanners change these values based on the scan.
+
+            #if machine['ReportingGroup'] != reporting_group:
+            #    print(f"Machine {serial} report group error {machine['ReportingGroup']} != {reporting_group}")
+            #if machine['PollPlace'] != poll_place:
+            #    print(f"Machine {serial} poll place error {machine['PollPlace']} != {poll_place}")
 
             # Update the count of ballots for the machine
             current_ballot_count = machine['BallotCount']
@@ -140,10 +162,26 @@ def analyze_ballot_cvr_machines(ballot_cvr_data):
         # Append the ballot CVR to the list for this machine
         machine['BallotCVRs'].append(ballot_cvr)
 
+    # Process the ballot CVR objects for each machine
+    for machine, details in MACHINES.items():
+        process_ballot_cvr_contests_for_machine(machine, details)
+
+    # Print out the header for the output
+    headings = "BallotCount,MachineSerial,PollPlace,ReportingGroup"
+    for candidate in CANDIDATES:
+        headings = headings + ',' + candidate
+    print(headings)
+
     # Now we can process every machine in the list to print out information
     # for it which includes the count of ballots it scanned
     for machine, details in MACHINES.items():
-        print(f"{machine},{details['PollPlace']},{details['ReportingGroup']},{details['BallotCount']}")
+
+        # Generate the candidate totals
+        candidate_totals = ""
+        for candidate in CANDIDATES:
+            candidate_totals = candidate_totals + "," + str(details[candidate])
+
+        print(f"{details['BallotCount']},{machine},{details['PollPlace']},{details['ReportingGroup']}{candidate_totals}")
 
     print(f"DS200 Scanned Ballots {ds200_ballot_count}")
     print(f"ExpressTouch Scanned Ballots {express_ballot_count}")

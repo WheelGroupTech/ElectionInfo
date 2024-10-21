@@ -231,6 +231,8 @@ def obtain_ballot_from_cvr(pathname):
 def analyze_files(dirname):
     """Analyze files in the specified directory"""
 
+    num_ballot_cvrs = 0
+
     for dirpath, dirnames, filenames in os.walk(dirname):
         for filename in filenames:
             if re.search(r'c.pdf', filename, flags=re.IGNORECASE):

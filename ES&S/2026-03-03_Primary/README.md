@@ -1,4 +1,4 @@
-**Travis County 2026 Primary Tool Documentation**
+**Travis County 2026 Primary Data Analysis Scripts**
 ===========================
 
 This repository contains various scripts used for analyzing data related to the 2026 primary elections in Travis County, Texas.

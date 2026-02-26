@@ -18,3 +18,13 @@ These scripts can be used to analyze the published registered voter registration
 - **`process_p26_ballot_detail_listing_csv.py`** — Python script to process a ballot detail listing CSV file from an ES&S EMS.
 
 - **`analyze_p26_datafiles.py`** — Python script to analyze P26 data files, which are CSV files with ballot details for each ballot style.
+
+Python 3.14.2 was used to develop and run these scripts.  Required Python packages can be installed using:
+
+pip install --upgrade PyMuPDF
+pip install --upgrade Pillow
+pip install --upgrade pyzbar
+pip install --upgrade pandas
+pip install --upgrade PyPDF
+pip install --upgrade openpyxl
+

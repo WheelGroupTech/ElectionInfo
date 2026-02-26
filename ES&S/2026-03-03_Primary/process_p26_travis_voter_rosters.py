@@ -36,8 +36,11 @@
 # Implementation notes:
 # - Use pandas.isna to detect NaN values and also check stripped strings to avoid empty values.
 #-----------------------------------------------------------------------------
+# pylint: disable=broad-exception-caught,too-many-statements
+#-----------------------------------------------------------------------------
 """process_p26_travis_voter_rosters.py"""
 
+import csv
 import os
 import re
 import shelve
@@ -348,6 +351,35 @@ def process_files(dirname):
 
 
 #-----------------------------------------------------------------------------
+# save_voter_roster()
+#-----------------------------------------------------------------------------
+def save_voter_roster(pathname):
+    """Save the voter roster to disk with the specified pathname"""
+
+    try:
+        with open(pathname, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            # Header row
+            writer.writerow(['VUID', 'LastName', 'FirstName', 'Precinct', 'BallotType', 'VoteDate', 'Party'])
+            # Write each voter record
+            for voter in VOTER_ROSTER:
+                vuid = voter.get('VUID', '')
+                last = str(voter.get('LastName', '')).strip()
+                first = str(voter.get('FirstName', '')).strip()
+                precinct = str(voter.get('Precinct', '')).strip()
+                ballot = str(voter.get('BallotType', '')).strip()
+                vote_date = str(voter.get('VoteDate', '')).strip()
+                party = str(voter.get('Party', '')).strip()
+                writer.writerow([vuid, last, first, precinct, ballot, vote_date, party])
+        print(f"Wrote {len(VOTER_ROSTER)} voter roster records to {pathname}")
+        return True
+
+    except Exception as err:
+        print(f"Error writing voter roster to {pathname}: {err}")
+        return False
+
+
+#-----------------------------------------------------------------------------
 # main()
 #-----------------------------------------------------------------------------
 def main():
@@ -358,6 +390,9 @@ def main():
 
     # Analyze the voter roster data
     analyze_roster_vuid_numbers()
+
+    # Save the voter roster to disk
+    save_voter_roster(r"voter_roster.csv")
 
     if result is True:
         print(f"Successfully processed {num_files} Excel workbooks")

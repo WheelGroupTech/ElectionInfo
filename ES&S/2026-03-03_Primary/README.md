@@ -22,9 +22,14 @@ These scripts can be used to analyze the published registered voter registration
 Python 3.14.2 was used to develop and run these scripts.  Required Python packages can be installed using:
 
 pip install --upgrade PyMuPDF
+
 pip install --upgrade Pillow
+
 pip install --upgrade pyzbar
+
 pip install --upgrade pandas
+
 pip install --upgrade PyPDF
+
 pip install --upgrade openpyxl
 

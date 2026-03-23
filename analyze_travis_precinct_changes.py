@@ -161,6 +161,12 @@ def process_registered_voter_list(pathname):
         precinct = str(record.get(precinct_field, '')).strip() if 'precinct_field' in locals() else ''
         state_senate = str(record.get(state_senate_field, '')).strip() if 'state_senate_field' in locals() else ''
 
+        # Sometimes the precinct number may start with a leading 'P Z' or 'P ' so we need to remove it
+        if precinct.startswith('P Z'):
+            precinct = precinct[3:]
+        elif precinct.startswith('P '):
+            precinct = precinct[2:]
+
         if not vuid_number:
             # Skip records with missing/empty VUID values but count them
             continue

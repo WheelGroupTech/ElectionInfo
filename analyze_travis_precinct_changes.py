@@ -221,6 +221,151 @@ def find_senate_district_for_precinct(sd_to_precincts, precinct):
 
 
 #-----------------------------------------------------------------------------
+# determine_precinct_changes()
+#
+# This function is used to determine the changes that occurred when the
+# county updated the precinct map.  Many precincts remained unchanged, but
+# there were precincts that were joined together into one precinct or
+# split into separate precincts.
+#
+# This function will use all of the addresses from the old precinct map and
+# identify the new precinct that address is now in.  This will allow us to determine
+# how many addresses were moved from each old precinct to each new precinct, and thus determine
+# which precincts were joined together or split apart.
+#
+# The function will use the number of voters registered at each address to weight the changes,
+# so we can determine how many voters were moved from each old precinct to each new precinct.
+#-----------------------------------------------------------------------------
+def determine_precinct_changes(old_precinct_to_addresses, new_precinct_to_addresses):
+    """Determine and report how voters moved from old precincts to new precincts.
+
+    old_precinct_to_addresses and new_precinct_to_addresses are mappings:
+      precinct -> { address_string -> voter_count }
+
+    The function prints a human-readable summary and returns a tuple:
+      (changes, old_totals, new_totals)
+    where `changes` is a dict mapping old_precinct -> { new_precinct_or_None -> voter_count }.
+    """
+    # Helper: normalize addresses for matching between files
+    def normalize_address(addr):
+        if not addr:
+            return ''
+        # Collapse whitespace and uppercase for robust matching
+        # Replace common separators with space, strip, then collapse multiple spaces
+        s = str(addr).strip()
+        # Normalize whitespace
+        parts = s.split()
+        if not parts:
+            return ''
+        return ' '.join(parts).upper()
+
+    # Build mapping from normalized address -> new_precinct
+    new_address_to_precinct = {}
+    for new_precinct, addr_map in (new_precinct_to_addresses or {}).items():
+        if not addr_map:
+            continue
+        for addr in addr_map.keys():
+            norm = normalize_address(addr)
+            if not norm:
+                continue
+            existing = new_address_to_precinct.get(norm)
+            if existing is None:
+                new_address_to_precinct[norm] = new_precinct
+            elif existing != new_precinct:
+                # Address appears in multiple new precincts; warn and keep first seen
+                print(f"Warning: address '{addr}' (normalized '{norm}') appears in new precincts '{existing}' and '{new_precinct}'. Keeping '{existing}'.")
+
+    changes = {}           # old_precinct -> { new_precinct_or_None -> voter_count }
+    old_totals = {}        # old_precinct -> total voters
+    new_totals = {}        # new_precinct_or_None -> total voters (None = unmapped)
+
+    # Iterate old precincts and map addresses to new precincts
+    for old_precinct, addr_map in (old_precinct_to_addresses or {}).items():
+        if not addr_map:
+            old_totals[old_precinct] = 0
+            changes[old_precinct] = {}
+            continue
+
+        old_total = 0
+        dest_counts = {}
+
+        for addr, count in addr_map.items():
+            try:
+                voter_count = int(count)
+            except Exception:
+                # If count is not an integer, attempt float then round, otherwise treat as 1
+                try:
+                    voter_count = int(float(count))
+                except Exception:
+                    voter_count = 1
+
+            old_total += voter_count
+
+            norm = normalize_address(addr)
+            dest_precinct = new_address_to_precinct.get(norm)
+
+            # Use None key for unmapped addresses
+            dest_counts[dest_precinct] = dest_counts.get(dest_precinct, 0) + voter_count
+            new_totals[dest_precinct] = new_totals.get(dest_precinct, 0) + voter_count
+
+        changes[old_precinct] = dest_counts
+        old_totals[old_precinct] = old_total
+
+    # Print detailed report
+    print("\nPrecinct change summary (based on address-level voter counts):\n")
+
+    grand_old_total = sum(old_totals.values())
+    grand_new_total = sum(v for k, v in new_totals.items() if k is not None)
+    grand_unmapped = new_totals.get(None, 0)
+
+    for old_precinct in sorted(old_totals.keys(), key=lambda x: (str(x))):
+        old_total = old_totals[old_precinct]
+        print(f"Old precinct '{old_precinct}': {old_total} registered voters")
+
+        dest_counts = changes.get(old_precinct, {})
+        if not dest_counts:
+            print("  No address data for this precinct.")
+            continue
+
+        # Prepare sorted list of destinations by voter count descending
+        sorted_dests = sorted(dest_counts.items(), key=lambda x: x[1], reverse=True)
+
+        for dest_precinct, voters in sorted_dests:
+            pct = (voters / old_total * 100) if old_total > 0 else 0.0
+            dest_label = dest_precinct if dest_precinct is not None else "UNMAPPED"
+            print(f"  -> {dest_label}: {voters} voters ({pct:.1f}%)")
+
+        # Interpret topology: majority stayed or split/merged
+        stayed = dest_counts.get(old_precinct, 0)
+        if stayed == old_total:
+            print("  ==> All voters remained in the same precinct (unchanged).")
+        else:
+            stayed_pct = (stayed / old_total * 100) if old_total > 0 else 0.0
+            if stayed_pct >= 50.0:
+                print(f"  ==> Majority ({stayed_pct:.1f}%) remained in the same precinct; others moved.")
+            else:
+                # If the old precinct distributed across multiple new precincts, it's likely split
+                dest_nonnull = [d for d in sorted_dests if d[0] is not None]
+                if len(dest_nonnull) == 1:
+                    # Most moved to a single new precinct => likely merged into that precinct
+                    print("  ==> Majority moved into a single new precinct (likely merged).")
+                else:
+                    print("  ==> Voters distributed across multiple new precincts (likely split).")
+
+        print("")  # blank line between precinct summaries
+
+    # Print new precinct totals summary
+    print("New precinct totals (based on mapped old addresses):")
+    for new_precinct in sorted([k for k in new_totals.keys() if k is not None], key=lambda x: (str(x))):
+        print(f"  {new_precinct}: {new_totals.get(new_precinct,0)} mapped voters")
+    print(f"  UNMAPPED (addresses from old list not found in new list): {grand_unmapped} voters\n")
+
+    print(f"Grand totals: old list={grand_old_total}, new-list-mapped={grand_new_total}, unmapped={grand_unmapped}")
+
+    return changes, old_totals, new_totals
+
+
+#-----------------------------------------------------------------------------
 # main()
 #-----------------------------------------------------------------------------
 def main():
@@ -273,6 +418,9 @@ def main():
             print(f"  {precinct}: {unique_addresses} addresses, {address_voters} registered voters, {sd}")
         print(f"\nTotal unique addresses: {total_addresses}")
         print(f"Total registered voters: {total_voters}")
+
+        # Determine the changes between the two precinct maps
+        determine_precinct_changes(precinct_to_addresses_1, precinct_to_addresses_2)
 
     return True
 

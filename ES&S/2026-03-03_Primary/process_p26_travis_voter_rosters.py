@@ -190,7 +190,7 @@ def process_excel_workbook(pathname, ballot_type, vote_date):
     # Get the number of sheets in the workbook
     num_sheets = len(xlsx.sheet_names)
     if num_sheets != 2:
-        print(f"There are {num_sheets} in {pathname} - expecting only a single sheet!")
+        print(f"There are {num_sheets} in {pathname} - expecting only two sheets!")
         ret_val = False
         return ret_val
 

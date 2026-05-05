@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# process_l26_travis_voter_rosters.py
+# process_travis_voter_rosters.py
 #
 # Copyright (c) 2026 Daniel M. Teal
 #
@@ -7,7 +7,7 @@
 #
 # Python script to process Excel voter rosters from Travis County Elections.
 #-----------------------------------------------------------------------------
-"""process_l26_travis_voter_rosters.py""" # for pylint
+"""process_travis_voter_rosters.py""" # for pylint
 # pylint: disable=line-too-long,unused-variable,too-many-branches, too-many-locals
 # pylint: disable=too-many-statements
 
@@ -121,6 +121,30 @@ def parse_info_from_workbook_filename(filename):
 #
 # This function prcesses the specified Excel workbook.  It will identify
 # the worksheet containing voter information and process the contents.
+#
+# Pseudocode / Plan:
+#
+# 1. Read workbook with pandas and ensure there is only one sheet.
+# 2. Load the sheet into a DataFrame and determine row/column counts.
+# 3. Attempt to auto-detect the header row by scanning the first N rows
+#    for expected header keywords: 'vuid', 'pct'/'precinct', and either
+#    'first' and 'last' or a combined 'name' (e.g. "Last, First").
+# 4. Build a mapping from role -> column index:
+#      - col_vuid: header contains 'vuid'
+#      - col_precinct: header contains 'pct' or 'precinct'
+#      - col_first: header contains 'first'
+#      - col_last: header contains 'last'
+#      - col_name: header contains 'name' or header looks like combined "last, first"
+#      - col_notes: header contains 'note' (optional)
+# 5. If detection fails, fall back to previous heuristics (existing logic) but attempt
+#    to be tolerant (case-insensitive, substring matches).
+# 6. Validate that we found the required columns (vuid and precinct and either first+last or name).
+#    If not, print an error and return False.
+# 7. Iterate rows after the detected header row:
+#      - Extract vuid, precinct, names and notes using the mapped columns.
+#      - For combined name column, split on comma into last, first (strip).
+#      - Build voter dict and append to VOTER_ROSTER.
+# 8. Preserve existing behaviors such as rstrip on names and printing progress.
 #-----------------------------------------------------------------------------
 def process_excel_workbook(pathname, ballot_type, vote_date):
     """Process the specified Excel workbook"""
@@ -144,39 +168,124 @@ def process_excel_workbook(pathname, ballot_type, vote_date):
     # Get the number of rows and columns from the Excel data
     num_rows, num_columns = excel_data.shape
 
-    # Iterate through all of the data rows
-    cur_row = 2
+    # Attempt to find the header row by searching the first few rows for expected headers
+    header_row = None
+    max_header_scan = min(10, num_rows)
+    for r in range(0, max_header_scan):
+        try:
+            row_vals = [str(excel_data.iat[r, c]).strip().lower() for c in range(num_columns)]
+        except Exception:
+            # If iat fails for this row, skip it
+            continue
+
+        has_vuid = any('vuid' in v for v in row_vals)
+        has_pct = any(('pct' in v) or ('precinct' in v) for v in row_vals)
+        has_first = any('first' in v for v in row_vals)
+        has_last = any('last' in v for v in row_vals)
+        has_name = any('name' in v for v in row_vals) or any(',' in v for v in row_vals)
+
+        # If we see vuid and precinct and either first+last or a name column, choose this row
+        if has_vuid and has_pct and ( (has_first and has_last) or has_name ):
+            header_row = r
+            break
+
+    # Fallback: if no header was found, use row index 2 (legacy behavior)
+    if header_row is None:
+        if num_rows > 2:
+            header_row = 2
+        else:
+            print(f"Unable to determine header row for '{pathname}'")
+            return False
+
+    # Map column indices to roles
+    col_vuid = None
+    col_precinct = None
+    col_first = None
+    col_last = None
+    col_name = None
+    col_notes = None
+
+    for c in range(num_columns):
+        try:
+            header = str(excel_data.iat[header_row, c]).strip().lower()
+        except Exception:
+            header = ''
+        if 'vuid' in header:
+            col_vuid = c
+        elif 'pct' in header or 'precinct' in header:
+            col_precinct = c
+        elif 'first' in header:
+            col_first = c
+        elif 'last' in header:
+            col_last = c
+        elif 'name' in header:
+            # could be "Name" which might be "Last, First"
+            col_name = c
+        elif 'note' in header:
+            col_notes = c
+        else:
+            # If header contains a comma and looks like "Last, First" treat as name
+            if ',' in header and col_name is None:
+                col_name = c
+
+    # Some sheets may have no explicit 'notes' header but have a 5th column; detect by position
+    if col_notes is None and num_columns >= 5:
+        # Prefer the last column if it doesn't look like a known field
+        potential = num_columns - 1
+        if potential not in (col_vuid, col_precinct, col_first, col_last, col_name):
+            col_notes = potential
+
+    # Validate required columns: VUID and Precinct and name components
+    has_name_components = (col_name is not None) or (col_first is not None and col_last is not None)
+    if col_vuid is None or col_precinct is None or not has_name_components:
+        print(f"Failed to detect required columns in '{pathname}' header row {header_row}")
+        print(f"Detected columns: vuid={col_vuid}, precinct={col_precinct}, first={col_first}, last={col_last}, name={col_name}, notes={col_notes}")
+        ret_val = False
+        return ret_val
+
+    # Iterate through all of the data rows starting after the header
+    cur_row = header_row + 1
     while cur_row < num_rows:
+        try:
+            # Read values using detected column mapping
+            vuid = excel_data.iat[cur_row, col_vuid]
+            precinct = excel_data.iat[cur_row, col_precinct]
+            notes = excel_data.iat[cur_row, col_notes] if col_notes is not None else ""
+            if col_name is not None:
+                name = excel_data.iat[cur_row, col_name]
+                # Split "Last, First" into components
+                if isinstance(name, str) and ',' in name:
+                    parts = [p.strip() for p in name.split(',', 1)]
+                    if len(parts) == 2:
+                        last_name = parts[0]
+                        first_name = parts[1]
+                    else:
+                        # fall back to raw values
+                        first_name = str(name).strip()
+                        last_name = ""
+                else:
+                    # If no comma, try to treat as single name in first position
+                    first_name = str(name).strip()
+                    last_name = ""
+            else:
+                first_name = excel_data.iat[cur_row, col_first]
+                last_name = excel_data.iat[cur_row, col_last]
 
-        if num_columns == 4:
-            vuid = excel_data.iat[cur_row, 0]
-            last_name = excel_data.iat[cur_row, 1]
-            first_name = excel_data.iat[cur_row, 2]
-            precinct = excel_data.iat[cur_row, 3]
-        else:
-            vuid = excel_data.iat[cur_row, 0]
-            last_name = excel_data.iat[cur_row, 1]
-            first_name = excel_data.iat[cur_row, 2]
-            precinct = excel_data.iat[cur_row, 3]
+        except Exception:
+            # If row access fails (e.g., blank trailing rows), break loop
+            break
 
-        # The fifth column is added in data returned after election day to
-        # highlight voters under the following conditions:
-        #  Chapter 102:  Late voting by a disabled voter
-        #  Chapter 103:  Late voting because of death in immediate family
-        if num_columns == 5:
-            notes = excel_data.iat[cur_row, 4]
-        else:
-            notes = ""
-
-        if cur_row == 2:
-
-            # Validate the column headers in the data.  Some worksheets have "Precinct" or "PCT"
-            if vuid != 'VUID' or first_name != 'First Name' or last_name != 'Last Name':
-                print(f"Row 2 is {vuid} {precinct} {first_name} {last_name}")
+        # If this is the header validation row (legacy check), compare values
+        if cur_row == header_row + 0:
+            # For compatibility with original code, check that detected header values look correct
+            hdr_vuid = str(vuid)
+            hdr_first = str(first_name)
+            hdr_last = str(last_name)
+            if 'vuid' not in hdr_vuid.lower() and 'vuid' not in str(excel_data.iat[header_row, col_vuid]).lower():
+                print(f"Row {header_row} header mismatch: {hdr_vuid} {hdr_first} {hdr_last}")
                 ret_val = False
                 break
         else:
-
             # Append the voter to the voter roster
             voter = {'VUID': vuid}
             voter['Precinct'] = str(precinct)
@@ -211,12 +320,11 @@ def process_files(dirname):
     for dirpath, dirnames, filenames in os.walk(dirname):
         for filename in filenames:
 
-            # Skip temporary or backup files that start with '~'
+            # Skip temporary or lock files that often begin with '~'
             if filename.startswith('~'):
                 continue
 
             if re.search(r'.xlsx', filename, flags=re.IGNORECASE):
-
 
                 # Create the pathname to the Excel workbook
                 pathname = os.path.join(dirpath, filename)

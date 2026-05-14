@@ -298,26 +298,26 @@ def compare_vuid_sets(vuid_1, vuid_2):
 #-----------------------------------------------------------------------------
 def find_multiple_registrations(vuids):
     """Find multiple voter registrations with different VUID and the same
-       date of birth, last name, and first name
+       date of birth, last name, first name, and middle name (if available)
 
     Pseudocode / Plan:
     - Input: 'vuids' dict mapping vuid -> record dict with keys:
         'FullName', 'LastName', 'FirstName', 'MiddleName', 'DOB', 'VoterRecord'
-    - Normalize last name, first name, and DOB for grouping:
-        - Trim whitespace from last name, first name, and DOB.
-        - Use uppercase last and first name for case-insensitive matching.
-        - Treat empty last name, first name, or empty DOB as ineligible for grouping.
-    - Build a grouping dictionary 'groups' keyed by (LAST_UPPER, FIRST_UPPER, DOB) mapping to
+    - Normalize last name, first name, middle name, and DOB for grouping:
+        - Trim whitespace from last name, first name, middle name, and DOB.
+        - Use uppercase last, first, and middle name for case-insensitive matching.
+        - Treat empty last name, first name, middle name, or empty DOB as ineligible for grouping.
+    - Build a grouping dictionary 'groups' keyed by (LAST_UPPER, FIRST_UPPER, MIDDLE_UPPER, DOB) mapping to
       a list of tuples (vuid, record).
     - Iterate over all items in 'vuids':
-        - Extract and normalize last name, first name and dob.
-        - Skip records missing last, first, or dob.
-        - Append (vuid, record) to groups[(last_upper, first_upper, dob)].
+        - Extract and normalize last name, first name, middle name, and dob.
+        - Skip records missing last, first, middle, or dob.
+        - Append (vuid, record) to groups[(last_upper, first_upper, middle_upper, dob)].
     - After grouping, iterate groups and select only those with length > 1 (possible multiples).
     - Print a human-readable report:
         - Total number of groups found and total records involved.
         - For each group print:
-            - Group header with LastName, FirstName and DOB and group size.
+            - Group header with LastName, FirstName, MiddleName, and DOB and group size.
             - List each VUID and a best-effort name string (FullName if present else "Last, First Middle").
     - Return a list of groups (each group is a list of (vuid, record)) for programmatic use.
     """
@@ -333,11 +333,12 @@ def find_multiple_registrations(vuids):
             continue
         last = (record.get('LastName', '') or '').strip()
         first = (record.get('FirstName', '') or '').strip()
+        middle = (record.get('MiddleName', '') or '').strip()
         dob = (record.get('DOB', '') or '').strip()
-        if not last or not first or not dob:
-            # We require last name, first name, and DOB to consider potential duplicate registrations
+        if not last or not first or not middle or not dob:
+            # We require last name, first name, middle name, and DOB to consider potential duplicate registrations
             continue
-        key = (last.upper(), first.upper(), dob)
+        key = (last.upper(), first.upper(), middle.upper(), dob)
         grouping.setdefault(key, []).append((vuid, record))
 
     # Filter groups with more than one distinct VUID
@@ -373,6 +374,7 @@ def find_multiple_registrations(vuids):
         first_rec = group[0][1] if group else {}
         return ((first_rec.get('LastName') or '').upper(),
                 (first_rec.get('FirstName') or '').upper(),
+                (first_rec.get('MiddleName') or '').upper(),
                 first_rec.get('DOB') or '')
 
     for idx, group in enumerate(sorted(suspect_groups, key=group_sort_key), start=1):
@@ -380,8 +382,9 @@ def find_multiple_registrations(vuids):
         first_rec = group[0][1] if group else {}
         display_last = first_rec.get('LastName', '') or ''
         display_first = first_rec.get('FirstName', '') or ''
+        display_middle = first_rec.get('MiddleName', '') or ''
         display_dob = first_rec.get('DOB', '') or ''
-        print(f"Group {idx}: LastName='{display_last}', FirstName='{display_first}', DOB='{display_dob}' - {len(group)} records")
+        print(f"Group {idx}: LastName='{display_last}', FirstName='{display_first}', MiddleName='{display_middle}', DOB='{display_dob}' - {len(group)} records")
         # Sort entries by VUID for deterministic listing
         for vuid, rec in sorted(group, key=lambda x: x[0]):
             print(f"  {vuid} - {format_name(rec)}")

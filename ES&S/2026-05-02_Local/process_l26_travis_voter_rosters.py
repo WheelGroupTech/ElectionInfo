@@ -38,6 +38,7 @@ def analyze_roster_vuid_numbers():
     num_bbm = 0
     num_ev = 0
     num_ed = 0
+    num_prov = 0
 
     for voter in VOTER_ROSTER:
 
@@ -57,6 +58,8 @@ def analyze_roster_vuid_numbers():
             num_ev += 1
         elif ballot_type == 'ED':
             num_ed += 1
+        elif ballot_type == 'PROV':
+            num_prov += 1
 
         try:
             # Find the vuid number in the list of all VUIDs
@@ -76,9 +79,10 @@ def analyze_roster_vuid_numbers():
 
     print(f"Found {num_duplicates} duplicate entries in the voter roster lists")
 
-    print(f"BBM Roster Voters: {num_bbm}")
-    print(f"ED  Roster Voters: {num_ed}")
-    print(f"EV  Roster Voters: {num_ev}")
+    print(f"BBM Roster Voters:  {num_bbm}")
+    print(f"ED  Roster Voters:  {num_ed}")
+    print(f"EV  Roster Voters:  {num_ev}")
+    print(f"PROV Roster Voters: {num_prov}")
 
 
 #-----------------------------------------------------------------------------
@@ -93,14 +97,17 @@ def parse_info_from_workbook_filename(filename):
     ret_val = True
 
     # Determine if the workbook filename is for:
-    #  BBM - Ballot by mail
-    #  EV  - In-person early vote
-    #  ED  - In-person election day vote
+    #  BBM  - Ballot by mail
+    #  EV   - In-person early vote
+    #  ED   - In-person election day vote
+    #  PROV - In-person provisional vote
     words = filename.split(r' ')
     if re.search(r'Mail', filename, flags=re.IGNORECASE):
         ballot_type = 'BBM'
     elif re.search(r'Early', filename, flags=re.IGNORECASE):
         ballot_type = 'EV'
+    elif re.search(r'Provisional', filename, flags=re.IGNORECASE):
+        ballot_type = 'PROV'
     else:
         ballot_type = 'ED'
 

@@ -619,6 +619,7 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
                 rv_last_name = record['LAST_NAME'].strip()
                 rv_first_name = record['FIRST_NAME'].strip()
                 rv_middle_name = record['MIDDLE_NAME'].strip()
+                rv_party = record['Party'].strip() if 'Party' in record else ''
             except KeyError:
                 name = record['NAME'].strip()
                 name_parts = [item.strip() for item in name.split(",")]
@@ -637,6 +638,14 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
                     print(f"Name mismatch for VUID {vuid_number} [{precinct}]: '{rv_first_name} {rv_last_name}' '{first_name} {last_name}'")
             else:
                 num_name_correct = num_name_correct + 1
+
+            # Get the party affiliation from the registered voter list if available and compare to
+            # the roster party affiliation for voters that voted in the primary election.
+            # (we already did this comparison in the analyze_vuid_numbers() function, but we
+            # do it again here for voters that voted in the runoff election to see if there are
+            # any discrepancies for those voters).
+            if rv_party and party and (rv_party != party):
+                print(f"PR26 party affiliation discrepancy for VUID {vuid_number} [{precinct}]: Registered='{rv_party}' vs Roster='{party}'")
 
         except KeyError:
 

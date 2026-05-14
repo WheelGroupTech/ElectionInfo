@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# process_p26_travis_registered_voters.py
+# process_pr26_travis_registered_voters.py
 #
 # Copyright (c) 2026 Daniel M. Teal
 #
@@ -59,7 +59,7 @@
 # - Use .casefold() for robust case-insensitive comparisons.
 #   any mismatch in either field counts as a name change.
 #-----------------------------------------------------------------------------
-"""process_p26_travis_registered_voters.py"""
+"""process_pr26_travis_registered_voters.py"""
 
 import csv
 import sys
@@ -157,6 +157,7 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
     vuids = {}
     num_duplicates = 0
     dob_available = False
+    party_available = False
 
     # Determine which VUID header is present: 'VUID' or 'VUIDNO' (case-insensitive)
     vuid_field = None
@@ -199,6 +200,11 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
             dob_field = key_map['DATE_OF_BIRTH']
             dob_available = True
 
+        # Get the field value for the voter's party affiliation
+        if 'PARTY_CODE' in key_map:
+            party_field = key_map['PARTY_CODE']
+            party_available = True
+
     for record in registered_voters:
         vuid_number = str(record['VUID'])
 
@@ -206,6 +212,7 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
         last_name = ''
         first_name = ''
         middle_name = ''
+        party = ''
         dob = ''
 
         # Use the detected header name to extract the voter record information safely
@@ -215,6 +222,7 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
         last_name = str(record.get(lastname_field, '')).strip() if 'lastname_field' in locals() else ''
         first_name = str(record.get(firstname_field, '')).strip() if 'firstname_field' in locals() else ''
         middle_name = str(record.get(middlename_field, '')).strip() if 'middlename_field' in locals() else ''
+        party = str(record.get(party_field, '')).strip() if 'party_field' in locals() else ''
         dob = str(record.get(dob_field, '')).strip() if 'dob_field' in locals() else ''
 
         try:
@@ -235,12 +243,56 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
             vuid_record['LastName'] = last_name
             vuid_record['FirstName'] = first_name
             vuid_record['MiddleName'] = middle_name
+            vuid_record['Party'] = party
             vuid_record['DOB'] = dob
             vuids[vuid_number] = vuid_record
 
     print(f"Found {num_duplicates} duplicate entries in the registered voter list '{voter_list_pathname}'")
 
     print(f"There are {len(vuids)} voters in the registered voter list '{voter_list_pathname}'")
+
+    if party_available:
+        print(f"Party affiliation is available in the registered voter list '{voter_list_pathname}'")
+
+        # Read in the processed voter roster from the primary election - it must be in the
+        # current directory and named 'PrimaryVoterRosterDatabase.dat' (created by
+        # process_p26_travis_voter_roster.py).  We use this to compare the party affiliation in the
+        # registered voter list to the party affiliation in the voter roster for voters that voted in the
+        # primary election to see if there are any discrepancies.
+        try:
+            # Load in the data from the database
+            db = shelve.open('PrimaryVoterRosterDatabase.dat')
+            primary_voter_roster_version = db['Version']
+            primary_voter_roster = db['VoterRoster']
+            db.close()
+
+        except KeyError:
+
+            # Return if we cannot open the database file
+            print(r"Cannot open database file 'PrimaryVoterRosterDatabase'")
+            return vuids, dob_available
+
+        # Check the database version
+        if primary_voter_roster_version != VOTER_ROSTER_VERSION:
+            print(f"Voter roster database version {primary_voter_roster_version} does not match expected version {VOTER_ROSTER_VERSION}")
+            return vuids, dob_available
+
+        # Now that we have the primary voter roster, we can compare the party affiliation in the
+        # registered voter list to the party affiliation in the voter roster for voters that voted
+        # in the primary election to see if there are any discrepancies.
+        num_party_discrepancies = 0
+        for voter in primary_voter_roster:
+            vuid_number = str(voter['VUID'])
+            roster_party = voter['Party']
+            if vuid_number in vuids:
+                reg_party = vuids[vuid_number].get('Party', '').strip()
+                if reg_party is '':
+                    reg_party = '(none)'
+                if reg_party and roster_party and (reg_party != roster_party):
+                    num_party_discrepancies += 1
+                    print(f"Party affiliation discrepancy for VUID {vuid_number}: Registered='{reg_party}' vs Roster='{roster_party}'")
+
+        print(f"Found {num_party_discrepancies} party affiliation discrepancies between the registered voter list and the primary voter roster")
 
     return vuids, dob_available
 
@@ -616,7 +668,7 @@ def main():
 
     # Check args
     if len(sys.argv) < 2:
-        print("Usage: python process_p26_travis_registered_voters.py <registered_voter_list_file_path>")
+        print("Usage: python process_pr26_travis_registered_voters.py <registered_voter_list_file_path>")
         return False
     voter_list_pathname_1 = sys.argv[1]
 

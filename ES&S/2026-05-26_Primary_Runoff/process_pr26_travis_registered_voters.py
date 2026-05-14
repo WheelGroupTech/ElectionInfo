@@ -286,7 +286,7 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
             roster_party = voter['Party']
             if vuid_number in vuids:
                 reg_party = vuids[vuid_number].get('Party', '').strip()
-                if reg_party is '':
+                if reg_party == '':
                     reg_party = '(none)'
                 if reg_party and roster_party and (reg_party != roster_party):
                     num_party_discrepancies += 1

@@ -7,7 +7,7 @@
 #
 # Python script to load and process the registered voter list from Travis County
 # and analyze the voter roster data previously processed by the
-# process_p26_travis_voter_rosters.py script and stored in the shelve database
+# process_pr26_travis_voter_rosters.py script and stored in the shelve database
 # 'VoterRosterDatabase.dat'
 #-----------------------------------------------------------------------------
 # pylint: disable=line-too-long,unused-variable,too-many-branches, too-many-locals

@@ -129,6 +129,8 @@ def parse_info_from_workbook_filename(filename):
         ballot_type = 'EV'
     elif re.search(r'Provisional', filename, flags=re.IGNORECASE):
         ballot_type = 'PROV'
+    elif re.search(r'Limited', filename, flags=re.IGNORECASE):
+        ballot_type = 'LIMITED'
     else:
         ballot_type = 'ED'
 
@@ -161,7 +163,6 @@ def process_excel_workbook(pathname, ballot_type, vote_date):
     num_voters = 0
     num_rep_voters = 0
     num_dem_voters = 0
-    num_data_errors = 0
 
     # Get the number of sheets in the workbook
     num_sheets = len(xlsx.sheet_names)
@@ -327,9 +328,6 @@ def process_excel_workbook(pathname, ballot_type, vote_date):
     # Print out a status update
     print(f"Processing Excel workbook {pathname} NumVoters: {num_voters} NumRep: {num_rep_voters} TotalVoterCount: {len(VOTER_ROSTER)}")
 
-    if num_data_errors > 0:
-        print(f"Encountered {num_data_errors} rows with missing data in {pathname}")
-
     return ret_val
 
 
@@ -367,11 +365,12 @@ def process_files(dirname):
 
                 # Process the workbook
                 num_files = num_files + 1
-                result = process_excel_workbook(pathname, ballot_type, vote_date)
-                if result is False:
-                    print(f"Error occurred when processing workbook {pathname}")
-                    ret_val = False
-                    break
+                if ballot_type != 'LIMITED':
+                    result = process_excel_workbook(pathname, ballot_type, vote_date)
+                    if result is False:
+                        print(f"Error occurred when processing workbook {pathname}")
+                        ret_val = False
+                        break
 
     return ret_val, num_files
 

@@ -158,6 +158,10 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
     num_duplicates = 0
     dob_available = False
     party_available = False
+    num_rep_voters = 0
+    num_dem_voters = 0
+    num_np_voters = 0
+    num_other_voters = 0
 
     # Determine which VUID header is present: 'VUID' or 'VUIDNO' (case-insensitive)
     vuid_field = None
@@ -247,9 +251,26 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
             vuid_record['DOB'] = dob
             vuids[vuid_number] = vuid_record
 
+        # Track the number of voters by party affiliation if available
+        if party_available:
+            if party == 'REP':
+                num_rep_voters += 1
+            elif party == 'DEM':
+                num_dem_voters += 1
+            elif party == '':
+                num_np_voters += 1
+            else:
+                num_other_voters += 1
+
     print(f"Found {num_duplicates} duplicate entries in the registered voter list '{voter_list_pathname}'")
 
     print(f"There are {len(vuids)} voters in the registered voter list '{voter_list_pathname}'")
+    if party_available:
+        print(f"  REP voters: {num_rep_voters}")
+        print(f"  DEM voters: {num_dem_voters}")
+        print(f"  No party affiliation voters: {num_np_voters}")
+        if num_other_voters > 0:
+            print(f"  Other party affiliation voters: {num_other_voters}")
 
     if party_available:
         print(f"Party affiliation is available in the registered voter list '{voter_list_pathname}'")
@@ -277,22 +298,32 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
             print(f"Voter roster database version {primary_voter_roster_version} does not match expected version {VOTER_ROSTER_VERSION}")
             return vuids, dob_available
 
+        print(f"Analyzing {len(primary_voter_roster)} primary voter roster entries against {len(vuids)} registered VUIDs")
+
         # Now that we have the primary voter roster, we can compare the party affiliation in the
         # registered voter list to the party affiliation in the voter roster for voters that voted
         # in the primary election to see if there are any discrepancies.
         num_party_discrepancies = 0
+        num_primary_voter_in_list = 0
+        num_primary_voter_not_in_list = 0
+
         for voter in primary_voter_roster:
             vuid_number = str(voter['VUID'])
             roster_party = voter['Party']
             if vuid_number in vuids:
+                num_primary_voter_in_list += 1
                 reg_party = vuids[vuid_number].get('Party', '').strip()
                 if reg_party == '':
                     reg_party = '(none)'
                 if reg_party and roster_party and (reg_party != roster_party):
                     num_party_discrepancies += 1
                     print(f"Party affiliation discrepancy for VUID {vuid_number}: Registered='{reg_party}' vs Roster='{roster_party}'")
+            else:
+                num_primary_voter_not_in_list += 1
+                #print(f"Primary voter with VUID {vuid_number} not found in registered voter list")
 
         print(f"Found {num_party_discrepancies} party affiliation discrepancies between the registered voter list and the primary voter roster")
+        print(f"Found {num_primary_voter_in_list} primary voters in the registered voter list and {num_primary_voter_not_in_list} primary voters not in the registered voter list")
 
     return vuids, dob_available
 

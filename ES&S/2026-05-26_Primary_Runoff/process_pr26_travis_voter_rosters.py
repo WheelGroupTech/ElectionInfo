@@ -8,13 +8,14 @@
 # Python script to process Excel voter rosters from Travis County Elections.
 #-----------------------------------------------------------------------------
 # pylint: disable=line-too-long,unused-variable,too-many-branches, too-many-locals
-# pylint: disable=too-many-statements
+# pylint: disable=too-many-statements,too-many-nested-blocks
 #-----------------------------------------------------------------------------
 # pylint: disable=broad-exception-caught,too-many-statements
 #-----------------------------------------------------------------------------
 """process_pr26_travis_voter_rosters.py"""
 
 import csv
+import math
 import os
 import re
 import shelve
@@ -31,6 +32,28 @@ VOTER_ROSTER_VERSION = 1
 
 # Dictionary of voter VUIDs
 ROSTER_VUIDS = {}
+
+
+#-----------------------------------------------------------------------------
+# nan_to_empty()
+#-----------------------------------------------------------------------------
+def nan_to_empty(value):
+    """
+    Converts NaN (float or string) to an empty string.
+    Handles:
+      - float('nan')
+      - numpy.nan / pandas.NaT
+      - string 'nan' (case-insensitive)
+    """
+    # Check for pandas/NumPy NaN or float NaN
+    if pd.isna(value) or (isinstance(value, float) and math.isnan(value)):
+        return ""
+
+    # Check for string 'nan' (case-insensitive)
+    if isinstance(value, str) and value.strip().lower() == "nan":
+        return ""
+
+    return value  # Return unchanged if not NaN
 
 
 #-----------------------------------------------------------------------------
@@ -308,13 +331,13 @@ def process_excel_workbook(pathname, ballot_type, vote_date):
             else:
                 # Append the voter to the voter roster
                 voter = {'VUID': vuid}
-                voter['Precinct'] = str(precinct)
+                voter['Precinct'] = nan_to_empty(str(precinct))
                 voter['Party'] = party
-                voter['FirstName'] = str(first_name).rstrip()
-                voter['LastName'] = str(last_name).rstrip()
-                voter['BallotType'] = str(ballot_type)
-                voter['VoteDate'] = str(vote_date)
-                voter['Notes'] = str(notes)
+                voter['FirstName'] = nan_to_empty(str(first_name).rstrip())
+                voter['LastName'] = nan_to_empty(str(last_name).rstrip())
+                voter['BallotType'] = nan_to_empty(str(ballot_type))
+                voter['VoteDate'] = nan_to_empty(str(vote_date))
+                voter['Notes'] = nan_to_empty(str(notes))
 
                 VOTER_ROSTER.append(voter)
                 num_voters = num_voters + 1

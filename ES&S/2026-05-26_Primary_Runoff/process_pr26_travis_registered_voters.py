@@ -62,6 +62,7 @@
 """process_pr26_travis_registered_voters.py"""
 
 import csv
+from os import name
 import sys
 import shelve
 
@@ -72,6 +73,51 @@ VOTER_ROSTER_VERSION = 1
 # Set of all VUID numbers from the registered voter list
 VUIDS = {}
 
+STATE_PRIMARY_VUIDS = {}
+
+
+#-----------------------------------------------------------------------------
+# load_statewide_primary_info()
+#
+# This function loads statewide primary information from four separate CSV
+# files that are in the current directory with the following names:
+#
+#   STATEWIDE_ED_VOTER_INFO_DEM.csv
+#   STATEWIDE_ED_VOTER_INFO_REP.csv
+#   STATEWIDE_EV_VOTER_INFO_DEM.csv
+#   STATEWIDE_EV_VOTER_INFO_REP.csv
+#
+# This data was obtained from: https://goelect.txelections.civixapps.com/ivis-evr-ui/evr
+#
+# Each file contains the following fields:
+# "COUNTY_NAME","VOTER_NAME","ID_VOTER","VOTING_METHOD","PRECINCT"
+#
+#  COUNTY_NAME: The name of the county where the voter is registered.
+#  VOTER_NAME: The full name of the voter in the format "LAST_NAME, FIRST_NAME MIDDLE_NAME".
+#  ID_VOTER: The unique identifier for the voter (VUID).
+#  VOTING_METHOD: The method by which the voter cast their ballot "IN-PERSON" or "MAIL-IN".
+#  PRECINCT: The precinct where the voter is registered.
+#-----------------------------------------------------------------------------
+def load_statewide_primary_info():
+    """Load statewide primary information from the four separate CSV files"""
+
+    # Check for the first file and load the data if it exists
+    try:
+        with open('STATEWIDE_ED_VOTER_INFO_DEM.csv', 'r', encoding='utf-8', errors='strict') as csv_file:
+            reader = csv.DictReader(csv_file, delimiter=',', quotechar='"')
+            for record in reader:
+                vuid = str(record['ID_VOTER']).strip()
+                name = str(record['VOTER_NAME']).strip()
+                county = str(record['COUNTY_NAME']).strip()
+                voting_method = str(record['VOTING_METHOD']).strip()
+
+                voter = {'VUID': vuid}
+                voter['Precinct'] = str(record['PRECINCT']).strip()
+                voter['Party'] = 'DEM'
+
+                STATE_PRIMARY_VUIDS[vuid] = record
+    except FileNotFoundError:
+        print("File not found: 'STATEWIDE_ED_VOTER_INFO_DEM.csv' - skipping this file")
 
 #-----------------------------------------------------------------------------
 # process_registered_voter_list()
@@ -624,6 +670,7 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
     num_name_changes = 0
     num_name_correct = 0
     num_voters = 0
+    num_party_affiliation_incorrect = 0
 
     for voter in voter_roster:
         num_voters = num_voters + 1
@@ -650,7 +697,7 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
                 rv_last_name = record['LAST_NAME'].strip()
                 rv_first_name = record['FIRST_NAME'].strip()
                 rv_middle_name = record['MIDDLE_NAME'].strip()
-                rv_party = record['Party'].strip() if 'Party' in record else ''
+                rv_party = record['PARTY_CODE'].strip() if 'PARTY_CODE' in record else ''
             except KeyError:
                 name = record['NAME'].strip()
                 name_parts = [item.strip() for item in name.split(",")]
@@ -675,8 +722,11 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
             # (we already did this comparison in the analyze_vuid_numbers() function, but we
             # do it again here for voters that voted in the runoff election to see if there are
             # any discrepancies for those voters).
+            # print(f"Comparing party affiliation for VUID {vuid_number} [{precinct}]: Registered='{rv_party}' vs Roster='{party}'")
+
             if rv_party and party and (rv_party != party):
-                print(f"PR26 party affiliation discrepancy for VUID {vuid_number} [{precinct}]: Registered='{rv_party}' vs Roster='{party}'")
+                num_party_affiliation_incorrect += 1
+                print(f"PR26 party affiliation discrepancy for VUID {vuid_number} \"{first_name} {last_name}\" [{precinct}]: Registered='{rv_party}' vs Roster='{party}' ballot='{ballot_type}' vote_date='{vote_date}'")
 
         except KeyError:
 
@@ -696,6 +746,7 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
     print(f"Found {num_unknown_voter} private/unknown voter records")
     print(f"Found {num_unknown_voter_rep} private/unknown REP voter records")
     print(f"Found {num_unknown_voter_dem} private/unknown DEM voter records")
+    print(f"Found {num_party_affiliation_incorrect} voters with party affiliation discrepancies between the registered voter list and the voter roster")
 
     return unknown_voter_roster
 

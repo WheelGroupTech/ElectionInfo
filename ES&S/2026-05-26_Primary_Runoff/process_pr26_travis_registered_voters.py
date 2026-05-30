@@ -13,56 +13,9 @@
 # pylint: disable=line-too-long,unused-variable,too-many-branches, too-many-locals
 # pylint: disable=broad-exception-caught,too-many-statements
 #-----------------------------------------------------------------------------
-# PSEUDOCODE / IMPLEMENTATION PLAN:
-#
-# 1. Load a processed voter roster (from a shelve database) into voter_roster.
-#    - Open shelve 'VoterRosterDatabase.dat' and read 'Version' and 'VoterRoster'.
-#    - If KeyError occurs, print error and exit.
-# 2. Analyze roster vuids for duplicates and aggregate ballot types:
-#    - For each voter in voter_roster:
-#        - Extract vuid_number, Party, Precinct, FirstName, LastName, BallotType, VoteDate, Notes.
-#        - Tally ballot type counts and party splits (BBM/EV/ED and REP/DEM).
-#        - Detect duplicate VUIDs in roster_vuids.
-#        - This step is also done in the process_p26_travis_voter_rosters.py script.
-# 3. Read and parse the registered voter CSV into a registered_voter list.
-#    - Open file with various encoding types until successful.
-#    - Use csv.DictReader to read each row as a dict.
-#    - Append each record to registered_voters and count voters.
-#    - Return registered_voters and print count and encoding used.
-# 4. Build a dictionary vuids mapping VUID strings to the original voter registration record
-#    from the registered voter list CSV.
-#    - Iterate the provided registered_voters.
-#    - Convert record['VUID'] to string (vuid_number).
-#    - If vuid_number exists in vuids, increment duplicate counter.
-#    - Otherwise add an entry vuids[vuid_number] = {'VoterRecord': record}.
-#    - Return a dictionary of vuids and print summary counts (total voters, duplicates).
-# 5. Compare the roster voter against the registered voter list:
-#    - For each roster voter:
-#        - Extract vuid_number, precinct, first_name, last_name (strip whitespace).
-#        - Look up vuid_number in vuids from the registered voter list.
-#        - If found:
-#            - Extract registered rv_first_name and rv_last_name.
-#            - Normalize the last names with .casefold() for case-insensitive comparison.
-#            - If either last names differ (case-insensitive), treat as name mismatch and increment counter.
-#            - Otherwise treat as name-correct match.
-#        - If not found in vuids increment unknown counter and print missing info.
-#        - Return a list of unknown voters for optional second pass against a second registered voter list.
-# 6. Print summary counts (total roster voters, name-correct, name-changes, unknown).
-# 7. Perform the same analysis against a second registered voter list (if provided)
-# 8. Analyze the first registered voter list for potential multiple registrations of a voter
-#    with the same first name, last name, and date of birth but different VUID.  If multiple
-#    registrations are found, determine how many of the voters have voted and report if any have
-#    voted more than once using their different VUIDs.
-#
-# Implementation notes:
-# - Use .strip() to remove surrounding whitespace before comparisons.
-# - Use .casefold() for robust case-insensitive comparisons.
-#   any mismatch in either field counts as a name change.
-#-----------------------------------------------------------------------------
 """process_pr26_travis_registered_voters.py"""
 
 import csv
-from os import name
 import sys
 import shelve
 
@@ -74,6 +27,8 @@ VOTER_ROSTER_VERSION = 1
 VUIDS = {}
 
 STATE_PRIMARY_VUIDS = {}
+
+TRAVIS_PRIMARY_VOTERS = {}
 
 
 #-----------------------------------------------------------------------------
@@ -107,7 +62,7 @@ def load_statewide_primary_info():
             reader = csv.DictReader(csv_file, delimiter=',', quotechar='"')
             for record in reader:
                 vuid = str(record['ID_VOTER']).strip()
-                name = str(record['VOTER_NAME']).strip()
+                voter_name = str(record['VOTER_NAME']).strip()
                 county = str(record['COUNTY_NAME']).strip()
                 voting_method = str(record['VOTING_METHOD']).strip()
 
@@ -118,6 +73,7 @@ def load_statewide_primary_info():
                 STATE_PRIMARY_VUIDS[vuid] = record
     except FileNotFoundError:
         print("File not found: 'STATEWIDE_ED_VOTER_INFO_DEM.csv' - skipping this file")
+
 
 #-----------------------------------------------------------------------------
 # process_registered_voter_list()
@@ -343,6 +299,12 @@ def analyze_vuid_numbers(registered_voters, voter_list_pathname):
         if primary_voter_roster_version != VOTER_ROSTER_VERSION:
             print(f"Voter roster database version {primary_voter_roster_version} does not match expected version {VOTER_ROSTER_VERSION}")
             return vuids, dob_available
+
+        # Add each of the voter records from the primary voter roster to
+        # TRAVIS_PRIMARY_VOTERS for easy lookup by VUID later.
+        for voter in primary_voter_roster:
+            vuid_number = str(voter['VUID']).strip()
+            TRAVIS_PRIMARY_VOTERS[vuid_number] = voter
 
         print(f"Analyzing {len(primary_voter_roster)} primary voter roster entries against {len(vuids)} registered VUIDs")
 
@@ -667,6 +629,9 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
     num_unknown_voter = 0
     num_unknown_voter_rep = 0
     num_unknown_voter_dem = 0
+    num_primary_voter_rep = 0
+    num_primary_voter_dem = 0
+    num_non_travis_primary_voter = 0
     num_name_changes = 0
     num_name_correct = 0
     num_voters = 0
@@ -685,6 +650,34 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
         vote_date = voter['VoteDate']
         notes = voter['Notes']
 
+        # See if the voter voted in the Travis primary by looking up the VUID in TRAVIS_PRIMARY_VOTERS.
+        # If the voter voted in the primary, we can compare the party affiliation in the registered voter
+        # list to the party affiliation in the voter roster for voters that voted in the primary election
+        # to see if there are any discrepancies.
+        travis_primary_voter = TRAVIS_PRIMARY_VOTERS.get(vuid_number, None)
+        if travis_primary_voter:
+            primary_precinct = travis_primary_voter['Precinct']
+            primary_party = travis_primary_voter['Party']
+            primary_first_name = travis_primary_voter['FirstName'].strip()
+            primary_last_name = travis_primary_voter['LastName'].strip()
+            primary_ballot_type = travis_primary_voter['BallotType']
+            primary_vote_date = travis_primary_voter['VoteDate']
+            voted_in_travis_primary = True
+
+            # Count how many primary voters from each primary are voting in the runoff election
+            if primary_party == 'REP':
+                num_primary_voter_rep += 1
+            elif primary_party == 'DEM':
+                num_primary_voter_dem += 1
+
+            if primary_party and party and (primary_party != party):
+                num_party_affiliation_incorrect += 1
+                #print(f"Travis PR26 party affiliation discrepancy for VUID {vuid_number} \"{first_name} {last_name}\" [{precinct}]: Registered='{primary_party}' vs Roster='{party}' ballot='{ballot_type}' vote_date='{vote_date}'")
+                print(f"Travis_PR26_error,{vuid_number},\"{first_name} {last_name}\",{precinct},{primary_vote_date},{primary_ballot_type},{primary_party},{party},{ballot_type},{vote_date}")
+        else:
+            num_non_travis_primary_voter += 1
+            voted_in_travis_primary = False
+
         try:
             vuid_record = registered_vuids[vuid_number]
 
@@ -699,8 +692,8 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
                 rv_middle_name = record['MIDDLE_NAME'].strip()
                 rv_party = record['PARTY_CODE'].strip() if 'PARTY_CODE' in record else ''
             except KeyError:
-                name = record['NAME'].strip()
-                name_parts = [item.strip() for item in name.split(",")]
+                voter_name = record['NAME'].strip()
+                name_parts = [item.strip() for item in voter_name.split(",")]
                 rv_last_name = name_parts[0].strip()
                 first_mid_name = name_parts[1].strip()
 
@@ -724,9 +717,10 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
             # any discrepancies for those voters).
             # print(f"Comparing party affiliation for VUID {vuid_number} [{precinct}]: Registered='{rv_party}' vs Roster='{party}'")
 
-            if rv_party and party and (rv_party != party):
+            if rv_party and party and (rv_party != party) and voted_in_travis_primary is False:
                 num_party_affiliation_incorrect += 1
-                print(f"PR26 party affiliation discrepancy for VUID {vuid_number} \"{first_name} {last_name}\" [{precinct}]: Registered='{rv_party}' vs Roster='{party}' ballot='{ballot_type}' vote_date='{vote_date}'")
+                #print(f"State PR26 party affiliation discrepancy for VUID {vuid_number} \"{first_name} {last_name}\" [{precinct}]: Registered='{rv_party}' vs Roster='{party}' ballot='{ballot_type}' vote_date='{vote_date}'")
+                print(f"State_PR26_error,{vuid_number},\"{first_name} {last_name}\",{precinct},,,{rv_party},{party},{ballot_type},{vote_date}")
 
         except KeyError:
 
@@ -747,6 +741,9 @@ def analyze_voter_roster(voter_roster, registered_vuids, voter_list_pathname, sh
     print(f"Found {num_unknown_voter_rep} private/unknown REP voter records")
     print(f"Found {num_unknown_voter_dem} private/unknown DEM voter records")
     print(f"Found {num_party_affiliation_incorrect} voters with party affiliation discrepancies between the registered voter list and the voter roster")
+    print(f"Found {num_primary_voter_rep} primary REP voters voting in the runoff election")
+    print(f"Found {num_primary_voter_dem} primary DEM voters voting in the runoff election")
+    print(f"Found {num_non_travis_primary_voter} voters voting in the runoff election that did not vote in the Travis primary election")
 
     return unknown_voter_roster
 

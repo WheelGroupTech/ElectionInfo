@@ -20,6 +20,12 @@ from typing import Dict, List
 
 
 def parse_fixed_width(line: str, start: int, end: int) -> str:
+    """Return the substring from a fixed-width record.
+
+    The layout specification uses 1-based inclusive positions for start and end.
+    This helper converts to Python's 0-based indexing and strips trailing
+    whitespace.
+    """
     # start and end are 1-based inclusive positions per the layout file
     return line[start - 1:end].rstrip()
 
@@ -66,7 +72,16 @@ def load_improvements(imp_path: str) -> Dict[str, List[Dict[str, str]]]:
     return imps
 
 
-def write_csv(output_path: str, props: Dict[str, Dict[str, str]], imps: Dict[str, List[Dict[str, str]]]):
+def write_csv(
+    output_path: str,
+    props: Dict[str, Dict[str, str]],
+    imps: Dict[str, List[Dict[str, str]]],
+) -> None:
+    """Write the combined property and improvement data to a CSV file.
+
+    Each row contains the property ID, situs address components, and a
+    semicolon-separated list of improvement type codes and descriptions.
+    """
     fieldnames = [
         "prop_id",
         "situs_street_prefx",
@@ -106,7 +121,12 @@ def write_csv(output_path: str, props: Dict[str, Dict[str, str]], imps: Dict[str
                 writer.writerow(row)
 
 
-def main(argv: List[str]):
+def main(argv: List[str]) -> int:
+    """Entry point for the script.
+
+    argv is expected to be sys.argv. Returns an exit code suitable for
+    SystemExit.
+    """
     if len(argv) < 2:
         print("Usage: parse_appaisal_data.py /path/to/export_dir [output.csv]")
         return 2

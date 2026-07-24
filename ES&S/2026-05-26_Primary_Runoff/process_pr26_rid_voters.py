@@ -80,7 +80,7 @@ def process_excel_workbook(pathname):
         has_vuid = any('state voter id' in v for v in row_vals)
         has_first = any('first name' in v for v in row_vals)
         has_last = any('last name' in v for v in row_vals)
-        has_rid = any('rid reason' in v for v in row_vals)
+        has_rid = any('no photo id reason' in v for v in row_vals)
 
         # If we see vuid and rid and first&last name column, choose this row
         if has_vuid and has_rid and has_first and has_last:
@@ -117,7 +117,7 @@ def process_excel_workbook(pathname):
             col_last = c
         elif 'middle' in val:
             col_middle = c
-        elif 'rid' in val:
+        elif 'no photo id reason' in val:
             col_rid = c
         elif 'id type' in val:
             col_id_type = c

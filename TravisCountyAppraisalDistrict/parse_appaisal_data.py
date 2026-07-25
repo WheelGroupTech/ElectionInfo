@@ -39,17 +39,21 @@ def load_properties(prop_path: str) -> Dict[str, Dict[str, str]]:
                 continue
             # Fields per layout (1-based positions)
             prop_id = parse_fixed_width(ln, 1, 12).strip()
+            situs_num = parse_fixed_width(ln, 4460, 4474).strip()
             situs_street_prefx = parse_fixed_width(ln, 1040, 1049).strip()
             situs_street = parse_fixed_width(ln, 1050, 1099).strip()
             situs_street_suffix = parse_fixed_width(ln, 1100, 1109).strip()
+            situs_unit = parse_fixed_width(ln, 4475, 4479).strip()
             situs_city = parse_fixed_width(ln, 1110, 1139).strip()
             situs_zip = parse_fixed_width(ln, 1140, 1149).strip()
 
             props[prop_id] = {
                 "prop_id": prop_id,
+                "situs_num": situs_num,
                 "situs_street_prefx": situs_street_prefx,
                 "situs_street": situs_street,
                 "situs_street_suffix": situs_street_suffix,
+                "situs_unit": situs_unit,
                 "situs_city": situs_city,
                 "situs_zip": situs_zip,
             }
@@ -84,9 +88,11 @@ def write_csv(
     """
     fieldnames = [
         "prop_id",
+        "situs_num",
         "situs_street_prefx",
         "situs_street",
         "situs_street_suffix",
+        "situs_unit",
         "situs_city",
         "situs_zip",
         "improv_type_cd",

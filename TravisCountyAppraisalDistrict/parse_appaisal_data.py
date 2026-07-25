@@ -30,8 +30,104 @@ def parse_fixed_width(line: str, start: int, end: int) -> str:
     return line[start - 1:end].rstrip()
 
 
+def _normalize_addr(text: str) -> str:
+    """Normalize address text for loose comparison."""
+    return " ".join(text.upper().split())
+
+
+def _build_situs_street_key(
+    situs_num: str,
+    situs_street_prefx: str,
+    situs_street: str,
+    situs_street_suffix: str,
+) -> str:
+    """Build a normalized situs street string used for owner matching."""
+    parts = [situs_num, situs_street_prefx, situs_street, situs_street_suffix]
+    return _normalize_addr(" ".join(part for part in parts if part))
+
+
+def _owner_street_matches(situs_street_key: str, owner_lines: List[str]) -> bool:
+    """Return True if the situs street appears in any owner address line."""
+    if not situs_street_key:
+        return False
+
+    # Prefer matching the street name portion when house number is absent
+    # from owner lines, so also try without a leading house number.
+    situs_street_only = " ".join(situs_street_key.split()[1:]) if (
+        situs_street_key.split() and situs_street_key.split()[0].isdigit()
+    ) else situs_street_key
+
+    for line in owner_lines:
+        owner_norm = _normalize_addr(line)
+        if not owner_norm:
+            continue
+        if situs_street_key and situs_street_key in owner_norm:
+            return True
+        if situs_street_only and situs_street_only in owner_norm:
+            return True
+    return False
+
+
+def _fill_situs_city_from_owner(
+    situs_city: str,
+    situs_street_key: str,
+    owner_lines: List[str],
+    owner_city: str,
+) -> str:
+    """Fill empty situs_city from an owner city when streets match."""
+    if situs_city:
+        return situs_city
+    owner_city = owner_city.strip()
+    if not owner_city:
+        return situs_city
+    if _owner_street_matches(situs_street_key, owner_lines):
+        return owner_city
+    return situs_city
+
+
+# Owner address layouts: three line ranges followed by city range.
+# Each range is (start, end) using 1-based inclusive positions.
+_OWNER_ADDR_LAYOUTS = (
+    ((694, 753), (754, 813), (814, 873), (874, 923)),       # property year
+    ((2273, 2332), (2333, 2392), (2393, 2452), (2453, 2502)),  # january 1
+)
+
+
+def _parse_owner_address(
+    line: str,
+    layout: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]],
+) -> tuple[List[str], str]:
+    """Parse owner address lines and city using a layout of field ranges."""
+    line1, line2, line3, city = layout
+    owner_lines = [
+        parse_fixed_width(line, line1[0], line1[1]).strip(),
+        parse_fixed_width(line, line2[0], line2[1]).strip(),
+        parse_fixed_width(line, line3[0], line3[1]).strip(),
+    ]
+    owner_city = parse_fixed_width(line, city[0], city[1]).strip()
+    return owner_lines, owner_city
+
+
+def _resolve_situs_city(line: str, situs_city: str, situs_street_key: str) -> str:
+    """Fill blank situs_city from matching property-year or Jan 1 owner city."""
+    if situs_city:
+        return situs_city
+    for layout in _OWNER_ADDR_LAYOUTS:
+        owner_lines, owner_city = _parse_owner_address(line, layout)
+        filled = _fill_situs_city_from_owner(
+            situs_city, situs_street_key, owner_lines, owner_city
+        )
+        if filled:
+            return filled
+    return situs_city
+
+
 def load_properties(prop_path: str) -> Dict[str, Dict[str, str]]:
-    """Load PROP.TXT returning a map prop_id -> address fields."""
+    """Load PROP.TXT returning a map prop_id -> address fields.
+
+    When situs_city is blank, attempt to fill it from the property-year owner
+    or January 1 owner city if the owner street matches the situs street.
+    """
     props: Dict[str, Dict[str, str]] = {}
     with open(prop_path, "r", encoding="latin1", errors="replace") as fh:
         for ln in fh:
@@ -46,6 +142,14 @@ def load_properties(prop_path: str) -> Dict[str, Dict[str, str]]:
             situs_unit = parse_fixed_width(ln, 4475, 4479).strip()
             situs_city = parse_fixed_width(ln, 1110, 1139).strip()
             situs_zip = parse_fixed_width(ln, 1140, 1149).strip()
+
+            situs_street_key = _build_situs_street_key(
+                situs_num,
+                situs_street_prefx,
+                situs_street,
+                situs_street_suffix,
+            )
+            situs_city = _resolve_situs_city(ln, situs_city, situs_street_key)
 
             props[prop_id] = {
                 "prop_id": prop_id,

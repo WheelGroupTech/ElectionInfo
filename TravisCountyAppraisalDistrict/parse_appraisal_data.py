@@ -274,8 +274,11 @@ def write_csv(
         writer = csv.DictWriter(csvf, fieldnames=fieldnames)
         writer.writeheader()
 
-        # iterate properties; include those without improvements as well
-        for prop_id, pdata in props.items():
+        # iterate properties sorted by prop_id ascending
+        for prop_id, pdata in sorted(
+            props.items(),
+            key=lambda item: int(item[0]) if item[0].isdigit() else item[0],
+        ):
             unique_imps = _unique_improvements(imps.get(prop_id, []))
             if unique_imps:
                 seen_cd = []

@@ -24,10 +24,14 @@ from __future__ import annotations
 import csv
 import os
 import sys
-from typing import Dict, List
+from typing import Dict, List, MutableMapping
 
-TOTAL_EMPTY_SITUS_CITY = 0
-TOTAL_EMPTY_SITUS_CITY_FILLED = 0
+
+# Mutable counters avoid pylint global-statement warnings.
+SITUS_CITY_STATS: MutableMapping[str, int] = {
+    "empty": 0,
+    "filled": 0,
+}
 
 
 #-----------------------------------------------------------------------------
@@ -144,16 +148,14 @@ def _resolve_situs_city(line: str, situs_city: str, situs_street_key: str) -> st
     """Fill blank situs_city from matching property-year or Jan 1 owner city."""
     if situs_city:
         return situs_city
-    global TOTAL_EMPTY_SITUS_CITY
-    TOTAL_EMPTY_SITUS_CITY += 1
+    SITUS_CITY_STATS["empty"] += 1
     for layout in _OWNER_ADDR_LAYOUTS:
         owner_lines, owner_city = _parse_owner_address(line, layout)
         filled = _fill_situs_city_from_owner(
             situs_city, situs_street_key, owner_lines, owner_city
         )
         if filled:
-            global TOTAL_EMPTY_SITUS_CITY_FILLED
-            TOTAL_EMPTY_SITUS_CITY_FILLED += 1
+            SITUS_CITY_STATS["filled"] += 1
             return filled
     return situs_city
 
@@ -223,6 +225,24 @@ def load_improvements(imp_path: str) -> Dict[str, List[Dict[str, str]]]:
 
 
 #-----------------------------------------------------------------------------
+# _unique_improvements()
+#-----------------------------------------------------------------------------
+def _unique_improvements(
+    improvements: List[Dict[str, str]],
+) -> List[tuple[str, str]]:
+    """Return unique (type_cd, type_desc) pairs preserving first-seen order."""
+    seen: List[tuple[str, str]] = []
+    seen_set = set()
+    for entry in improvements:
+        pair = (entry.get("type_cd", ""), entry.get("type_desc", ""))
+        if pair == ("", "") or pair in seen_set:
+            continue
+        seen_set.add(pair)
+        seen.append(pair)
+    return seen
+
+
+#-----------------------------------------------------------------------------
 # write_csv()
 #-----------------------------------------------------------------------------
 def write_csv(
@@ -253,14 +273,11 @@ def write_csv(
 
         # iterate properties; include those without improvements as well
         for prop_id, pdata in props.items():
-            improvements = imps.get(prop_id, [])
-            if improvements:
-                # join unique codes/descriptions preserving order
+            unique_imps = _unique_improvements(imps.get(prop_id, []))
+            if unique_imps:
                 seen_cd = []
                 seen_desc = []
-                for e in improvements:
-                    cd = e.get("type_cd", "")
-                    desc = e.get("type_desc", "")
+                for cd, desc in unique_imps:
                     if cd and cd not in seen_cd:
                         seen_cd.append(cd)
                     if desc and desc not in seen_desc:
@@ -277,6 +294,41 @@ def write_csv(
 
 
 #-----------------------------------------------------------------------------
+# write_improv_types_csv()
+#-----------------------------------------------------------------------------
+def write_improv_types_csv(
+    output_path: str,
+    props: Dict[str, Dict[str, str]],
+    imps: Dict[str, List[Dict[str, str]]],
+) -> int:
+    """Write one row per improvement type with property counts.
+
+    Counts how many travis_properties.csv rows include each
+    (improv_type_cd, improv_type_desc) pair. Returns the number of type rows.
+    """
+    counts: Dict[tuple[str, str], int] = {}
+    for prop_id in props:
+        for pair in _unique_improvements(imps.get(prop_id, [])):
+            counts[pair] = counts.get(pair, 0) + 1
+
+    fieldnames = ["improv_type_cd", "improv_type_desc", "count"]
+    with open(output_path, "w", newline="", encoding="utf-8") as csvf:
+        writer = csv.DictWriter(csvf, fieldnames=fieldnames)
+        writer.writeheader()
+        for (type_cd, type_desc), count in sorted(
+            counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+        ):
+            writer.writerow(
+                {
+                    "improv_type_cd": type_cd,
+                    "improv_type_desc": type_desc,
+                    "count": count,
+                }
+            )
+    return len(counts)
+
+
+#-----------------------------------------------------------------------------
 # main()
 #-----------------------------------------------------------------------------
 def main(argv: List[str]) -> int:
@@ -290,6 +342,7 @@ def main(argv: List[str]) -> int:
         return 2
     in_dir = argv[1]
     output = argv[2] if len(argv) > 2 else os.path.join(in_dir, "travis_properties.csv")
+    improv_types_output = os.path.join(in_dir, "travis_improv_types.csv")
 
     prop_file = os.path.join(in_dir, "PROP.TXT")
     imp_file = os.path.join(in_dir, "IMP_INFO.TXT")
@@ -305,9 +358,11 @@ def main(argv: List[str]) -> int:
     imps = load_improvements(imp_file)
 
     write_csv(output, props, imps)
+    type_count = write_improv_types_csv(improv_types_output, props, imps)
     print(f"Wrote {output} with {len(props)} properties")
-    print(f"Empty situs cities: {TOTAL_EMPTY_SITUS_CITY}")
-    print(f"Filled situs cities: {TOTAL_EMPTY_SITUS_CITY_FILLED}")
+    print(f"Wrote {improv_types_output} with {type_count} improvement types")
+    print(f"Empty situs cities: {SITUS_CITY_STATS['empty']}")
+    print(f"Filled situs cities: {SITUS_CITY_STATS['filled']}")
     return 0
 
 

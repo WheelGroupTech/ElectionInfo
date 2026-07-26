@@ -221,8 +221,12 @@ def load_improvements(imp_path: str) -> Dict[str, List[Dict[str, str]]]:
             prop_id = parse_fixed_width(ln, 1, 12).strip()
             improv_type_cd = parse_fixed_width(ln, 29, 38).strip()
             improv_type_desc = parse_fixed_width(ln, 39, 63).strip()
-            # store minimal fields; could extend later
-            entry = {"type_cd": improv_type_cd, "type_desc": improv_type_desc}
+            imprv_state_cd = parse_fixed_width(ln, 64, 68).strip()
+            entry = {
+                "type_cd": improv_type_cd,
+                "type_desc": improv_type_desc,
+                "state_cd": imprv_state_cd,
+            }
             imps.setdefault(prop_id, []).append(entry)
     return imps
 
@@ -232,16 +236,20 @@ def load_improvements(imp_path: str) -> Dict[str, List[Dict[str, str]]]:
 #-----------------------------------------------------------------------------
 def _unique_improvements(
     improvements: List[Dict[str, str]],
-) -> List[tuple[str, str]]:
-    """Return unique (type_cd, type_desc) pairs preserving first-seen order."""
-    seen: List[tuple[str, str]] = []
+) -> List[tuple[str, str, str]]:
+    """Return unique (type_cd, type_desc, state_cd) triples in first-seen order."""
+    seen: List[tuple[str, str, str]] = []
     seen_set = set()
     for entry in improvements:
-        pair = (entry.get("type_cd", ""), entry.get("type_desc", ""))
-        if pair == ("", "") or pair in seen_set:
+        triple = (
+            entry.get("type_cd", ""),
+            entry.get("type_desc", ""),
+            entry.get("state_cd", ""),
+        )
+        if triple[:2] == ("", "") or triple in seen_set:
             continue
-        seen_set.add(pair)
-        seen.append(pair)
+        seen_set.add(triple)
+        seen.append(triple)
     return seen
 
 
@@ -256,7 +264,8 @@ def write_csv(
     """Write the combined property and improvement data to a CSV file.
 
     Each row contains the property ID, situs address components, and a
-    semicolon-separated list of improvement type codes and descriptions.
+    semicolon-separated list of improvement type codes, descriptions, and
+    state codes.
     """
     fieldnames = [
         "prop_id",
@@ -269,6 +278,7 @@ def write_csv(
         "situs_zip",
         "improv_type_cd",
         "improv_type_desc",
+        "imprv_state_cd",
     ]
     with open(output_path, "w", newline="", encoding="utf-8") as csvf:
         writer = csv.DictWriter(csvf, fieldnames=fieldnames)
@@ -283,19 +293,28 @@ def write_csv(
             if unique_imps:
                 seen_cd = []
                 seen_desc = []
-                for cd, desc in unique_imps:
+                seen_state = []
+                for cd, desc, state_cd in unique_imps:
                     if cd and cd not in seen_cd:
                         seen_cd.append(cd)
                     if desc and desc not in seen_desc:
                         seen_desc.append(desc)
+                    if state_cd and state_cd not in seen_state:
+                        seen_state.append(state_cd)
                 row = {
                     **pdata,
                     "improv_type_cd": ";".join(seen_cd),
                     "improv_type_desc": ";".join(seen_desc),
+                    "imprv_state_cd": ";".join(seen_state),
                 }
                 writer.writerow(row)
             else:
-                row = {**pdata, "improv_type_cd": "", "improv_type_desc": ""}
+                row = {
+                    **pdata,
+                    "improv_type_cd": "",
+                    "improv_type_desc": "",
+                    "imprv_state_cd": "",
+                }
                 writer.writerow(row)
 
 
@@ -310,24 +329,52 @@ def write_improv_types_csv(
     """Write one row per improvement type with property counts.
 
     Counts how many travis_properties.csv rows include each
-    (improv_type_cd, improv_type_desc) pair. Returns the number of type rows.
+    (improv_type_cd, improv_type_desc, imprv_state_cd) triple. If the same
+    type code/description appears with more than one state code, each
+    combination is written as a separate row and a message is printed.
+    Returns the number of type rows.
     """
-    counts: Dict[tuple[str, str], int] = {}
+    counts: Dict[tuple[str, str, str], int] = {}
     for prop_id in props:
-        for pair in _unique_improvements(imps.get(prop_id, [])):
-            counts[pair] = counts.get(pair, 0) + 1
+        for triple in _unique_improvements(imps.get(prop_id, [])):
+            counts[triple] = counts.get(triple, 0) + 1
 
-    fieldnames = ["improv_type_cd", "improv_type_desc", "count"]
+    # Detect type_cd/type_desc pairs that map to multiple state codes.
+    states_by_type: Dict[tuple[str, str], set[str]] = {}
+    for type_cd, type_desc, state_cd in counts:
+        states_by_type.setdefault((type_cd, type_desc), set()).add(state_cd)
+    for (type_cd, type_desc), state_codes in sorted(states_by_type.items()):
+        if len(state_codes) > 1:
+            state_list = ", ".join(sorted(state_codes))
+            print(
+                "State code difference encountered for "
+                f"improv_type_cd={type_cd!r}, improv_type_desc={type_desc!r}: "
+                f"{state_list}"
+            )
+
+    fieldnames = [
+        "improv_type_cd",
+        "improv_type_desc",
+        "imprv_state_cd",
+        "count",
+    ]
     with open(output_path, "w", newline="", encoding="utf-8") as csvf:
         writer = csv.DictWriter(csvf, fieldnames=fieldnames)
         writer.writeheader()
-        for (type_cd, type_desc), count in sorted(
-            counts.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+        for (type_cd, type_desc, state_cd), count in sorted(
+            counts.items(),
+            key=lambda item: (
+                -item[1],
+                item[0][0],
+                item[0][1],
+                item[0][2],
+            ),
         ):
             writer.writerow(
                 {
                     "improv_type_cd": type_cd,
                     "improv_type_desc": type_desc,
+                    "imprv_state_cd": state_cd,
                     "count": count,
                 }
             )

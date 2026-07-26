@@ -1,4 +1,15 @@
+#-----------------------------------------------------------------------------
+# parse_appaisal_data.py
+#
+# Copyright (c) 2026 Daniel M. Teal
+#
+# License: MIT License
+#
+# Python script to extract and combine property and improvement data from
+# Travis County Appraisal District fixed-width export files.
+#-----------------------------------------------------------------------------
 #!/usr/bin/env python3
+#-----------------------------------------------------------------------------
 """Simple parser for Travis County Appraisal District fixed-width exports.
 
 Reads PROP.TXT and IMP_INFO.TXT from an input directory and writes a CSV with
@@ -7,9 +18,6 @@ improvement type code(s) and description(s) (joined with ';' if multiple).
 
 Usage:
     python parse_appaisal_data.py /path/to/export_dir [output.csv]
-
-This file was created to implement the layout described by the user and is
-minimal and defensive. It does not require external libraries.
 """
 from __future__ import annotations
 
@@ -18,7 +26,13 @@ import os
 import sys
 from typing import Dict, List
 
+TOTAL_EMPTY_SITUS_CITY = 0
+TOTAL_EMPTY_SITUS_CITY_FILLED = 0
 
+
+#-----------------------------------------------------------------------------
+# parse_fixed_width()
+#-----------------------------------------------------------------------------
 def parse_fixed_width(line: str, start: int, end: int) -> str:
     """Return the substring from a fixed-width record.
 
@@ -30,11 +44,17 @@ def parse_fixed_width(line: str, start: int, end: int) -> str:
     return line[start - 1:end].rstrip()
 
 
+#-----------------------------------------------------------------------------
+# _normalize_addr()
+#-----------------------------------------------------------------------------
 def _normalize_addr(text: str) -> str:
     """Normalize address text for loose comparison."""
     return " ".join(text.upper().split())
 
 
+#-----------------------------------------------------------------------------
+# _build_situs_street_key()
+#-----------------------------------------------------------------------------
 def _build_situs_street_key(
     situs_num: str,
     situs_street_prefx: str,
@@ -46,6 +66,9 @@ def _build_situs_street_key(
     return _normalize_addr(" ".join(part for part in parts if part))
 
 
+#-----------------------------------------------------------------------------
+# _owner_street_matches()
+#-----------------------------------------------------------------------------
 def _owner_street_matches(situs_street_key: str, owner_lines: List[str]) -> bool:
     """Return True if the situs street appears in any owner address line."""
     if not situs_street_key:
@@ -68,6 +91,9 @@ def _owner_street_matches(situs_street_key: str, owner_lines: List[str]) -> bool
     return False
 
 
+#-----------------------------------------------------------------------------
+# _fill_situs_city_from_owner()
+#-----------------------------------------------------------------------------
 def _fill_situs_city_from_owner(
     situs_city: str,
     situs_street_key: str,
@@ -93,6 +119,9 @@ _OWNER_ADDR_LAYOUTS = (
 )
 
 
+#-----------------------------------------------------------------------------
+# _parse_owner_address()
+#-----------------------------------------------------------------------------
 def _parse_owner_address(
     line: str,
     layout: tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]],
@@ -108,20 +137,30 @@ def _parse_owner_address(
     return owner_lines, owner_city
 
 
+#-----------------------------------------------------------------------------
+# _resolve_situs_city()
+#-----------------------------------------------------------------------------
 def _resolve_situs_city(line: str, situs_city: str, situs_street_key: str) -> str:
     """Fill blank situs_city from matching property-year or Jan 1 owner city."""
     if situs_city:
         return situs_city
+    global TOTAL_EMPTY_SITUS_CITY
+    TOTAL_EMPTY_SITUS_CITY += 1
     for layout in _OWNER_ADDR_LAYOUTS:
         owner_lines, owner_city = _parse_owner_address(line, layout)
         filled = _fill_situs_city_from_owner(
             situs_city, situs_street_key, owner_lines, owner_city
         )
         if filled:
+            global TOTAL_EMPTY_SITUS_CITY_FILLED
+            TOTAL_EMPTY_SITUS_CITY_FILLED += 1
             return filled
     return situs_city
 
 
+#-----------------------------------------------------------------------------
+# load_properties()
+#-----------------------------------------------------------------------------
 def load_properties(prop_path: str) -> Dict[str, Dict[str, str]]:
     """Load PROP.TXT returning a map prop_id -> address fields.
 
@@ -164,6 +203,9 @@ def load_properties(prop_path: str) -> Dict[str, Dict[str, str]]:
     return props
 
 
+#-----------------------------------------------------------------------------
+# load_improvements()
+#-----------------------------------------------------------------------------
 def load_improvements(imp_path: str) -> Dict[str, List[Dict[str, str]]]:
     """Load IMP_INFO.TXT returning a map prop_id -> list of improvements."""
     imps: Dict[str, List[Dict[str, str]]] = {}
@@ -180,6 +222,9 @@ def load_improvements(imp_path: str) -> Dict[str, List[Dict[str, str]]]:
     return imps
 
 
+#-----------------------------------------------------------------------------
+# write_csv()
+#-----------------------------------------------------------------------------
 def write_csv(
     output_path: str,
     props: Dict[str, Dict[str, str]],
@@ -231,6 +276,9 @@ def write_csv(
                 writer.writerow(row)
 
 
+#-----------------------------------------------------------------------------
+# main()
+#-----------------------------------------------------------------------------
 def main(argv: List[str]) -> int:
     """Entry point for the script.
 
@@ -258,6 +306,8 @@ def main(argv: List[str]) -> int:
 
     write_csv(output, props, imps)
     print(f"Wrote {output} with {len(props)} properties")
+    print(f"Empty situs cities: {TOTAL_EMPTY_SITUS_CITY}")
+    print(f"Filled situs cities: {TOTAL_EMPTY_SITUS_CITY_FILLED}")
     return 0
 
 

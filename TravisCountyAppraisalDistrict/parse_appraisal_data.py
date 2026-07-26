@@ -9,6 +9,9 @@
 # Travis County Appraisal District fixed-width export files.
 #-----------------------------------------------------------------------------
 #!/usr/bin/env python3
+#
+# pylint: disable=line-too-long,unused-variable,too-many-branches, too-many-locals
+# pylint: disable=broad-exception-caught,too-many-statements
 #-----------------------------------------------------------------------------
 """Simple parser for Travis County Appraisal District fixed-width exports.
 

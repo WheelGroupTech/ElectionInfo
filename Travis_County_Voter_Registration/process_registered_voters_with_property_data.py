@@ -23,8 +23,29 @@ import sys
 from collections import Counter
 
 
-# Residential TCAD state-code prefixes (A=single family, B=multifamily, E=farm/ranch resid).
-RESIDENTIAL_STATE_PREFIXES = ('A', 'B', 'E')
+# Residential TCAD state-code prefixes (A=single family, B=multifamily, E=farm/ranch resid,
+# O=residential inventory). These are excluded from the non-residential match report.
+RESIDENTIAL_STATE_PREFIXES = ('A', 'B', 'E', 'O')
+
+# F1 (commercial) improvement-type markers that are residential-use and should be treated as
+# residential / excluded from the non-residential match report. Matching is case-insensitive
+# substring search so prefixes or additional ';'-separated types still match.
+F1_RESIDENTIAL_IMPROV_TYPE_MARKERS = (
+    'TREATMENT/REHAB',
+    'SFR COMM',
+    'DUPLEX COMM',
+    'GARAGE APT COMM',
+    'DORMITORY',
+    'FRAT/SORORITY',
+    'INDEPENDENT LIVING',
+    'ASSISTED LIVING/MEMORY',
+    'SKILLED NURSING',
+    'ALT LIVING CTR',
+    'MOHO',
+    'CONTINUING CARE',
+    'OFF HI-RISE',
+    'DWELLING'
+)
 
 # Common directional / street-type expansions used during normalization.
 _DIRECTION_MAP = {
@@ -408,8 +429,13 @@ def format_address_display(number, street, unit='', city='', zip_code=''):
 #-----------------------------------------------------------------------------
 # is_residential_state_cd()
 #-----------------------------------------------------------------------------
-def is_residential_state_cd(imprv_state_cd):
-    """Return True if any state-code token starts with A, B, or E.
+def is_residential_state_cd(imprv_state_cd, improv_type_desc=''):
+    """Return True if the property should be treated as residential.
+
+    A property is residential when:
+      - any imprv_state_cd token starts with A, B, E, or O, or
+      - any imprv_state_cd token is F1 and improv_type_desc contains a known
+        residential-use commercial marker (see F1_RESIDENTIAL_IMPROV_TYPE_MARKERS).
 
     Empty/missing codes are treated as non-residential.
     """
@@ -417,12 +443,25 @@ def is_residential_state_cd(imprv_state_cd):
     if not text:
         return False
 
+    codes = []
     for token in text.split(';'):
         code = token.strip().upper()
-        if not code:
-            continue
+        if code:
+            codes.append(code)
+
+    if not codes:
+        return False
+
+    for code in codes:
         if code[0] in RESIDENTIAL_STATE_PREFIXES:
             return True
+
+    if any(code == 'F1' for code in codes):
+        desc = (improv_type_desc or '').upper()
+        if desc:
+            for marker in F1_RESIDENTIAL_IMPROV_TYPE_MARKERS:
+                if marker in desc:
+                    return True
     return False
 
 
@@ -433,8 +472,14 @@ def property_is_preferred(candidate, existing):
     """Prefer property rows that have a residential state code."""
     if existing is None:
         return True
-    cand_res = is_residential_state_cd(candidate.get('imprv_state_cd', ''))
-    exist_res = is_residential_state_cd(existing.get('imprv_state_cd', ''))
+    cand_res = is_residential_state_cd(
+        candidate.get('imprv_state_cd', ''),
+        candidate.get('improv_type_desc', ''),
+    )
+    exist_res = is_residential_state_cd(
+        existing.get('imprv_state_cd', ''),
+        existing.get('improv_type_desc', ''),
+    )
     if cand_res and not exist_res:
         return True
     return False
@@ -941,7 +986,7 @@ def process_registered_voter_list(pathname, property_data_path):
         )
         matched_group_counts[group_key] += 1
 
-        if is_residential_state_cd(imprv_state_cd):
+        if is_residential_state_cd(imprv_state_cd, improv_type_desc):
             residential_count += 1
         else:
             nonresidential_count += 1

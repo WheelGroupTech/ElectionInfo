@@ -919,6 +919,46 @@ def extract_voter_name(record, fields):
 
 
 #-----------------------------------------------------------------------------
+# is_confidential_address_text()
+#-----------------------------------------------------------------------------
+def is_confidential_address_text(*values):
+    """Return True if any value looks like a confidential-address redaction.
+
+    Travis County confidential voters list residential address fields as one or
+    more groupings of three asterisks, e.g. ``***`` or
+    ``*** *** *** *** *** -***``.
+    """
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        if '***' in text:
+            return True
+    return False
+
+
+#-----------------------------------------------------------------------------
+# is_confidential_address()
+#-----------------------------------------------------------------------------
+def is_confidential_address(address):
+    """Return True if a parsed voter address dict is confidential / redacted."""
+    if not address:
+        return False
+    if address.get('confidential'):
+        return True
+    return is_confidential_address_text(
+        address.get('display', ''),
+        address.get('number', ''),
+        address.get('street', ''),
+        address.get('unit', ''),
+        address.get('city', ''),
+        address.get('zip', ''),
+    )
+
+
+#-----------------------------------------------------------------------------
 # extract_voter_address()
 #-----------------------------------------------------------------------------
 def extract_voter_address(record, fields):
@@ -926,6 +966,9 @@ def extract_voter_address(record, fields):
 
     Prefers component columns when a street number is present; otherwise
     parses the free-form residential address field.
+
+    Confidential / redacted addresses (``***`` groupings) are flagged with
+    ``confidential=True`` and left largely unparsed.
     """
     city = get_field_value(record, fields['city'])
     zip_code = get_field_value(record, fields['zip'])
@@ -939,6 +982,20 @@ def extract_voter_address(record, fields):
     post = get_field_value(record, fields['post_direction'])
     unit = get_field_value(record, fields['unit'])
     unit_type = get_field_value(record, fields['unit_type'])
+
+    if is_confidential_address_text(
+        freeform, number, pre, name1, name2, street_type, post, unit, unit_type, city, zip_code
+    ):
+        display = freeform or number or '***'
+        return {
+            'number': '',
+            'street': '',
+            'unit': '',
+            'city': '',
+            'zip': '',
+            'display': ' '.join(str(display).split()),
+            'confidential': True,
+        }
 
     if number and (name1 or name2 or street_type or pre):
         street = compose_street(pre, name1, street_type, name2=name2)
@@ -970,6 +1027,7 @@ def extract_voter_address(record, fields):
             'city': normalize_text(city),
             'zip': normalize_zip(zip_code),
             'display': ' '.join(str(display).split()),
+            'confidential': False,
         }
 
     if freeform:
@@ -978,6 +1036,7 @@ def extract_voter_address(record, fields):
             parsed['city'] = normalize_text(city)
         if zip_code:
             parsed['zip'] = normalize_zip(zip_code)
+        parsed['confidential'] = False
         return parsed
 
     if name1 or name2 or street_type:
@@ -991,6 +1050,7 @@ def extract_voter_address(record, fields):
             'city': normalize_text(city),
             'zip': normalize_zip(zip_code),
             'display': display,
+            'confidential': False,
         }
 
     return {
@@ -1000,6 +1060,7 @@ def extract_voter_address(record, fields):
         'city': normalize_text(city),
         'zip': normalize_zip(zip_code),
         'display': '',
+        'confidential': False,
     }
 
 
@@ -1085,9 +1146,18 @@ def process_registered_voter_list(pathname, property_data_path):
     residential_count = 0
     nonresidential_count = 0
     unmatched_count = 0
+    confidential_count = 0
 
     for vuid_number, voter in vuids.items():
         addr = voter['address']
+
+        # Confidential voters have redacted residential addresses (*** groupings).
+        # Do not attempt property matching and do not write them to the unmatched
+        # or non-residential detail reports.
+        if is_confidential_address(addr):
+            confidential_count += 1
+            continue
+
         prop, match_level = match_property(
             property_indexes,
             addr.get('number', ''),
@@ -1190,6 +1260,7 @@ def process_registered_voter_list(pathname, property_data_path):
     print("SUMMARY")
     print("=" * 72)
     print(f"Unique voters processed:              {len(vuids)}")
+    print(f"Confidential address (excluded):      {confidential_count}")
     print(f"Matched to property data:             {matched_count}")
     print(f"  Residential (A/B/E state code):     {residential_count}")
     print(f"  Non-residential / blank state code: {nonresidential_count}")

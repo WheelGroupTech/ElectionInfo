@@ -13,30 +13,6 @@
 #-----------------------------------------------------------------------------
 """analyze_travis_precinct_changes.py"""
 
-# PSEUDOCODE / PLAN (detailed)
-# 1. Read CSV records robustly trying several encodings.
-# 2. For each successful CSV parse, build:
-#    - sd_to_precincts: mapping state senate district -> set(precinct)
-#    - precinct_to_addresses: mapping precinct -> dict(address -> voter_count)
-#    - precinct_to_sd: mapping precinct -> state senate district (ensure one-to-one)
-# 3. Field detection:
-#    - Detect VUID field name ('VUID' or 'VUIDNO', case-insensitive)
-#    - Detect 'RESIDENTIAL ADDRESS', 'PRECINCT', 'STATE SENATE' header names (case-insensitive)
-# 4. For each record:
-#    - Extract vuid, address, precinct, state_senate (use detected header names)
-#    - Skip records missing VUID
-#    - Skip records missing precinct (warn)
-#    - If state_senate:
-#        - Ensure precinct_to_sd consistency
-#        - Add precinct to sd_to_precincts[state_senate]
-#    - If address:
-#        - Use precinct_to_addresses[precinct] (dict) and increment count for address
-# 5. Return the two mappings for reporting.
-# 6. Main prints:
-#    - For each SD: number of precincts
-#    - For each precinct: number of unique addresses (len of dict)
-# Note: The address tracking now includes counts of registered voters per address.
-
 import csv
 import sys
 
@@ -318,7 +294,7 @@ def determine_precinct_changes(old_precinct_to_addresses, new_precinct_to_addres
     grand_new_total = sum(v for k, v in new_totals.items() if k is not None)
     grand_unmapped = new_totals.get(None, 0)
 
-    for old_precinct in sorted(old_totals.keys(), key=lambda x: (str(x))):
+    for old_precinct in sorted(old_totals, key=str):
         old_total = old_totals[old_precinct]
         print(f"Old precinct '{old_precinct}': {old_total} registered voters")
 
@@ -356,7 +332,7 @@ def determine_precinct_changes(old_precinct_to_addresses, new_precinct_to_addres
 
     # Print new precinct totals summary
     print("New precinct totals (based on mapped old addresses):")
-    for new_precinct in sorted([k for k in new_totals.keys() if k is not None], key=lambda x: (str(x))):
+    for new_precinct in sorted((k for k in new_totals if k is not None), key=str):
         print(f"  {new_precinct}: {new_totals.get(new_precinct,0)} mapped voters")
     print(f"  UNMAPPED (addresses from old list not found in new list): {grand_unmapped} voters\n")
 
@@ -388,28 +364,28 @@ def generate_precinct_changes_csv(changes, old_totals, new_totals, output_filena
     """
     try:
         # Extract unique old and new precincts
-        old_precincts = sorted([p for p in changes.keys()], key=lambda x: str(x))
-        new_precincts = sorted([p for p in new_totals.keys() if p is not None], key=lambda x: str(x))
-        
+        old_precincts = sorted(changes, key=str)
+        new_precincts = sorted((p for p in new_totals if p is not None), key=str)
+
         if not old_precincts or not new_precincts:
             print("No precinct data available for CSV generation.")
             return False
-        
+
         # Write CSV file
         with open(output_filename, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile, delimiter=',', quotechar='"')
-            
+
             # Write header row: "New Precinct" + old precinct names
             header = ['New Precinct'] + old_precincts
             writer.writerow(header)
-            
+
             # Write data rows: one row per new precinct
             for new_precinct in new_precincts:
                 row = [str(new_precinct)]
-                
+
                 for old_precinct in old_precincts:
                     old_total = old_totals.get(old_precinct, 0)
-                    
+
                     if old_total == 0:
                         # Avoid division by zero
                         percentage = 0.0
@@ -417,14 +393,14 @@ def generate_precinct_changes_csv(changes, old_totals, new_totals, output_filena
                         dest_counts = changes.get(old_precinct, {})
                         voters_moved = dest_counts.get(new_precinct, 0)
                         percentage = (voters_moved / old_total) * 100.0
-                    
+
                     row.append(f"{percentage:.1f}%")
-                
+
                 writer.writerow(row)
-        
+
         print(f"\nCSV report written to '{output_filename}'")
         return True
-    
+
     except IOError as exc:
         print(f"Error writing CSV file '{output_filename}': {exc}")
         return False

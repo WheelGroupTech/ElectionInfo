@@ -256,6 +256,8 @@ The script looks for flexible header names. At minimum it needs property id and 
 
 Voter side: it accepts either a single residential address field or split fields (street number, name, type, unit, city, ZIP, etc.).
 
+> **Note on `City` vs `CITY`:** Some Travis voter extracts include a residential **`City`** column with the address fields and a later **`CITY`** column (after district fields such as `US CONGRESS`) that is a jurisdiction **code**, not a city name. The script uses the earlier residential city field and ignores the later code column when both are present.
+
 ### What it does behind the scenes
 
 1. Loads property rows and builds several **address indexes** with normalized text (uppercase, cleaned street types like ST/STREET, directions like N/NORTH, units like APT 2 → 2).

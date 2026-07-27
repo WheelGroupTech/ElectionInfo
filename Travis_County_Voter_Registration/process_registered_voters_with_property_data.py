@@ -126,12 +126,20 @@ _STREET_TYPE_PATTERN = '|'.join(
 # build_key_map()
 #-----------------------------------------------------------------------------
 def build_key_map(fieldnames):
-    """Build a case-insensitive header lookup: UPPER(name) -> original name."""
+    """Build a case-insensitive header lookup: UPPER(name) -> original name.
+
+    When multiple headers collide after uppercasing (e.g. residential ``City``
+    and later jurisdiction code ``CITY``), keep the **first** occurrence so the
+    address-field value is preferred.
+    """
     key_map = {}
     for name in fieldnames or []:
         if name is None:
             continue
-        key_map[(name or '').strip().upper()] = name
+        key = (name or '').strip().upper()
+        if not key or key in key_map:
+            continue
+        key_map[key] = name
     return key_map
 
 
@@ -737,12 +745,15 @@ def detect_voter_fields(key_map):
             'UNIT TYPE',
             'UNIT_TYPE',
         ),
+        # Prefer explicit residential city headers. Bare CITY is last because some
+        # Travis extracts also include a later jurisdiction-code column named CITY
+        # (after US CONGRESS); build_key_map keeps the earlier residential City.
         'city': resolve_field(
             key_map,
-            'CITY',
             'RESIDENT_CITY',
             'RESIDENCE_CITY',
             'RES_CITY',
+            'CITY',
         ),
         'zip': resolve_field(
             key_map,

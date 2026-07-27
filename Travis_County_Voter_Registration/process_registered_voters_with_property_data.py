@@ -44,7 +44,13 @@ F1_RESIDENTIAL_IMPROV_TYPE_MARKERS = (
     'MOHO',
     'CONTINUING CARE',
     'OFF HI-RISE',
-    'DWELLING'
+    'DWELLING',
+)
+
+# M1 improvement-type markers that are residential-use and should be treated as residential /
+# excluded from the non-residential match report. Matching is case-insensitive substring search.
+M1_RESIDENTIAL_IMPROV_TYPE_MARKERS = (
+    'MOHO',
 )
 
 # Common directional / street-type expansions used during normalization.
@@ -435,7 +441,9 @@ def is_residential_state_cd(imprv_state_cd, improv_type_desc=''):
     A property is residential when:
       - any imprv_state_cd token starts with A, B, E, or O, or
       - any imprv_state_cd token is F1 and improv_type_desc contains a known
-        residential-use commercial marker (see F1_RESIDENTIAL_IMPROV_TYPE_MARKERS).
+        residential-use commercial marker (see F1_RESIDENTIAL_IMPROV_TYPE_MARKERS), or
+      - any imprv_state_cd token is M1 and improv_type_desc contains a known
+        residential-use marker (see M1_RESIDENTIAL_IMPROV_TYPE_MARKERS).
 
     Empty/missing codes are treated as non-residential.
     """
@@ -456,10 +464,14 @@ def is_residential_state_cd(imprv_state_cd, improv_type_desc=''):
         if code[0] in RESIDENTIAL_STATE_PREFIXES:
             return True
 
-    if any(code == 'F1' for code in codes):
-        desc = (improv_type_desc or '').upper()
-        if desc:
+    desc = (improv_type_desc or '').upper()
+    if desc:
+        if any(code == 'F1' for code in codes):
             for marker in F1_RESIDENTIAL_IMPROV_TYPE_MARKERS:
+                if marker in desc:
+                    return True
+        if any(code == 'M1' for code in codes):
+            for marker in M1_RESIDENTIAL_IMPROV_TYPE_MARKERS:
                 if marker in desc:
                     return True
     return False

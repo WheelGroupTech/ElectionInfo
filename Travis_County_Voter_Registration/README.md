@@ -61,7 +61,7 @@ python process_registered_voters_with_property_data.py <voter_csv> <property_csv
 - Precinct change analysis normalizes addresses (case/whitespace) and maps old address → new precinct; unmapped addresses are reported as `UNMAPPED` / `None`.
 - Property matching builds multi-level indexes and tries, in order:  
   `num+street+unit+zip` → `num+street+zip` → `num+street+unit` → `num+street`.  
-  Residential = any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); blank codes count as non-residential.
+  Residential = any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); also `M1` when `improv_type_desc` contains `MOHO`; blank codes count as non-residential.
 - Property script outputs (same directory as the voter file, based on voter basename):  
   `*_unmatched_properties.csv`, `*_nonresidential_matches.csv`, `*_matched_by_improv_type.csv`.
 
@@ -268,7 +268,8 @@ Voter side: it accepts either a single residential address field or split fields
 4. Classifies matches using property **state codes** and improvement descriptions:
    - Codes starting with **A**, **B**, **E**, or **O** → treated as **residential** (excluded from the non-residential report)
    - Code **F1** whose `improv_type_desc` contains any of these markers (prefix/extra `;`-separated text allowed) → also **residential**:
-     `TREATMENT/REHAB`, `SFR COMM`, `DUPLEX COMM`, `GARAGE APT COMM`, `DORMITORY`, `FRAT/SORORITY`, `INDEPENDENT LIVING`, `ASSISTED LIVING/MEMORY`, `SKILLED NURSING`, `ALT LIVING CTR`, `MOHO`, `CONTINUING CARE`, `OFF HI-RISE`
+     `TREATMENT/REHAB`, `SFR COMM`, `DUPLEX COMM`, `GARAGE APT COMM`, `DORMITORY`, `FRAT/SORORITY`, `INDEPENDENT LIVING`, `ASSISTED LIVING/MEMORY`, `SKILLED NURSING`, `ALT LIVING CTR`, `MOHO`, `CONTINUING CARE`, `OFF HI-RISE`, `DWELLING`
+   - Code **M1** whose `improv_type_desc` contains `MOHO` (prefix/extra `;`-separated text allowed) → also **residential**
    - Other codes or blank → **non-residential** (for this script’s purposes)
 5. Writes three CSV files next to your voter file (names based on the voter file name).
 

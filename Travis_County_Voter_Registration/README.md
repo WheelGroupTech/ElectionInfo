@@ -30,7 +30,9 @@ These scripts are designed to run from a command prompt (Terminal on Mac, Comman
 	 or, on some systems:  
 	 `python3 --version`  
    - You want something like `Python 3.10.x` or newer.
-2. Your **voter registration list** as a **CSV** file (comma-separated values), exported from Travis County / election data sources.
+2. Your **voter registration list** as a **CSV** file (comma-separated values), exported from Travis County / election data sources.  
+   The Travis County Voter Registration List can be downloaded from:  
+   https://voter-registration-maps-traviscountytx.hub.arcgis.com/pages/data-files-and-reference
 3. For the property script only: a **property data CSV** with situs (site) address fields and improvement/state code fields.
 
 > **Tip:** CSV files open in Excel, Google Sheets, or any text editor. The scripts expect a header row (column names in the first line).

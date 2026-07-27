@@ -63,6 +63,8 @@ python process_registered_voters_with_property_data.py <voter_csv> <property_csv
 - Precinct change analysis normalizes addresses (case/whitespace) and maps old address → new precinct; unmapped addresses are reported as `UNMAPPED` / `None`.
 - Property matching builds multi-level indexes and tries, in order:  
   `num+street+unit+zip` → `num+street+zip` → `num+street+unit` → `num+street`.  
+  If still unmatched, the same sequence is retried with a leading N/S/E/W stripped from **named** streets only (not numbered streets or highways), so voter `W WELLS BRANCH PKWY` can hit TCAD `WELLS BRANCH PKWY`.  
+  Street normalization also aligns common Travis/TCAD spelling differences: interstate (`IH 35` / `INTERSTATE HY 35`), FM/Ranch Road (`FM 620 RD` / `RANCH RD 620`), US/SH highways, ordinal streets (`E 21ST ST` / `E 21 ST`), Mc-names (`MC NEIL` → `MCNEIL`), MLK name variants, and `PLZ`/`PLAZA`.  
   Residential = any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); also `M1` when `improv_type_desc` contains `MOHO`; blank codes count as non-residential.
 - Property script outputs (same directory as the voter file, based on voter basename):  
   `*_unmatched_properties.csv`, `*_nonresidential_matches.csv`, `*_matched_by_improv_type.csv`.
@@ -262,13 +264,14 @@ Voter side: it accepts either a single residential address field or split fields
 
 ### What it does behind the scenes
 
-1. Loads property rows and builds several **address indexes** with normalized text (uppercase, cleaned street types like ST/STREET, directions like N/NORTH, units like APT 2 → 2).
+1. Loads property rows and builds several **address indexes** with normalized text (uppercase; street types like ST/STREET; directions like N/NORTH; units like APT 2 → 2; plus highway/ordinal/Mc-name aliases described above).
 2. Loads unique voters by VUID.
 3. For each voter, tries to match an address from most specific to least specific:
    1. Number + street + unit + ZIP  
    2. Number + street + ZIP  
    3. Number + street + unit  
    4. Number + street only  
+   Then, if needed, repeats that sequence after stripping a leading direction from named streets (see experienced-user notes).
 4. Classifies matches using property **state codes** and improvement descriptions:
    - Codes starting with **A**, **B**, **E**, or **O** → treated as **residential** (excluded from the non-residential report)
    - Code **F1** whose `improv_type_desc` contains any of these markers (prefix/extra `;`-separated text allowed) → also **residential**:
@@ -295,8 +298,9 @@ The script also prints a short summary in the terminal (matched / residential / 
 |---------|-------------|
 | Usage message asking for two paths | Provide **both** the voter CSV and the property CSV. |
 | `Property file missing required columns` | Confirm the property extract includes situs number/street (and ideally ZIP/unit). |
-| Very high unmatched count | Address formats may differ a lot between files; check a few rows manually. Normalization helps, but it is not perfect. |
+| Very high unmatched count | Address formats may still differ (missing house numbers in the property extract, apartment complexes under a different situs number, vacant / non-situs rows). Check a few unmatched rows by hand against the property file. Normalization covers many highway, ordinal, and Mc-name differences, but not every edge case. |
 | Slow run on large files | Normal for big county extracts; let it finish. |
+| Example: `1109 N IH 35` unmatched before fix | Voter rolls often say `IH 35` while TCAD situs uses `INTERSTATE HY 35`. Current normalization maps both to `IH 35` so they match. |
 
 ---
 

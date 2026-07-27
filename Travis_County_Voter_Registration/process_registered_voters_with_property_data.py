@@ -74,10 +74,12 @@ _STREET_TYPE_MAP = {
     'DRIVE': 'DR', 'DR': 'DR', 'DRV': 'DR',
     'EXPRESSWAY': 'EXPY', 'EXPY': 'EXPY', 'EXPWY': 'EXPY',
     'FREEWAY': 'FWY', 'FWY': 'FWY', 'FRWY': 'FWY',
-    'HIGHWAY': 'HWY', 'HWY': 'HWY', 'HIWAY': 'HWY',
+    # TCAD situs often uses HY for highway.
+    'HIGHWAY': 'HWY', 'HWY': 'HWY', 'HIWAY': 'HWY', 'HY': 'HWY',
     'LANE': 'LN', 'LN': 'LN',
     'PARKWAY': 'PKWY', 'PKWY': 'PKWY', 'PKY': 'PKWY', 'PKWAY': 'PKWY',
     'PLACE': 'PL', 'PL': 'PL',
+    'PLAZA': 'PLAZA', 'PLZ': 'PLAZA',
     'ROAD': 'RD', 'RD': 'RD',
     'STREET': 'ST', 'ST': 'ST', 'STR': 'ST',
     'TERRACE': 'TER', 'TER': 'TER', 'TERR': 'TER',
@@ -98,6 +100,12 @@ _STREET_TYPE_MAP = {
     'CREEK': 'CRK', 'CRK': 'CRK',
     'VIEW': 'VW', 'VW': 'VW',
 }
+
+# Leading direction tokens that may be dropped as a match fallback when the
+# property situs omits a pre-direction (e.g. voter "W WELLS BRANCH PKWY" vs
+# property "WELLS BRANCH PKWY"). Not applied to numbered/highway streets.
+_LEADING_DIRECTIONS = frozenset({'N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW'})
+_HIGHWAY_NAME_TOKENS = frozenset({'IH', 'US', 'SH', 'FM', 'HWY', 'RR', 'HY', 'SVRD'})
 
 _UNIT_TYPE_TOKENS = {
     'APT', 'APARTMENT', 'UNIT', 'STE', 'SUITE', 'BLDG', 'BUILDING',
@@ -265,7 +273,17 @@ def normalize_unit(unit):
 # normalize_street_tokens()
 #-----------------------------------------------------------------------------
 def normalize_street_tokens(street_text):
-    """Normalize street direction and type tokens within a street string."""
+    """Normalize street direction, type, highway, and ordinal tokens.
+
+    Aligns common Travis County voter-roll spellings with TCAD situs forms, e.g.:
+
+    * ``N IH 35`` / ``N INTERSTATE HY 35`` → ``N IH 35``
+    * ``N FM 620 RD`` / ``N RANCH RD 620`` → ``N FM 620``
+    * ``W US 290 HWY`` / ``W U S HY 290`` → ``W US 290``
+    * ``E 21ST ST`` / ``E 21 ST`` → ``E 21 ST``
+    * ``MC NEIL DR`` / ``MCNEIL DR`` → ``MCNEIL DR``
+    * ``NORTH PLZ`` / ``NORTH PLAZA`` → ``N PLAZA``
+    """
     text = normalize_text(street_text)
     if not text:
         return ''
@@ -287,7 +305,82 @@ def normalize_street_tokens(street_text):
 
     # Drop bound indicators not present in TCAD situs streets.
     cleaned = [part for part in normalized if part not in {'NB', 'SB', 'EB', 'WB'}]
-    return ' '.join(cleaned)
+    text = ' '.join(cleaned)
+    if not text:
+        return ''
+
+    # Mc / Mac spacing: "MC NEIL" / "MC KINNEY" → "MCNEIL" / "MCKINNEY".
+    text = re.sub(r'\bMC\s+', 'MC', text)
+    text = re.sub(r'\bMAC\s+', 'MAC', text)
+
+    # Spaced single-letter highway prefixes used in some TCAD rows.
+    text = re.sub(r'\bU\s+S\b', 'US', text)
+    text = re.sub(r'\bF\s+M\b', 'FM', text)
+    text = re.sub(r'\bI\s+H\b', 'IH', text)
+    text = re.sub(r'\bS\s+H\b', 'SH', text)
+    text = re.sub(r'\bR\s+R\b', 'RR', text)
+
+    # Interstate variants → IH <n>
+    text = re.sub(r'\bINTERSTATE\s+(?:HWY\s+)?(\d+)\b', r'IH \1', text)
+    text = re.sub(r'\bIH(\d+)\b', r'IH \1', text)
+    text = re.sub(r'\bI\s+(\d+)\b', r'IH \1', text)
+
+    # State highway variants → SH <n>
+    text = re.sub(r'\bSTATE\s+HWY\s+(\d+)\b', r'SH \1', text)
+    text = re.sub(r'\bSH(\d+)\b', r'SH \1', text)
+
+    # US highway variants → US <n> (drop redundant HWY token)
+    text = re.sub(r'\bUS\s+HWY\s+(\d+)\b', r'US \1', text)
+    text = re.sub(r'\bUS\s+(\d+)\s+HWY\b', r'US \1', text)
+    text = re.sub(r'\bUS(\d+)\b', r'US \1', text)
+
+    # Farm-to-Market / Ranch Road variants → FM <n>
+    text = re.sub(r'\bFM\s+RANCH\s+RD\s+(\d+)\b', r'FM \1', text)
+    text = re.sub(r'\bRANCH\s+ROAD\s+(\d+)\b', r'FM \1', text)
+    text = re.sub(r'\bRANCH\s+RD\s+(\d+)\b', r'FM \1', text)
+    text = re.sub(r'\bFM\s+RD\s+(\d+)\b', r'FM \1', text)
+    text = re.sub(r'\bFM\s+(\d+)\s+RD\b', r'FM \1', text)
+    text = re.sub(r'\b(\d+)\s+RANCH\s+RD\b', r'FM \1', text)
+    text = re.sub(r'\bRANCH\s+(\d+)\s+RD\b', r'FM \1', text)
+    text = re.sub(r'\b([NSEW])\s+(\d+)\s+RANCH\s+RD\b', r'\1 FM \2', text)
+
+    # Local aliases
+    text = re.sub(r'\bCAPITAL\s+OF\s+TX\s+HWY\b', 'CAPITAL OF TEXAS HWY', text)
+    text = re.sub(r'\bMOPAC\s+EXPRESSWAY\b', 'MOPAC EXPY', text)
+    text = re.sub(r'\bMOPAC\s+EXPWY\b', 'MOPAC EXPY', text)
+    text = re.sub(r'\bMARTIN\s+LUTHER\s+KING\b', 'M L KING', text)
+    text = re.sub(r'\bMLK\b', 'M L KING', text)
+
+    # Ordinal street names: TCAD often stores street="21", suffix="ST" while the
+    # voter roll uses "21ST ST". Collapse 21ST/1ST/2ND/3RD/4TH → digits only.
+    text = re.sub(r'\b(\d+)(?:ST|ND|RD|TH)\b', r'\1', text)
+
+    return ' '.join(text.split())
+
+
+#-----------------------------------------------------------------------------
+# street_without_leading_direction()
+#-----------------------------------------------------------------------------
+def street_without_leading_direction(street):
+    """Return street with a leading N/S/E/W stripped, when safe to do so.
+
+    Used as a match fallback when property situs omits a pre-direction that the
+    voter roll includes (e.g. ``W WELLS BRANCH PKWY`` vs ``WELLS BRANCH PKWY``).
+
+    Does **not** strip direction from numbered streets (``E 6 ST``) or highway
+    designations (``N IH 35``), where direction is part of the identity.
+    """
+    parts = (street or '').split()
+    if len(parts) < 2:
+        return ''
+    if parts[0] not in _LEADING_DIRECTIONS:
+        return ''
+    rest = parts[1:]
+    if not rest:
+        return ''
+    if rest[0].isdigit() or rest[0] in _HIGHWAY_NAME_TOKENS:
+        return ''
+    return ' '.join(rest)
 
 
 #-----------------------------------------------------------------------------
@@ -634,6 +727,17 @@ def load_property_indexes(property_data_path):
 def match_property(indexes, number, street, unit='', zip_code=''):
     """Match address components against property indexes using fallback keys.
 
+    Lookup order (most specific first):
+
+    1. number + street + unit + ZIP
+    2. number + street + ZIP
+    3. number + street + unit
+    4. number + street
+
+    If none match, the same sequence is tried again with a leading N/S/E/W
+    stripped from named streets (not numbered or highway streets). That covers
+    cases where TCAD omits a pre-direction present on the voter roll.
+
     Returns (property_info_or_None, match_level_or_None).
     """
     if not indexes:
@@ -648,21 +752,39 @@ def match_property(indexes, number, street, unit='', zip_code=''):
 
     unit_norm = normalize_unit(unit)
     zip_norm = normalize_zip(zip_code)
+    street_norm = normalize_street_tokens(street)
 
-    key_candidates = {
-        'num_street_unit_zip': make_address_key(number, street, unit, zip_code) if unit_norm and zip_norm else '',
-        'num_street_zip': make_address_key(number, street, '', zip_code) if zip_norm else '',
-        'num_street_unit': make_address_key(number, street, unit, '') if unit_norm else '',
-        'num_street': make_address_key(number, street, '', ''),
-    }
+    street_variants = []
+    if street_norm:
+        street_variants.append((street_norm, ''))
+    alt_street = street_without_leading_direction(street_norm)
+    if alt_street and alt_street != street_norm:
+        street_variants.append((alt_street, '_no_dir'))
 
-    for level in level_names:
-        key = key_candidates[level]
-        if not key:
-            continue
-        prop = indexes[level].get(key)
-        if prop is not None:
-            return prop, level
+    for street_try, level_suffix in street_variants:
+        key_candidates = {
+            'num_street_unit_zip': (
+                make_address_key(number, street_try, unit, zip_code)
+                if unit_norm and zip_norm else ''
+            ),
+            'num_street_zip': (
+                make_address_key(number, street_try, '', zip_code)
+                if zip_norm else ''
+            ),
+            'num_street_unit': (
+                make_address_key(number, street_try, unit, '')
+                if unit_norm else ''
+            ),
+            'num_street': make_address_key(number, street_try, '', ''),
+        }
+
+        for level in level_names:
+            key = key_candidates[level]
+            if not key:
+                continue
+            prop = indexes[level].get(key)
+            if prop is not None:
+                return prop, f"{level}{level_suffix}"
 
     return None, None
 

@@ -68,7 +68,8 @@ python process_registered_voters_with_property_data.py <voter_csv> <property_csv
   **Confidential voters** (residential address redacted as `***` or similar multi-token `***` groupings) are counted in the summary but excluded from property matching and from the unmatched / non-residential CSVs.  
   Residential = any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); also `M1` when `improv_type_desc` contains `MOHO`; blank codes count as non-residential.
 - Property script outputs (same directory as the voter file, based on voter basename):  
-  `*_unmatched_properties.csv`, `*_nonresidential_matches.csv`, `*_matched_by_improv_type.csv`.
+  `*_unmatched_properties.csv`, `*_nonresidential_matches.csv`, `*_matched_by_improv_type.csv`,
+  `*_nonresidential_matches_improv_types.csv`.
 
 ---
 
@@ -280,7 +281,7 @@ Voter side: it accepts either a single residential address field or split fields
      `TREATMENT/REHAB`, `SFR COMM`, `DUPLEX COMM`, `GARAGE APT COMM`, `DORMITORY`, `FRAT/SORORITY`, `INDEPENDENT LIVING`, `ASSISTED LIVING/MEMORY`, `SKILLED NURSING`, `ALT LIVING CTR`, `MOHO`, `CONTINUING CARE`, `OFF HI-RISE`, `DWELLING`
    - Code **M1** whose `improv_type_desc` contains `MOHO` (prefix/extra `;`-separated text allowed) → also **residential**
    - Other codes or blank → **non-residential** (for this script’s purposes)
-6. Writes three CSV files next to your voter file (names based on the voter file name).
+6. Writes four CSV files next to your voter file (names based on the voter file name).
 
 ### Output files
 
@@ -290,7 +291,8 @@ If your voter file is named `travis_voters_2026.csv`, you will get something lik
 |-------------|----------|
 | `travis_voters_2026_unmatched_properties.csv` | Voters whose addresses could not be matched to any property row (**excludes** confidential `***` addresses) |
 | `travis_voters_2026_nonresidential_matches.csv` | Voters matched to a property that does not look residential (**excludes** confidential `***` addresses) |
-| `travis_voters_2026_matched_by_improv_type.csv` | Counts of matched properties grouped by improvement type description and state code |
+| `travis_voters_2026_matched_by_improv_type.csv` | Counts of **all** matched properties grouped by improvement type description and state code |
+| `travis_voters_2026_nonresidential_matches_improv_types.csv` | Same grouping as above, but only for **non-residential** matches |
 
 The script also prints a short summary in the terminal (confidential excluded / matched / residential / non-residential / unmatched, and match-level counts).
 
@@ -395,6 +397,6 @@ Replace the `.\data\...` paths with the real locations of your files.
 |--------|--------|--------------|
 | `process_registered_voters.py` | 1–2 voter CSVs | Terminal report: unique voters, duplicate VUIDs, possible multi-registrations, optional VUID diff |
 | `analyze_travis_precinct_changes.py` | 1–2 voter CSVs | Terminal precinct/SD summary; with 2 files also `precinct_changes_report.csv` |
-| `process_registered_voters_with_property_data.py` | 1 voter CSV + 1 property CSV | Terminal match summary + unmatched / non-residential / improvement-type CSV files |
+| `process_registered_voters_with_property_data.py` | 1 voter CSV + 1 property CSV | Terminal match summary + unmatched / non-residential / all-match and non-residential improvement-type CSV files |
 
 If you are new to Python, start with **`process_registered_voters.py`** and a single CSV. Once that works, try a two-file comparison, then the precinct and property tools as needed.

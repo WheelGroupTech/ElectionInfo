@@ -1140,6 +1140,7 @@ def process_registered_voter_list(pathname, property_data_path):
     unmatched_rows = []
     nonresidential_rows = []
     matched_group_counts = Counter()
+    nonresidential_group_counts = Counter()
     match_level_counts = Counter()
 
     matched_count = 0
@@ -1205,6 +1206,7 @@ def process_registered_voter_list(pathname, property_data_path):
             residential_count += 1
         else:
             nonresidential_count += 1
+            nonresidential_group_counts[group_key] += 1
             nonresidential_rows.append({
                 'VUID': vuid_number,
                 'Name': voter['name'],
@@ -1228,6 +1230,9 @@ def process_registered_voter_list(pathname, property_data_path):
     unmatched_path = os.path.join(voter_dir, f"{voter_base}_unmatched_properties.csv")
     nonres_path = os.path.join(voter_dir, f"{voter_base}_nonresidential_matches.csv")
     matched_summary_path = os.path.join(voter_dir, f"{voter_base}_matched_by_improv_type.csv")
+    nonres_summary_path = os.path.join(
+        voter_dir, f"{voter_base}_nonresidential_matches_improv_types.csv"
+    )
 
     unmatched_fields = [
         'VUID', 'Name', 'Address', 'StreetNumber', 'Street', 'Unit', 'City', 'Zip',
@@ -1242,18 +1247,24 @@ def process_registered_voter_list(pathname, property_data_path):
     write_csv(unmatched_path, unmatched_fields, unmatched_rows)
     write_csv(nonres_path, nonres_fields, nonresidential_rows)
 
-    summary_rows = [
-        {
-            'ImprovTypeDesc': desc,
-            'ImprvStateCd': state_cd,
-            'Count': count,
-        }
-        for (desc, state_cd), count in sorted(
-            matched_group_counts.items(),
-            key=lambda item: (-item[1], item[0][0], item[0][1]),
-        )
-    ]
+    def build_improv_summary_rows(group_counts):
+        """Build sorted improv_type_desc / imprv_state_cd count rows."""
+        return [
+            {
+                'ImprovTypeDesc': desc,
+                'ImprvStateCd': state_cd,
+                'Count': count,
+            }
+            for (desc, state_cd), count in sorted(
+                group_counts.items(),
+                key=lambda item: (-item[1], item[0][0], item[0][1]),
+            )
+        ]
+
+    summary_rows = build_improv_summary_rows(matched_group_counts)
+    nonres_summary_rows = build_improv_summary_rows(nonresidential_group_counts)
     write_csv(matched_summary_path, summary_fields, summary_rows)
+    write_csv(nonres_summary_path, summary_fields, nonres_summary_rows)
 
     print("")
     print("=" * 72)
@@ -1278,29 +1289,43 @@ def process_registered_voter_list(pathname, property_data_path):
     print(f"Wrote non-residential detail: {nonres_path}")
     print("")
 
-    print("Matched properties grouped by improv_type_desc and imprv_state_cd:")
-    if not summary_rows:
-        print("  (none)")
-    else:
+    def print_improv_summary_table(title, rows):
+        """Print a count table grouped by improv_type_desc and imprv_state_cd."""
+        print(title)
+        if not rows:
+            print("  (none)")
+            return
         desc_width = min(
             40,
-            max(len('improv_type_desc'), max(len(r['ImprovTypeDesc']) for r in summary_rows)),
+            max(len('improv_type_desc'), max(len(r['ImprovTypeDesc']) for r in rows)),
         )
         state_width = min(
             24,
-            max(len('imprv_state_cd'), max(len(r['ImprvStateCd']) for r in summary_rows)),
+            max(len('imprv_state_cd'), max(len(r['ImprvStateCd']) for r in rows)),
         )
         header = f"  {'Count':>8}  {'imprv_state_cd':<{state_width}}  {'improv_type_desc'}"
         print(header)
         print(f"  {'-' * 8}  {'-' * state_width}  {'-' * desc_width}")
-        for row in summary_rows:
+        for row in rows:
             desc = row['ImprovTypeDesc']
             if len(desc) > 60:
                 desc = desc[:57] + '...'
             print(f"  {row['Count']:>8}  {row['ImprvStateCd']:<{state_width}}  {desc}")
 
+    print_improv_summary_table(
+        "Matched properties grouped by improv_type_desc and imprv_state_cd:",
+        summary_rows,
+    )
     print("")
     print(f"Wrote matched grouping summary: {matched_summary_path}")
+    print("")
+
+    print_improv_summary_table(
+        "Non-residential matches grouped by improv_type_desc and imprv_state_cd:",
+        nonres_summary_rows,
+    )
+    print("")
+    print(f"Wrote non-residential improv-type summary: {nonres_summary_path}")
     print(f"Total non-residential flagged voters: {nonresidential_count}")
 
     return True

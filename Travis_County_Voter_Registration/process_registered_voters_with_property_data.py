@@ -21,11 +21,21 @@ import os
 import re
 import sys
 from collections import Counter
+from urllib.parse import quote_plus
 
 
 # Residential TCAD state-code prefixes (A=single family, B=multifamily, E=farm/ranch resid,
 # O=residential inventory). These are excluded from the non-residential match report.
 RESIDENTIAL_STATE_PREFIXES = ('A', 'B', 'E', 'O')
+
+# Improvement-type markers that are always treated as residential / excluded from the
+# non-residential match report, regardless of imprv_state_cd. Matching is case-insensitive
+# substring search (so CONDO also matches CONDOS / CONDOMINIUM, etc.).
+ALWAYS_RESIDENTIAL_IMPROV_TYPE_MARKERS = (
+    'DWELLING',
+    'CONDO',
+    'CONDOS',
+)
 
 # F1 (commercial) improvement-type markers that are residential-use and should be treated as
 # residential / excluded from the non-residential match report. Matching is case-insensitive
@@ -45,6 +55,12 @@ F1_RESIDENTIAL_IMPROV_TYPE_MARKERS = (
     'CONTINUING CARE',
     'OFF HI-RISE',
     'DWELLING',
+    'CONDOS',
+    'MOTEL',
+    'HOTEL',
+    'RELIGIOUS',
+    'RETIREMENT',
+    'CLUBHOUSE',
 )
 
 # M1 improvement-type markers that are residential-use and should be treated as residential /
@@ -534,20 +550,44 @@ def format_address_display(number, street, unit='', city='', zip_code=''):
 
 
 #-----------------------------------------------------------------------------
+# google_maps_url()
+#-----------------------------------------------------------------------------
+def google_maps_url(address_text):
+    """Build a Google Maps search URL for a free-form address string.
+
+    Returns '' when the address is empty so confidential/blank rows stay blank.
+    Non-empty URLs end with a trailing space so the CSV field sits cleanly
+    before the next comma separator when opened in spreadsheet tools.
+    """
+    query = ' '.join(str(address_text or '').split())
+    if not query:
+        return ''
+    return f"https://www.google.com/maps/search/?api=1&query={quote_plus(query)} "
+
+
+#-----------------------------------------------------------------------------
 # is_residential_state_cd()
 #-----------------------------------------------------------------------------
 def is_residential_state_cd(imprv_state_cd, improv_type_desc=''):
     """Return True if the property should be treated as residential.
 
     A property is residential when:
+      - improv_type_desc contains an always-residential marker
+        (see ALWAYS_RESIDENTIAL_IMPROV_TYPE_MARKERS: DWELLING, CONDO, CONDOS), or
       - any imprv_state_cd token starts with A, B, E, or O, or
       - any imprv_state_cd token is F1 and improv_type_desc contains a known
         residential-use commercial marker (see F1_RESIDENTIAL_IMPROV_TYPE_MARKERS), or
       - any imprv_state_cd token is M1 and improv_type_desc contains a known
         residential-use marker (see M1_RESIDENTIAL_IMPROV_TYPE_MARKERS).
 
-    Empty/missing codes are treated as non-residential.
+    Empty/missing codes with no always-residential description are non-residential.
     """
+    desc = (improv_type_desc or '').upper()
+    if desc:
+        for marker in ALWAYS_RESIDENTIAL_IMPROV_TYPE_MARKERS:
+            if marker in desc:
+                return True
+
     text = (imprv_state_cd or '').strip()
     if not text:
         return False
@@ -565,7 +605,6 @@ def is_residential_state_cd(imprv_state_cd, improv_type_desc=''):
         if code[0] in RESIDENTIAL_STATE_PREFIXES:
             return True
 
-    desc = (improv_type_desc or '').upper()
     if desc:
         if any(code == 'F1' for code in codes):
             for marker in F1_RESIDENTIAL_IMPROV_TYPE_MARKERS:
@@ -1216,6 +1255,7 @@ def process_registered_voter_list(pathname, property_data_path):
                 'Unit': addr.get('unit', ''),
                 'City': addr.get('city', ''),
                 'Zip': addr.get('zip', ''),
+                'GoogleMapsURL': google_maps_url(display_address),
                 'MatchLevel': match_level or '',
                 'PropId': prop.get('prop_id', ''),
                 'PropertyAddress': prop.get('display', ''),
@@ -1223,6 +1263,17 @@ def process_registered_voter_list(pathname, property_data_path):
                 'ImprovTypeDesc': improv_type_desc,
                 'ImprvStateCd': imprv_state_cd,
             })
+
+    # Sort non-residential detail: improv type description, then address.
+    # Rows with a blank improvement description sort last.
+    nonresidential_rows.sort(
+        key=lambda row: (
+            0 if (row.get('ImprovTypeDesc') or '').strip() else 1,
+            (row.get('ImprovTypeDesc') or '').upper(),
+            (row.get('Address') or '').upper(),
+            row.get('VUID') or '',
+        )
+    )
 
     voter_dir = os.path.dirname(os.path.abspath(pathname))
     voter_base = os.path.splitext(os.path.basename(pathname))[0]
@@ -1239,6 +1290,7 @@ def process_registered_voter_list(pathname, property_data_path):
     ]
     nonres_fields = [
         'VUID', 'Name', 'Address', 'StreetNumber', 'Street', 'Unit', 'City', 'Zip',
+        'GoogleMapsURL',
         'MatchLevel', 'PropId', 'PropertyAddress',
         'ImprovTypeCd', 'ImprovTypeDesc', 'ImprvStateCd',
     ]

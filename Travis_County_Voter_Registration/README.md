@@ -66,7 +66,7 @@ python process_registered_voters_with_property_data.py <voter_csv> <property_csv
   If still unmatched, the same sequence is retried with a leading N/S/E/W stripped from **named** streets only (not numbered streets or highways), so voter `W WELLS BRANCH PKWY` can hit TCAD `WELLS BRANCH PKWY`.  
   Street normalization also aligns common Travis/TCAD spelling differences: interstate (`IH 35` / `INTERSTATE HY 35`), FM/Ranch Road (`FM 620 RD` / `RANCH RD 620`), US/SH highways, ordinal streets (`E 21ST ST` / `E 21 ST`), Mc-names (`MC NEIL` → `MCNEIL`), MLK name variants, and `PLZ`/`PLAZA`.  
   **Confidential voters** (residential address redacted as `***` or similar multi-token `***` groupings) are counted in the summary but excluded from property matching and from the unmatched / non-residential CSVs.  
-  Residential = any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); also `M1` when `improv_type_desc` contains `MOHO`; blank codes count as non-residential.
+  Residential = `improv_type_desc` containing `DWELLING`, `CONDO`, or `CONDOS` (any state code); or any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); also `M1` when `improv_type_desc` contains `MOHO`; blank codes with no always-residential description count as non-residential.
 - Property script outputs (same directory as the voter file, based on voter basename):  
   `*_unmatched_properties.csv`, `*_nonresidential_matches.csv`, `*_matched_by_improv_type.csv`,
   `*_nonresidential_matches_improv_types.csv`.
@@ -276,12 +276,13 @@ Voter side: it accepts either a single residential address field or split fields
    4. Number + street only  
    Then, if needed, repeats that sequence after stripping a leading direction from named streets (see experienced-user notes).
 5. Classifies matches using property **state codes** and improvement descriptions:
+   - `improv_type_desc` containing **`DWELLING`**, **`CONDO`**, or **`CONDOS`** (any state code; case-insensitive substring) → **residential** (excluded from the non-residential report)
    - Codes starting with **A**, **B**, **E**, or **O** → treated as **residential** (excluded from the non-residential report)
    - Code **F1** whose `improv_type_desc` contains any of these markers (prefix/extra `;`-separated text allowed) → also **residential**:
-     `TREATMENT/REHAB`, `SFR COMM`, `DUPLEX COMM`, `GARAGE APT COMM`, `DORMITORY`, `FRAT/SORORITY`, `INDEPENDENT LIVING`, `ASSISTED LIVING/MEMORY`, `SKILLED NURSING`, `ALT LIVING CTR`, `MOHO`, `CONTINUING CARE`, `OFF HI-RISE`, `DWELLING`
+     `TREATMENT/REHAB`, `SFR COMM`, `DUPLEX COMM`, `GARAGE APT COMM`, `DORMITORY`, `FRAT/SORORITY`, `INDEPENDENT LIVING`, `ASSISTED LIVING/MEMORY`, `SKILLED NURSING`, `ALT LIVING CTR`, `MOHO`, `CONTINUING CARE`, `OFF HI-RISE`, `DWELLING`, `CONDOS`, `MOTEL`, `HOTEL`, `RELIGIOUS`, `RETIREMENT`, `CLUBHOUSE`
    - Code **M1** whose `improv_type_desc` contains `MOHO` (prefix/extra `;`-separated text allowed) → also **residential**
-   - Other codes or blank → **non-residential** (for this script’s purposes)
-6. Writes four CSV files next to your voter file (names based on the voter file name).
+   - Other codes or blank (with no always-residential description) → **non-residential** (for this script’s purposes)
+6. Writes four CSV files next to your voter file (names based on the voter file name). The non-residential detail CSV is sorted by improvement type description, then address; rows with a blank improvement description are last.
 
 ### Output files
 
@@ -290,7 +291,7 @@ If your voter file is named `travis_voters_2026.csv`, you will get something lik
 | Output file | Contents |
 |-------------|----------|
 | `travis_voters_2026_unmatched_properties.csv` | Voters whose addresses could not be matched to any property row (**excludes** confidential `***` addresses) |
-| `travis_voters_2026_nonresidential_matches.csv` | Voters matched to a property that does not look residential (**excludes** confidential `***` addresses) |
+| `travis_voters_2026_nonresidential_matches.csv` | Voters matched to a property that does not look residential (**excludes** confidential `***` addresses and descriptions containing `DWELLING` / `CONDO` / `CONDOS`). Sorted by `ImprovTypeDesc`, then `Address` (blank descriptions last). Includes a `GoogleMapsURL` column linking to a Google Maps search for the voter address. |
 | `travis_voters_2026_matched_by_improv_type.csv` | Counts of **all** matched properties grouped by improvement type description and state code |
 | `travis_voters_2026_nonresidential_matches_improv_types.csv` | Same grouping as above, but only for **non-residential** matches |
 

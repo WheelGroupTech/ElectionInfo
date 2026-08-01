@@ -63,7 +63,7 @@ python process_registered_voters_with_property_data.py <voter_csv> <property_csv
 - Precinct change analysis normalizes addresses (case/whitespace) and maps old address → new precinct; unmapped addresses are reported as `UNMAPPED` / `None`.
 - Property matching builds multi-level indexes and tries, in order:  
   `num+street+unit+zip` → `num+street+zip` → `num+street+unit` → `num+street`.  
-  If still unmatched, the same sequence is retried with a leading N/S/E/W stripped from **named** streets only (not numbered streets or highways), so voter `W WELLS BRANCH PKWY` can hit TCAD `WELLS BRANCH PKWY`.  
+  If still unmatched, the same sequence is retried across street variants: trailing street type stripped (voter `BOB HARRISON` vs TCAD `BOB HARRISON` + suffix `ST`), and leading N/S/E/W stripped from **named** streets only (not numbered streets or highways), so voter `W WELLS BRANCH PKWY` can hit TCAD `WELLS BRANCH PKWY`. Property indexes also store those fallback street forms.  
   Street normalization also aligns common Travis/TCAD spelling differences: interstate (`IH 35` / `INTERSTATE HY 35`), FM/Ranch Road (`FM 620 RD` / `RANCH RD 620`), US/SH highways, ordinal streets (`E 21ST ST` / `E 21 ST`), Mc-names (`MC NEIL` → `MCNEIL`), MLK name variants, and `PLZ`/`PLAZA`.  
   **Confidential voters** (residential address redacted as `***` or similar multi-token `***` groupings) are counted in the summary but excluded from property matching and from the unmatched / non-residential CSVs.  
   Residential = `improv_type_desc` containing `DWELLING`, `CONDO`, or `CONDOS` (any state code); or any `imprv_state_cd` token starting with `A`, `B`, `E`, or `O`; also `F1` when `improv_type_desc` contains a residential-use marker (e.g. `SFR COMM`, `DORMITORY`, `ASSISTED LIVING/MEMORY`, `OFF HI-RISE`); also `M1` when `improv_type_desc` contains `MOHO`; blank codes with no always-residential description count as non-residential.
@@ -274,7 +274,7 @@ Voter side: it accepts either a single residential address field or split fields
    2. Number + street + ZIP  
    3. Number + street + unit  
    4. Number + street only  
-   Then, if needed, repeats that sequence after stripping a leading direction from named streets (see experienced-user notes).
+   Then, if needed, repeats that sequence after stripping a trailing street type (e.g. `ST`) and/or a leading direction from named streets (see experienced-user notes).
 5. Classifies matches using property **state codes** and improvement descriptions:
    - `improv_type_desc` containing **`DWELLING`**, **`CONDO`**, or **`CONDOS`** (any state code; case-insensitive substring) → **residential** (excluded from the non-residential report)
    - Codes starting with **A**, **B**, **E**, or **O** → treated as **residential** (excluded from the non-residential report)

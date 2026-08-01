@@ -123,6 +123,16 @@ _STREET_TYPE_MAP = {
 _LEADING_DIRECTIONS = frozenset({'N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW'})
 _HIGHWAY_NAME_TOKENS = frozenset({'IH', 'US', 'SH', 'FM', 'HWY', 'RR', 'HY', 'SVRD'})
 
+# Trailing street-type tokens that may be dropped as a match fallback when the
+# voter roll omits a type that TCAD stores in situs_street_suffix (e.g. voter
+# "BOB HARRISON" vs property "BOB HARRISON ST"). PLAZA is excluded because it is
+# often the primary street name (e.g. "NORTH PLAZA"), not a suffix.
+_STRIP_TRAILING_STREET_TYPES = frozenset({
+    'AVE', 'BLVD', 'CIR', 'CT', 'CV', 'DR', 'EXPY', 'FWY', 'HWY', 'LN',
+    'PKWY', 'PL', 'RD', 'ST', 'TER', 'TRL', 'WAY', 'LOOP', 'PASS', 'PATH',
+    'RUN', 'ROW', 'SQ', 'XING', 'BND', 'PT', 'RDG', 'HL', 'HLS', 'CRK', 'VW',
+})
+
 _UNIT_TYPE_TOKENS = {
     'APT', 'APARTMENT', 'UNIT', 'STE', 'SUITE', 'BLDG', 'BUILDING',
     'FL', 'FLOOR', 'RM', 'ROOM', 'DEPT', '#', 'NO', 'NUM', 'NUMBER',
@@ -397,6 +407,55 @@ def street_without_leading_direction(street):
     if rest[0].isdigit() or rest[0] in _HIGHWAY_NAME_TOKENS:
         return ''
     return ' '.join(rest)
+
+
+#-----------------------------------------------------------------------------
+# street_without_trailing_type()
+#-----------------------------------------------------------------------------
+def street_without_trailing_type(street):
+    """Return street with a trailing street-type token stripped, when present.
+
+    Used as a match fallback when the voter roll omits a type that TCAD stores
+    as ``situs_street_suffix`` (e.g. ``BOB HARRISON`` vs ``BOB HARRISON ST``).
+    """
+    parts = (street or '').split()
+    if len(parts) < 2:
+        return ''
+    if parts[-1] not in _STRIP_TRAILING_STREET_TYPES:
+        return ''
+    return ' '.join(parts[:-1])
+
+
+#-----------------------------------------------------------------------------
+# street_match_variants()
+#-----------------------------------------------------------------------------
+def street_match_variants(street):
+    """Return ordered (street, level_suffix) variants for indexing and lookup.
+
+    More specific forms are listed first. Fallbacks cover omitted pre-direction
+    and omitted street type (common voter-roll vs TCAD differences).
+    """
+    base = normalize_street_tokens(street)
+    if not base:
+        return []
+
+    variants = []
+    seen = set()
+
+    def add(candidate, level_suffix):
+        if not candidate or candidate in seen:
+            return
+        seen.add(candidate)
+        variants.append((candidate, level_suffix))
+
+    add(base, '')
+    no_type = street_without_trailing_type(base)
+    add(no_type, '_no_type')
+    no_dir = street_without_leading_direction(base)
+    add(no_dir, '_no_dir')
+    if no_dir:
+        add(street_without_trailing_type(no_dir), '_no_dir_no_type')
+    return variants
 
 
 #-----------------------------------------------------------------------------
@@ -728,22 +787,44 @@ def load_property_indexes(property_data_path):
             'imprv_state_cd': imprv_state_cd,
         }
 
-        key_levels = {
-            'num_street_unit_zip': make_address_key(number, street, unit, zip_code) if unit_norm and zip_norm else '',
-            'num_street_zip': make_address_key(number, street, '', zip_code) if zip_norm else '',
-            'num_street_unit': make_address_key(number, street, unit, '') if unit_norm else '',
-            'num_street': make_address_key(number, street, '', ''),
-        }
+        # Index full street plus fallbacks: omit situs suffix / trailing type so
+        # voter "BOB HARRISON" can match TCAD "BOB HARRISON" + suffix "ST".
+        street_forms = []
+        seen_streets = set()
+        for street_form, _label in street_match_variants(street):
+            if street_form not in seen_streets:
+                seen_streets.add(street_form)
+                street_forms.append(street_form)
+        if suffix:
+            street_no_suffix = compose_street(prefix, street_name, '')
+            if street_no_suffix and street_no_suffix not in seen_streets:
+                street_forms.append(street_no_suffix)
 
         stored = False
-        for level in level_names:
-            key = key_levels[level]
-            if not key:
-                continue
-            existing = indexes[level].get(key)
-            if existing is None or property_is_preferred(prop_info, existing):
-                indexes[level][key] = prop_info
-            stored = True
+        for street_form in street_forms:
+            key_levels = {
+                'num_street_unit_zip': (
+                    make_address_key(number, street_form, unit, zip_code)
+                    if unit_norm and zip_norm else ''
+                ),
+                'num_street_zip': (
+                    make_address_key(number, street_form, '', zip_code)
+                    if zip_norm else ''
+                ),
+                'num_street_unit': (
+                    make_address_key(number, street_form, unit, '')
+                    if unit_norm else ''
+                ),
+                'num_street': make_address_key(number, street_form, '', ''),
+            }
+            for level in level_names:
+                key = key_levels[level]
+                if not key:
+                    continue
+                existing = indexes[level].get(key)
+                if existing is None or property_is_preferred(prop_info, existing):
+                    indexes[level][key] = prop_info
+                stored = True
 
         if stored:
             indexed_count += 1
@@ -773,9 +854,15 @@ def match_property(indexes, number, street, unit='', zip_code=''):
     3. number + street + unit
     4. number + street
 
-    If none match, the same sequence is tried again with a leading N/S/E/W
-    stripped from named streets (not numbered or highway streets). That covers
-    cases where TCAD omits a pre-direction present on the voter roll.
+    The same sequence is retried across street variants:
+
+    - full normalized street
+    - trailing street type stripped (``BOB HARRISON ST`` → ``BOB HARRISON``)
+    - leading N/S/E/W stripped from named streets (not numbered/highway)
+    - both direction and type stripped
+
+    That covers common voter-roll vs TCAD differences (omitted pre-direction or
+    street type / situs suffix).
 
     Returns (property_info_or_None, match_level_or_None).
     """
@@ -791,16 +878,8 @@ def match_property(indexes, number, street, unit='', zip_code=''):
 
     unit_norm = normalize_unit(unit)
     zip_norm = normalize_zip(zip_code)
-    street_norm = normalize_street_tokens(street)
 
-    street_variants = []
-    if street_norm:
-        street_variants.append((street_norm, ''))
-    alt_street = street_without_leading_direction(street_norm)
-    if alt_street and alt_street != street_norm:
-        street_variants.append((alt_street, '_no_dir'))
-
-    for street_try, level_suffix in street_variants:
+    for street_try, level_suffix in street_match_variants(street):
         key_candidates = {
             'num_street_unit_zip': (
                 make_address_key(number, street_try, unit, zip_code)

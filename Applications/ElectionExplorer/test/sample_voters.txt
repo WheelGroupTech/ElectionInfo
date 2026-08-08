@@ -1,0 +1,4 @@
+SOS_VoterID	idnumber	voter_status	party_code	lastname	firstname	middlename	namesuffix	streetnumber	streetname	streettype	city	zip	precinct	precsub
+200001	C-1	Active	Rep	Adams	Alice	B		100	Pine	ST	Austin	78704	55	1
+200002	C-2	Suspended	Dem	Baker	Bob		Jr	200	Cedar	RD	Austin	78705	56	2
+200003	C-3		Rep	Clark	Cathy	M		300	Elm	AVE	Austin	78701	55	1

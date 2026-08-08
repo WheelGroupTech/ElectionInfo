@@ -97,7 +97,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;comctl32.lib;comdlg32.lib;uxtheme.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
@@ -162,10 +162,13 @@
 
   <ItemGroup>
     <ClCompile Include="src\main.c" />
+    <ClCompile Include="src\voter_table.c" />
   </ItemGroup>
 
   <ItemGroup>
     <ClInclude Include="src\main.h" />
+    <ClInclude Include="src\voter_table.h" />
+    <ClInclude Include="src\resource.h" />
   </ItemGroup>
 
   <ItemGroup>

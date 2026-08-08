@@ -1,0 +1,21 @@
+/**
+ * @file resource.h
+ * @brief Resource and command IDs for ElectionExplorer.
+ */
+#pragma once
+
+#define IDR_MAINMENU 101
+
+#define IDM_FILE_OPEN_VOTER_LIST 40001
+#define IDM_FILE_EXIT           40002
+
+#define IDC_PROGRESS_BAR    41001
+#define IDC_PROGRESS_CANCEL 41002
+#define IDC_PROGRESS_STATUS 41003
+
+#define IDD_LOAD_PROGRESS 42001
+
+/* User messages (main window). */
+#define EEM_LOAD_PROGRESS      (WM_APP + 1)
+#define EEM_LOAD_FINISHED      (WM_APP + 2)
+#define EEM_SYNC_PANE_SCROLLUI (WM_APP + 3)

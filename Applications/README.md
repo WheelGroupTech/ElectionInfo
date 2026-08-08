@@ -193,10 +193,15 @@ appears), not by copying files between apps.
 | Item | Path |
 |------|------|
 | Project | `ElectionExplorer/ElectionExplorer.vcxproj` |
-| Source | `ElectionExplorer/src/` |
-| Tests | `ElectionExplorer/test/` |
-| Docs | `ElectionExplorer/docs/` |
+| Source | `ElectionExplorer/src/` (`main.c`, `voter_table.c`, …) |
+| Tests / samples | `ElectionExplorer/test/` |
+| Docs | `ElectionExplorer/docs/voter-list.md` |
 | Release x64 binary (after build) | `Build/win-x64-release/ElectionExplorer/ElectionExplorer.exe` |
+
+**Current capability:** Win32 GUI (C11, no MFC, static CRT) that loads large
+voter registration CSV/TXT files on a background thread and shows them in a
+DPI-aware dual-pane grid (frozen Voter ID + Name, sortable columns). See
+[`ElectionExplorer/docs/voter-list.md`](ElectionExplorer/docs/voter-list.md).
 
 Open `Applications.sln` in Visual Studio 2026 to develop. Build outputs appear
 under `Build/` as described above.

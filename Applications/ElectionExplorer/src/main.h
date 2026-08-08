@@ -1,21 +1,22 @@
 /**
  * @file main.h
- * @brief ElectionExplorer Win32 application entry and window procedure.
+ * @brief ElectionExplorer application entry and main window.
  */
 #pragma once
+
+#ifndef UNICODE
+#define UNICODE
+#endif
+#ifndef _UNICODE
+#define _UNICODE
+#endif
 
 #include <windows.h>
 
 /**
- * @brief Standard Win32 window procedure for the main application window.
- *
- * @param hwnd    Window handle.
- * @param msg     Message identifier.
- * @param wParam  Message WPARAM.
- * @param lParam  Message LPARAM.
- * @return Message result.
+ * @brief Application entry point (Unicode GUI).
  */
-LRESULT CALLBACK ElectionExplorer_WindowProc(HWND hwnd,
-                                             UINT msg,
-                                             WPARAM wParam,
-                                             LPARAM lParam);
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
+                      _In_opt_ HINSTANCE hPrevInstance,
+                      _In_ LPWSTR lpCmdLine,
+                      _In_ int nCmdShow);

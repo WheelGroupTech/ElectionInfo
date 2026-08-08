@@ -1,0 +1,66 @@
+Language:     C
+BasedOnStyle: Microsoft
+
+IndentWidth:   4
+TabWidth:      4
+UseTab:        Never
+ColumnLimit:   100
+
+BreakBeforeBraces: Allman
+
+DerivePointerAlignment: false
+PointerAlignment:       Right
+
+AllowShortFunctionsOnASingleLine:        None
+AllowShortIfStatementsOnASingleLine:     Never
+AllowShortLoopsOnASingleLine:            false
+AllowShortBlocksOnASingleLine:           Empty
+AllowShortCaseLabelsOnASingleLine:       false
+
+AlignAfterOpenBracket: Align
+
+AlignConsecutiveMacros:
+  Enabled:          true
+  AcrossEmptyLines: false
+  AcrossComments:   false
+
+AlignConsecutiveAssignments:
+  Enabled:          false
+
+AlignEscapedNewlines: Right
+
+AlignTrailingComments:
+  Kind:           Always
+  OverEmptyLines: 1
+
+BinPackParameters:                        false
+BinPackArguments:                         false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllArgumentsOnNextLine:              false
+
+SortIncludes:  Never
+IncludeBlocks: Preserve
+
+SpaceBeforeParens:            ControlStatements
+SpaceAfterCStyleCast:         false
+SpacesInParentheses:          false
+SpacesInSquareBrackets:       false
+SpaceBeforeSquareBrackets:    false
+SpacesBeforeTrailingComments: 2
+
+ReflowComments: false
+
+MaxEmptyLinesToKeep:              2
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+IndentCaseLabels: true
+
+BreakStringLiterals: false
+
+AttributeMacros:
+  - CALLBACK
+  - WINAPI
+  - NTAPI
+  - APIENTRY
+  - __cdecl
+  - __stdcall

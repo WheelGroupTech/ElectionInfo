@@ -15,7 +15,7 @@ Applications/
   Applications.sln                 # Visual Studio solution (all compiled tools)
   AGENTS.md                        # Agent / coding policy for this tree
   README.md                        # This file
-  Directory.Build.props            # Shared MSBuild defaults (when added)
+  Directory.Build.props            # Shared MSBuild defaults (OutDir/IntDir)
   Build/                           # All build output (gitignored)
     win-x64-release/
       ElectionExplorer/
@@ -43,7 +43,7 @@ Applications/
 |------|----------|--------|
 | Solution | `Applications/Applications.sln` | Single solution for all compiled tools |
 | App project | `Applications/<AppName>/<AppName>.vcxproj` | First app: `ElectionExplorer` |
-| Shared MSBuild props | `Applications/Directory.Build.props` (recommended) | Common `OutDir` / `IntDir`, C11, UNICODE |
+| Shared MSBuild props | `Applications/Directory.Build.props` | Common `OutDir` / `IntDir` mapping |
 | App source | `Applications/<AppName>/src/` | Production C sources and headers |
 | App tests | `Applications/<AppName>/test/` | Unit / integration tests for that app |
 | App docs | `Applications/<AppName>/docs/` | Design notes, user docs for that tool |
@@ -99,18 +99,36 @@ Applications/Build/win-x64-release/ElectionExplorer/ElectionExplorer.exe
 Applications/Build/win-x64-release/ElectionExplorer/obj/   (*.obj, *.tlog, ...)
 ```
 
-Suggested MSBuild properties (typically in `Directory.Build.props` or each
-`.vcxproj`):
+`Directory.Build.props` maps `Platform` / `Configuration` to those folders and
+sets `OutDir` / `IntDir` for every project under `Applications/`. Do not rely on
+Visual Studio’s default `x64\Release\` next to the project file.
 
-```xml
-<!-- Illustrative; map Platform/Configuration to the folder names above -->
-<OutDir>$(SolutionDir)Build\win-$(PlatformLower)-$(ConfigurationLower)\$(MSBuildProjectName)\</OutDir>
-<IntDir>$(OutDir)obj\</IntDir>
+### Runtime footprint (no redistributable install)
+
+ElectionExplorer is configured for portable Win32 deployment on **Windows 10/11**
+(**x64** and **ARM64**):
+
+| Setting | Value | Why |
+|---------|--------|-----|
+| CRT | Static (`/MT` Release, `/MTd` Debug) | No `VCRUNTIME` / `MSVCP` / UCRT redistributable DLLs |
+| UI framework | Raw Win32 (no MFC, no ATL) | Only OS system DLLs (`user32`, `gdi32`, …) |
+| Language | ISO C11 | Matches `AGENTS.md` C-first policy |
+| Subsystem | Windows | GUI entry (`wWinMain`), not console |
+| Toolset | `v145` (VS 2026) | Matches installed Enterprise 18.x |
+| Min OS macros | `WINVER` / `_WIN32_WINNT` = `0x0A00` | Windows 10+ (includes Windows 11) |
+
+### Build commands
+
+From `Applications/` (or via the Visual Studio IDE):
+
+```powershell
+msbuild Applications.sln /p:Configuration=Release /p:Platform=x64
+msbuild Applications.sln /p:Configuration=Release /p:Platform=ARM64
 ```
 
-Use a small property sheet or `Directory.Build.props` so every new project
-inherits the same layout. Do not rely on Visual Studio’s default
-`x64\Release\` next to the project file.
+MSBuild path (VS 2026 Enterprise example):
+
+`C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe`
 
 ### What belongs in the app output folder
 
@@ -180,5 +198,5 @@ appears), not by copying files between apps.
 | Docs | `ElectionExplorer/docs/` |
 | Release x64 binary (after build) | `Build/win-x64-release/ElectionExplorer/ElectionExplorer.exe` |
 
-Scaffold the Visual Studio solution and project when ready; this document is
-the layout contract those files must honor.
+Open `Applications.sln` in Visual Studio 2026 to develop. Build outputs appear
+under `Build/` as described above.

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shared MSBuild defaults for all projects under Applications/.
+  Layout contract: Applications/README.md and AGENTS.md
+-->
+<Project>
+  <!-- Map VS Platform / Configuration to Build/<os>-<arch>-<config>/ -->
+  <PropertyGroup>
+    <AppOs>win</AppOs>
+    <AppArch Condition="'$(Platform)' == 'x64'">x64</AppArch>
+    <AppArch Condition="'$(Platform)' == 'ARM64'">arm64</AppArch>
+    <AppArch Condition="'$(AppArch)' == ''">$(Platform)</AppArch>
+    <AppConfig Condition="'$(Configuration)' == 'Debug'">debug</AppConfig>
+    <AppConfig Condition="'$(Configuration)' == 'Release'">release</AppConfig>
+    <AppConfig Condition="'$(AppConfig)' == ''">$(Configuration.ToLower())</AppConfig>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- MSBuildThisFileDirectory is Applications/ (trailing slash). -->
+    <OutDir>$(MSBuildThisFileDirectory)Build\$(AppOs)-$(AppArch)-$(AppConfig)\$(MSBuildProjectName)\</OutDir>
+    <IntDir>$(OutDir)obj\</IntDir>
+  </PropertyGroup>
+
+  <!-- Defaults applied to C/C++ projects that do not override them. -->
+  <PropertyGroup>
+    <WindowsTargetPlatformVersion Condition="'$(WindowsTargetPlatformVersion)' == ''">10.0</WindowsTargetPlatformVersion>
+    <!-- Windows 10 or later (covers Windows 10 and Windows 11). -->
+    <AppTargetWindowsVersion>0x0A00</AppTargetWindowsVersion>
+  </PropertyGroup>
+</Project>

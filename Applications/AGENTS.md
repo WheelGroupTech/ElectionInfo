@@ -358,3 +358,4 @@ and posting a comment describing the blocker.
 |---|---|---|
 | 2026-08-07 | Initial | Document created. Win32 C-first policy, general agent constraints, and security rules established. |
 | 2026-08-08 | Layout | Scoped to `Applications/`; added Repository Layout (VS solution, per-app projects, `Build/<os>-<arch>-<config>/<App>/`); aligned testing with `test/` and MSBuild. |
+| 2026-08-08 | Scaffold | ElectionExplorer Win32 GUI (C11, no MFC); static CRT; VS 2026 `v145`; x64/ARM64 Debug+Release via `Applications.sln`. |

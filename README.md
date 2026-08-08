@@ -1,13 +1,20 @@
 # ElectionInfo
 
-This repository contains Python scripts used to analyze election data, including ES&S cast vote records (CVRs), scanner results tapes, Travis County voter registration and roster files, and Travis Central Appraisal District (TCAD) property exports.
+This repository contains tools for working with election data: Python scripts for
+analysis of ES&S cast vote records (CVRs), scanner results tapes, Travis County
+voter registration and roster files, and Travis Central Appraisal District
+(TCAD) property exports; and compiled native applications under `Applications/`.
 
-Most tools are plain Python scripts run from a terminal. Some folders include their own detailed `README.md` files with setup steps, expected inputs, and sample commands.
+Most analysis tools are plain Python scripts run from a terminal. Some folders
+include their own detailed `README.md` files with setup steps, expected inputs,
+and sample commands. Compiled tools are built with Visual Studio (see
+[`Applications/README.md`](Applications/README.md)).
 
 ## Repository layout
 
 | Directory | Purpose |
 |-----------|---------|
+| [`Applications/`](Applications/) | Compiled election tools (Visual Studio solution, per-app projects, build outputs under `Build/`) |
 | [`ES&S/`](ES&S/) | Process and analyze ES&S CVR, ballot, and audit exports |
 | [`Results_Tapes/`](Results_Tapes/) | OCR/process ES&S DS200 results-tape TIFF images and analyze captured totals |
 | [`Travis_County_Appraisal_District/`](Travis_County_Appraisal_District/) | Parse TCAD certified appraisal exports into property CSV files |

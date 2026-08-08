@@ -2,24 +2,28 @@
 
 This file defines the behavior, constraints, coding policies, and operational
 guidelines for all AI agents (Copilot, automated pipelines, CI bots, etc.)
-that read, write, or review code in this repository.
+that read, write, or review code under the `Applications/` tree.
+
+Human layout documentation (full tree diagrams, how to add a tool) lives in
+[`README.md`](README.md). Keep this file **normative and short** for agents.
 
 ---
 
 ## Table of Contents
 
 1. [Scope](#scope)
-2. [General Agent Behavior](#general-agent-behavior)
-3. [Constraints](#constraints)
-4. [Language Policy](#language-policy)
+2. [Repository Layout](#repository-layout)
+3. [General Agent Behavior](#general-agent-behavior)
+4. [Constraints](#constraints)
+5. [Language Policy](#language-policy)
    - [Win32 / Native Windows Code — C First](#win32--native-windows-code--c-first)
    - [Other Language Tiers](#other-language-tiers)
-5. [Code Style & Formatting](#code-style--formatting)
-6. [Security Policy](#security-policy)
-7. [Testing Requirements](#testing-requirements)
-8. [Pull-Request & Commit Policy](#pull-request--commit-policy)
-9. [Escalation & Human Review](#escalation--human-review)
-10. [Changelog](#changelog)
+6. [Code Style & Formatting](#code-style--formatting)
+7. [Security Policy](#security-policy)
+8. [Testing Requirements](#testing-requirements)
+9. [Pull-Request & Commit Policy](#pull-request--commit-policy)
+10. [Escalation & Human Review](#escalation--human-review)
+11. [Changelog](#changelog)
 
 ---
 
@@ -27,15 +31,63 @@ that read, write, or review code in this repository.
 
 These guidelines apply to:
 
-- Every AI-assisted code generation, refactoring, or review action performed
-  inside this repository.
+- All work under `Applications/` (compiled election tools, Visual Studio
+  solution/projects, shared build props, and app `src` / `test` / `docs`).
+- AI-assisted generation, refactoring, or review of that tree.
 - Automated CI/CD agents that open pull requests, apply patches, or run
-  scripts.
-- Any external agent granted write access via a personal-access token or
-  GitHub App installation.
+  scripts affecting `Applications/`.
+
+These guidelines do **not** replace conventions for top-level Python analysis
+folders (`ES&S/`, `Results_Tapes/`, `Travis_County_*`, etc.). Agents MUST NOT
+implement new compiled production tools in those Python folders.
 
 Human contributors are encouraged (but not required) to follow the same
 conventions when working alongside agents.
+
+---
+
+## Repository Layout
+
+Full detail: [`README.md`](README.md). Agents MUST follow these rules:
+
+### Source and projects
+
+1. Each compiled tool lives in `Applications/<AppName>/` (e.g.
+   `ElectionExplorer`).
+2. Standard subdirectories: `src/`, `test/`, `docs/`. Create others only when
+   needed (`include/`, `res/`, `bench/`).
+3. The Visual Studio solution is `Applications/Applications.sln`.
+4. Each app’s project is `Applications/<AppName>/<AppName>.vcxproj` (plus
+   `.filters` as needed).
+5. Shared MSBuild defaults belong in `Applications/Directory.Build.props`
+   (or a checked-in `.props` imported by all projects)—not duplicated ad hoc
+   per project when avoidable.
+6. Agents MUST place new application source under that app’s tree. Agents
+   MUST NOT put source, projects, or docs under `Build/`.
+7. Shared code used by multiple apps MUST go under a dedicated shared tree
+   (e.g. `Applications/common/` or `Applications/libs/`) once a second
+   consumer exists—not by copying sources between apps.
+
+### Build output
+
+1. All build artifacts MUST go under `Applications/Build/` (gitignored at
+   repo root as `Applications/Build/`).
+2. Configuration directories use
+   `<os>-<arch>-<config>` in lowercase, for example:
+   - `win-x64-release`
+   - `win-x64-debug`
+   - `win-arm64-release`
+   - `win-arm64-debug`
+3. Per-app output:
+   `Build/<os>-<arch>-<config>/<AppName>/`
+   Final binary example:
+   `Build/win-x64-release/ElectionExplorer/ElectionExplorer.exe`
+4. Intermediate files (`IntDir`) MUST live under that app output tree, e.g.
+   `Build/<os>-<arch>-<config>/<AppName>/obj/`.
+5. Agents MUST configure new targets so `OutDir` / `IntDir` follow this layout.
+   Agents MUST NOT rely on default in-project `x64\Release\` (or similar)
+   output folders.
+6. Agents MUST NOT commit binaries or other content under `Build/`.
 
 ---
 
@@ -73,10 +125,11 @@ before merging.
 | Constraint | Rule |
 |---|---|
 | Repository scope | Agents operate only within this repository. Cross-repository writes require explicit opt-in. |
+| Applications tree | Compiled tools, VS solution/projects, and their tests/docs live under `Applications/` only. |
 | Secret handling | Agents MUST NOT read, log, print, or transmit secrets, tokens, or credentials found in files. |
 | Network access | Agents MUST NOT make outbound network calls during code generation or test execution unless the task explicitly requires it. |
 | Dependency pinning | Agents MUST NOT upgrade or add dependencies without human sign-off in the PR description. |
-| Binary assets | Agents MUST NOT commit binary blobs (executables, DLLs, images > 100 KB) without prior approval. |
+| Binary assets | Agents MUST NOT commit binary blobs (executables, DLLs, images > 100 KB) without prior approval. Includes `Applications/Build/`. |
 | Force-push | Agents MUST NOT force-push to any protected branch (`main`, `release/*`). |
 | Merge commits | Agents MUST rebase rather than merge when integrating upstream changes into a feature branch. |
 | License headers | Agents MUST preserve existing license/copyright headers and add the project-standard header to every new source file. |
@@ -110,16 +163,20 @@ before merging.
 1. **Use C11 (`/std:c11` in MSVC, `-std=c11` in Clang/GCC).**  
    Agents MUST set the appropriate compiler flag in every new build target.
 
-2. **C/C++ source files** in `src/win32/`, `src/drivers/`, and `src/shell/`
-   MUST use the `.c` extension. Introducing `.cpp` source files into these
-   directories is prohibited.
+2. **C source files** under each app’s `src/` (and under any future
+   `Applications/common/`, `Applications/libs/`, or Win32-specific subtrees
+   such as `src/win32/`, `src/drivers/`, `src/shell/`) MUST use the `.c`
+   extension. Introducing `.cpp` source files into these directories is
+   prohibited unless a recorded language exception exists.
 
    Other file types are unrestricted by this rule, including:
    - C header files (`.h`, `.inl`)
    - Windows resource and manifest files (`.rc`, `.mc`, `.manifest`, `.def`)
    - Assembly source files (`.asm`)
-   - Build system files (`CMakeLists.txt`, `.cmake`, `.props`, `.targets`)
-   - Visual Studio project and solution files (`.vcxproj`, `.vcxproj.filters`, `.sln`)
+   - Build system files (`Directory.Build.props`, `.props`, `.targets`,
+     `CMakeLists.txt`, `.cmake`)
+   - Visual Studio project and solution files (`.vcxproj`, `.vcxproj.filters`,
+     `.sln`)
    - Debugger visualizer files (`.natvis`)
 
    Agents MUST NOT introduce `.cpp` files or C++-only constructs (templates,
@@ -234,10 +291,15 @@ logic.
 ## Testing Requirements
 
 - Every new public function MUST have at least one corresponding unit test.
-- Tests live in `tests/` mirroring the `src/` directory structure.
-- Agents MUST run the full test suite (`cmake --build build --target test` or
-  equivalent) and confirm it passes before marking a PR ready for review.
-- Performance-sensitive paths MUST include a microbenchmark in `bench/`.
+- Tests live in each app’s `test/` directory, mirroring the `src/` structure
+  where practical (e.g. `ElectionExplorer/test/`).
+- Primary build system: Visual Studio / MSBuild via `Applications.sln`.
+  Agents MUST build and run the relevant test targets for the changed app
+  (for example `msbuild Applications.sln /p:Configuration=Debug /p:Platform=x64`
+  or the IDE equivalent) and confirm they pass before marking a PR ready for
+  review.
+- Performance-sensitive paths MUST include a microbenchmark under the app’s
+  `bench/` directory when that directory is introduced.
 - Agents MUST NOT disable, skip, or delete existing tests. If a test becomes
   invalid, it MUST be updated, not removed, with a comment explaining the
   change.
@@ -295,3 +357,4 @@ and posting a comment describing the blocker.
 | Date | Author | Change |
 |---|---|---|
 | 2026-08-07 | Initial | Document created. Win32 C-first policy, general agent constraints, and security rules established. |
+| 2026-08-08 | Layout | Scoped to `Applications/`; added Repository Layout (VS solution, per-app projects, `Build/<os>-<arch>-<config>/<App>/`); aligned testing with `test/` and MSBuild. |

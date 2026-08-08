@@ -166,3 +166,27 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# ---------------------------------------------------------------------------
+# Compiled tools under Applications/ (Visual Studio / MSBuild)
+# ---------------------------------------------------------------------------
+
+# All application build outputs (exe, pdb, obj, logs). Source of truth for
+# layout: Applications/README.md
+Applications/Build/
+
+# Visual Studio user-specific / cache files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+ipch/
+*.VC.db
+*.VC.VC.opendb
+*.aps
+*.ncb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db-shm
+*.VC.db-wal
+

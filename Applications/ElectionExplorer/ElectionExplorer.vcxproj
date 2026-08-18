@@ -102,6 +102,9 @@
     <Manifest>
       <EnableDpiAwareness>PerMonitorHighDPIAware</EnableDpiAwareness>
     </Manifest>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
   </ItemDefinitionGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -158,6 +161,7 @@
 
   <PropertyGroup>
     <ApplicationManifest>res\app.manifest</ApplicationManifest>
+    <ApplicationIcon>res\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -177,6 +181,7 @@
 
   <ItemGroup>
     <ResourceCompile Include="res\ElectionExplorer.rc" />
+    <Image Include="res\app.ico" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

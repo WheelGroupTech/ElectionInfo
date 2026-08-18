@@ -1955,8 +1955,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = k_WindowClassName;
-    wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
-    wc.hIconSm = LoadIconW(NULL, IDI_APPLICATION);
+    wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APPICON));
+    wc.hIconSm = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APPICON));
+    if (wc.hIcon == NULL)
+    {
+        wc.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+        wc.hIconSm = wc.hIcon;
+    }
     if (RegisterClassExW(&wc) == 0)
     {
         return 1;
@@ -1969,6 +1974,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     pc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     pc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
     pc.lpszClassName = k_ProgressClassName;
+    pc.hIcon = wc.hIcon;
+    pc.hIconSm = wc.hIconSm;
     if (RegisterClassExW(&pc) == 0)
     {
         return 1;

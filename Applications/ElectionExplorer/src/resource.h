@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#define IDI_APPICON  1
 #define IDR_MAINMENU 101
 
 #define IDM_FILE_OPEN_VOTER_LIST 40001

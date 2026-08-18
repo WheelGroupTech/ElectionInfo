@@ -1,4 +1,8 @@
 #include <winres.h>
+#include "resource.h"
+
+/* Lowest icon ID so Explorer and the shell use this as the program icon. */
+IDI_APPICON ICON "app.ico"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,1,0,0

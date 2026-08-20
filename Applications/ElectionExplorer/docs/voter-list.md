@@ -12,7 +12,7 @@ display them in a high-performance grid.
 | Open a list | **File → Open Voter List…** (or `Ctrl+O`) |
 | Formats | `.csv` (comma) or `.txt` (tab); delimiter also sniffed from the header |
 | Progress | Modal progress window with percent complete and **Cancel** |
-| Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane |
+| Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane. Selected cells use the system highlight color on **both** panes (Voter ID, Name, and the scrolling columns). |
 | Copy | **Edit → Copy** (`Ctrl+C`) or right-click the selection; uses the file delimiter |
 | Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID** and **Name** before the original columns |
 | Grid | Virtual list (owner-data) with **grid lines**, sized for hundreds of thousands to millions of rows |

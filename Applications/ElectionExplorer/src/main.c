@@ -1488,6 +1488,10 @@ static BOOL App_CreateControls(AppState *app)
 
     ListView_SetExtendedListViewStyle(app->hwnd_frozen, lv_ex);
     ListView_SetExtendedListViewStyle(app->hwnd_scroll, lv_ex);
+    /* Classic item theme so selection is the system highlight on the full row,
+     * not a blue focus cell with a grey remainder. */
+    SetWindowTheme(app->hwnd_frozen, L"", L"");
+    SetWindowTheme(app->hwnd_scroll, L"", L"");
 
     /* Prefer no H-scroll until content needs it; pad logic equalizes heights. */
     ShowScrollBar(app->hwnd_frozen, SB_HORZ, FALSE);
@@ -1518,6 +1522,8 @@ static HMENU App_CreateMenu(void)
 /* -------------------------------------------------------------------------- */
 
 static LONG g_syncing_selection = 0;
+static LONG g_sel_sync_posted = 0;
+static HWND g_sel_sync_source = NULL;
 
 static BOOL App_HasSelection(const AppState *app)
 {
@@ -1528,50 +1534,49 @@ static BOOL App_HasSelection(const AppState *app)
     return ListView_GetNextItem(app->hwnd_frozen, -1, LVNI_SELECTED) >= 0;
 }
 
-static void App_SyncSelectionItem(AppState *app, HWND source, int item)
+static void App_RequestSelectionSync(AppState *app, HWND source)
 {
-    HWND other;
-    UINT st;
-
-    if (app == NULL || source == NULL || item < 0)
+    if (app == NULL || source == NULL ||
+        InterlockedCompareExchange(&g_syncing_selection, 0, 0) != 0)
     {
         return;
     }
-    other = (source == app->hwnd_frozen) ? app->hwnd_scroll : app->hwnd_frozen;
-    if (other == NULL)
+    g_sel_sync_source = source;
+    if (InterlockedCompareExchange(&g_sel_sync_posted, 1, 0) == 0)
     {
-        return;
+        PostMessageW(app->hwnd_main, EEM_SYNC_SELECTION, 0, 0);
     }
-    st = ListView_GetItemState(source, item, LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_SetItemState(other, item, st, LVIS_SELECTED | LVIS_FOCUSED);
 }
 
-static void App_SyncSelectionRange(AppState *app, HWND source, int from, int to)
+/**
+ * Copy the source pane's selected set onto the other pane. Owner-data
+ * list views often omit per-item deselect notifications, so a one-item
+ * mirror leaves stale highlights behind.
+ */
+static void App_CopySelectionToOtherPane(AppState *app, HWND source)
 {
+    HWND dest;
     int i;
-    int last;
 
     if (app == NULL || source == NULL)
     {
         return;
     }
-    last = (int)app->table.row_count - 1;
-    if (from < 0)
-    {
-        from = 0;
-    }
-    if (to < 0 || to > last)
-    {
-        to = last;
-    }
-    if (from > to)
+    dest = (source == app->hwnd_frozen) ? app->hwnd_scroll : app->hwnd_frozen;
+    if (dest == NULL)
     {
         return;
     }
-    for (i = from; i <= to; i++)
+
+    InterlockedExchange(&g_syncing_selection, 1);
+    ListView_SetItemState(dest, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    i = -1;
+    while ((i = ListView_GetNextItem(source, i, LVNI_SELECTED)) >= 0)
     {
-        App_SyncSelectionItem(app, source, i);
+        ListView_SetItemState(dest, i, LVIS_SELECTED, LVIS_SELECTED);
     }
+    InterlockedExchange(&g_syncing_selection, 0);
+    InvalidateRect(dest, NULL, TRUE);
 }
 
 static BOOL App_SetClipboardUtf8(HWND hwnd, const char *utf8)
@@ -2009,27 +2014,51 @@ static BOOL App_ShowOptions(AppState *app)
 /* -------------------------------------------------------------------------- */
 
 /**
- * @brief Center-draw Voter ID cells. ListView always left-justifies column 0.
+ * @brief Full-row system highlight on both panes; center Voter ID text.
+ *
+ * Default (and Explorer-themed) drawing paints only the focused cell in
+ * COLOR_HIGHLIGHT and the rest of the row in the inactive grey. Strip the
+ * selected/focus item state and apply the highlight colors ourselves so every
+ * selected cell matches the user's system selection color.
  */
-static LRESULT App_FrozenListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
+static LRESULT App_ListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
 {
+    HWND hwnd = lvcd->nmcd.hdr.hwndFrom;
+    BOOL frozen = (hwnd == app->hwnd_frozen);
+    BOOL selected;
+    int item;
+
     switch (lvcd->nmcd.dwDrawStage)
     {
         case CDDS_PREPAINT:
             return CDRF_NOTIFYITEMDRAW;
 
         case CDDS_ITEMPREPAINT:
-            return CDRF_NOTIFYSUBITEMDRAW;
+            item = (int)lvcd->nmcd.dwItemSpec;
+            selected = (ListView_GetItemState(hwnd, item, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+            if (selected)
+            {
+                lvcd->clrText = GetSysColor(COLOR_HIGHLIGHTTEXT);
+                lvcd->clrTextBk = GetSysColor(COLOR_HIGHLIGHT);
+                lvcd->nmcd.uItemState &= ~(CDIS_SELECTED | CDIS_FOCUS | CDIS_HOT);
+                FillRect(lvcd->nmcd.hdc, &lvcd->nmcd.rc, GetSysColorBrush(COLOR_HIGHLIGHT));
+            }
+            return CDRF_NEWFONT | CDRF_NOTIFYSUBITEMDRAW;
 
         case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
-            if (lvcd->iSubItem == 0)
+            item = (int)lvcd->nmcd.dwItemSpec;
+            selected = (ListView_GetItemState(hwnd, item, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+            if (selected)
+            {
+                lvcd->clrText = GetSysColor(COLOR_HIGHLIGHTTEXT);
+                lvcd->clrTextBk = GetSysColor(COLOR_HIGHLIGHT);
+                lvcd->nmcd.uItemState &= ~(CDIS_SELECTED | CDIS_FOCUS | CDIS_HOT);
+            }
+            if (frozen && lvcd->iSubItem == 0)
             {
                 RECT rc;
                 wchar_t text[256];
-                uint32_t view_row = (uint32_t)lvcd->nmcd.dwItemSpec;
-                BOOL selected =
-                    (ListView_GetItemState(app->hwnd_frozen, (int)view_row, LVIS_SELECTED) &
-                     LVIS_SELECTED) != 0;
+                uint32_t view_row = (uint32_t)item;
                 HDC hdc = lvcd->nmcd.hdc;
                 HFONT old_font;
                 COLORREF old_text;
@@ -2037,24 +2066,19 @@ static LRESULT App_FrozenListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
                 int old_mode;
                 HBRUSH brush;
 
-                if (!ListView_GetSubItemRect(app->hwnd_frozen, (int)view_row, 0, LVIR_BOUNDS, &rc))
+                if (!ListView_GetSubItemRect(hwnd, item, 0, LVIR_BOUNDS, &rc))
                 {
-                    return CDRF_DODEFAULT;
+                    return selected ? CDRF_NEWFONT : CDRF_DODEFAULT;
                 }
-                /* Clip to first column only (BOUNDS can span full row with full-row select). */
                 {
                     RECT rc_label;
-                    if (ListView_GetSubItemRect(app->hwnd_frozen,
-                                                (int)view_row,
-                                                0,
-                                                LVIR_LABEL,
-                                                &rc_label))
+                    if (ListView_GetSubItemRect(hwnd, item, 0, LVIR_LABEL, &rc_label))
                     {
                         rc = rc_label;
                     }
                     else
                     {
-                        int col0_w = ListView_GetColumnWidth(app->hwnd_frozen, 0);
+                        int col0_w = ListView_GetColumnWidth(hwnd, 0);
                         rc.right = rc.left + col0_w;
                     }
                 }
@@ -2073,7 +2097,6 @@ static LRESULT App_FrozenListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
                 }
                 FillRect(hdc, &rc, brush);
 
-                /* Grid line on the right of the cell. */
                 {
                     HPEN pen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
                     HPEN old = (HPEN)SelectObject(hdc, pen);
@@ -2106,7 +2129,7 @@ static LRESULT App_FrozenListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
                 SetBkColor(hdc, old_bk);
                 return CDRF_SKIPDEFAULT;
             }
-            return CDRF_DODEFAULT;
+            return selected ? CDRF_NEWFONT : CDRF_DODEFAULT;
 
         default:
             return CDRF_DODEFAULT;
@@ -2118,11 +2141,7 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
     if (hdr->code == NM_CUSTOMDRAW &&
         (hdr->hwndFrom == app->hwnd_frozen || hdr->hwndFrom == app->hwnd_scroll))
     {
-        if (hdr->hwndFrom == app->hwnd_frozen)
-        {
-            return App_FrozenListCustomDraw(app, (NMLVCUSTOMDRAW *)hdr);
-        }
-        return CDRF_DODEFAULT;
+        return App_ListCustomDraw(app, (NMLVCUSTOMDRAW *)hdr);
     }
 
     if (hdr->hwndFrom != app->hwnd_frozen && hdr->hwndFrom != app->hwnd_scroll)
@@ -2171,30 +2190,17 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
     if (hdr->code == LVN_ITEMCHANGED)
     {
         NMLISTVIEW *nmlv = (NMLISTVIEW *)hdr;
-        if (InterlockedCompareExchange(&g_syncing_selection, 0, 0) != 0)
-        {
-            return 0;
-        }
         if ((nmlv->uChanged & LVIF_STATE) &&
             ((nmlv->uNewState ^ nmlv->uOldState) & (LVIS_SELECTED | LVIS_FOCUSED)))
         {
-            InterlockedExchange(&g_syncing_selection, 1);
-            App_SyncSelectionItem(app, hdr->hwndFrom, nmlv->iItem);
-            InterlockedExchange(&g_syncing_selection, 0);
+            App_RequestSelectionSync(app, hdr->hwndFrom);
         }
         return 0;
     }
 
     if (hdr->code == LVN_ODSTATECHANGED)
     {
-        NMLVODSTATECHANGE *od = (NMLVODSTATECHANGE *)hdr;
-        if (InterlockedCompareExchange(&g_syncing_selection, 0, 0) != 0)
-        {
-            return 0;
-        }
-        InterlockedExchange(&g_syncing_selection, 1);
-        App_SyncSelectionRange(app, hdr->hwndFrom, od->iFrom, od->iTo);
-        InterlockedExchange(&g_syncing_selection, 0);
+        App_RequestSelectionSync(app, hdr->hwndFrom);
         return 0;
     }
 
@@ -2406,6 +2412,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         case EEM_SYNC_PANE_SCROLLUI:
             App_SyncPaneScrollChrome(app);
+            return 0;
+
+        case EEM_SYNC_SELECTION:
+            InterlockedExchange(&g_sel_sync_posted, 0);
+            App_CopySelectionToOtherPane(app, g_sel_sync_source);
             return 0;
 
         case WM_CTLCOLORSTATIC:

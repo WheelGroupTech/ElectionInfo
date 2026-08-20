@@ -28,6 +28,7 @@ static const wchar_t k_ProgressClassName[] = L"ElectionExplorerLoadProgress";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
+static const int k_DefaultFrozenWidth = 320;
 
 enum
 {
@@ -58,9 +59,9 @@ typedef struct AppState
     HPEN pen_header_line;
     UINT dpi;
     int pad;
-    int frozen_width;     /* Left pane width (client pixels), user-resizable */
-    int splitter_width;   /* Gap / hit strip between panes */
-    BOOL splitting;       /* Dragging the left-pane splitter */
+    int frozen_width;   /* Left pane width (client pixels), user-resizable */
+    int splitter_width; /* Gap / hit strip between panes */
+    BOOL splitting;     /* Dragging the left-pane splitter */
     COLORREF header_bg;
     COLORREF header_line;
     EeVoterTable table;
@@ -105,7 +106,7 @@ static void App_UpdateDpiMetrics(AppState *app, UINT dpi)
         /* Preserve user-chosen pane width across DPI changes. */
         if (app->frozen_width <= 0)
         {
-            app->frozen_width = Scale(app, 320);
+            app->frozen_width = Scale(app, k_DefaultFrozenWidth);
         }
         else if (old_dpi != app->dpi)
         {
@@ -140,11 +141,7 @@ static void App_UpdateDpiMetrics(AppState *app, UINT dpi)
 
     ZeroMemory(&ncm, sizeof(ncm));
     ncm.cbSize = sizeof(ncm);
-    if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS,
-                                   sizeof(ncm),
-                                   &ncm,
-                                   0,
-                                   app->dpi))
+    if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, app->dpi))
     {
         font = CreateFontIndirectW(&ncm.lfMessageFont);
         if (font != NULL)
@@ -228,184 +225,182 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
 
     switch (nmcd->dwDrawStage)
     {
-    case CDDS_PREPAINT:
-        if (app->brush_header != NULL)
+        case CDDS_PREPAINT:
+            if (app->brush_header != NULL)
+            {
+                FillRect(nmcd->hdc, &nmcd->rc, app->brush_header);
+            }
+            return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
+
+        case CDDS_ITEMPREPAINT:
         {
-            FillRect(nmcd->hdc, &nmcd->rc, app->brush_header);
-        }
-        return CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
+            HWND header = nmcd->hdr.hwndFrom;
+            int index = (int)nmcd->dwItemSpec;
+            HDITEMW item;
+            wchar_t text[256];
+            RECT rc = nmcd->rc;
+            RECT rc_text;
+            HFONT old_font;
+            COLORREF old_bk;
+            COLORREF old_text;
+            int old_bk_mode;
+            HPEN old_pen;
+            int y1;
+            int y2;
+            int arrow_room = 0;
+            UINT fmt = 0;
 
-    case CDDS_ITEMPREPAINT:
-    {
-        HWND header = nmcd->hdr.hwndFrom;
-        int index = (int)nmcd->dwItemSpec;
-        HDITEMW item;
-        wchar_t text[256];
-        RECT rc = nmcd->rc;
-        RECT rc_text;
-        HFONT old_font;
-        COLORREF old_bk;
-        COLORREF old_text;
-        int old_bk_mode;
-        HPEN old_pen;
-        int y1;
-        int y2;
-        int arrow_room = 0;
-        UINT fmt = 0;
+            ZeroMemory(&item, sizeof(item));
+            item.mask = HDI_TEXT | HDI_FORMAT;
+            item.pszText = text;
+            item.cchTextMax = ARRAYSIZE(text);
+            text[0] = L'\0';
+            Header_GetItem(header, index, &item);
+            fmt = item.fmt;
 
-        ZeroMemory(&item, sizeof(item));
-        item.mask = HDI_TEXT | HDI_FORMAT;
-        item.pszText = text;
-        item.cchTextMax = ARRAYSIZE(text);
-        text[0] = L'\0';
-        Header_GetItem(header, index, &item);
-        fmt = item.fmt;
+            if (app->brush_header != NULL)
+            {
+                FillRect(nmcd->hdc, &rc, app->brush_header);
+            }
 
-        if (app->brush_header != NULL)
-        {
-            FillRect(nmcd->hdc, &rc, app->brush_header);
-        }
+            /* Soft vertical divider between columns. */
+            {
+                HPEN grid_pen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
+                HPEN prev = (HPEN)SelectObject(nmcd->hdc, grid_pen);
+                MoveToEx(nmcd->hdc, rc.right - 1, rc.top, NULL);
+                LineTo(nmcd->hdc, rc.right - 1, rc.bottom);
+                SelectObject(nmcd->hdc, prev);
+                DeleteObject(grid_pen);
+            }
 
-        /* Soft vertical divider between columns. */
-        {
-            HPEN grid_pen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
-            HPEN prev = (HPEN)SelectObject(nmcd->hdc, grid_pen);
-            MoveToEx(nmcd->hdc, rc.right - 1, rc.top, NULL);
-            LineTo(nmcd->hdc, rc.right - 1, rc.bottom);
-            SelectObject(nmcd->hdc, prev);
-            DeleteObject(grid_pen);
-        }
+            if ((fmt & HDF_SORTUP) || (fmt & HDF_SORTDOWN))
+            {
+                arrow_room = Scale(app, 14);
+            }
 
-        if ((fmt & HDF_SORTUP) || (fmt & HDF_SORTDOWN))
-        {
-            arrow_room = Scale(app, 14);
-        }
-
-        /*
+            /*
          * ListView often clears LVCFMT_CENTER on column 0 (first column). Treat
          * the frozen pane's Voter ID header (index 0) as center-aligned always.
          */
-        {
-            BOOL force_center =
-                (app->hwnd_frozen != NULL &&
-                 header == ListView_GetHeader(app->hwnd_frozen) && index == 0);
-            BOOL is_center = force_center || ((fmt & HDF_CENTER) != 0);
-            BOOL is_right = !is_center && ((fmt & HDF_RIGHT) != 0);
-            UINT dt = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
-            int pad = Scale(app, 4);
-
-            rc_text = rc;
-            rc_text.top += Scale(app, 2);
-            rc_text.bottom -= Scale(app, 5);
-
-            if (is_center)
             {
-                /* Symmetric padding so the caption matches centered cell text. */
-                rc_text.left += pad;
-                rc_text.right -= pad;
-                dt |= DT_CENTER;
+                BOOL force_center = (app->hwnd_frozen != NULL &&
+                                     header == ListView_GetHeader(app->hwnd_frozen) && index == 0);
+                BOOL is_center = force_center || ((fmt & HDF_CENTER) != 0);
+                BOOL is_right = !is_center && ((fmt & HDF_RIGHT) != 0);
+                UINT dt = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+                int pad = Scale(app, 4);
+
+                rc_text = rc;
+                rc_text.top += Scale(app, 2);
+                rc_text.bottom -= Scale(app, 5);
+
+                if (is_center)
+                {
+                    /* Symmetric padding so the caption matches centered cell text. */
+                    rc_text.left += pad;
+                    rc_text.right -= pad;
+                    dt |= DT_CENTER;
+                }
+                else if (is_right)
+                {
+                    rc_text.left += pad;
+                    rc_text.right -= pad + arrow_room;
+                    dt |= DT_RIGHT;
+                }
+                else
+                {
+                    rc_text.left += Scale(app, 6);
+                    rc_text.right -= pad + arrow_room;
+                    dt |= DT_LEFT;
+                }
+
+                old_font = (HFONT)SelectObject(nmcd->hdc,
+                                               app->font_header ? app->font_header : app->font_ui);
+                old_bk_mode = SetBkMode(nmcd->hdc, TRANSPARENT);
+                old_bk = SetBkColor(nmcd->hdc, app->header_bg);
+                old_text = SetTextColor(nmcd->hdc, RGB(0, 0, 0));
+                DrawTextW(nmcd->hdc, text, -1, &rc_text, dt);
             }
-            else if (is_right)
+
+            if (arrow_room > 0)
             {
-                rc_text.left += pad;
-                rc_text.right -= pad + arrow_room;
-                dt |= DT_RIGHT;
+                int cx = rc.right - Scale(app, 8);
+                int cy = (rc.top + rc.bottom) / 2;
+                int half = Scale(app, 4);
+                POINT pts[3];
+                HBRUSH br = CreateSolidBrush(RGB(60, 60, 60));
+                HBRUSH old_br = (HBRUSH)SelectObject(nmcd->hdc, br);
+                HPEN null_pen = (HPEN)GetStockObject(NULL_PEN);
+                HPEN old_p = (HPEN)SelectObject(nmcd->hdc, null_pen);
+
+                if (fmt & HDF_SORTUP)
+                {
+                    pts[0].x = cx;
+                    pts[0].y = cy - half / 2;
+                    pts[1].x = cx - half;
+                    pts[1].y = cy + half / 2;
+                    pts[2].x = cx + half;
+                    pts[2].y = cy + half / 2;
+                }
+                else
+                {
+                    pts[0].x = cx;
+                    pts[0].y = cy + half / 2;
+                    pts[1].x = cx - half;
+                    pts[1].y = cy - half / 2;
+                    pts[2].x = cx + half;
+                    pts[2].y = cy - half / 2;
+                }
+                Polygon(nmcd->hdc, pts, 3);
+                SelectObject(nmcd->hdc, old_br);
+                SelectObject(nmcd->hdc, old_p);
+                DeleteObject(br);
             }
-            else
+
+            /* Double rule under the header caption. */
+            y2 = rc.bottom - Scale(app, 2);
+            y1 = y2 - Scale(app, 2);
+            if (y1 < rc.top)
             {
-                rc_text.left += Scale(app, 6);
-                rc_text.right -= pad + arrow_room;
-                dt |= DT_LEFT;
+                y1 = rc.top;
             }
-
-            old_font = (HFONT)SelectObject(nmcd->hdc,
-                                           app->font_header ? app->font_header : app->font_ui);
-            old_bk_mode = SetBkMode(nmcd->hdc, TRANSPARENT);
-            old_bk = SetBkColor(nmcd->hdc, app->header_bg);
-            old_text = SetTextColor(nmcd->hdc, RGB(0, 0, 0));
-            DrawTextW(nmcd->hdc, text, -1, &rc_text, dt);
-        }
-
-        if (arrow_room > 0)
-        {
-            int cx = rc.right - Scale(app, 8);
-            int cy = (rc.top + rc.bottom) / 2;
-            int half = Scale(app, 4);
-            POINT pts[3];
-            HBRUSH br = CreateSolidBrush(RGB(60, 60, 60));
-            HBRUSH old_br = (HBRUSH)SelectObject(nmcd->hdc, br);
-            HPEN null_pen = (HPEN)GetStockObject(NULL_PEN);
-            HPEN old_p = (HPEN)SelectObject(nmcd->hdc, null_pen);
-
-            if (fmt & HDF_SORTUP)
-            {
-                pts[0].x = cx;
-                pts[0].y = cy - half / 2;
-                pts[1].x = cx - half;
-                pts[1].y = cy + half / 2;
-                pts[2].x = cx + half;
-                pts[2].y = cy + half / 2;
-            }
-            else
-            {
-                pts[0].x = cx;
-                pts[0].y = cy + half / 2;
-                pts[1].x = cx - half;
-                pts[1].y = cy - half / 2;
-                pts[2].x = cx + half;
-                pts[2].y = cy - half / 2;
-            }
-            Polygon(nmcd->hdc, pts, 3);
-            SelectObject(nmcd->hdc, old_br);
-            SelectObject(nmcd->hdc, old_p);
-            DeleteObject(br);
-        }
-
-        /* Double rule under the header caption. */
-        y2 = rc.bottom - Scale(app, 2);
-        y1 = y2 - Scale(app, 2);
-        if (y1 < rc.top)
-        {
-            y1 = rc.top;
-        }
-        old_pen = (HPEN)SelectObject(nmcd->hdc,
-                                     app->pen_header_line
-                                         ? app->pen_header_line
-                                         : (HPEN)GetStockObject(BLACK_PEN));
-        MoveToEx(nmcd->hdc, rc.left, y1, NULL);
-        LineTo(nmcd->hdc, rc.right, y1);
-        MoveToEx(nmcd->hdc, rc.left, y2, NULL);
-        LineTo(nmcd->hdc, rc.right, y2);
-        SelectObject(nmcd->hdc, old_pen);
-
-        SetTextColor(nmcd->hdc, old_text);
-        SetBkColor(nmcd->hdc, old_bk);
-        SetBkMode(nmcd->hdc, old_bk_mode);
-        if (old_font != NULL)
-        {
-            SelectObject(nmcd->hdc, old_font);
-        }
-        return CDRF_SKIPDEFAULT;
-    }
-
-    case CDDS_POSTPAINT:
-        /* Ensure a continuous double line across the full header width. */
-        if (app->pen_header_line != NULL)
-        {
-            RECT rc = nmcd->rc;
-            int y2 = rc.bottom - Scale(app, 2);
-            int y1 = y2 - Scale(app, 2);
-            HPEN old_pen = (HPEN)SelectObject(nmcd->hdc, app->pen_header_line);
+            old_pen = (HPEN)SelectObject(nmcd->hdc,
+                                         app->pen_header_line ? app->pen_header_line
+                                                              : (HPEN)GetStockObject(BLACK_PEN));
             MoveToEx(nmcd->hdc, rc.left, y1, NULL);
             LineTo(nmcd->hdc, rc.right, y1);
             MoveToEx(nmcd->hdc, rc.left, y2, NULL);
             LineTo(nmcd->hdc, rc.right, y2);
             SelectObject(nmcd->hdc, old_pen);
-        }
-        return CDRF_DODEFAULT;
 
-    default:
-        return CDRF_DODEFAULT;
+            SetTextColor(nmcd->hdc, old_text);
+            SetBkColor(nmcd->hdc, old_bk);
+            SetBkMode(nmcd->hdc, old_bk_mode);
+            if (old_font != NULL)
+            {
+                SelectObject(nmcd->hdc, old_font);
+            }
+            return CDRF_SKIPDEFAULT;
+        }
+
+        case CDDS_POSTPAINT:
+            /* Ensure a continuous double line across the full header width. */
+            if (app->pen_header_line != NULL)
+            {
+                RECT rc = nmcd->rc;
+                int y2 = rc.bottom - Scale(app, 2);
+                int y1 = y2 - Scale(app, 2);
+                HPEN old_pen = (HPEN)SelectObject(nmcd->hdc, app->pen_header_line);
+                MoveToEx(nmcd->hdc, rc.left, y1, NULL);
+                LineTo(nmcd->hdc, rc.right, y1);
+                MoveToEx(nmcd->hdc, rc.left, y2, NULL);
+                LineTo(nmcd->hdc, rc.right, y2);
+                SelectObject(nmcd->hdc, old_pen);
+            }
+            return CDRF_DODEFAULT;
+
+        default:
+            return CDRF_DODEFAULT;
     }
 }
 
@@ -429,10 +424,7 @@ static void App_UpdateRowStatus(AppState *app)
         App_SetStatus(app, L"No voter list loaded.");
         return;
     }
-    StringCchPrintfW(buf,
-                     ARRAYSIZE(buf),
-                     L"%u voters loaded",
-                     app->table.row_count);
+    StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u voters loaded", app->table.row_count);
     App_SetStatus(app, buf);
 }
 
@@ -477,6 +469,43 @@ static void App_SetHeaderSortArrow(HWND hwnd_list, int column, int sort_column, 
         }
         Header_SetItem(header, i, &item);
     }
+}
+
+static void App_FitFrozenColumns(AppState *app)
+{
+    HWND header;
+    RECT rc;
+    int inner_w;
+    int id_w;
+    int name_w;
+
+    if (app->hwnd_frozen == NULL)
+    {
+        return;
+    }
+
+    header = ListView_GetHeader(app->hwnd_frozen);
+    if (header == NULL || Header_GetItemCount(header) < EE_FROZEN_COLUMN_COUNT)
+    {
+        return;
+    }
+
+    GetClientRect(app->hwnd_frozen, &rc);
+    inner_w = rc.right - rc.left;
+    if (inner_w <= 0)
+    {
+        return;
+    }
+
+    id_w = Scale(app, 110);
+    name_w = inner_w - id_w - Scale(app, 2);
+    if (name_w < Scale(app, 200))
+    {
+        name_w = Scale(app, 200);
+    }
+
+    ListView_SetColumnWidth(app->hwnd_frozen, 0, id_w);
+    ListView_SetColumnWidth(app->hwnd_frozen, 1, name_w);
 }
 
 static void App_RebuildColumns(AppState *app)
@@ -566,6 +595,7 @@ static void App_RebuildColumns(AppState *app)
 
     App_ApplyHeaderStyle(app, app->hwnd_frozen);
     App_ApplyHeaderStyle(app, app->hwnd_scroll);
+    App_FitFrozenColumns(app);
     InvalidateRect(app->hwnd_frozen, NULL, TRUE);
     InvalidateRect(app->hwnd_scroll, NULL, TRUE);
 
@@ -691,37 +721,37 @@ static LRESULT CALLBACK ProgressWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
 
     switch (msg)
     {
-    case WM_CREATE:
-    {
-        CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
-        app = (AppState *)cs->lpCreateParams;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
-        return 0;
-    }
-
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDC_PROGRESS_CANCEL && app != NULL)
+        case WM_CREATE:
         {
-            InterlockedExchange(&app->load_cancel, 1);
-            if (app->hwnd_progress_status)
-            {
-                SetWindowTextW(app->hwnd_progress_status, L"Cancelling…");
-            }
-            EnableWindow(GetDlgItem(hwnd, IDC_PROGRESS_CANCEL), FALSE);
-        }
-        return 0;
-
-    case WM_CLOSE:
-        /* Force cancel rather than destroy mid-load. */
-        if (app != NULL && app->loading)
-        {
-            InterlockedExchange(&app->load_cancel, 1);
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            app = (AppState *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
             return 0;
         }
-        break;
 
-    default:
-        break;
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDC_PROGRESS_CANCEL && app != NULL)
+            {
+                InterlockedExchange(&app->load_cancel, 1);
+                if (app->hwnd_progress_status)
+                {
+                    SetWindowTextW(app->hwnd_progress_status, L"Cancelling…");
+                }
+                EnableWindow(GetDlgItem(hwnd, IDC_PROGRESS_CANCEL), FALSE);
+            }
+            return 0;
+
+        case WM_CLOSE:
+            /* Force cancel rather than destroy mid-load. */
+            if (app != NULL && app->loading)
+            {
+                InterlockedExchange(&app->load_cancel, 1);
+                return 0;
+            }
+            break;
+
+        default:
+            break;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -740,26 +770,57 @@ static void App_DestroyProgress(AppState *app)
 static BOOL App_ShowProgress(AppState *app)
 {
     RECT rc_main;
-    int width = Scale(app, 420);
-    int height = Scale(app, 140);
+    RECT rc_wnd;
+    RECT rc_client;
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
+    int client_w = Scale(app, 420);
+    int client_h = Scale(app, 140);
+    int margin = Scale(app, 16);
+    int status_h = Scale(app, 20);
+    int bar_y = Scale(app, 48);
+    int bar_h = Scale(app, 22);
+    int btn_w = Scale(app, 90);
+    int btn_h = Scale(app, 28);
+    int gap = Scale(app, 12);
+    int outer_w;
+    int outer_h;
     int x;
     int y;
+    int btn_x;
+    int btn_y;
     HWND btn;
 
     App_DestroyProgress(app);
 
-    GetWindowRect(app->hwnd_main, &rc_main);
-    x = rc_main.left + ((rc_main.right - rc_main.left) - width) / 2;
-    y = rc_main.top + ((rc_main.bottom - rc_main.top) - height) / 2;
+    /* CreateWindow size includes caption and frame. Convert from the desired
+     * client size so the Cancel button is not placed on top of the bar. */
+    rc_wnd.left = 0;
+    rc_wnd.top = 0;
+    rc_wnd.right = client_w;
+    rc_wnd.bottom = client_h;
+    if (!AdjustWindowRectExForDpi(&rc_wnd, style, FALSE, ex_style, app->dpi))
+    {
+        rc_wnd.left = 0;
+        rc_wnd.top = 0;
+        rc_wnd.right = client_w + Scale(app, 16);
+        rc_wnd.bottom = client_h + Scale(app, 40);
+    }
+    outer_w = rc_wnd.right - rc_wnd.left;
+    outer_h = rc_wnd.bottom - rc_wnd.top;
 
-    app->hwnd_progress = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+    GetWindowRect(app->hwnd_main, &rc_main);
+    x = rc_main.left + ((rc_main.right - rc_main.left) - outer_w) / 2;
+    y = rc_main.top + ((rc_main.bottom - rc_main.top) - outer_h) / 2;
+
+    app->hwnd_progress = CreateWindowExW(ex_style,
                                          k_ProgressClassName,
                                          L"Loading voter list",
-                                         WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                                         style,
                                          x,
                                          y,
-                                         width,
-                                         height,
+                                         outer_w,
+                                         outer_h,
                                          app->hwnd_main,
                                          NULL,
                                          app->instance,
@@ -769,44 +830,53 @@ static BOOL App_ShowProgress(AppState *app)
         return FALSE;
     }
 
-    app->hwnd_progress_status =
-        CreateWindowExW(0,
-                        L"STATIC",
-                        L"Reading file…",
-                        WS_CHILD | WS_VISIBLE | SS_LEFT,
-                        Scale(app, 16),
-                        Scale(app, 16),
-                        width - Scale(app, 32),
-                        Scale(app, 20),
-                        app->hwnd_progress,
-                        (HMENU)(INT_PTR)IDC_PROGRESS_STATUS,
-                        app->instance,
-                        NULL);
+    GetClientRect(app->hwnd_progress, &rc_client);
+    client_w = rc_client.right - rc_client.left;
+    client_h = rc_client.bottom - rc_client.top;
 
-    app->hwnd_progress_bar =
-        CreateWindowExW(0,
-                        PROGRESS_CLASSW,
-                        NULL,
-                        WS_CHILD | WS_VISIBLE,
-                        Scale(app, 16),
-                        Scale(app, 48),
-                        width - Scale(app, 32),
-                        Scale(app, 22),
-                        app->hwnd_progress,
-                        (HMENU)(INT_PTR)IDC_PROGRESS_BAR,
-                        app->instance,
-                        NULL);
+    app->hwnd_progress_status = CreateWindowExW(0,
+                                                L"STATIC",
+                                                L"Reading file…",
+                                                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                                margin,
+                                                margin,
+                                                client_w - margin * 2,
+                                                status_h,
+                                                app->hwnd_progress,
+                                                (HMENU)(INT_PTR)IDC_PROGRESS_STATUS,
+                                                app->instance,
+                                                NULL);
+
+    app->hwnd_progress_bar = CreateWindowExW(0,
+                                             PROGRESS_CLASSW,
+                                             NULL,
+                                             WS_CHILD | WS_VISIBLE,
+                                             margin,
+                                             bar_y,
+                                             client_w - margin * 2,
+                                             bar_h,
+                                             app->hwnd_progress,
+                                             (HMENU)(INT_PTR)IDC_PROGRESS_BAR,
+                                             app->instance,
+                                             NULL);
     SendMessageW(app->hwnd_progress_bar, PBM_SETRANGE32, 0, 100);
     SendMessageW(app->hwnd_progress_bar, PBM_SETPOS, 0, 0);
+
+    btn_x = client_w - margin - btn_w;
+    btn_y = client_h - margin - btn_h;
+    if (btn_y < bar_y + bar_h + gap)
+    {
+        btn_y = bar_y + bar_h + gap;
+    }
 
     btn = CreateWindowExW(0,
                           L"BUTTON",
                           L"Cancel",
                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-                          width - Scale(app, 16) - Scale(app, 90),
-                          height - Scale(app, 16) - Scale(app, 30) - Scale(app, 30),
-                          Scale(app, 90),
-                          Scale(app, 28),
+                          btn_x,
+                          btn_y,
+                          btn_w,
+                          btn_h,
                           app->hwnd_progress,
                           (HMENU)(INT_PTR)IDC_PROGRESS_CANCEL,
                           app->instance,
@@ -968,11 +1038,7 @@ static void App_OnLoadFinished(AppState *app)
         wchar_t title[MAX_PATH + 64];
         App_RebuildColumns(app);
         App_UpdateRowStatus(app);
-        StringCchPrintfW(title,
-                         ARRAYSIZE(title),
-                         L"%s — %s",
-                         k_WindowTitle,
-                         app->load_path);
+        StringCchPrintfW(title, ARRAYSIZE(title), L"%s — %s", k_WindowTitle, app->load_path);
         SetWindowTextW(app->hwnd_main, title);
     }
     else if (app->load_status == EeLoadStatus_Cancelled)
@@ -989,8 +1055,7 @@ static void App_OnLoadFinished(AppState *app)
         App_SetStatus(app, L"Load failed.");
         SetWindowTextW(app->hwnd_main, k_WindowTitle);
         MessageBoxW(app->hwnd_main,
-                    app->load_error[0] ? app->load_error
-                                      : L"Failed to load the voter list.",
+                    app->load_error[0] ? app->load_error : L"Failed to load the voter list.",
                     k_WindowTitle,
                     MB_ICONERROR | MB_OK);
     }
@@ -1288,8 +1353,13 @@ static void App_Layout(AppState *app)
     }
 
     split_w = app->splitter_width > 0 ? app->splitter_width : Scale(app, 6);
+    if (app->frozen_width <= 0)
+    {
+        app->frozen_width = Scale(app, k_DefaultFrozenWidth);
+    }
+    /* Clamp for display only. Writing back would lock WM_CREATE's empty
+     * client (or a later shrink) over the default pane width. */
     frozen_w = App_ClampFrozenWidth(app, app->frozen_width, client_w);
-    app->frozen_width = frozen_w;
     scroll_x = app->pad + frozen_w + split_w;
     scroll_w = client_w - scroll_x - app->pad;
     if (scroll_w < 0)
@@ -1314,6 +1384,8 @@ static void App_Layout(AppState *app)
     {
         ShowWindow(app->hwnd_scroll_hsb_pad, SW_HIDE);
     }
+
+    App_FitFrozenColumns(app);
 
     /* ListView updates non-client scrollbars during size; equalize after. */
     App_SyncPaneScrollChrome(app);
@@ -1340,8 +1412,8 @@ static BOOL App_CreateControls(AppState *app)
 {
     DWORD lv_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA |
                      LVS_SHOWSELALWAYS | LVS_SINGLESEL;
-    DWORD lv_ex = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP |
-                  LVS_EX_GRIDLINES | LVS_EX_HEADERDRAGDROP;
+    DWORD lv_ex = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_GRIDLINES |
+                  LVS_EX_HEADERDRAGDROP;
 
     app->hwnd_frozen = CreateWindowExW(WS_EX_CLIENTEDGE,
                                        WC_LISTVIEWW,
@@ -1443,104 +1515,101 @@ static LRESULT App_FrozenListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
 {
     switch (lvcd->nmcd.dwDrawStage)
     {
-    case CDDS_PREPAINT:
-        return CDRF_NOTIFYITEMDRAW;
+        case CDDS_PREPAINT:
+            return CDRF_NOTIFYITEMDRAW;
 
-    case CDDS_ITEMPREPAINT:
-        return CDRF_NOTIFYSUBITEMDRAW;
+        case CDDS_ITEMPREPAINT:
+            return CDRF_NOTIFYSUBITEMDRAW;
 
-    case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
-        if (lvcd->iSubItem == 0)
-        {
-            RECT rc;
-            wchar_t text[256];
-            uint32_t view_row = (uint32_t)lvcd->nmcd.dwItemSpec;
-            BOOL selected = (ListView_GetItemState(app->hwnd_frozen,
-                                                   (int)view_row,
-                                                   LVIS_SELECTED) &
-                             LVIS_SELECTED) != 0;
-            HDC hdc = lvcd->nmcd.hdc;
-            HFONT old_font;
-            COLORREF old_text;
-            COLORREF old_bk;
-            int old_mode;
-            HBRUSH brush;
-
-            if (!ListView_GetSubItemRect(app->hwnd_frozen,
-                                         (int)view_row,
-                                         0,
-                                         LVIR_BOUNDS,
-                                         &rc))
+        case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
+            if (lvcd->iSubItem == 0)
             {
-                return CDRF_DODEFAULT;
-            }
-            /* Clip to first column only (BOUNDS can span full row with full-row select). */
-            {
-                RECT rc_label;
-                if (ListView_GetSubItemRect(app->hwnd_frozen,
-                                            (int)view_row,
-                                            0,
-                                            LVIR_LABEL,
-                                            &rc_label))
+                RECT rc;
+                wchar_t text[256];
+                uint32_t view_row = (uint32_t)lvcd->nmcd.dwItemSpec;
+                BOOL selected =
+                    (ListView_GetItemState(app->hwnd_frozen, (int)view_row, LVIS_SELECTED) &
+                     LVIS_SELECTED) != 0;
+                HDC hdc = lvcd->nmcd.hdc;
+                HFONT old_font;
+                COLORREF old_text;
+                COLORREF old_bk;
+                int old_mode;
+                HBRUSH brush;
+
+                if (!ListView_GetSubItemRect(app->hwnd_frozen, (int)view_row, 0, LVIR_BOUNDS, &rc))
                 {
-                    rc = rc_label;
+                    return CDRF_DODEFAULT;
+                }
+                /* Clip to first column only (BOUNDS can span full row with full-row select). */
+                {
+                    RECT rc_label;
+                    if (ListView_GetSubItemRect(app->hwnd_frozen,
+                                                (int)view_row,
+                                                0,
+                                                LVIR_LABEL,
+                                                &rc_label))
+                    {
+                        rc = rc_label;
+                    }
+                    else
+                    {
+                        int col0_w = ListView_GetColumnWidth(app->hwnd_frozen, 0);
+                        rc.right = rc.left + col0_w;
+                    }
+                }
+
+                if (selected)
+                {
+                    brush = GetSysColorBrush(COLOR_HIGHLIGHT);
+                    old_text = SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
+                    old_bk = SetBkColor(hdc, GetSysColor(COLOR_HIGHLIGHT));
                 }
                 else
                 {
-                    int col0_w = ListView_GetColumnWidth(app->hwnd_frozen, 0);
-                    rc.right = rc.left + col0_w;
+                    brush = GetSysColorBrush(COLOR_WINDOW);
+                    old_text = SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+                    old_bk = SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
                 }
-            }
+                FillRect(hdc, &rc, brush);
 
-            if (selected)
-            {
-                brush = GetSysColorBrush(COLOR_HIGHLIGHT);
-                old_text = SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
-                old_bk = SetBkColor(hdc, GetSysColor(COLOR_HIGHLIGHT));
-            }
-            else
-            {
-                brush = GetSysColorBrush(COLOR_WINDOW);
-                old_text = SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
-                old_bk = SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
-            }
-            FillRect(hdc, &rc, brush);
+                /* Grid line on the right of the cell. */
+                {
+                    HPEN pen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
+                    HPEN old = (HPEN)SelectObject(hdc, pen);
+                    MoveToEx(hdc, rc.right - 1, rc.top, NULL);
+                    LineTo(hdc, rc.right - 1, rc.bottom);
+                    SelectObject(hdc, old);
+                    DeleteObject(pen);
+                }
 
-            /* Grid line on the right of the cell. */
-            {
-                HPEN pen = CreatePen(PS_SOLID, 1, RGB(200, 200, 200));
-                HPEN old = (HPEN)SelectObject(hdc, pen);
-                MoveToEx(hdc, rc.right - 1, rc.top, NULL);
-                LineTo(hdc, rc.right - 1, rc.bottom);
-                SelectObject(hdc, old);
-                DeleteObject(pen);
+                text[0] = L'\0';
+                EeVoterTable_GetViewCellW(&app->table, view_row, 0, text, ARRAYSIZE(text));
+                old_font = (HFONT)SelectObject(hdc,
+                                               app->font_ui ? app->font_ui
+                                                            : GetStockObject(DEFAULT_GUI_FONT));
+                old_mode = SetBkMode(hdc, TRANSPARENT);
+                {
+                    RECT rc_text = rc;
+                    rc_text.left += Scale(app, 2);
+                    rc_text.right -= Scale(app, 2);
+                    DrawTextW(hdc,
+                              text,
+                              -1,
+                              &rc_text,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                                  DT_NOPREFIX);
+                }
+                SetBkMode(hdc, old_mode);
+                SelectObject(hdc, old_font);
+                SetTextColor(hdc, old_text);
+                SetBkColor(hdc, old_bk);
+                return CDRF_SKIPDEFAULT;
             }
+            return CDRF_DODEFAULT;
 
-            text[0] = L'\0';
-            EeVoterTable_GetViewCellW(&app->table, view_row, 0, text, ARRAYSIZE(text));
-            old_font = (HFONT)SelectObject(hdc, app->font_ui ? app->font_ui : GetStockObject(DEFAULT_GUI_FONT));
-            old_mode = SetBkMode(hdc, TRANSPARENT);
-            {
-                RECT rc_text = rc;
-                rc_text.left += Scale(app, 2);
-                rc_text.right -= Scale(app, 2);
-                DrawTextW(hdc,
-                          text,
-                          -1,
-                          &rc_text,
-                          DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
-                              DT_NOPREFIX);
-            }
-            SetBkMode(hdc, old_mode);
-            SelectObject(hdc, old_font);
-            SetTextColor(hdc, old_text);
-            SetBkColor(hdc, old_bk);
-            return CDRF_SKIPDEFAULT;
-        }
-        return CDRF_DODEFAULT;
-
-    default:
-        return CDRF_DODEFAULT;
+        default:
+            return CDRF_DODEFAULT;
     }
 }
 
@@ -1607,12 +1676,10 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
         {
             return 0;
         }
-        if ((nmlv->uChanged & LVIF_STATE) &&
-            (nmlv->uNewState & LVIS_SELECTED) &&
+        if ((nmlv->uChanged & LVIF_STATE) && (nmlv->uNewState & LVIS_SELECTED) &&
             !(nmlv->uOldState & LVIS_SELECTED))
         {
-            HWND other =
-                (hdr->hwndFrom == app->hwnd_frozen) ? app->hwnd_scroll : app->hwnd_frozen;
+            HWND other = (hdr->hwndFrom == app->hwnd_frozen) ? app->hwnd_scroll : app->hwnd_frozen;
             InterlockedExchange(&syncing_selection, 1);
             ListView_SetItemState(other, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
             ListView_SetItemState(other,
@@ -1640,230 +1707,230 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
     switch (msg)
     {
-    case WM_CREATE:
-    {
-        HMENU menu;
-        app->hwnd_main = hwnd;
-        menu = App_CreateMenu();
-        SetMenu(hwnd, menu);
-        if (!App_CreateControls(app))
+        case WM_CREATE:
         {
-            return -1;
-        }
-        App_Layout(app);
-        return 0;
-    }
-
-    case WM_SIZE:
-        App_Layout(app);
-        return 0;
-
-    case WM_PAINT:
-    {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        if (hdc != NULL)
-        {
-            RECT split_rc;
-            FillRect(hdc, &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
-            App_GetSplitterRect(app, &split_rc);
-            if (split_rc.right > split_rc.left && split_rc.bottom > split_rc.top)
+            HMENU menu;
+            app->hwnd_main = hwnd;
+            App_UpdateDpiMetrics(app, GetDpiForWindow(hwnd));
+            menu = App_CreateMenu();
+            SetMenu(hwnd, menu);
+            if (!App_CreateControls(app))
             {
-                HBRUSH brush = GetSysColorBrush(COLOR_BTNFACE);
-                HPEN pen = CreatePen(PS_SOLID, 1, RGB(160, 160, 160));
-                HPEN old_pen;
-                int mid;
-                int y;
-                int grip = Scale(app, 12);
-
-                FillRect(hdc, &split_rc, brush);
-                old_pen = (HPEN)SelectObject(hdc, pen);
-                mid = (split_rc.left + split_rc.right) / 2;
-                MoveToEx(hdc, mid, split_rc.top + Scale(app, 4), NULL);
-                LineTo(hdc, mid, split_rc.bottom - Scale(app, 4));
-                /* Small grip dots */
-                for (y = (split_rc.top + split_rc.bottom) / 2 - grip;
-                     y <= (split_rc.top + split_rc.bottom) / 2 + grip;
-                     y += Scale(app, 4))
-                {
-                    SetPixel(hdc, mid - 1, y, RGB(100, 100, 100));
-                    SetPixel(hdc, mid + 1, y, RGB(100, 100, 100));
-                }
-                SelectObject(hdc, old_pen);
-                DeleteObject(pen);
+                return -1;
             }
-            EndPaint(hwnd, &ps);
-        }
-        return 0;
-    }
-
-    case WM_SETCURSOR:
-        if ((HWND)wParam == hwnd && LOWORD(lParam) == HTCLIENT)
-        {
-            POINT pt;
-            GetCursorPos(&pt);
-            ScreenToClient(hwnd, &pt);
-            if (App_HitTestSplitter(app, pt.x, pt.y) || app->splitting)
-            {
-                SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
-                return TRUE;
-            }
-        }
-        break;
-
-    case WM_LBUTTONDOWN:
-    {
-        int x = GET_X_LPARAM(lParam);
-        int y = GET_Y_LPARAM(lParam);
-        if (App_HitTestSplitter(app, x, y))
-        {
-            app->splitting = TRUE;
-            SetCapture(hwnd);
-            SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
-            return 0;
-        }
-        break;
-    }
-
-    case WM_MOUSEMOVE:
-        if (app->splitting)
-        {
-            RECT client;
-            int x = GET_X_LPARAM(lParam);
-            int new_w;
-            GetClientRect(hwnd, &client);
-            new_w = x - app->pad;
-            app->frozen_width =
-                App_ClampFrozenWidth(app, new_w, client.right - client.left);
             App_Layout(app);
             return 0;
         }
-        break;
 
-    case WM_LBUTTONUP:
-        if (app->splitting)
+        case WM_SIZE:
+            App_Layout(app);
+            return 0;
+
+        case WM_PAINT:
         {
-            app->splitting = FALSE;
-            ReleaseCapture();
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            if (hdc != NULL)
+            {
+                RECT split_rc;
+                FillRect(hdc, &ps.rcPaint, (HBRUSH)(COLOR_WINDOW + 1));
+                App_GetSplitterRect(app, &split_rc);
+                if (split_rc.right > split_rc.left && split_rc.bottom > split_rc.top)
+                {
+                    HBRUSH brush = GetSysColorBrush(COLOR_BTNFACE);
+                    HPEN pen = CreatePen(PS_SOLID, 1, RGB(160, 160, 160));
+                    HPEN old_pen;
+                    int mid;
+                    int y;
+                    int grip = Scale(app, 12);
+
+                    FillRect(hdc, &split_rc, brush);
+                    old_pen = (HPEN)SelectObject(hdc, pen);
+                    mid = (split_rc.left + split_rc.right) / 2;
+                    MoveToEx(hdc, mid, split_rc.top + Scale(app, 4), NULL);
+                    LineTo(hdc, mid, split_rc.bottom - Scale(app, 4));
+                    /* Small grip dots */
+                    for (y = (split_rc.top + split_rc.bottom) / 2 - grip;
+                         y <= (split_rc.top + split_rc.bottom) / 2 + grip;
+                         y += Scale(app, 4))
+                    {
+                        SetPixel(hdc, mid - 1, y, RGB(100, 100, 100));
+                        SetPixel(hdc, mid + 1, y, RGB(100, 100, 100));
+                    }
+                    SelectObject(hdc, old_pen);
+                    DeleteObject(pen);
+                }
+                EndPaint(hwnd, &ps);
+            }
             return 0;
         }
-        break;
 
-    case WM_CAPTURECHANGED:
-        app->splitting = FALSE;
-        break;
+        case WM_SETCURSOR:
+            if ((HWND)wParam == hwnd && LOWORD(lParam) == HTCLIENT)
+            {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd, &pt);
+                if (App_HitTestSplitter(app, pt.x, pt.y) || app->splitting)
+                {
+                    SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
+                    return TRUE;
+                }
+            }
+            break;
 
-    case WM_DPICHANGED:
-    {
-        UINT dpi = HIWORD(wParam);
-        RECT *const prc = (RECT *)lParam;
-        App_UpdateDpiMetrics(app, dpi);
-        App_ApplyFont(app);
-        SetWindowPos(hwnd,
-                     NULL,
-                     prc->left,
-                     prc->top,
-                     prc->right - prc->left,
-                     prc->bottom - prc->top,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
-        App_RebuildColumns(app);
-        App_Layout(app);
-        return 0;
-    }
-
-    case WM_COMMAND:
-        switch (LOWORD(wParam))
+        case WM_LBUTTONDOWN:
         {
-        case IDM_FILE_OPEN_VOTER_LIST:
-            App_BeginOpenVoterList(app);
-            return 0;
-        case IDM_FILE_EXIT:
-            PostMessageW(hwnd, WM_CLOSE, 0, 0);
-            return 0;
-        default:
+            int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
+            if (App_HitTestSplitter(app, x, y))
+            {
+                app->splitting = TRUE;
+                SetCapture(hwnd);
+                SetCursor(LoadCursorW(NULL, IDC_SIZEWE));
+                return 0;
+            }
             break;
         }
-        break;
 
-    case WM_NOTIFY:
-        return App_OnNotify(app, (NMHDR *)lParam);
+        case WM_MOUSEMOVE:
+            if (app->splitting)
+            {
+                RECT client;
+                int x = GET_X_LPARAM(lParam);
+                int new_w;
+                GetClientRect(hwnd, &client);
+                new_w = x - app->pad;
+                app->frozen_width = App_ClampFrozenWidth(app, new_w, client.right - client.left);
+                App_Layout(app);
+                return 0;
+            }
+            break;
 
-    case WM_VSCROLL:
-        /* ListView may not send this to parent; left for completeness. */
-        break;
+        case WM_LBUTTONUP:
+            if (app->splitting)
+            {
+                app->splitting = FALSE;
+                ReleaseCapture();
+                return 0;
+            }
+            break;
 
-    case EEM_LOAD_PROGRESS:
-        EnterCriticalSection(&app->progress_lock);
-        if (app->progress_dirty)
+        case WM_CAPTURECHANGED:
+            app->splitting = FALSE;
+            break;
+
+        case WM_DPICHANGED:
         {
-            EeLoadProgress snap = app->last_progress;
-            app->progress_dirty = FALSE;
-            LeaveCriticalSection(&app->progress_lock);
-            App_UpdateProgressUi(app, &snap);
-        }
-        else
-        {
-            LeaveCriticalSection(&app->progress_lock);
-        }
-        return 0;
-
-    case EEM_LOAD_FINISHED:
-        App_OnLoadFinished(app);
-        return 0;
-
-    case EEM_SYNC_PANE_SCROLLUI:
-        App_SyncPaneScrollChrome(app);
-        return 0;
-
-    case WM_CTLCOLORSTATIC:
-        if ((HWND)lParam == app->hwnd_frozen_hsb_pad ||
-            (HWND)lParam == app->hwnd_scroll_hsb_pad)
-        {
-            HDC hdc = (HDC)wParam;
-            SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
-            return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
-        }
-        break;
-
-    case WM_CLOSE:
-        if (app->loading)
-        {
-            InterlockedExchange(&app->load_cancel, 1);
-            App_SetStatus(app, L"Cancelling load…");
+            UINT dpi = HIWORD(wParam);
+            RECT *const prc = (RECT *)lParam;
+            App_UpdateDpiMetrics(app, dpi);
+            App_ApplyFont(app);
+            SetWindowPos(hwnd,
+                         NULL,
+                         prc->left,
+                         prc->top,
+                         prc->right - prc->left,
+                         prc->bottom - prc->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            App_RebuildColumns(app);
+            App_Layout(app);
             return 0;
         }
-        DestroyWindow(hwnd);
-        return 0;
 
-    case WM_DESTROY:
-        App_DestroyProgress(app);
-        EeVoterTable_Clear(&app->table);
-        if (app->font_ui)
-        {
-            DeleteObject(app->font_ui);
-            app->font_ui = NULL;
-        }
-        if (app->font_header)
-        {
-            DeleteObject(app->font_header);
-            app->font_header = NULL;
-        }
-        if (app->brush_header)
-        {
-            DeleteObject(app->brush_header);
-            app->brush_header = NULL;
-        }
-        if (app->pen_header_line)
-        {
-            DeleteObject(app->pen_header_line);
-            app->pen_header_line = NULL;
-        }
-        DeleteCriticalSection(&app->progress_lock);
-        PostQuitMessage(0);
-        return 0;
+        case WM_COMMAND:
+            switch (LOWORD(wParam))
+            {
+                case IDM_FILE_OPEN_VOTER_LIST:
+                    App_BeginOpenVoterList(app);
+                    return 0;
+                case IDM_FILE_EXIT:
+                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    return 0;
+                default:
+                    break;
+            }
+            break;
 
-    default:
-        break;
+        case WM_NOTIFY:
+            return App_OnNotify(app, (NMHDR *)lParam);
+
+        case WM_VSCROLL:
+            /* ListView may not send this to parent; left for completeness. */
+            break;
+
+        case EEM_LOAD_PROGRESS:
+            EnterCriticalSection(&app->progress_lock);
+            if (app->progress_dirty)
+            {
+                EeLoadProgress snap = app->last_progress;
+                app->progress_dirty = FALSE;
+                LeaveCriticalSection(&app->progress_lock);
+                App_UpdateProgressUi(app, &snap);
+            }
+            else
+            {
+                LeaveCriticalSection(&app->progress_lock);
+            }
+            return 0;
+
+        case EEM_LOAD_FINISHED:
+            App_OnLoadFinished(app);
+            return 0;
+
+        case EEM_SYNC_PANE_SCROLLUI:
+            App_SyncPaneScrollChrome(app);
+            return 0;
+
+        case WM_CTLCOLORSTATIC:
+            if ((HWND)lParam == app->hwnd_frozen_hsb_pad ||
+                (HWND)lParam == app->hwnd_scroll_hsb_pad)
+            {
+                HDC hdc = (HDC)wParam;
+                SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+                return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+            }
+            break;
+
+        case WM_CLOSE:
+            if (app->loading)
+            {
+                InterlockedExchange(&app->load_cancel, 1);
+                App_SetStatus(app, L"Cancelling load…");
+                return 0;
+            }
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            App_DestroyProgress(app);
+            EeVoterTable_Clear(&app->table);
+            if (app->font_ui)
+            {
+                DeleteObject(app->font_ui);
+                app->font_ui = NULL;
+            }
+            if (app->font_header)
+            {
+                DeleteObject(app->font_header);
+                app->font_header = NULL;
+            }
+            if (app->brush_header)
+            {
+                DeleteObject(app->brush_header);
+                app->brush_header = NULL;
+            }
+            if (app->pen_header_line)
+            {
+                DeleteObject(app->pen_header_line);
+                app->pen_header_line = NULL;
+            }
+            DeleteCriticalSection(&app->progress_lock);
+            PostQuitMessage(0);
+            return 0;
+
+        default:
+            break;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -1883,8 +1950,7 @@ static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
     {
         NMHDR *nm = (NMHDR *)lParam;
         HWND header = ListView_GetHeader(hwnd);
-        if (nm != NULL && header != NULL && nm->hwndFrom == header &&
-            nm->code == NM_CUSTOMDRAW)
+        if (nm != NULL && header != NULL && nm->hwndFrom == header && nm->code == NM_CUSTOMDRAW)
         {
             return App_HeaderCustomDraw(&g_app, (NMCUSTOMDRAW *)lParam);
         }
@@ -1892,8 +1958,7 @@ static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
 
     {
         LRESULT r = CallWindowProcW(old_proc, hwnd, msg, wParam, lParam);
-        if (msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL ||
-            msg == WM_KEYDOWN)
+        if (msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL || msg == WM_KEYDOWN)
         {
             App_SyncVerticalScroll(&g_app, hwnd);
         }
@@ -1939,12 +2004,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     ZeroMemory(&g_app, sizeof(g_app));
     g_app.instance = hInstance;
     g_app.dpi = 96;
+    App_UpdateDpiMetrics(&g_app, GetDpiForSystem());
     InitializeCriticalSection(&g_app.progress_lock);
     EeVoterTable_Init(&g_app.table);
 
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES |
-                ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
 
     ZeroMemory(&wc, sizeof(wc));

@@ -36,6 +36,7 @@ extern "C"
     {
         wchar_t *column_titles[EE_MAX_COLUMNS];
         uint32_t column_count;
+        char delimiter; /* ',' or '\t' from the loaded file */
 
         char *pool;
         size_t pool_len;
@@ -104,6 +105,26 @@ extern "C"
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);
+
+    /**
+ * @brief Format selected view rows as delimited text for the clipboard.
+ *
+ * @param table               Loaded table.
+ * @param view_rows           Visual row indices (sort order).
+ * @param n_rows              Number of entries in @p view_rows.
+ * @param prepend_normalized  If TRUE, emit Voter ID and Name before source fields.
+ * @param out_text            Receives heap UTF-8 (caller frees). Never NULL on
+ *                            success (empty string if @p n_rows is 0).
+ * @param out_len             Optional; byte length excluding the terminating NUL.
+ *
+ * @return FALSE on invalid arguments or out of memory.
+ */
+    BOOL EeVoterTable_FormatCopyUtf8(const EeVoterTable *table,
+                                     const uint32_t *view_rows,
+                                     uint32_t n_rows,
+                                     BOOL prepend_normalized,
+                                     char **out_text,
+                                     size_t *out_len);
 
     /**
  * @brief Load a CSV (comma) or TXT (tab) voter roster into @p out_table.

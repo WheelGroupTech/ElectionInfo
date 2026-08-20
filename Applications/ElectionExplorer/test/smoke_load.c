@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strsafe.h>
 #include <windows.h>
 
@@ -111,6 +112,105 @@ static int load_wide_history(void)
     return rc;
 }
 
+static int test_copy_format(void)
+{
+    EeVoterTable t;
+    wchar_t err[256];
+    char *text = NULL;
+    uint32_t rows[2];
+    int rc = 1;
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.csv",
+                                  &t,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"copy: csv load failed %s\n", err);
+        goto done;
+    }
+    if (t.delimiter != ',')
+    {
+        wprintf(L"copy: expected comma delimiter\n");
+        goto done;
+    }
+    rows[0] = 0;
+    if (!EeVoterTable_FormatCopyUtf8(&t, rows, 1, FALSE, &text, NULL) || text == NULL)
+    {
+        wprintf(L"copy: raw format failed\n");
+        goto done;
+    }
+    if (strncmp(text, "100001,101,", 11) != 0)
+    {
+        wprintf(L"copy: raw prefix mismatch\n");
+        goto done;
+    }
+    free(text);
+    text = NULL;
+    if (!EeVoterTable_FormatCopyUtf8(&t, rows, 1, TRUE, &text, NULL) || text == NULL)
+    {
+        wprintf(L"copy: prepend format failed\n");
+        goto done;
+    }
+    if (strncmp(text, "100001,John A Smith,100001,", 27) != 0)
+    {
+        wprintf(L"copy: prepend prefix mismatch\n");
+        goto done;
+    }
+    free(text);
+    text = NULL;
+    EeVoterTable_Clear(&t);
+
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.txt",
+                                  &t,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"copy: txt load failed %s\n", err);
+        goto done;
+    }
+    if (t.delimiter != '\t')
+    {
+        wprintf(L"copy: expected tab delimiter\n");
+        goto done;
+    }
+    rows[0] = 0;
+    rows[1] = 1;
+    if (!EeVoterTable_FormatCopyUtf8(&t, rows, 2, FALSE, &text, NULL) || text == NULL)
+    {
+        wprintf(L"copy: tab format failed\n");
+        goto done;
+    }
+    if (strncmp(text, "200001\tC-1\t", 11) != 0)
+    {
+        wprintf(L"copy: tab prefix mismatch\n");
+        goto done;
+    }
+    if (strstr(text, "\r\n200002\t") == NULL)
+    {
+        wprintf(L"copy: missing second tab row\n");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"copy format ok\n");
+
+done:
+    free(text);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"copy format test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -118,5 +218,6 @@ int wmain(void)
     failed |= load_sample(L"test\\sample_voters.csv", L"csv");
     failed |= load_sample(L"test\\sample_voters.txt", L"txt");
     failed |= load_wide_history();
+    failed |= test_copy_format();
     return failed == 0 ? 0 : 1;
 }

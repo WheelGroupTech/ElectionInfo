@@ -9,6 +9,7 @@
 
 #include <commctrl.h>
 #include <commdlg.h>
+#include <intsafe.h>
 #include <strsafe.h>
 #include <stdlib.h>
 #include <uxtheme.h>
@@ -25,6 +26,7 @@
 static const wchar_t k_WindowClassName[] = L"ElectionExplorerMainWindow";
 static const wchar_t k_WindowTitle[] = L"Election Explorer";
 static const wchar_t k_ProgressClassName[] = L"ElectionExplorerLoadProgress";
+static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -53,6 +55,8 @@ typedef struct AppState
     HWND hwnd_progress;
     HWND hwnd_progress_bar;
     HWND hwnd_progress_status;
+    HWND hwnd_options;
+    BOOL copy_prepend_normalized;
     HFONT font_ui;
     HFONT font_header; /* Bold header captions */
     HBRUSH brush_header;
@@ -1410,8 +1414,8 @@ static void App_Layout(AppState *app)
 
 static BOOL App_CreateControls(AppState *app)
 {
-    DWORD lv_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA |
-                     LVS_SHOWSELALWAYS | LVS_SINGLESEL;
+    DWORD lv_style =
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS;
     DWORD lv_ex = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_GRIDLINES |
                   LVS_EX_HEADERDRAGDROP;
 
@@ -1497,11 +1501,507 @@ static HMENU App_CreateMenu(void)
 {
     HMENU menu = CreateMenu();
     HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Open Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_OPTIONS, L"&Options…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     return menu;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Selection, copy, options                                                   */
+/* -------------------------------------------------------------------------- */
+
+static LONG g_syncing_selection = 0;
+
+static BOOL App_HasSelection(const AppState *app)
+{
+    if (app == NULL || app->hwnd_frozen == NULL || app->table.row_count == 0)
+    {
+        return FALSE;
+    }
+    return ListView_GetNextItem(app->hwnd_frozen, -1, LVNI_SELECTED) >= 0;
+}
+
+static void App_SyncSelectionItem(AppState *app, HWND source, int item)
+{
+    HWND other;
+    UINT st;
+
+    if (app == NULL || source == NULL || item < 0)
+    {
+        return;
+    }
+    other = (source == app->hwnd_frozen) ? app->hwnd_scroll : app->hwnd_frozen;
+    if (other == NULL)
+    {
+        return;
+    }
+    st = ListView_GetItemState(source, item, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(other, item, st, LVIS_SELECTED | LVIS_FOCUSED);
+}
+
+static void App_SyncSelectionRange(AppState *app, HWND source, int from, int to)
+{
+    int i;
+    int last;
+
+    if (app == NULL || source == NULL)
+    {
+        return;
+    }
+    last = (int)app->table.row_count - 1;
+    if (from < 0)
+    {
+        from = 0;
+    }
+    if (to < 0 || to > last)
+    {
+        to = last;
+    }
+    if (from > to)
+    {
+        return;
+    }
+    for (i = from; i <= to; i++)
+    {
+        App_SyncSelectionItem(app, source, i);
+    }
+}
+
+static BOOL App_SetClipboardUtf8(HWND hwnd, const char *utf8)
+{
+    int wlen;
+    SIZE_T bytes;
+    HGLOBAL mem = NULL;
+    wchar_t *locked = NULL;
+    BOOL ok = FALSE;
+
+    if (hwnd == NULL || utf8 == NULL)
+    {
+        return FALSE;
+    }
+
+    wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (wlen <= 0)
+    {
+        wlen = MultiByteToWideChar(CP_ACP, 0, utf8, -1, NULL, 0);
+    }
+    if (wlen <= 0)
+    {
+        return FALSE;
+    }
+    if (FAILED(SizeTMult((size_t)wlen, sizeof(wchar_t), &bytes)))
+    {
+        return FALSE;
+    }
+    if (!OpenClipboard(hwnd))
+    {
+        return FALSE;
+    }
+    EmptyClipboard();
+
+    mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (mem == NULL)
+    {
+        goto cleanup;
+    }
+    locked = (wchar_t *)GlobalLock(mem);
+    if (locked == NULL)
+    {
+        goto cleanup;
+    }
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, locked, wlen) == 0 &&
+        MultiByteToWideChar(CP_ACP, 0, utf8, -1, locked, wlen) == 0)
+    {
+        goto cleanup;
+    }
+    GlobalUnlock(mem);
+    locked = NULL;
+    if (SetClipboardData(CF_UNICODETEXT, mem) == NULL)
+    {
+        goto cleanup;
+    }
+    mem = NULL;
+    ok = TRUE;
+
+cleanup:
+    if (locked != NULL && mem != NULL)
+    {
+        GlobalUnlock(mem);
+    }
+    if (mem != NULL)
+    {
+        GlobalFree(mem);
+    }
+    CloseClipboard();
+    return ok;
+}
+
+static void App_CopySelection(AppState *app)
+{
+    uint32_t *rows = NULL;
+    uint32_t n = 0;
+    uint32_t cap = 0;
+    int i;
+    char *text = NULL;
+    wchar_t status[80];
+
+    if (app == NULL || app->loading || app->table.row_count == 0)
+    {
+        return;
+    }
+
+    i = ListView_GetNextItem(app->hwnd_frozen, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if (n == cap)
+        {
+            uint32_t new_cap = cap ? cap * 2u : 64u;
+            uint32_t *grown;
+            size_t bytes;
+            if (new_cap < cap)
+            {
+                goto fail;
+            }
+            if (FAILED(SizeTMult((size_t)new_cap, sizeof(uint32_t), &bytes)))
+            {
+                goto fail;
+            }
+            grown = (uint32_t *)realloc(rows, bytes);
+            if (grown == NULL)
+            {
+                goto fail;
+            }
+            rows = grown;
+            cap = new_cap;
+        }
+        rows[n++] = (uint32_t)i;
+        i = ListView_GetNextItem(app->hwnd_frozen, i, LVNI_SELECTED);
+    }
+
+    if (n == 0)
+    {
+        App_SetStatus(app, L"Nothing selected to copy.");
+        free(rows);
+        return;
+    }
+
+    if (!EeVoterTable_FormatCopyUtf8(&app->table,
+                                     rows,
+                                     n,
+                                     app->copy_prepend_normalized,
+                                     &text,
+                                     NULL))
+    {
+        goto fail;
+    }
+    if (!App_SetClipboardUtf8(app->hwnd_main, text))
+    {
+        goto fail;
+    }
+
+    StringCchPrintfW(status,
+                     ARRAYSIZE(status),
+                     L"Copied %u row%s to the clipboard.",
+                     n,
+                     n == 1u ? L"" : L"s");
+    App_SetStatus(app, status);
+    free(text);
+    free(rows);
+    return;
+
+fail:
+    free(text);
+    free(rows);
+    MessageBoxW(app->hwnd_main,
+                L"Could not copy the selection to the clipboard.",
+                k_WindowTitle,
+                MB_ICONERROR | MB_OK);
+}
+
+static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x, int screen_y)
+{
+    POINT pt;
+    LVHITTESTINFO ht;
+    HMENU menu;
+    UINT cmd;
+
+    if (app == NULL || hwnd_list == NULL || app->loading)
+    {
+        return;
+    }
+
+    if (screen_x == -1 && screen_y == -1)
+    {
+        int item = ListView_GetNextItem(hwnd_list, -1, LVNI_FOCUSED);
+        RECT rc;
+        if (item < 0)
+        {
+            item = ListView_GetNextItem(hwnd_list, -1, LVNI_SELECTED);
+        }
+        if (item >= 0 && ListView_GetItemRect(hwnd_list, item, &rc, LVIR_LABEL))
+        {
+            pt.x = rc.left + Scale(app, 8);
+            pt.y = rc.bottom;
+            ClientToScreen(hwnd_list, &pt);
+        }
+        else if (!GetCursorPos(&pt))
+        {
+            return;
+        }
+    }
+    else
+    {
+        pt.x = screen_x;
+        pt.y = screen_y;
+        ht.pt = pt;
+        ScreenToClient(hwnd_list, &ht.pt);
+        ListView_HitTest(hwnd_list, &ht);
+        if (ht.iItem < 0)
+        {
+            return;
+        }
+        if ((ListView_GetItemState(hwnd_list, ht.iItem, LVIS_SELECTED) & LVIS_SELECTED) == 0)
+        {
+            int sel = ListView_GetNextItem(hwnd_list, -1, LVNI_SELECTED);
+            while (sel >= 0)
+            {
+                int next = ListView_GetNextItem(hwnd_list, sel, LVNI_SELECTED);
+                ListView_SetItemState(hwnd_list, sel, 0, LVIS_SELECTED);
+                sel = next;
+            }
+            ListView_SetItemState(hwnd_list,
+                                  ht.iItem,
+                                  LVIS_SELECTED | LVIS_FOCUSED,
+                                  LVIS_SELECTED | LVIS_FOCUSED);
+        }
+    }
+
+    if (!App_HasSelection(app))
+    {
+        return;
+    }
+
+    menu = CreatePopupMenu();
+    if (menu == NULL)
+    {
+        return;
+    }
+    AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    cmd = (UINT)
+        TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, app->hwnd_main, NULL);
+    DestroyMenu(menu);
+    if (cmd == IDM_EDIT_COPY)
+    {
+        App_CopySelection(app);
+    }
+}
+
+static void App_DestroyOptions(AppState *app)
+{
+    if (app != NULL && app->hwnd_options != NULL)
+    {
+        DestroyWindow(app->hwnd_options);
+        app->hwnd_options = NULL;
+    }
+}
+
+static LRESULT CALLBACK OptionsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    AppState *app = (AppState *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            app = (AppState *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
+            return 0;
+        }
+
+        case WM_COMMAND:
+            if (app == NULL)
+            {
+                return 0;
+            }
+            switch (LOWORD(wParam))
+            {
+                case IDOK:
+                {
+                    HWND chk = GetDlgItem(hwnd, IDC_OPT_PREPEND);
+                    app->copy_prepend_normalized =
+                        (chk != NULL && SendMessageW(chk, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                    if (app->hwnd_progress == NULL)
+                    {
+                        EnableWindow(app->hwnd_main, TRUE);
+                    }
+                    DestroyWindow(hwnd);
+                    return 0;
+                }
+                case IDCANCEL:
+                    if (app->hwnd_progress == NULL)
+                    {
+                        EnableWindow(app->hwnd_main, TRUE);
+                    }
+                    DestroyWindow(hwnd);
+                    return 0;
+                default:
+                    break;
+            }
+            return 0;
+
+        case WM_CLOSE:
+            if (app != NULL && app->hwnd_progress == NULL)
+            {
+                EnableWindow(app->hwnd_main, TRUE);
+            }
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (app != NULL && app->hwnd_options == hwnd)
+            {
+                app->hwnd_options = NULL;
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static BOOL App_ShowOptions(AppState *app)
+{
+    RECT rc_main;
+    RECT rc_wnd;
+    RECT rc_client;
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST | WS_EX_CONTROLPARENT;
+    int client_w;
+    int client_h;
+    int margin;
+    int btn_w;
+    int btn_h;
+    int outer_w;
+    int outer_h;
+    int x;
+    int y;
+    HWND chk;
+    HWND btn_ok;
+    HWND btn_cancel;
+
+    if (app == NULL)
+    {
+        return FALSE;
+    }
+    if (app->hwnd_options != NULL)
+    {
+        SetForegroundWindow(app->hwnd_options);
+        return TRUE;
+    }
+
+    client_w = Scale(app, 420);
+    client_h = Scale(app, 130);
+    margin = Scale(app, 16);
+    btn_w = Scale(app, 90);
+    btn_h = Scale(app, 28);
+
+    rc_wnd.left = 0;
+    rc_wnd.top = 0;
+    rc_wnd.right = client_w;
+    rc_wnd.bottom = client_h;
+    if (!AdjustWindowRectExForDpi(&rc_wnd, style, FALSE, ex_style, app->dpi))
+    {
+        rc_wnd.left = 0;
+        rc_wnd.top = 0;
+        rc_wnd.right = client_w + Scale(app, 16);
+        rc_wnd.bottom = client_h + Scale(app, 40);
+    }
+    outer_w = rc_wnd.right - rc_wnd.left;
+    outer_h = rc_wnd.bottom - rc_wnd.top;
+
+    GetWindowRect(app->hwnd_main, &rc_main);
+    x = rc_main.left + ((rc_main.right - rc_main.left) - outer_w) / 2;
+    y = rc_main.top + ((rc_main.bottom - rc_main.top) - outer_h) / 2;
+
+    app->hwnd_options = CreateWindowExW(ex_style,
+                                        k_OptionsClassName,
+                                        L"Options",
+                                        style,
+                                        x,
+                                        y,
+                                        outer_w,
+                                        outer_h,
+                                        app->hwnd_main,
+                                        NULL,
+                                        app->instance,
+                                        app);
+    if (app->hwnd_options == NULL)
+    {
+        return FALSE;
+    }
+
+    GetClientRect(app->hwnd_options, &rc_client);
+    client_w = rc_client.right - rc_client.left;
+    client_h = rc_client.bottom - rc_client.top;
+
+    chk = CreateWindowExW(0,
+                          L"BUTTON",
+                          L"Pre-pend normalized data for copies",
+                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                          margin,
+                          margin,
+                          client_w - margin * 2,
+                          Scale(app, 24),
+                          app->hwnd_options,
+                          (HMENU)(INT_PTR)IDC_OPT_PREPEND,
+                          app->instance,
+                          NULL);
+    btn_ok = CreateWindowExW(0,
+                             L"BUTTON",
+                             L"OK",
+                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                             client_w - margin - btn_w * 2 - Scale(app, 8),
+                             client_h - margin - btn_h,
+                             btn_w,
+                             btn_h,
+                             app->hwnd_options,
+                             (HMENU)(INT_PTR)IDOK,
+                             app->instance,
+                             NULL);
+    btn_cancel = CreateWindowExW(0,
+                                 L"BUTTON",
+                                 L"Cancel",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                 client_w - margin - btn_w,
+                                 client_h - margin - btn_h,
+                                 btn_w,
+                                 btn_h,
+                                 app->hwnd_options,
+                                 (HMENU)(INT_PTR)IDCANCEL,
+                                 app->instance,
+                                 NULL);
+
+    if (app->font_ui)
+    {
+        SendMessageW(chk, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(btn_ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(btn_cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+    }
+    SendMessageW(chk, BM_SETCHECK, app->copy_prepend_normalized ? BST_CHECKED : BST_UNCHECKED, 0);
+
+    EnableWindow(app->hwnd_main, FALSE);
+    ShowWindow(app->hwnd_options, SW_SHOW);
+    UpdateWindow(app->hwnd_options);
+    return TRUE;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1670,24 +2170,31 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
 
     if (hdr->code == LVN_ITEMCHANGED)
     {
-        static LONG syncing_selection = 0;
         NMLISTVIEW *nmlv = (NMLISTVIEW *)hdr;
-        if (InterlockedCompareExchange(&syncing_selection, 0, 0) != 0)
+        if (InterlockedCompareExchange(&g_syncing_selection, 0, 0) != 0)
         {
             return 0;
         }
-        if ((nmlv->uChanged & LVIF_STATE) && (nmlv->uNewState & LVIS_SELECTED) &&
-            !(nmlv->uOldState & LVIS_SELECTED))
+        if ((nmlv->uChanged & LVIF_STATE) &&
+            ((nmlv->uNewState ^ nmlv->uOldState) & (LVIS_SELECTED | LVIS_FOCUSED)))
         {
-            HWND other = (hdr->hwndFrom == app->hwnd_frozen) ? app->hwnd_scroll : app->hwnd_frozen;
-            InterlockedExchange(&syncing_selection, 1);
-            ListView_SetItemState(other, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-            ListView_SetItemState(other,
-                                  nmlv->iItem,
-                                  LVIS_SELECTED | LVIS_FOCUSED,
-                                  LVIS_SELECTED | LVIS_FOCUSED);
-            InterlockedExchange(&syncing_selection, 0);
+            InterlockedExchange(&g_syncing_selection, 1);
+            App_SyncSelectionItem(app, hdr->hwndFrom, nmlv->iItem);
+            InterlockedExchange(&g_syncing_selection, 0);
         }
+        return 0;
+    }
+
+    if (hdr->code == LVN_ODSTATECHANGED)
+    {
+        NMLVODSTATECHANGE *od = (NMLVODSTATECHANGE *)hdr;
+        if (InterlockedCompareExchange(&g_syncing_selection, 0, 0) != 0)
+        {
+            return 0;
+        }
+        InterlockedExchange(&g_syncing_selection, 1);
+        App_SyncSelectionRange(app, hdr->hwndFrom, od->iFrom, od->iTo);
+        InterlockedExchange(&g_syncing_selection, 0);
         return 0;
     }
 
@@ -1838,6 +2345,13 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
         }
 
+        case WM_INITMENUPOPUP:
+            EnableMenuItem((HMENU)wParam,
+                           IDM_EDIT_COPY,
+                           MF_BYCOMMAND |
+                               ((App_HasSelection(app) && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            return 0;
+
         case WM_COMMAND:
             switch (LOWORD(wParam))
             {
@@ -1846,6 +2360,18 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 case IDM_FILE_EXIT:
                     PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    return 0;
+                case IDM_EDIT_COPY:
+                    App_CopySelection(app);
+                    return 0;
+                case IDM_EDIT_OPTIONS:
+                    if (!App_ShowOptions(app))
+                    {
+                        MessageBoxW(hwnd,
+                                    L"Could not open the options window.",
+                                    k_WindowTitle,
+                                    MB_ICONERROR | MB_OK);
+                    }
                     return 0;
                 default:
                     break;
@@ -1903,6 +2429,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_DESTROY:
+            App_DestroyOptions(app);
             App_DestroyProgress(app);
             EeVoterTable_Clear(&app->table);
             if (app->font_ui)
@@ -1945,6 +2472,12 @@ static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
                                          LPARAM lParam,
                                          WNDPROC old_proc)
 {
+    if (msg == WM_CONTEXTMENU)
+    {
+        App_ShowCopyContextMenu(&g_app, hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+    }
+
     /* Header NM_CUSTOMDRAW is delivered to the ListView (header parent). */
     if (msg == WM_NOTIFY)
     {
@@ -1987,10 +2520,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 {
     WNDCLASSEXW wc;
     WNDCLASSEXW pc;
+    WNDCLASSEXW oc;
     HWND hwnd;
     MSG msg;
     INITCOMMONCONTROLSEX icc;
-    ACCEL accel;
+    ACCEL accels[2];
     HACCEL haccel;
     BOOL getResult;
     UINT dpi;
@@ -2004,6 +2538,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     ZeroMemory(&g_app, sizeof(g_app));
     g_app.instance = hInstance;
     g_app.dpi = 96;
+    g_app.copy_prepend_normalized = TRUE;
     App_UpdateDpiMetrics(&g_app, GetDpiForSystem());
     InitializeCriticalSection(&g_app.progress_lock);
     EeVoterTable_Init(&g_app.table);
@@ -2042,6 +2577,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     pc.hIcon = wc.hIcon;
     pc.hIconSm = wc.hIconSm;
     if (RegisterClassExW(&pc) == 0)
+    {
+        return 1;
+    }
+
+    ZeroMemory(&oc, sizeof(oc));
+    oc.cbSize = sizeof(oc);
+    oc.lpfnWndProc = OptionsWndProc;
+    oc.hInstance = hInstance;
+    oc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    oc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+    oc.lpszClassName = k_OptionsClassName;
+    oc.hIcon = wc.hIcon;
+    oc.hIconSm = wc.hIconSm;
+    if (RegisterClassExW(&oc) == 0)
     {
         return 1;
     }
@@ -2086,10 +2635,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     g_old_scroll_proc =
         (WNDPROC)SetWindowLongPtrW(g_app.hwnd_scroll, GWLP_WNDPROC, (LONG_PTR)ScrollSubclass);
 
-    accel.fVirt = FCONTROL | FVIRTKEY;
-    accel.key = 'O';
-    accel.cmd = IDM_FILE_OPEN_VOTER_LIST;
-    haccel = CreateAcceleratorTableW(&accel, 1);
+    accels[0].fVirt = FCONTROL | FVIRTKEY;
+    accels[0].key = 'O';
+    accels[0].cmd = IDM_FILE_OPEN_VOTER_LIST;
+    accels[1].fVirt = FCONTROL | FVIRTKEY;
+    accels[1].key = 'C';
+    accels[1].cmd = IDM_EDIT_COPY;
+    haccel = CreateAcceleratorTableW(accels, 2);
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
@@ -2099,6 +2651,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         if (getResult == -1)
         {
             break;
+        }
+        if (g_app.hwnd_options != NULL && IsDialogMessageW(g_app.hwnd_options, &msg))
+        {
+            continue;
         }
         if (haccel == NULL || !TranslateAcceleratorW(hwnd, haccel, &msg))
         {

@@ -171,6 +171,7 @@ void EeVoterTable_Init(EeVoterTable *table)
     ZeroMemory(table, sizeof(*table));
     table->sort_column = -1;
     table->sort_ascending = TRUE;
+    table->delimiter = ',';
     for (i = 0; i < EE_MAX_COLUMNS; i++)
     {
         table->column_titles[i] = NULL;
@@ -259,6 +260,204 @@ void EeVoterTable_GetViewCellW(const EeVoterTable *table,
 }
 
 /* -------------------------------------------------------------------------- */
+/* Clipboard / copy text                                                      */
+/* -------------------------------------------------------------------------- */
+
+typedef struct Utf8Buf
+{
+    char *data;
+    size_t len;
+    size_t cap;
+} Utf8Buf;
+
+static BOOL utf8buf_reserve(Utf8Buf *buf, size_t extra)
+{
+    size_t need;
+    size_t new_cap;
+    char *p;
+
+    if (FAILED(SizeTAdd(buf->len, extra, &need)))
+    {
+        return FALSE;
+    }
+    if (FAILED(SizeTAdd(need, 1, &need)))
+    {
+        return FALSE;
+    }
+    if (need <= buf->cap)
+    {
+        return TRUE;
+    }
+
+    new_cap = buf->cap ? buf->cap : 4096;
+    while (new_cap < need)
+    {
+        if (new_cap > SIZE_MAX / 2)
+        {
+            new_cap = need;
+            break;
+        }
+        new_cap *= 2;
+    }
+
+    p = (char *)realloc(buf->data, new_cap);
+    if (p == NULL)
+    {
+        return FALSE;
+    }
+    buf->data = p;
+    buf->cap = new_cap;
+    return TRUE;
+}
+
+static BOOL utf8buf_append(Utf8Buf *buf, const char *s, size_t n)
+{
+    if (n == 0)
+    {
+        if (buf->data == NULL)
+        {
+            if (!utf8buf_reserve(buf, 0))
+            {
+                return FALSE;
+            }
+            buf->data[0] = '\0';
+        }
+        return TRUE;
+    }
+    if (!utf8buf_reserve(buf, n))
+    {
+        return FALSE;
+    }
+    memcpy(buf->data + buf->len, s, n);
+    buf->len += n;
+    buf->data[buf->len] = '\0';
+    return TRUE;
+}
+
+static BOOL utf8buf_append_field(Utf8Buf *buf, const char *s, char delim)
+{
+    const char *p;
+    BOOL quote = FALSE;
+
+    if (s == NULL)
+    {
+        s = "";
+    }
+    for (p = s; *p != '\0'; p++)
+    {
+        if (*p == delim || *p == '"' || *p == '\n' || *p == '\r')
+        {
+            quote = TRUE;
+            break;
+        }
+    }
+    if (!quote)
+    {
+        return utf8buf_append(buf, s, strlen(s));
+    }
+    if (!utf8buf_append(buf, "\"", 1))
+    {
+        return FALSE;
+    }
+    for (p = s; *p != '\0'; p++)
+    {
+        if (*p == '"')
+        {
+            if (!utf8buf_append(buf, "\"\"", 2))
+            {
+                return FALSE;
+            }
+        }
+        else if (!utf8buf_append(buf, p, 1))
+        {
+            return FALSE;
+        }
+    }
+    return utf8buf_append(buf, "\"", 1);
+}
+
+BOOL EeVoterTable_FormatCopyUtf8(const EeVoterTable *table,
+                                 const uint32_t *view_rows,
+                                 uint32_t n_rows,
+                                 BOOL prepend_normalized,
+                                 char **out_text,
+                                 size_t *out_len)
+{
+    Utf8Buf buf;
+    uint32_t r;
+    char delim;
+    uint32_t start_col;
+
+    ZeroMemory(&buf, sizeof(buf));
+    if (out_text == NULL)
+    {
+        return FALSE;
+    }
+    *out_text = NULL;
+    if (out_len != NULL)
+    {
+        *out_len = 0;
+    }
+    if (table == NULL || (n_rows > 0 && view_rows == NULL))
+    {
+        return FALSE;
+    }
+
+    delim = table->delimiter != '\0' ? table->delimiter : ',';
+    start_col = prepend_normalized ? 0u : (uint32_t)EE_FROZEN_COLUMN_COUNT;
+
+    for (r = 0; r < n_rows; r++)
+    {
+        uint32_t c;
+        BOOL first = TRUE;
+        for (c = start_col; c < table->column_count; c++)
+        {
+            const char *cell = EeVoterTable_GetViewCellUtf8(table, view_rows[r], c);
+            if (!first)
+            {
+                char d[1];
+                d[0] = delim;
+                if (!utf8buf_append(&buf, d, 1))
+                {
+                    goto fail;
+                }
+            }
+            first = FALSE;
+            if (!utf8buf_append_field(&buf, cell, delim))
+            {
+                goto fail;
+            }
+        }
+        if (!utf8buf_append(&buf, "\r\n", 2))
+        {
+            goto fail;
+        }
+    }
+
+    if (buf.data == NULL)
+    {
+        buf.data = (char *)malloc(1);
+        if (buf.data == NULL)
+        {
+            return FALSE;
+        }
+        buf.data[0] = '\0';
+        buf.len = 0;
+    }
+
+    *out_text = buf.data;
+    if (out_len != NULL)
+    {
+        *out_len = buf.len;
+    }
+    return TRUE;
+
+fail:
+    free(buf.data);
+    return FALSE;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Header normalize / field roles                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -335,8 +534,7 @@ static FieldRole classify_field(const char *norm)
         return Role_NamePrefix;
     }
     if (strcmp(norm, "FSTNAM") == 0 || strcmp(norm, "FIRSTNAME") == 0 ||
-        strcmp(norm, "FIRST") == 0 || strcmp(norm, "FNAME") == 0 ||
-        strcmp(norm, "GIVENNAME") == 0)
+        strcmp(norm, "FIRST") == 0 || strcmp(norm, "FNAME") == 0 || strcmp(norm, "GIVENNAME") == 0)
     {
         return Role_FirstName;
     }
@@ -345,9 +543,8 @@ static FieldRole classify_field(const char *norm)
     {
         return Role_MiddleName;
     }
-    if (strcmp(norm, "LSTNAM") == 0 || strcmp(norm, "LASTNAME") == 0 ||
-        strcmp(norm, "LAST") == 0 || strcmp(norm, "LNAME") == 0 ||
-        strcmp(norm, "SURNAME") == 0)
+    if (strcmp(norm, "LSTNAM") == 0 || strcmp(norm, "LASTNAME") == 0 || strcmp(norm, "LAST") == 0 ||
+        strcmp(norm, "LNAME") == 0 || strcmp(norm, "SURNAME") == 0)
     {
         return Role_LastName;
     }
@@ -476,8 +673,7 @@ static void trim_spaces(const char **start, size_t *len)
         s++;
         n--;
     }
-    while (n > 0 &&
-           (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r'))
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r'))
     {
         n--;
     }
@@ -695,8 +891,7 @@ static BOOL compose_name(const FieldList *fields,
     size_t len = 0;
     out[0] = '\0';
 
-    if (full_idx >= 0 && (size_t)full_idx < fields->count &&
-        fields->items[full_idx][0] != '\0')
+    if (full_idx >= 0 && (size_t)full_idx < fields->count && fields->items[full_idx][0] != '\0')
     {
         if (FAILED(StringCchCopyA(out, out_cap, fields->items[full_idx])))
         {
@@ -1032,10 +1227,8 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                 /* Skip UTF-8 BOM on first line */
                 {
                     size_t start = 0;
-                    if (!got_header && line_len >= 3 &&
-                        (unsigned char)line[0] == 0xEF &&
-                        (unsigned char)line[1] == 0xBB &&
-                        (unsigned char)line[2] == 0xBF)
+                    if (!got_header && line_len >= 3 && (unsigned char)line[0] == 0xEF &&
+                        (unsigned char)line[1] == 0xBB && (unsigned char)line[2] == 0xBF)
                     {
                         start = 3;
                     }
@@ -1081,6 +1274,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         }
 
                         src_col_count = (uint32_t)header_fields.count;
+                        out_table->delimiter = delim;
                         for (i = 0; i < header_fields.count; i++)
                         {
                             char norm[128];
@@ -1088,56 +1282,56 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             roles[i] = classify_field(norm);
                             switch (roles[i])
                             {
-                            case Role_Vuid:
-                                if (vuid_idx < 0)
-                                {
-                                    vuid_idx = (int)i;
-                                }
-                                break;
-                            case Role_OtherId:
-                                if (other_id_idx < 0)
-                                {
-                                    other_id_idx = (int)i;
-                                }
-                                break;
-                            case Role_FullName:
-                                if (full_idx < 0)
-                                {
-                                    full_idx = (int)i;
-                                }
-                                break;
-                            case Role_NamePrefix:
-                                if (pre_idx < 0)
-                                {
-                                    pre_idx = (int)i;
-                                }
-                                break;
-                            case Role_FirstName:
-                                if (first_idx < 0)
-                                {
-                                    first_idx = (int)i;
-                                }
-                                break;
-                            case Role_MiddleName:
-                                if (mid_idx < 0)
-                                {
-                                    mid_idx = (int)i;
-                                }
-                                break;
-                            case Role_LastName:
-                                if (last_idx < 0)
-                                {
-                                    last_idx = (int)i;
-                                }
-                                break;
-                            case Role_NameSuffix:
-                                if (suf_idx < 0)
-                                {
-                                    suf_idx = (int)i;
-                                }
-                                break;
-                            default:
-                                break;
+                                case Role_Vuid:
+                                    if (vuid_idx < 0)
+                                    {
+                                        vuid_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_OtherId:
+                                    if (other_id_idx < 0)
+                                    {
+                                        other_id_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_FullName:
+                                    if (full_idx < 0)
+                                    {
+                                        full_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_NamePrefix:
+                                    if (pre_idx < 0)
+                                    {
+                                        pre_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_FirstName:
+                                    if (first_idx < 0)
+                                    {
+                                        first_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_MiddleName:
+                                    if (mid_idx < 0)
+                                    {
+                                        mid_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_LastName:
+                                    if (last_idx < 0)
+                                    {
+                                        last_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_NameSuffix:
+                                    if (suf_idx < 0)
+                                    {
+                                        suf_idx = (int)i;
+                                    }
+                                    break;
+                                default:
+                                    break;
                             }
                         }
                         if (vuid_idx < 0)
@@ -1161,9 +1355,9 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         }
                         for (i = 0; i < header_fields.count; i++)
                         {
-                            if (!utf8_to_wide_dup(header_fields.items[i],
-                                                  &out_table->column_titles[EE_FROZEN_COLUMN_COUNT +
-                                                                            i]))
+                            if (!utf8_to_wide_dup(
+                                    header_fields.items[i],
+                                    &out_table->column_titles[EE_FROZEN_COLUMN_COUNT + i]))
                             {
                                 free(read_buf);
                                 free(line);
@@ -1196,10 +1390,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                     }
 
                     /* Data row */
-                    if (!parse_delimited_line(line + start,
-                                              line_len - start,
-                                              delim,
-                                              &row_fields))
+                    if (!parse_delimited_line(line + start, line_len - start, delim, &row_fields))
                     {
                         free(read_buf);
                         free(line);
@@ -1303,8 +1494,8 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
 
                     if (file_size > 0)
                     {
-                        uint32_t pct =
-                            (uint32_t)((bytes_read * 99ull) / file_size); /* leave 100 for UI ready */
+                        uint32_t pct = (uint32_t)((bytes_read * 99ull) /
+                                                  file_size); /* leave 100 for UI ready */
                         if (pct > 99u)
                         {
                             pct = 99u;
@@ -1382,12 +1573,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
     }
 
     /* Progress 99%: data parsed; UI will push 100% when grid is ready. */
-    report_progress(progress_fn,
-                    progress_user,
-                    99,
-                    out_table->row_count,
-                    bytes_read,
-                    file_size);
+    report_progress(progress_fn, progress_user, 99, out_table->row_count, bytes_read, file_size);
 
     if (cancelled(cancel_flag))
     {

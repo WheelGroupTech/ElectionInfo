@@ -41,6 +41,9 @@ matching pad) so the last data row is not covered by the bar.
 2. **Name** — from a full-name field when present, otherwise composed from
    prefix / first / middle / last / suffix parts (`FSTNAM`, `LSTNAM`, …).
 3. **All original file columns** — in file order, using the source headers.
+   Historical Travis-style files with per-election `VOTED` / `PLACE` / `PARTY`
+   fields are included (hundreds of columns). The loader accepts up to
+   `EE_MAX_COLUMNS` display columns (1024, including Voter ID and Name).
 
 ## DPI
 

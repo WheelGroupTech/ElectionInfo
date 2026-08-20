@@ -4,7 +4,7 @@
 |------|----------------|-------|
 | `sample_voters.csv` | **Travis County** style headers (`VUIDNO`, `LSTNAM`, `FSTNAM`, …) | Comma-delimited |
 | `sample_voters.txt` | **Dallas County** style headers (`SOS_VoterID`, `lastname`, …) | Tab-delimited |
-| `smoke_load.c` | — | Optional console harness for `EeVoterTable_LoadFromFile` |
+| `smoke_load.c` | — | Optional console harness for `EeVoterTable_LoadFromFile` (samples plus a generated 400-column history header) |
 
 These are tiny synthetic rows for UI and parser smoke tests only. Do not commit
 build artifacts (`*.obj`, `*.exe`, `*.pdb`) from this folder.

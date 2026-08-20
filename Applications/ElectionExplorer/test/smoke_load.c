@@ -1,32 +1,122 @@
-﻿#include <stdio.h>
-#include <windows.h>
+/**
+ * @file smoke_load.c
+ * @brief Console smoke test for EeVoterTable_LoadFromFile.
+ */
+
 #include "voter_table.h"
-int wmain(void) {
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <strsafe.h>
+#include <windows.h>
+
+/** Travis-style history exports currently have ~389 source columns. */
+static const uint32_t k_WideSourceColumns = 400;
+
+static int load_sample(const wchar_t *path, const wchar_t *label)
+{
     EeVoterTable t;
     wchar_t err[256];
     EeLoadStatus s;
     uint32_t i;
+
     EeVoterTable_Init(&t);
-    err[0]=0;
-    s = EeVoterTable_LoadFromFile(L"test\\sample_voters.csv", &t, NULL, NULL, NULL, err, 256);
-    wprintf(L"csv status=%d rows=%u cols=%u err=%s\n", (int)s, t.row_count, t.column_count, err);
-    if (s==EeLoadStatus_Ok && t.row_count>0) {
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    wprintf(L"%s status=%d rows=%u cols=%u err=%s\n",
+            label,
+            (int)s,
+            t.row_count,
+            t.column_count,
+            err);
+    if (s == EeLoadStatus_Ok && t.row_count > 0)
+    {
         wchar_t buf[128];
-        for (i=0;i<t.column_count && i<6;i++) wprintf(L"  col%u: %s\n", i, t.column_titles[i]);
-        EeVoterTable_GetViewCellW(&t, 0, 0, buf, 128); wprintf(L"  row0 VoterID=%s\n", buf);
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, 128); wprintf(L"  row0 Name=%s\n", buf);
-        EeVoterTable_SortByColumn(&t, 1);
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, 128); wprintf(L"  after sort by name first=%s\n", buf);
+        for (i = 0; i < t.column_count && i < 6; i++)
+        {
+            wprintf(L"  col%u: %s\n", i, t.column_titles[i]);
+        }
+        EeVoterTable_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+        wprintf(L"  row0 VoterID=%s\n", buf);
+        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        wprintf(L"  row0 Name=%s\n", buf);
     }
     EeVoterTable_Clear(&t);
+    return (s == EeLoadStatus_Ok) ? 0 : 1;
+}
+
+static int load_wide_history(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    uint32_t i;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path))
+    {
+        wprintf(L"wide: GetTempPathW failed\n");
+        return 1;
+    }
+    if (FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_wide_voters.csv")))
+    {
+        wprintf(L"wide: path too long\n");
+        return 1;
+    }
+
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"wide: could not create %s\n", path);
+        return 1;
+    }
+
+    fputs("VUIDNO,LSTNAM,FSTNAM", fp);
+    for (i = 3; i < k_WideSourceColumns; i++)
+    {
+        fprintf(fp, ",H%u", i);
+    }
+    fputs("\n100001,Smith,John", fp);
+    for (i = 3; i < k_WideSourceColumns; i++)
+    {
+        fputs(",Y", fp);
+    }
+    fputs("\n", fp);
+    fclose(fp);
+    fp = NULL;
+
     EeVoterTable_Init(&t);
-    s = EeVoterTable_LoadFromFile(L"test\\sample_voters.txt", &t, NULL, NULL, NULL, err, 256);
-    wprintf(L"txt status=%d rows=%u cols=%u\n", (int)s, t.row_count, t.column_count);
-    if (s==EeLoadStatus_Ok) {
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    wprintf(L"wide status=%d rows=%u cols=%u err=%s\n", (int)s, t.row_count, t.column_count, err);
+    if (s == EeLoadStatus_Ok && t.row_count == 1 &&
+        t.column_count == k_WideSourceColumns + EE_FROZEN_COLUMN_COUNT)
+    {
         wchar_t buf[128];
-        EeVoterTable_GetViewCellW(&t, 0, 0, buf, 128); wprintf(L"  row0 VoterID=%s\n", buf);
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, 128); wprintf(L"  row0 Name=%s\n", buf);
+        EeVoterTable_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+        if (wcscmp(buf, L"100001") == 0)
+        {
+            EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+            if (wcscmp(buf, L"John Smith") == 0)
+            {
+                rc = 0;
+            }
+        }
     }
     EeVoterTable_Clear(&t);
-    return (s==EeLoadStatus_Ok)?0:1;
+    DeleteFileW(path);
+    return rc;
+}
+
+int wmain(void)
+{
+    int failed = 0;
+
+    failed |= load_sample(L"test\\sample_voters.csv", L"csv");
+    failed |= load_sample(L"test\\sample_voters.txt", L"txt");
+    failed |= load_wide_history();
+    return failed == 0 ? 0 : 1;
 }

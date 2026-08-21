@@ -16,6 +16,7 @@ display them in a high-performance grid.
 | Copy | **Edit → Copy** (`Ctrl+C`) or right-click the selection; uses the file delimiter |
 | Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID** and **Name** before the original columns |
 | Name format | **Edit → Options…** — **Display name in surname-first format** (default on) shows the frozen **Name** column as `Last, First Middle`. Uncheck for `First Middle Last`. |
+| Zoom | **Edit → Options…** — **Zoom** (default **100%**, range **50–250%**) scales grid text, row height, column widths, and pane titles. Dialogs stay at system size. |
 | Grid | Virtual list (owner-data) with **grid lines**, sized for hundreds of thousands to millions of rows |
 | Column headers | **Bold** captions, **light grey** background, **double underline** rule |
 | Frozen columns | **Voter ID** and **Name** stay visible while the rest of the grid scrolls horizontally |

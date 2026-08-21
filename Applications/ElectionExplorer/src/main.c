@@ -32,6 +32,9 @@ static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
 static const int k_DefaultFrozenWidth = 320;
 static const uint32_t k_NameUpdateProgressMinRows = 25000;
+static const int k_ZoomMin = 50;
+static const int k_ZoomMax = 250;
+static const int k_ZoomDefault = 100;
 
 enum
 {
@@ -63,8 +66,10 @@ typedef struct AppState
     HWND hwnd_options;
     BOOL copy_prepend_normalized;
     BOOL name_surname_first;
-    HFONT font_ui;
-    HFONT font_header; /* Bold header captions */
+    int zoom_percent;  /* 50..250; 100 is actual size */
+    HFONT font_ui;     /* Dialogs / status (DPI only) */
+    HFONT font_grid;   /* List cells (DPI × zoom) */
+    HFONT font_header; /* Bold captions (DPI × zoom) */
     HBRUSH brush_header;
     HPEN pen_header_line;
     UINT dpi;
@@ -97,9 +102,28 @@ static int Scale(AppState *app, int value_96)
     return MulDiv(value_96, (int)app->dpi, 96);
 }
 
+static int App_ClampZoom(int zoom_percent)
+{
+    if (zoom_percent < k_ZoomMin)
+    {
+        return k_ZoomMin;
+    }
+    if (zoom_percent > k_ZoomMax)
+    {
+        return k_ZoomMax;
+    }
+    return zoom_percent;
+}
+
+static int ScaleDisplay(AppState *app, int value_96)
+{
+    int z = app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault;
+    return MulDiv(Scale(app, value_96), z, 100);
+}
+
 static int App_PaneTitleHeight(AppState *app)
 {
-    int h = Scale(app, 22);
+    int h = ScaleDisplay(app, 22);
     if (h < 18)
     {
         h = 18;
@@ -126,7 +150,7 @@ static void App_UpdateDpiMetrics(AppState *app, UINT dpi)
         /* Preserve user-chosen pane width across DPI changes. */
         if (app->frozen_width <= 0)
         {
-            app->frozen_width = Scale(app, k_DefaultFrozenWidth);
+            app->frozen_width = ScaleDisplay(app, k_DefaultFrozenWidth);
         }
         else if (old_dpi != app->dpi)
         {
@@ -163,6 +187,9 @@ static void App_UpdateDpiMetrics(AppState *app, UINT dpi)
     ncm.cbSize = sizeof(ncm);
     if (SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, app->dpi))
     {
+        int zoom = App_ClampZoom(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault);
+        HFONT grid_font;
+
         font = CreateFontIndirectW(&ncm.lfMessageFont);
         if (font != NULL)
         {
@@ -174,6 +201,20 @@ static void App_UpdateDpiMetrics(AppState *app, UINT dpi)
         }
 
         lf = ncm.lfMessageFont;
+        if (zoom != 100 && lf.lfHeight != 0)
+        {
+            lf.lfHeight = MulDiv(lf.lfHeight, zoom, 100);
+        }
+        grid_font = CreateFontIndirectW(&lf);
+        if (grid_font != NULL)
+        {
+            if (app->font_grid != NULL)
+            {
+                DeleteObject(app->font_grid);
+            }
+            app->font_grid = grid_font;
+        }
+
         lf.lfWeight = FW_BOLD;
         header_font = CreateFontIndirectW(&lf);
         if (header_font != NULL)
@@ -209,20 +250,78 @@ static void App_ApplyHeaderStyle(AppState *app, HWND hwnd_list)
     InvalidateRect(header, NULL, TRUE);
 }
 
+static void App_SetListRowHeight(HWND hwnd_list, int height)
+{
+    HIMAGELIST himl;
+    HIMAGELIST old;
+
+    if (hwnd_list == NULL || height <= 0)
+    {
+        return;
+    }
+    himl = ImageList_Create(1, height, ILC_COLOR, 1, 1);
+    if (himl == NULL)
+    {
+        return;
+    }
+    old = ListView_SetImageList(hwnd_list, himl, LVSIL_SMALL);
+    if (old != NULL)
+    {
+        ImageList_Destroy(old);
+    }
+}
+
+static int App_MeasureGridRowHeight(AppState *app)
+{
+    HDC hdc;
+    HFONT font;
+    int h = ScaleDisplay(app, 20);
+
+    font = app->font_grid != NULL ? app->font_grid : app->font_ui;
+    if (font == NULL || app->hwnd_main == NULL)
+    {
+        return h < 8 ? 8 : h;
+    }
+    hdc = GetDC(app->hwnd_main);
+    if (hdc != NULL)
+    {
+        TEXTMETRICW tm;
+        HFONT old = (HFONT)SelectObject(hdc, font);
+        if (GetTextMetricsW(hdc, &tm))
+        {
+            h = tm.tmHeight + tm.tmExternalLeading + ScaleDisplay(app, 6);
+        }
+        SelectObject(hdc, old);
+        ReleaseDC(app->hwnd_main, hdc);
+    }
+    if (h < 8)
+    {
+        h = 8;
+    }
+    return h;
+}
+
 static void App_ApplyFont(AppState *app)
 {
+    HFONT cell_font;
+    int row_h;
+
     if (app->font_ui == NULL)
     {
         return;
     }
+    cell_font = app->font_grid != NULL ? app->font_grid : app->font_ui;
+    row_h = App_MeasureGridRowHeight(app);
     if (app->hwnd_frozen)
     {
-        SendMessageW(app->hwnd_frozen, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(app->hwnd_frozen, WM_SETFONT, (WPARAM)cell_font, TRUE);
+        App_SetListRowHeight(app->hwnd_frozen, row_h);
         App_ApplyHeaderStyle(app, app->hwnd_frozen);
     }
     if (app->hwnd_scroll)
     {
-        SendMessageW(app->hwnd_scroll, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(app->hwnd_scroll, WM_SETFONT, (WPARAM)cell_font, TRUE);
+        App_SetListRowHeight(app->hwnd_scroll, row_h);
         App_ApplyHeaderStyle(app, app->hwnd_scroll);
     }
     if (app->hwnd_status)
@@ -306,7 +405,7 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
 
             if ((fmt & HDF_SORTUP) || (fmt & HDF_SORTDOWN))
             {
-                arrow_room = Scale(app, 14);
+                arrow_room = ScaleDisplay(app, 14);
             }
 
             /*
@@ -319,11 +418,11 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
                 BOOL is_center = force_center || ((fmt & HDF_CENTER) != 0);
                 BOOL is_right = !is_center && ((fmt & HDF_RIGHT) != 0);
                 UINT dt = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
-                int pad = Scale(app, 4);
+                int pad = ScaleDisplay(app, 4);
 
                 rc_text = rc;
-                rc_text.top += Scale(app, 2);
-                rc_text.bottom -= Scale(app, 5);
+                rc_text.top += ScaleDisplay(app, 2);
+                rc_text.bottom -= ScaleDisplay(app, 5);
 
                 if (is_center)
                 {
@@ -340,7 +439,7 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
                 }
                 else
                 {
-                    rc_text.left += Scale(app, 6);
+                    rc_text.left += ScaleDisplay(app, 6);
                     rc_text.right -= pad + arrow_room;
                     dt |= DT_LEFT;
                 }
@@ -355,9 +454,9 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
 
             if (arrow_room > 0)
             {
-                int cx = rc.right - Scale(app, 8);
+                int cx = rc.right - ScaleDisplay(app, 8);
                 int cy = (rc.top + rc.bottom) / 2;
-                int half = Scale(app, 4);
+                int half = ScaleDisplay(app, 4);
                 POINT pts[3];
                 HBRUSH br = CreateSolidBrush(RGB(60, 60, 60));
                 HBRUSH old_br = (HBRUSH)SelectObject(nmcd->hdc, br);
@@ -389,8 +488,8 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
             }
 
             /* Double rule under the header caption. */
-            y2 = rc.bottom - Scale(app, 2);
-            y1 = y2 - Scale(app, 2);
+            y2 = rc.bottom - ScaleDisplay(app, 2);
+            y1 = y2 - ScaleDisplay(app, 2);
             if (y1 < rc.top)
             {
                 y1 = rc.top;
@@ -419,8 +518,8 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
             if (app->pen_header_line != NULL)
             {
                 RECT rc = nmcd->rc;
-                int y2 = rc.bottom - Scale(app, 2);
-                int y1 = y2 - Scale(app, 2);
+                int y2 = rc.bottom - ScaleDisplay(app, 2);
+                int y1 = y2 - ScaleDisplay(app, 2);
                 HPEN old_pen = (HPEN)SelectObject(nmcd->hdc, app->pen_header_line);
                 MoveToEx(nmcd->hdc, rc.left, y1, NULL);
                 LineTo(nmcd->hdc, rc.right, y1);
@@ -528,11 +627,11 @@ static void App_FitFrozenColumns(AppState *app)
         return;
     }
 
-    id_w = Scale(app, 110);
-    name_w = inner_w - id_w - Scale(app, 2);
-    if (name_w < Scale(app, 200))
+    id_w = ScaleDisplay(app, 110);
+    name_w = inner_w - id_w - ScaleDisplay(app, 2);
+    if (name_w < ScaleDisplay(app, 200))
     {
-        name_w = Scale(app, 200);
+        name_w = ScaleDisplay(app, 200);
     }
 
     ListView_SetColumnWidth(app->hwnd_frozen, 0, id_w);
@@ -555,7 +654,7 @@ static void App_RebuildColumns(AppState *app)
         return;
     }
 
-    col_width = Scale(app, 120);
+    col_width = ScaleDisplay(app, 120);
 
     /* Frozen: Voter ID (center) + Name (left) */
     for (i = 0; i < EE_FROZEN_COLUMN_COUNT && i < app->table.column_count; i++)
@@ -564,7 +663,7 @@ static void App_RebuildColumns(AppState *app)
         col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
         /* Column 0 is forced left by ListView for item text; we center-draw it. */
         col.fmt = (i == 0) ? LVCFMT_CENTER : LVCFMT_LEFT;
-        col.cx = (i == 0) ? Scale(app, 110) : Scale(app, 200);
+        col.cx = (i == 0) ? ScaleDisplay(app, 110) : ScaleDisplay(app, 200);
         col.pszText = app->table.column_titles[i];
         col.iSubItem = (int)i;
         ListView_InsertColumn(app->hwnd_frozen, (int)i, &col);
@@ -660,14 +759,14 @@ static void App_SyncVerticalScroll(AppState *app, HWND source)
 
     if (!ListView_GetItemRect(source, top_src, &rc, LVIR_BOUNDS))
     {
-        row_height = Scale(app, 20);
+        row_height = ScaleDisplay(app, 20);
     }
     else
     {
         row_height = rc.bottom - rc.top;
         if (row_height <= 0)
         {
-            row_height = Scale(app, 20);
+            row_height = ScaleDisplay(app, 20);
         }
     }
 
@@ -1099,7 +1198,7 @@ static void App_OnLoadFinished(AppState *app)
 
 static int App_ClampFrozenWidth(AppState *app, int width, int client_w)
 {
-    int min_w = Scale(app, 140);
+    int min_w = ScaleDisplay(app, 140);
     int max_w = client_w - app->pad * 2 - app->splitter_width - Scale(app, 120);
 
     if (min_w < 80)
@@ -1390,7 +1489,7 @@ static void App_Layout(AppState *app)
     split_w = app->splitter_width > 0 ? app->splitter_width : Scale(app, 6);
     if (app->frozen_width <= 0)
     {
-        app->frozen_width = Scale(app, k_DefaultFrozenWidth);
+        app->frozen_width = ScaleDisplay(app, k_DefaultFrozenWidth);
     }
     /* Clamp for display only. Writing back would lock WM_CREATE's empty
      * client (or a later shrink) over the default pane width. */
@@ -2012,6 +2111,81 @@ static void App_ApplyNameFormat(AppState *app, BOOL surname_first)
                   surname_first ? L"Names shown surname-first." : L"Names shown given-name first.");
 }
 
+static void App_RescaleScrollColumns(AppState *app, int old_zoom, int new_zoom)
+{
+    HWND header;
+    int count;
+    int i;
+
+    if (app == NULL || app->hwnd_scroll == NULL || old_zoom <= 0 || new_zoom <= 0 ||
+        old_zoom == new_zoom)
+    {
+        return;
+    }
+    header = ListView_GetHeader(app->hwnd_scroll);
+    if (header == NULL)
+    {
+        return;
+    }
+    count = Header_GetItemCount(header);
+    for (i = 0; i < count; i++)
+    {
+        int cx = ListView_GetColumnWidth(app->hwnd_scroll, i);
+        int ncx = MulDiv(cx, new_zoom, old_zoom);
+        if (ncx < 16)
+        {
+            ncx = 16;
+        }
+        ListView_SetColumnWidth(app->hwnd_scroll, i, ncx);
+    }
+}
+
+static void App_ApplyZoom(AppState *app, int zoom_percent)
+{
+    int old_zoom;
+    int new_zoom;
+    wchar_t status[64];
+
+    if (app == NULL)
+    {
+        return;
+    }
+    new_zoom = App_ClampZoom(zoom_percent);
+    old_zoom = app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault;
+    if (old_zoom == new_zoom)
+    {
+        return;
+    }
+
+    app->zoom_percent = new_zoom;
+    if (app->frozen_width > 0 && old_zoom > 0)
+    {
+        app->frozen_width = MulDiv(app->frozen_width, new_zoom, old_zoom);
+    }
+    App_UpdateDpiMetrics(app, app->dpi);
+    App_ApplyFont(app);
+    App_RescaleScrollColumns(app, old_zoom, new_zoom);
+    App_Layout(app);
+    if (app->hwnd_frozen)
+    {
+        InvalidateRect(app->hwnd_frozen, NULL, TRUE);
+    }
+    if (app->hwnd_scroll)
+    {
+        InvalidateRect(app->hwnd_scroll, NULL, TRUE);
+    }
+    if (app->hwnd_frozen_title)
+    {
+        InvalidateRect(app->hwnd_frozen_title, NULL, TRUE);
+    }
+    if (app->hwnd_scroll_title)
+    {
+        InvalidateRect(app->hwnd_scroll_title, NULL, TRUE);
+    }
+    StringCchPrintfW(status, ARRAYSIZE(status), L"Zoom: %d%%", new_zoom);
+    App_SetStatus(app, status);
+}
+
 static void App_DestroyOptions(AppState *app)
 {
     if (app != NULL && app->hwnd_options != NULL)
@@ -2052,12 +2226,22 @@ static LRESULT CALLBACK OptionsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                          SendMessageW(chk_pre, BM_GETCHECK, 0, 0) == BST_CHECKED);
                     surname_first = (chk_sur != NULL &&
                                      SendMessageW(chk_sur, BM_GETCHECK, 0, 0) == BST_CHECKED);
-                    if (app->hwnd_progress == NULL)
                     {
-                        EnableWindow(app->hwnd_main, TRUE);
+                        BOOL parsed = FALSE;
+                        UINT zoom = GetDlgItemInt(hwnd, IDC_OPT_ZOOM_EDIT, &parsed, FALSE);
+                        if (!parsed)
+                        {
+                            zoom =
+                                (UINT)(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault);
+                        }
+                        if (app->hwnd_progress == NULL)
+                        {
+                            EnableWindow(app->hwnd_main, TRUE);
+                        }
+                        DestroyWindow(hwnd);
+                        App_ApplyNameFormat(app, surname_first);
+                        App_ApplyZoom(app, (int)zoom);
                     }
-                    DestroyWindow(hwnd);
-                    App_ApplyNameFormat(app, surname_first);
                     return 0;
                 }
                 case IDCANCEL:
@@ -2111,6 +2295,10 @@ static BOOL App_ShowOptions(AppState *app)
     int y;
     HWND chk_prepend;
     HWND chk_surname;
+    HWND lbl_zoom;
+    HWND edit_zoom;
+    HWND spin_zoom;
+    HWND lbl_pct;
     HWND btn_ok;
     HWND btn_cancel;
 
@@ -2125,7 +2313,7 @@ static BOOL App_ShowOptions(AppState *app)
     }
 
     client_w = Scale(app, 420);
-    client_h = Scale(app, 168);
+    client_h = Scale(app, 210);
     margin = Scale(app, 16);
     btn_w = Scale(app, 90);
     btn_h = Scale(app, 28);
@@ -2193,6 +2381,77 @@ static BOOL App_ShowOptions(AppState *app)
                                   (HMENU)(INT_PTR)IDC_OPT_SURNAME_FIRST,
                                   app->instance,
                                   NULL);
+    {
+        int zy = margin + Scale(app, 64);
+        int zh = Scale(app, 24);
+        int edit_x = margin + Scale(app, 56);
+        int edit_w = Scale(app, 56);
+        wchar_t zoom_text[16];
+
+        lbl_zoom = CreateWindowExW(0,
+                                   L"STATIC",
+                                   L"Zoom:",
+                                   WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                                   margin,
+                                   zy,
+                                   Scale(app, 52),
+                                   zh,
+                                   app->hwnd_options,
+                                   NULL,
+                                   app->instance,
+                                   NULL);
+        StringCchPrintfW(zoom_text,
+                         ARRAYSIZE(zoom_text),
+                         L"%d",
+                         App_ClampZoom(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault));
+        edit_zoom = CreateWindowExW(WS_EX_CLIENTEDGE,
+                                    L"EDIT",
+                                    zoom_text,
+                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER | ES_RIGHT,
+                                    edit_x,
+                                    zy,
+                                    edit_w,
+                                    zh,
+                                    app->hwnd_options,
+                                    (HMENU)(INT_PTR)IDC_OPT_ZOOM_EDIT,
+                                    app->instance,
+                                    NULL);
+        spin_zoom = CreateWindowExW(0,
+                                    UPDOWN_CLASSW,
+                                    NULL,
+                                    WS_CHILD | WS_VISIBLE | UDS_ALIGNRIGHT | UDS_ARROWKEYS |
+                                        UDS_SETBUDDYINT | UDS_NOTHOUSANDS,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    app->hwnd_options,
+                                    NULL,
+                                    app->instance,
+                                    NULL);
+        lbl_pct = CreateWindowExW(0,
+                                  L"STATIC",
+                                  L"%  (50–250)",
+                                  WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                                  edit_x + edit_w + Scale(app, 8),
+                                  zy,
+                                  Scale(app, 90),
+                                  zh,
+                                  app->hwnd_options,
+                                  NULL,
+                                  app->instance,
+                                  NULL);
+        if (spin_zoom != NULL)
+        {
+            SendMessageW(spin_zoom, UDM_SETRANGE32, (WPARAM)k_ZoomMin, (LPARAM)k_ZoomMax);
+            SendMessageW(spin_zoom, UDM_SETBUDDY, (WPARAM)edit_zoom, 0);
+            SendMessageW(
+                spin_zoom,
+                UDM_SETPOS32,
+                0,
+                (LPARAM)App_ClampZoom(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault));
+        }
+    }
     btn_ok = CreateWindowExW(0,
                              L"BUTTON",
                              L"OK",
@@ -2222,6 +2481,9 @@ static BOOL App_ShowOptions(AppState *app)
     {
         SendMessageW(chk_prepend, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(chk_surname, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(lbl_zoom, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(edit_zoom, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(lbl_pct, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
     }
@@ -2340,13 +2602,14 @@ static LRESULT App_ListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
                 text[0] = L'\0';
                 EeVoterTable_GetViewCellW(&app->table, view_row, 0, text, ARRAYSIZE(text));
                 old_font = (HFONT)SelectObject(hdc,
-                                               app->font_ui ? app->font_ui
-                                                            : GetStockObject(DEFAULT_GUI_FONT));
+                                               app->font_grid ? app->font_grid
+                                               : app->font_ui ? app->font_ui
+                                                              : GetStockObject(DEFAULT_GUI_FONT));
                 old_mode = SetBkMode(hdc, TRANSPARENT);
                 {
                     RECT rc_text = rc;
-                    rc_text.left += Scale(app, 2);
-                    rc_text.right -= Scale(app, 2);
+                    rc_text.left += ScaleDisplay(app, 2);
+                    rc_text.right -= ScaleDisplay(app, 2);
                     DrawTextW(hdc,
                               text,
                               -1,
@@ -2691,6 +2954,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 DeleteObject(app->font_ui);
                 app->font_ui = NULL;
             }
+            if (app->font_grid)
+            {
+                DeleteObject(app->font_grid);
+                app->font_grid = NULL;
+            }
             if (app->font_header)
             {
                 DeleteObject(app->font_header);
@@ -2864,12 +3132,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     g_app.dpi = 96;
     g_app.copy_prepend_normalized = TRUE;
     g_app.name_surname_first = TRUE;
+    g_app.zoom_percent = k_ZoomDefault;
     App_UpdateDpiMetrics(&g_app, GetDpiForSystem());
     InitializeCriticalSection(&g_app.progress_lock);
     EeVoterTable_Init(&g_app.table);
 
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES;
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES |
+                ICC_UPDOWN_CLASS;
     InitCommonControlsEx(&icc);
 
     ZeroMemory(&wc, sizeof(wc));

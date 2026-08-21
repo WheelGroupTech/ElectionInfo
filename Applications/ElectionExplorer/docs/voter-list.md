@@ -29,10 +29,11 @@ for input.
 
 ### Dual-pane layout
 
-The grid uses two synchronized virtual list views:
+The grid uses two synchronized virtual list views, each with a bold grey
+pane title:
 
-1. **Left (frozen)** — Voter ID + Name  
-2. **Right (scrollable)** — all remaining source columns  
+1. **Left (frozen)** — titled **Normalized Data**; Voter ID + Name  
+2. **Right (scrollable)** — titled **File Data**; all remaining source columns  
 
 Vertical scroll position and row selection stay in sync. When only one pane
 shows a horizontal scrollbar, the other pane’s height is adjusted (with a

@@ -37,7 +37,9 @@ enum
 {
     IDC_LIST_FROZEN = 1001,
     IDC_LIST_SCROLL = 1002,
-    IDC_STATUS_BAR = 1003
+    IDC_STATUS_BAR = 1003,
+    IDC_PANE_TITLE_FROZEN = 1004,
+    IDC_PANE_TITLE_SCROLL = 1005
 };
 
 /* -------------------------------------------------------------------------- */
@@ -50,6 +52,8 @@ typedef struct AppState
     HWND hwnd_main;
     HWND hwnd_frozen;
     HWND hwnd_scroll;
+    HWND hwnd_frozen_title;
+    HWND hwnd_scroll_title;
     HWND hwnd_frozen_hsb_pad; /* Fills H-scroll gap so row bottoms align */
     HWND hwnd_scroll_hsb_pad;
     HWND hwnd_status;
@@ -91,6 +95,16 @@ static AppState g_app;
 static int Scale(AppState *app, int value_96)
 {
     return MulDiv(value_96, (int)app->dpi, 96);
+}
+
+static int App_PaneTitleHeight(AppState *app)
+{
+    int h = Scale(app, 22);
+    if (h < 18)
+    {
+        h = 18;
+    }
+    return h;
 }
 
 static void App_UpdateDpiMetrics(AppState *app, UINT dpi)
@@ -214,6 +228,17 @@ static void App_ApplyFont(AppState *app)
     if (app->hwnd_status)
     {
         SendMessageW(app->hwnd_status, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+    }
+    if (app->font_header != NULL)
+    {
+        if (app->hwnd_frozen_title)
+        {
+            SendMessageW(app->hwnd_frozen_title, WM_SETFONT, (WPARAM)app->font_header, TRUE);
+        }
+        if (app->hwnd_scroll_title)
+        {
+            SendMessageW(app->hwnd_scroll_title, WM_SETFONT, (WPARAM)app->font_header, TRUE);
+        }
     }
 }
 
@@ -1334,6 +1359,9 @@ static void App_Layout(AppState *app)
     int split_w;
     int scroll_x;
     int scroll_w;
+    int title_h;
+    int list_top;
+    int list_h;
 
     if (app->hwnd_main == NULL)
     {
@@ -1374,14 +1402,31 @@ static void App_Layout(AppState *app)
         scroll_w = 0;
     }
 
-    /* First place both panes at full grid height so H-scroll visibility is real. */
+    title_h = App_PaneTitleHeight(app);
+    list_top = grid_top + title_h;
+    list_h = grid_h - title_h;
+    if (list_h < 0)
+    {
+        list_h = 0;
+    }
+
+    if (app->hwnd_frozen_title)
+    {
+        MoveWindow(app->hwnd_frozen_title, app->pad, grid_top, frozen_w, title_h, TRUE);
+    }
+    if (app->hwnd_scroll_title)
+    {
+        MoveWindow(app->hwnd_scroll_title, scroll_x, grid_top, scroll_w, title_h, TRUE);
+    }
+
+    /* Place both panes at full list height so H-scroll visibility is real. */
     if (app->hwnd_frozen)
     {
-        MoveWindow(app->hwnd_frozen, app->pad, grid_top, frozen_w, grid_h, TRUE);
+        MoveWindow(app->hwnd_frozen, app->pad, list_top, frozen_w, list_h, TRUE);
     }
     if (app->hwnd_scroll)
     {
-        MoveWindow(app->hwnd_scroll, scroll_x, grid_top, scroll_w, grid_h, TRUE);
+        MoveWindow(app->hwnd_scroll, scroll_x, list_top, scroll_w, list_h, TRUE);
     }
     if (app->hwnd_frozen_hsb_pad)
     {
@@ -1422,6 +1467,32 @@ static BOOL App_CreateControls(AppState *app)
     DWORD lv_ex = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_GRIDLINES |
                   LVS_EX_HEADERDRAGDROP;
 
+    app->hwnd_frozen_title =
+        CreateWindowExW(0,
+                        L"STATIC",
+                        L"Normalized Data",
+                        WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE | SS_NOPREFIX,
+                        0,
+                        0,
+                        0,
+                        0,
+                        app->hwnd_main,
+                        (HMENU)(INT_PTR)IDC_PANE_TITLE_FROZEN,
+                        app->instance,
+                        NULL);
+    app->hwnd_scroll_title =
+        CreateWindowExW(0,
+                        L"STATIC",
+                        L"File Data",
+                        WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE | SS_NOPREFIX,
+                        0,
+                        0,
+                        0,
+                        0,
+                        app->hwnd_main,
+                        (HMENU)(INT_PTR)IDC_PANE_TITLE_SCROLL,
+                        app->instance,
+                        NULL);
     app->hwnd_frozen = CreateWindowExW(WS_EX_CLIENTEDGE,
                                        WC_LISTVIEWW,
                                        L"",
@@ -1484,7 +1555,8 @@ static BOOL App_CreateControls(AppState *app)
                                        app->instance,
                                        NULL);
 
-    if (!app->hwnd_frozen || !app->hwnd_scroll || !app->hwnd_status)
+    if (!app->hwnd_frozen || !app->hwnd_scroll || !app->hwnd_status || !app->hwnd_frozen_title ||
+        !app->hwnd_scroll_title)
     {
         return FALSE;
     }
@@ -2579,6 +2651,18 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_CTLCOLORSTATIC:
+            if ((HWND)lParam == app->hwnd_frozen_title || (HWND)lParam == app->hwnd_scroll_title)
+            {
+                HDC hdc = (HDC)wParam;
+                SetBkMode(hdc, OPAQUE);
+                SetTextColor(hdc, RGB(0, 0, 0));
+                SetBkColor(hdc, app->header_bg);
+                if (app->brush_header != NULL)
+                {
+                    return (LRESULT)app->brush_header;
+                }
+                return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+            }
             if ((HWND)lParam == app->hwnd_frozen_hsb_pad ||
                 (HWND)lParam == app->hwnd_scroll_hsb_pad)
             {
@@ -2635,6 +2719,76 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 /* Subclass list views to sync vertical scrolling on wheel / scroll messages. */
 static WNDPROC g_old_frozen_proc;
 static WNDPROC g_old_scroll_proc;
+static WNDPROC g_old_title_proc;
+
+static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_ERASEBKGND)
+    {
+        return 1;
+    }
+    if (msg == WM_PAINT)
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        if (hdc != NULL)
+        {
+            RECT rc;
+            wchar_t text[64];
+            HFONT font;
+            HFONT old_font = NULL;
+            HPEN pen;
+            HPEN old_pen;
+            int pen_w;
+            HBRUSH brush =
+                g_app.brush_header != NULL ? g_app.brush_header : GetSysColorBrush(COLOR_BTNFACE);
+
+            GetClientRect(hwnd, &rc);
+            FillRect(hdc, &rc, brush);
+
+            text[0] = L'\0';
+            GetWindowTextW(hwnd, text, ARRAYSIZE(text));
+            font = g_app.font_header != NULL ? g_app.font_header : g_app.font_ui;
+            if (font != NULL)
+            {
+                old_font = (HFONT)SelectObject(hdc, font);
+            }
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(0, 0, 0));
+            DrawTextW(hdc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            if (old_font != NULL)
+            {
+                SelectObject(hdc, old_font);
+            }
+
+            pen_w = Scale(&g_app, 1);
+            if (pen_w < 1)
+            {
+                pen_w = 1;
+            }
+            pen = CreatePen(PS_SOLID, pen_w, RGB(0, 0, 0));
+            old_pen = (HPEN)SelectObject(hdc, pen);
+            /* Top */
+            MoveToEx(hdc, rc.left, rc.top + pen_w / 2, NULL);
+            LineTo(hdc, rc.right, rc.top + pen_w / 2);
+            /* Bottom */
+            MoveToEx(hdc, rc.left, rc.bottom - 1 - pen_w / 2, NULL);
+            LineTo(hdc, rc.right, rc.bottom - 1 - pen_w / 2);
+            /* Left */
+            MoveToEx(hdc, rc.left + pen_w / 2, rc.top, NULL);
+            LineTo(hdc, rc.left + pen_w / 2, rc.bottom);
+            /* Right */
+            MoveToEx(hdc, rc.right - 1 - pen_w / 2, rc.top, NULL);
+            LineTo(hdc, rc.right - 1 - pen_w / 2, rc.bottom);
+            SelectObject(hdc, old_pen);
+            DeleteObject(pen);
+
+            EndPaint(hwnd, &ps);
+        }
+        return 0;
+    }
+    return CallWindowProcW(g_old_title_proc, hwnd, msg, wParam, lParam);
+}
 
 static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
                                          UINT msg,
@@ -2805,6 +2959,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         (WNDPROC)SetWindowLongPtrW(g_app.hwnd_frozen, GWLP_WNDPROC, (LONG_PTR)FrozenSubclass);
     g_old_scroll_proc =
         (WNDPROC)SetWindowLongPtrW(g_app.hwnd_scroll, GWLP_WNDPROC, (LONG_PTR)ScrollSubclass);
+    g_old_title_proc = (WNDPROC)SetWindowLongPtrW(g_app.hwnd_frozen_title,
+                                                  GWLP_WNDPROC,
+                                                  (LONG_PTR)PaneTitleSubclass);
+    SetWindowLongPtrW(g_app.hwnd_scroll_title, GWLP_WNDPROC, (LONG_PTR)PaneTitleSubclass);
 
     accels[0].fVirt = FCONTROL | FVIRTKEY;
     accels[0].key = 'O';

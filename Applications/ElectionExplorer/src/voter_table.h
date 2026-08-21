@@ -52,6 +52,15 @@ extern "C"
 
         int sort_column; /* -1 if unsorted original order */
         BOOL sort_ascending;
+
+        /* Display-column indices for name parts (-1 if absent). */
+        int name_full_col;
+        int name_prefix_col;
+        int name_first_col;
+        int name_middle_col;
+        int name_last_col;
+        int name_suffix_col;
+        BOOL name_surname_first;
     } EeVoterTable;
 
     typedef struct EeLoadProgress
@@ -105,6 +114,21 @@ extern "C"
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);
+
+    /**
+ * @brief Rebuild the synthesized Name column in surname-first or given-first form.
+ *
+ * @param table          Loaded table.
+ * @param surname_first  TRUE for "Last, First Middle"; FALSE for "First Middle Last".
+ * @param progress_fn    Optional; invoked from the calling thread.
+ * @param progress_user  Passed to progress_fn.
+ *
+ * @return FALSE on invalid arguments or out of memory.
+ */
+    BOOL EeVoterTable_SetNameSurnameFirst(EeVoterTable *table,
+                                          BOOL surname_first,
+                                          EeLoadProgressFn progress_fn,
+                                          void *progress_user);
 
     /**
  * @brief Format selected view rows as delimited text for the clipboard.

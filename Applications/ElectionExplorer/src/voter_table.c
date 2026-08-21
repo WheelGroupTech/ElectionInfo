@@ -172,6 +172,13 @@ void EeVoterTable_Init(EeVoterTable *table)
     table->sort_column = -1;
     table->sort_ascending = TRUE;
     table->delimiter = ',';
+    table->name_full_col = -1;
+    table->name_prefix_col = -1;
+    table->name_first_col = -1;
+    table->name_middle_col = -1;
+    table->name_last_col = -1;
+    table->name_suffix_col = -1;
+    table->name_surname_first = TRUE;
     for (i = 0; i < EE_MAX_COLUMNS; i++)
     {
         table->column_titles[i] = NULL;
@@ -876,54 +883,121 @@ static BOOL append_name_part(char *buf, size_t cap, size_t *len, const char *par
     return TRUE;
 }
 
+static BOOL append_literal(char *buf, size_t cap, size_t *len, const char *lit)
+{
+    size_t n;
+    if (lit == NULL || lit[0] == '\0')
+    {
+        return TRUE;
+    }
+    n = strlen(lit);
+    if (*len + n >= cap)
+    {
+        return FALSE;
+    }
+    memcpy(buf + *len, lit, n);
+    *len += n;
+    buf[*len] = '\0';
+    return TRUE;
+}
+
+static BOOL compose_name_parts(const char *full,
+                               const char *prefix,
+                               const char *first,
+                               const char *middle,
+                               const char *last,
+                               const char *suffix,
+                               BOOL surname_first,
+                               char *out,
+                               size_t out_cap)
+{
+    size_t len = 0;
+    out[0] = '\0';
+
+    if (full != NULL && full[0] != '\0')
+    {
+        return SUCCEEDED(StringCchCopyA(out, out_cap, full));
+    }
+    if (prefix == NULL)
+    {
+        prefix = "";
+    }
+    if (first == NULL)
+    {
+        first = "";
+    }
+    if (middle == NULL)
+    {
+        middle = "";
+    }
+    if (last == NULL)
+    {
+        last = "";
+    }
+    if (suffix == NULL)
+    {
+        suffix = "";
+    }
+
+    if (surname_first && last[0] != '\0')
+    {
+        if (!append_name_part(out, out_cap, &len, last))
+        {
+            return FALSE;
+        }
+        if (prefix[0] != '\0' || first[0] != '\0' || middle[0] != '\0' || suffix[0] != '\0')
+        {
+            if (!append_literal(out, out_cap, &len, ","))
+            {
+                return FALSE;
+            }
+            if (!append_name_part(out, out_cap, &len, prefix) ||
+                !append_name_part(out, out_cap, &len, first) ||
+                !append_name_part(out, out_cap, &len, middle) ||
+                !append_name_part(out, out_cap, &len, suffix))
+            {
+                return FALSE;
+            }
+        }
+        return TRUE;
+    }
+
+    return append_name_part(out, out_cap, &len, prefix) &&
+           append_name_part(out, out_cap, &len, first) &&
+           append_name_part(out, out_cap, &len, middle) &&
+           append_name_part(out, out_cap, &len, last) &&
+           append_name_part(out, out_cap, &len, suffix);
+}
+
+static const char *field_at(const FieldList *fields, int idx)
+{
+    if (fields == NULL || idx < 0 || (size_t)idx >= fields->count || fields->items[idx] == NULL)
+    {
+        return "";
+    }
+    return fields->items[idx];
+}
+
 static BOOL compose_name(const FieldList *fields,
-                         const FieldRole *roles,
-                         size_t role_count,
                          int full_idx,
                          int pre_idx,
                          int first_idx,
                          int mid_idx,
                          int last_idx,
                          int suf_idx,
+                         BOOL surname_first,
                          char *out,
                          size_t out_cap)
 {
-    size_t len = 0;
-    out[0] = '\0';
-
-    if (full_idx >= 0 && (size_t)full_idx < fields->count && fields->items[full_idx][0] != '\0')
-    {
-        if (FAILED(StringCchCopyA(out, out_cap, fields->items[full_idx])))
-        {
-            return FALSE;
-        }
-        return TRUE;
-    }
-
-    (void)roles;
-    (void)role_count;
-
-    if (pre_idx >= 0 && (size_t)pre_idx < fields->count)
-    {
-        append_name_part(out, out_cap, &len, fields->items[pre_idx]);
-    }
-    if (first_idx >= 0 && (size_t)first_idx < fields->count)
-    {
-        append_name_part(out, out_cap, &len, fields->items[first_idx]);
-    }
-    if (mid_idx >= 0 && (size_t)mid_idx < fields->count)
-    {
-        append_name_part(out, out_cap, &len, fields->items[mid_idx]);
-    }
-    if (last_idx >= 0 && (size_t)last_idx < fields->count)
-    {
-        append_name_part(out, out_cap, &len, fields->items[last_idx]);
-    }
-    if (suf_idx >= 0 && (size_t)suf_idx < fields->count)
-    {
-        append_name_part(out, out_cap, &len, fields->items[suf_idx]);
-    }
-    return TRUE;
+    return compose_name_parts(field_at(fields, full_idx),
+                              field_at(fields, pre_idx),
+                              field_at(fields, first_idx),
+                              field_at(fields, mid_idx),
+                              field_at(fields, last_idx),
+                              field_at(fields, suf_idx),
+                              surname_first,
+                              out,
+                              out_cap);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -960,11 +1034,31 @@ static int sort_cmp(void *context, const void *a, const void *b)
     return ctx->ascending ? cmp : -cmp;
 }
 
-BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column)
+static BOOL sort_apply(EeVoterTable *table)
 {
     SortCtx ctx;
     uint32_t i;
 
+    if (table == NULL || table->sort_column < 0 || table->row_count == 0 ||
+        (uint32_t)table->sort_column >= table->column_count)
+    {
+        return TRUE;
+    }
+
+    for (i = 0; i < table->row_count; i++)
+    {
+        table->view_index[i] = i;
+    }
+
+    ctx.table = table;
+    ctx.column = (uint32_t)table->sort_column;
+    ctx.ascending = table->sort_ascending;
+    qsort_s(table->view_index, table->row_count, sizeof(uint32_t), sort_cmp, &ctx);
+    return TRUE;
+}
+
+BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column)
+{
     if (table == NULL || column >= table->column_count || table->row_count == 0)
     {
         return FALSE;
@@ -980,15 +1074,84 @@ BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column)
         table->sort_ascending = TRUE;
     }
 
-    for (i = 0; i < table->row_count; i++)
+    return sort_apply(table);
+}
+
+static const char *name_part_cell(const EeVoterTable *table, uint32_t row, int col)
+{
+    if (col < 0)
     {
-        table->view_index[i] = i;
+        return "";
+    }
+    return EeVoterTable_GetCellUtf8(table, row, (uint32_t)col);
+}
+
+BOOL EeVoterTable_SetNameSurnameFirst(EeVoterTable *table,
+                                      BOOL surname_first,
+                                      EeLoadProgressFn progress_fn,
+                                      void *progress_user)
+{
+    uint32_t row;
+    uint32_t last_percent = 0;
+    char name_buf[512];
+
+    if (table == NULL)
+    {
+        return FALSE;
+    }
+    if (table->name_surname_first == surname_first)
+    {
+        return TRUE;
     }
 
-    ctx.table = table;
-    ctx.column = column;
-    ctx.ascending = table->sort_ascending;
-    qsort_s(table->view_index, table->row_count, sizeof(uint32_t), sort_cmp, &ctx);
+    for (row = 0; row < table->row_count; row++)
+    {
+        uint32_t *cell;
+        uint32_t ofs;
+
+        if (!compose_name_parts(name_part_cell(table, row, table->name_full_col),
+                                name_part_cell(table, row, table->name_prefix_col),
+                                name_part_cell(table, row, table->name_first_col),
+                                name_part_cell(table, row, table->name_middle_col),
+                                name_part_cell(table, row, table->name_last_col),
+                                name_part_cell(table, row, table->name_suffix_col),
+                                surname_first,
+                                name_buf,
+                                sizeof(name_buf)))
+        {
+            name_buf[0] = '\0';
+        }
+        if (!pool_add(table, name_buf, strlen(name_buf), &ofs))
+        {
+            return FALSE;
+        }
+        cell = table->cells + (size_t)row * (size_t)table->column_count;
+        cell[1] = ofs;
+
+        if (progress_fn != NULL && table->row_count > 0)
+        {
+            uint32_t percent = (uint32_t)(((uint64_t)(row + 1u) * 100ull) / table->row_count);
+            if (percent != last_percent && (percent == 100u || percent >= last_percent + 2u))
+            {
+                EeLoadProgress p;
+                last_percent = percent;
+                p.percent = percent;
+                p.rows_loaded = row + 1u;
+                p.bytes_read = 0;
+                p.bytes_total = 0;
+                if (!progress_fn(&p, progress_user))
+                {
+                    return FALSE;
+                }
+            }
+        }
+    }
+
+    table->name_surname_first = surname_first;
+    if (table->sort_column == 1)
+    {
+        sort_apply(table);
+    }
     return TRUE;
 }
 
@@ -1075,7 +1238,11 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
         return EeLoadStatus_Error;
     }
 
-    EeVoterTable_Clear(out_table);
+    {
+        BOOL surname_first = out_table->name_surname_first;
+        EeVoterTable_Clear(out_table);
+        out_table->name_surname_first = surname_first;
+    }
 
     hfile = CreateFileW(path,
                         GENERIC_READ,
@@ -1339,6 +1506,19 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             vuid_idx = other_id_idx;
                         }
 
+                        out_table->name_full_col =
+                            (full_idx < 0) ? -1 : full_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->name_prefix_col =
+                            (pre_idx < 0) ? -1 : pre_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->name_first_col =
+                            (first_idx < 0) ? -1 : first_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->name_middle_col =
+                            (mid_idx < 0) ? -1 : mid_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->name_last_col =
+                            (last_idx < 0) ? -1 : last_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->name_suffix_col =
+                            (suf_idx < 0) ? -1 : suf_idx + (int)EE_FROZEN_COLUMN_COUNT;
+
                         /* Display columns: Voter ID, Name, then all source columns. */
                         display_cols = EE_FROZEN_COLUMN_COUNT + src_col_count;
                         out_table->column_count = display_cols;
@@ -1439,14 +1619,13 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         }
 
                         if (!compose_name(&row_fields,
-                                          roles,
-                                          header_fields.count,
                                           full_idx,
                                           pre_idx,
                                           first_idx,
                                           mid_idx,
                                           last_idx,
                                           suf_idx,
+                                          out_table->name_surname_first,
                                           name_buf,
                                           sizeof(name_buf)))
                         {

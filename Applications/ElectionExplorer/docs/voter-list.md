@@ -15,6 +15,7 @@ display them in a high-performance grid.
 | Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane. Selected cells use the system highlight color on **both** panes (Voter ID, Name, and the scrolling columns). |
 | Copy | **Edit → Copy** (`Ctrl+C`) or right-click the selection; uses the file delimiter |
 | Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID** and **Name** before the original columns |
+| Name format | **Edit → Options…** — **Display name in surname-first format** (default on) shows the frozen **Name** column as `Last, First Middle`. Uncheck for `First Middle Last`. |
 | Grid | Virtual list (owner-data) with **grid lines**, sized for hundreds of thousands to millions of rows |
 | Column headers | **Bold** captions, **light grey** background, **double underline** rule |
 | Frozen columns | **Voter ID** and **Name** stay visible while the rest of the grid scrolls horizontally |
@@ -43,6 +44,9 @@ matching pad) so the last data row is not covered by the bar.
    `VUIDNO`, `SOS_VoterID`, etc.; falls back to generic `ID` / legacy IDs).
 2. **Name** — from a full-name field when present, otherwise composed from
    prefix / first / middle / last / suffix parts (`FSTNAM`, `LSTNAM`, …).
+   Default display is surname-first (`Smith, John A`). A full-name source
+   field is shown as stored. Changing the option rebuilds the Name column
+   (a progress window appears for large lists).
 3. **All original file columns** — in file order, using the source headers.
    Historical Travis-style files with per-election `VOTED` / `PLACE` / `PARTY`
    fields are included (hundreds of columns). The loader accepts up to

@@ -31,6 +31,7 @@ static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
 static const int k_DefaultFrozenWidth = 320;
+static const uint32_t k_NameUpdateProgressMinRows = 25000;
 
 enum
 {
@@ -57,6 +58,7 @@ typedef struct AppState
     HWND hwnd_progress_status;
     HWND hwnd_options;
     BOOL copy_prepend_normalized;
+    BOOL name_surname_first;
     HFONT font_ui;
     HFONT font_header; /* Bold header captions */
     HBRUSH brush_header;
@@ -999,6 +1001,7 @@ static void App_BeginOpenVoterList(AppState *app)
         return;
     }
 
+    app->table.name_surname_first = app->name_surname_first;
     app->load_thread = CreateThread(NULL, 0, LoadThreadProc, app, 0, NULL);
     if (app->load_thread == NULL)
     {
@@ -1579,6 +1582,24 @@ static void App_CopySelectionToOtherPane(AppState *app, HWND source)
     InvalidateRect(dest, NULL, TRUE);
 }
 
+static void App_ClearSelection(AppState *app)
+{
+    if (app == NULL)
+    {
+        return;
+    }
+    InterlockedExchange(&g_syncing_selection, 1);
+    if (app->hwnd_frozen != NULL)
+    {
+        ListView_SetItemState(app->hwnd_frozen, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    if (app->hwnd_scroll != NULL)
+    {
+        ListView_SetItemState(app->hwnd_scroll, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    InterlockedExchange(&g_syncing_selection, 0);
+}
+
 static BOOL App_SetClipboardUtf8(HWND hwnd, const char *utf8)
 {
     int wlen;
@@ -1808,6 +1829,117 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
     }
 }
 
+static void App_PumpUi(void)
+{
+    MSG msg;
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+    {
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage((int)msg.wParam);
+            break;
+        }
+        if (g_app.hwnd_options != NULL && IsDialogMessageW(g_app.hwnd_options, &msg))
+        {
+            continue;
+        }
+        if (g_app.hwnd_progress != NULL && IsDialogMessageW(g_app.hwnd_progress, &msg))
+        {
+            continue;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+static BOOL CALLBACK NameProgressThunk(const EeLoadProgress *progress, void *user)
+{
+    AppState *app = (AppState *)user;
+    wchar_t text[160];
+
+    if (app->hwnd_progress_bar)
+    {
+        SendMessageW(app->hwnd_progress_bar, PBM_SETPOS, progress->percent, 0);
+    }
+    if (app->hwnd_progress_status)
+    {
+        StringCchPrintfW(text, ARRAYSIZE(text), L"Updating names… %u%%", progress->percent);
+        SetWindowTextW(app->hwnd_progress_status, text);
+    }
+    UpdateWindow(app->hwnd_progress);
+    App_PumpUi();
+    return TRUE;
+}
+
+static void App_ApplyNameFormat(AppState *app, BOOL surname_first)
+{
+    BOOL show_progress = FALSE;
+    HCURSOR prev;
+
+    app->name_surname_first = surname_first;
+    if (app->table.row_count == 0)
+    {
+        app->table.name_surname_first = surname_first;
+        return;
+    }
+    if (app->table.name_surname_first == surname_first)
+    {
+        return;
+    }
+
+    show_progress = app->table.row_count >= k_NameUpdateProgressMinRows;
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (show_progress)
+    {
+        if (App_ShowProgress(app))
+        {
+            SetWindowTextW(app->hwnd_progress, L"Updating names");
+            if (app->hwnd_progress_status)
+            {
+                SetWindowTextW(app->hwnd_progress_status, L"Rebuilding Name column…");
+            }
+            EnableWindow(GetDlgItem(app->hwnd_progress, IDC_PROGRESS_CANCEL), FALSE);
+        }
+        else
+        {
+            show_progress = FALSE;
+        }
+    }
+
+    if (!EeVoterTable_SetNameSurnameFirst(&app->table,
+                                          surname_first,
+                                          show_progress ? NameProgressThunk : NULL,
+                                          app))
+    {
+        if (show_progress)
+        {
+            EnableWindow(app->hwnd_main, TRUE);
+            App_DestroyProgress(app);
+        }
+        SetCursor(prev);
+        App_ClearSelection(app);
+        MessageBoxW(app->hwnd_main,
+                    L"Could not update the Name column.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+
+    if (show_progress)
+    {
+        EnableWindow(app->hwnd_main, TRUE);
+        App_DestroyProgress(app);
+    }
+    SetCursor(prev);
+    /* View indices no longer match the previous physical rows after a rebuild. */
+    App_ClearSelection(app);
+    InvalidateRect(app->hwnd_frozen, NULL, TRUE);
+    InvalidateRect(app->hwnd_scroll, NULL, TRUE);
+    App_FitFrozenColumns(app);
+    App_SetStatus(app,
+                  surname_first ? L"Names shown surname-first." : L"Names shown given-name first.");
+}
+
 static void App_DestroyOptions(AppState *app)
 {
     if (app != NULL && app->hwnd_options != NULL)
@@ -1840,14 +1972,20 @@ static LRESULT CALLBACK OptionsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             {
                 case IDOK:
                 {
-                    HWND chk = GetDlgItem(hwnd, IDC_OPT_PREPEND);
+                    HWND chk_pre = GetDlgItem(hwnd, IDC_OPT_PREPEND);
+                    HWND chk_sur = GetDlgItem(hwnd, IDC_OPT_SURNAME_FIRST);
+                    BOOL surname_first;
                     app->copy_prepend_normalized =
-                        (chk != NULL && SendMessageW(chk, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                        (chk_pre != NULL &&
+                         SendMessageW(chk_pre, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                    surname_first = (chk_sur != NULL &&
+                                     SendMessageW(chk_sur, BM_GETCHECK, 0, 0) == BST_CHECKED);
                     if (app->hwnd_progress == NULL)
                     {
                         EnableWindow(app->hwnd_main, TRUE);
                     }
                     DestroyWindow(hwnd);
+                    App_ApplyNameFormat(app, surname_first);
                     return 0;
                 }
                 case IDCANCEL:
@@ -1899,7 +2037,8 @@ static BOOL App_ShowOptions(AppState *app)
     int outer_h;
     int x;
     int y;
-    HWND chk;
+    HWND chk_prepend;
+    HWND chk_surname;
     HWND btn_ok;
     HWND btn_cancel;
 
@@ -1914,7 +2053,7 @@ static BOOL App_ShowOptions(AppState *app)
     }
 
     client_w = Scale(app, 420);
-    client_h = Scale(app, 130);
+    client_h = Scale(app, 168);
     margin = Scale(app, 16);
     btn_w = Scale(app, 90);
     btn_h = Scale(app, 28);
@@ -1958,18 +2097,30 @@ static BOOL App_ShowOptions(AppState *app)
     client_w = rc_client.right - rc_client.left;
     client_h = rc_client.bottom - rc_client.top;
 
-    chk = CreateWindowExW(0,
-                          L"BUTTON",
-                          L"Pre-pend normalized data for copies",
-                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                          margin,
-                          margin,
-                          client_w - margin * 2,
-                          Scale(app, 24),
-                          app->hwnd_options,
-                          (HMENU)(INT_PTR)IDC_OPT_PREPEND,
-                          app->instance,
-                          NULL);
+    chk_prepend = CreateWindowExW(0,
+                                  L"BUTTON",
+                                  L"Pre-pend normalized data for copies",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                  margin,
+                                  margin,
+                                  client_w - margin * 2,
+                                  Scale(app, 24),
+                                  app->hwnd_options,
+                                  (HMENU)(INT_PTR)IDC_OPT_PREPEND,
+                                  app->instance,
+                                  NULL);
+    chk_surname = CreateWindowExW(0,
+                                  L"BUTTON",
+                                  L"Display name in surname-first format",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                  margin,
+                                  margin + Scale(app, 28),
+                                  client_w - margin * 2,
+                                  Scale(app, 24),
+                                  app->hwnd_options,
+                                  (HMENU)(INT_PTR)IDC_OPT_SURNAME_FIRST,
+                                  app->instance,
+                                  NULL);
     btn_ok = CreateWindowExW(0,
                              L"BUTTON",
                              L"OK",
@@ -1997,11 +2148,19 @@ static BOOL App_ShowOptions(AppState *app)
 
     if (app->font_ui)
     {
-        SendMessageW(chk, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(chk_prepend, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(chk_surname, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
     }
-    SendMessageW(chk, BM_SETCHECK, app->copy_prepend_normalized ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(chk_prepend,
+                 BM_SETCHECK,
+                 app->copy_prepend_normalized ? BST_CHECKED : BST_UNCHECKED,
+                 0);
+    SendMessageW(chk_surname,
+                 BM_SETCHECK,
+                 app->name_surname_first ? BST_CHECKED : BST_UNCHECKED,
+                 0);
 
     EnableWindow(app->hwnd_main, FALSE);
     ShowWindow(app->hwnd_options, SW_SHOW);
@@ -2550,6 +2709,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     g_app.instance = hInstance;
     g_app.dpi = 96;
     g_app.copy_prepend_normalized = TRUE;
+    g_app.name_surname_first = TRUE;
     App_UpdateDpiMetrics(&g_app, GetDpiForSystem());
     InitializeCriticalSection(&g_app.progress_lock);
     EeVoterTable_Init(&g_app.table);

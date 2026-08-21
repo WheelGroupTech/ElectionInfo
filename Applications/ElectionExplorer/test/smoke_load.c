@@ -101,7 +101,7 @@ static int load_wide_history(void)
         if (wcscmp(buf, L"100001") == 0)
         {
             EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
-            if (wcscmp(buf, L"John Smith") == 0)
+            if (wcscmp(buf, L"Smith, John") == 0)
             {
                 rc = 0;
             }
@@ -156,7 +156,7 @@ static int test_copy_format(void)
         wprintf(L"copy: prepend format failed\n");
         goto done;
     }
-    if (strncmp(text, "100001,John A Smith,100001,", 27) != 0)
+    if (strncmp(text, "100001,\"Smith, John A\",100001,", 30) != 0)
     {
         wprintf(L"copy: prepend prefix mismatch\n");
         goto done;
@@ -198,6 +198,53 @@ static int test_copy_format(void)
         wprintf(L"copy: missing second tab row\n");
         goto done;
     }
+    free(text);
+    text = NULL;
+    EeVoterTable_Clear(&t);
+
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.csv",
+                                  &t,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"copy: csv reload failed\n");
+        goto done;
+    }
+    {
+        wchar_t buf[128];
+        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        if (wcscmp(buf, L"Smith, John A") != 0)
+        {
+            wprintf(L"copy: default surname-first mismatch (%s)\n", buf);
+            goto done;
+        }
+        if (!EeVoterTable_SetNameSurnameFirst(&t, FALSE, NULL, NULL))
+        {
+            wprintf(L"copy: set given-first failed\n");
+            goto done;
+        }
+        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        if (wcscmp(buf, L"John A Smith") != 0)
+        {
+            wprintf(L"copy: given-first mismatch (%s)\n", buf);
+            goto done;
+        }
+        if (!EeVoterTable_SetNameSurnameFirst(&t, TRUE, NULL, NULL))
+        {
+            wprintf(L"copy: restore surname-first failed\n");
+            goto done;
+        }
+        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        if (wcscmp(buf, L"Smith, John A") != 0)
+        {
+            wprintf(L"copy: restored surname-first mismatch (%s)\n", buf);
+            goto done;
+        }
+    }
+
     rc = 0;
     wprintf(L"copy format ok\n");
 

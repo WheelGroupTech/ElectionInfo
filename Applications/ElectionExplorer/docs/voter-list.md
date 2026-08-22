@@ -14,7 +14,7 @@ display them in a high-performance grid.
 | Progress | Modal progress window with percent complete and **Cancel** |
 | Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane. Selected cells use the system highlight color on **both** panes (Voter ID, Name, and the scrolling columns). |
 | Copy | **Edit → Copy** (`Ctrl+C`) or right-click the selection; uses the file delimiter |
-| Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID** and **Name** before the original columns |
+| Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID**, **Name**, and **Address** before the original columns |
 | Name format | **Edit → Options…** — **Display name in surname-first format** (default on) shows the frozen **Name** column as `Last, First Middle`. Uncheck for `First Middle Last`. |
 | Zoom | **Edit → Options…** — **Zoom** (default **100%**, range **50–250%**) scales grid text, row height, column widths, and pane titles. Dialogs stay at system size. |
 | Grid | Virtual list (owner-data) with **grid lines**, sized for hundreds of thousands to millions of rows |
@@ -33,7 +33,7 @@ for input.
 The grid uses two synchronized virtual list views, each with a bold grey
 pane title:
 
-1. **Left (frozen)** — titled **Normalized Data**; Voter ID + Name  
+1. **Left (frozen)** — titled **Normalized Data**; Voter ID, Name, and Address  
 2. **Right (scrollable)** — titled **File Data**; all remaining source columns  
 
 Vertical scroll position and row selection stay in sync. When only one pane
@@ -49,7 +49,13 @@ matching pad) so the last data row is not covered by the bar.
    Default display is surname-first (`Smith, John A`). A full-name source
    field is shown as stored. Changing the option rebuilds the Name column
    (a progress window appears for large lists).
-3. **All original file columns** — in file order, using the source headers.
+3. **Address** — residence street composed from house number, direction,
+   street name/type, unit, city, state, and ZIP (`BLKNUM`, `STRNAM`,
+   `RSCITY`, `streetnumber`, …). A 9-digit ZIP (`78701-1234` or a separate
+   +4 field) is shown only when the extra four digits exist and are not
+   all zeros; otherwise the 5-digit ZIP is used. A single full-address
+   field is used when present.
+4. **All original file columns** — in file order, using the source headers.
    Historical Travis-style files with per-election `VOTED` / `PLACE` / `PARTY`
    fields are included (hundreds of columns). The loader accepts up to
    `EE_MAX_COLUMNS` display columns (1024, including Voter ID and Name).

@@ -22,8 +22,8 @@ extern "C"
  */
 #define EE_MAX_COLUMNS 1024
 
-/** First two display columns are always Voter ID and Name (frozen in UI). */
-#define EE_FROZEN_COLUMN_COUNT 2
+/** Frozen display columns: Voter ID, Name, Address. */
+#define EE_FROZEN_COLUMN_COUNT 3
 
     typedef enum EeLoadStatus
     {
@@ -61,6 +61,20 @@ extern "C"
         int name_last_col;
         int name_suffix_col;
         BOOL name_surname_first;
+
+        /* Display-column indices for residence address parts (-1 if absent). */
+        int addr_full_col;
+        int addr_number_col;
+        int addr_predir_col;
+        int addr_street_col;
+        int addr_type_col;
+        int addr_postdir_col;
+        int addr_unit_type_col;
+        int addr_unit_col;
+        int addr_city_col;
+        int addr_state_col;
+        int addr_zip_col;
+        int addr_zip4_col;
     } EeVoterTable;
 
     typedef struct EeLoadProgress
@@ -136,7 +150,8 @@ extern "C"
  * @param table               Loaded table.
  * @param view_rows           Visual row indices (sort order).
  * @param n_rows              Number of entries in @p view_rows.
- * @param prepend_normalized  If TRUE, emit Voter ID and Name before source fields.
+ * @param prepend_normalized  If TRUE, emit Voter ID, Name, and Address before
+ *                            source fields.
  * @param out_text            Receives heap UTF-8 (caller frees). Never NULL on
  *                            success (empty string if @p n_rows is 0).
  * @param out_len             Optional; byte length excluding the terminating NUL.

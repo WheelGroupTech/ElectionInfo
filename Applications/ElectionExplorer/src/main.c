@@ -30,7 +30,7 @@ static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
-static const int k_DefaultFrozenWidth = 320;
+static const int k_DefaultFrozenWidth = 560;
 static const uint32_t k_NameUpdateProgressMinRows = 25000;
 static const int k_ZoomMin = 50;
 static const int k_ZoomMax = 250;
@@ -608,6 +608,8 @@ static void App_FitFrozenColumns(AppState *app)
     int inner_w;
     int id_w;
     int name_w;
+    int addr_w;
+    int gap;
 
     if (app->hwnd_frozen == NULL)
     {
@@ -627,15 +629,18 @@ static void App_FitFrozenColumns(AppState *app)
         return;
     }
 
+    gap = ScaleDisplay(app, 2);
     id_w = ScaleDisplay(app, 110);
-    name_w = inner_w - id_w - ScaleDisplay(app, 2);
-    if (name_w < ScaleDisplay(app, 200))
+    name_w = ScaleDisplay(app, 180);
+    addr_w = inner_w - id_w - name_w - gap;
+    if (addr_w < ScaleDisplay(app, 200))
     {
-        name_w = ScaleDisplay(app, 200);
+        addr_w = ScaleDisplay(app, 200);
     }
 
     ListView_SetColumnWidth(app->hwnd_frozen, 0, id_w);
     ListView_SetColumnWidth(app->hwnd_frozen, 1, name_w);
+    ListView_SetColumnWidth(app->hwnd_frozen, 2, addr_w);
 }
 
 static void App_RebuildColumns(AppState *app)
@@ -656,14 +661,25 @@ static void App_RebuildColumns(AppState *app)
 
     col_width = ScaleDisplay(app, 120);
 
-    /* Frozen: Voter ID (center) + Name (left) */
+    /* Frozen: Voter ID (center) + Name + Address (left) */
     for (i = 0; i < EE_FROZEN_COLUMN_COUNT && i < app->table.column_count; i++)
     {
         ZeroMemory(&col, sizeof(col));
         col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
         /* Column 0 is forced left by ListView for item text; we center-draw it. */
         col.fmt = (i == 0) ? LVCFMT_CENTER : LVCFMT_LEFT;
-        col.cx = (i == 0) ? ScaleDisplay(app, 110) : ScaleDisplay(app, 200);
+        if (i == 0)
+        {
+            col.cx = ScaleDisplay(app, 110);
+        }
+        else if (i == 1)
+        {
+            col.cx = ScaleDisplay(app, 180);
+        }
+        else
+        {
+            col.cx = ScaleDisplay(app, 240);
+        }
         col.pszText = app->table.column_titles[i];
         col.iSubItem = (int)i;
         ListView_InsertColumn(app->hwnd_frozen, (int)i, &col);

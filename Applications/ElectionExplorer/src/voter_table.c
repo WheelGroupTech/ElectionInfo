@@ -179,6 +179,18 @@ void EeVoterTable_Init(EeVoterTable *table)
     table->name_last_col = -1;
     table->name_suffix_col = -1;
     table->name_surname_first = TRUE;
+    table->addr_full_col = -1;
+    table->addr_number_col = -1;
+    table->addr_predir_col = -1;
+    table->addr_street_col = -1;
+    table->addr_type_col = -1;
+    table->addr_postdir_col = -1;
+    table->addr_unit_type_col = -1;
+    table->addr_unit_col = -1;
+    table->addr_city_col = -1;
+    table->addr_state_col = -1;
+    table->addr_zip_col = -1;
+    table->addr_zip4_col = -1;
     for (i = 0; i < EE_MAX_COLUMNS; i++)
     {
         table->column_titles[i] = NULL;
@@ -478,7 +490,20 @@ typedef enum FieldRole
     Role_FirstName,
     Role_MiddleName,
     Role_LastName,
-    Role_NameSuffix
+    Role_NameSuffix,
+    Role_AddrFull,
+    Role_AddrNumber,
+    Role_AddrPredir,
+    Role_AddrStreet,
+    Role_AddrType,
+    Role_AddrDir,
+    Role_AddrPostdir,
+    Role_AddrUnitType,
+    Role_AddrUnit,
+    Role_AddrCity,
+    Role_AddrState,
+    Role_AddrZip,
+    Role_AddrZip4
 } FieldRole;
 
 static void normalize_header(const char *in, char *out, size_t out_cch)
@@ -559,6 +584,77 @@ static FieldRole classify_field(const char *norm)
         strcmp(norm, "SUFFIX") == 0 || strcmp(norm, "NSUFFIX") == 0)
     {
         return Role_NameSuffix;
+    }
+
+    if (strcmp(norm, "ADDRESS") == 0 || strcmp(norm, "FULLADDRESS") == 0 ||
+        strcmp(norm, "RESADDRESS") == 0 || strcmp(norm, "STREETADDRESS") == 0 ||
+        strcmp(norm, "RESIDENTIALADDRESS") == 0)
+    {
+        return Role_AddrFull;
+    }
+    if (strcmp(norm, "BLKNUM") == 0 || strcmp(norm, "BLOCKNUM") == 0 ||
+        strcmp(norm, "HOUSENUM") == 0 || strcmp(norm, "HOUSENUMBER") == 0 ||
+        strcmp(norm, "HOUSENO") == 0 || strcmp(norm, "HSENO") == 0 ||
+        strcmp(norm, "STREETNUMBER") == 0 || strcmp(norm, "STREETNUM") == 0 ||
+        strcmp(norm, "STREETNO") == 0 || strcmp(norm, "STRNUM") == 0)
+    {
+        return Role_AddrNumber;
+    }
+    if (strcmp(norm, "STRPRE") == 0 || strcmp(norm, "STRPREFIX") == 0 ||
+        strcmp(norm, "PREDIR") == 0 || strcmp(norm, "PREDIRECTION") == 0 ||
+        strcmp(norm, "STREETPREFIX") == 0)
+    {
+        return Role_AddrPredir;
+    }
+    if (strcmp(norm, "STRNAM") == 0 || strcmp(norm, "STRNAME") == 0 ||
+        strcmp(norm, "STREETNAME") == 0 || strcmp(norm, "STREETNAM") == 0 ||
+        strcmp(norm, "STREET") == 0)
+    {
+        return Role_AddrStreet;
+    }
+    if (strcmp(norm, "STRTYP") == 0 || strcmp(norm, "STRTYPE") == 0 ||
+        strcmp(norm, "STREETTYPE") == 0 || strcmp(norm, "STREETTYP") == 0)
+    {
+        return Role_AddrType;
+    }
+    if (strcmp(norm, "STRDIR") == 0 || strcmp(norm, "STREETDIR") == 0)
+    {
+        return Role_AddrDir;
+    }
+    if (strcmp(norm, "POSTDIR") == 0 || strcmp(norm, "POSTDIRECTION") == 0 ||
+        strcmp(norm, "STRPOST") == 0)
+    {
+        return Role_AddrPostdir;
+    }
+    if (strcmp(norm, "UNITYP") == 0 || strcmp(norm, "UNITTYPE") == 0 ||
+        strcmp(norm, "APTTYPE") == 0)
+    {
+        return Role_AddrUnitType;
+    }
+    if (strcmp(norm, "UNITNO") == 0 || strcmp(norm, "UNITNUM") == 0 ||
+        strcmp(norm, "UNITNUMBER") == 0 || strcmp(norm, "APTNO") == 0 ||
+        strcmp(norm, "APTNUM") == 0 || strcmp(norm, "APARTMENT") == 0)
+    {
+        return Role_AddrUnit;
+    }
+    if (strcmp(norm, "RSCITY") == 0 || strcmp(norm, "RESCITY") == 0 ||
+        strcmp(norm, "RESIDENCECITY") == 0 || strcmp(norm, "CITY") == 0)
+    {
+        return Role_AddrCity;
+    }
+    if (strcmp(norm, "RSTATE") == 0 || strcmp(norm, "RESSTATE") == 0 ||
+        strcmp(norm, "RESIDENCESTATE") == 0 || strcmp(norm, "STATE") == 0)
+    {
+        return Role_AddrState;
+    }
+    if (strcmp(norm, "RZIPCD") == 0 || strcmp(norm, "RZIP") == 0 || strcmp(norm, "RESZIP") == 0 ||
+        strcmp(norm, "ZIPCODE") == 0 || strcmp(norm, "ZIPCD") == 0 || strcmp(norm, "ZIP") == 0)
+    {
+        return Role_AddrZip;
+    }
+    if (strcmp(norm, "RZIP4") == 0 || strcmp(norm, "ZIP4") == 0 || strcmp(norm, "PLUS4") == 0)
+    {
+        return Role_AddrZip4;
     }
 
     return Role_None;
@@ -1000,6 +1096,182 @@ static BOOL compose_name(const FieldList *fields,
                               out_cap);
 }
 
+static BOOL zip4_is_usable(const char *s)
+{
+    const char *p;
+
+    if (s == NULL)
+    {
+        return FALSE;
+    }
+    for (p = s; *p != '\0'; p++)
+    {
+        if (*p == ' ' || *p == '\t' || *p == '-')
+        {
+            continue;
+        }
+        if (*p < '0' || *p > '9')
+        {
+            return TRUE;
+        }
+        if (*p != '0')
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void split_zip(const char *zip,
+                      const char *zip4,
+                      char *five,
+                      size_t five_cch,
+                      char *four,
+                      size_t four_cch)
+{
+    char digits[16];
+    int n = 0;
+    const char *p;
+
+    if (five_cch > 0)
+    {
+        five[0] = '\0';
+    }
+    if (four_cch > 0)
+    {
+        four[0] = '\0';
+    }
+
+    if (zip != NULL)
+    {
+        for (p = zip; *p != '\0' && n < (int)sizeof(digits) - 1; p++)
+        {
+            if (*p >= '0' && *p <= '9')
+            {
+                digits[n++] = *p;
+            }
+        }
+    }
+    digits[n] = '\0';
+
+    if (n >= 5 && five_cch > 5)
+    {
+        memcpy(five, digits, 5);
+        five[5] = '\0';
+        if (n >= 9 && four_cch > 4)
+        {
+            memcpy(four, digits + 5, 4);
+            four[4] = '\0';
+        }
+    }
+    else if (n > 0 && (size_t)n < five_cch)
+    {
+        memcpy(five, digits, (size_t)n);
+        five[n] = '\0';
+    }
+
+    if (four[0] == '\0' && zip4 != NULL && zip4[0] != '\0' && four_cch > 1)
+    {
+        int f = 0;
+        for (p = zip4; *p != '\0' && (size_t)f + 1 < four_cch; p++)
+        {
+            if (*p >= '0' && *p <= '9')
+            {
+                four[f++] = *p;
+            }
+        }
+        four[f] = '\0';
+    }
+    if (!zip4_is_usable(four))
+    {
+        four[0] = '\0';
+    }
+}
+
+static BOOL compose_address(const FieldList *fields,
+                            int full_idx,
+                            int number_idx,
+                            int predir_idx,
+                            int street_idx,
+                            int type_idx,
+                            int postdir_idx,
+                            int unit_type_idx,
+                            int unit_idx,
+                            int city_idx,
+                            int state_idx,
+                            int zip_idx,
+                            int zip4_idx,
+                            char *out,
+                            size_t out_cap)
+{
+    size_t len = 0;
+    const char *full = field_at(fields, full_idx);
+    const char *city = field_at(fields, city_idx);
+    const char *state = field_at(fields, state_idx);
+    char zip5[8];
+    char zip4_use[8];
+
+    split_zip(field_at(fields, zip_idx),
+              field_at(fields, zip4_idx),
+              zip5,
+              sizeof(zip5),
+              zip4_use,
+              sizeof(zip4_use));
+
+    out[0] = '\0';
+    if (full[0] != '\0')
+    {
+        return SUCCEEDED(StringCchCopyA(out, out_cap, full));
+    }
+
+    if (!append_name_part(out, out_cap, &len, field_at(fields, number_idx)) ||
+        !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
+        !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
+        !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
+        !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
+        !append_name_part(out, out_cap, &len, field_at(fields, unit_type_idx)) ||
+        !append_name_part(out, out_cap, &len, field_at(fields, unit_idx)))
+    {
+        return FALSE;
+    }
+
+    if (city[0] != '\0' || state[0] != '\0' || zip5[0] != '\0')
+    {
+        if (len > 0 && !append_literal(out, out_cap, &len, ","))
+        {
+            return FALSE;
+        }
+        if (!append_name_part(out, out_cap, &len, city))
+        {
+            return FALSE;
+        }
+        if (state[0] != '\0' || zip5[0] != '\0')
+        {
+            if (city[0] != '\0' && !append_literal(out, out_cap, &len, ","))
+            {
+                return FALSE;
+            }
+            if (!append_name_part(out, out_cap, &len, state))
+            {
+                return FALSE;
+            }
+            if (!append_name_part(out, out_cap, &len, zip5))
+            {
+                return FALSE;
+            }
+            if (zip5[0] != '\0' && zip4_use[0] != '\0')
+            {
+                if (!append_literal(out, out_cap, &len, "-") ||
+                    !append_literal(out, out_cap, &len, zip4_use))
+                {
+                    return FALSE;
+                }
+            }
+        }
+    }
+    return TRUE;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Sort                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -1221,6 +1493,19 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
     int mid_idx = -1;
     int last_idx = -1;
     int suf_idx = -1;
+    int addr_full_idx = -1;
+    int house_idx = -1;
+    int predir_idx = -1;
+    int street_idx = -1;
+    int strtype_idx = -1;
+    int dir_idx = -1;
+    int postdir_idx = -1;
+    int unitype_idx = -1;
+    int unit_idx = -1;
+    int city_idx = -1;
+    int state_idx = -1;
+    int zip_idx = -1;
+    int zip4_idx = -1;
     uint32_t src_col_count = 0;
     uint32_t display_cols = 0;
     size_t i;
@@ -1497,6 +1782,84 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                                         suf_idx = (int)i;
                                     }
                                     break;
+                                case Role_AddrFull:
+                                    if (addr_full_idx < 0)
+                                    {
+                                        addr_full_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrNumber:
+                                    if (house_idx < 0)
+                                    {
+                                        house_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrPredir:
+                                    if (predir_idx < 0)
+                                    {
+                                        predir_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrStreet:
+                                    if (street_idx < 0)
+                                    {
+                                        street_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrType:
+                                    if (strtype_idx < 0)
+                                    {
+                                        strtype_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrDir:
+                                    if (dir_idx < 0)
+                                    {
+                                        dir_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrPostdir:
+                                    if (postdir_idx < 0)
+                                    {
+                                        postdir_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrUnitType:
+                                    if (unitype_idx < 0)
+                                    {
+                                        unitype_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrUnit:
+                                    if (unit_idx < 0)
+                                    {
+                                        unit_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrCity:
+                                    if (city_idx < 0)
+                                    {
+                                        city_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrState:
+                                    if (state_idx < 0)
+                                    {
+                                        state_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrZip:
+                                    if (zip_idx < 0)
+                                    {
+                                        zip_idx = (int)i;
+                                    }
+                                    break;
+                                case Role_AddrZip4:
+                                    if (zip4_idx < 0)
+                                    {
+                                        zip4_idx = (int)i;
+                                    }
+                                    break;
                                 default:
                                     break;
                             }
@@ -1504,6 +1867,14 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         if (vuid_idx < 0)
                         {
                             vuid_idx = other_id_idx;
+                        }
+                        if (predir_idx < 0)
+                        {
+                            predir_idx = dir_idx;
+                        }
+                        else if (postdir_idx < 0)
+                        {
+                            postdir_idx = dir_idx;
                         }
 
                         out_table->name_full_col =
@@ -1518,12 +1889,37 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             (last_idx < 0) ? -1 : last_idx + (int)EE_FROZEN_COLUMN_COUNT;
                         out_table->name_suffix_col =
                             (suf_idx < 0) ? -1 : suf_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_full_col =
+                            (addr_full_idx < 0) ? -1 : addr_full_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_number_col =
+                            (house_idx < 0) ? -1 : house_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_predir_col =
+                            (predir_idx < 0) ? -1 : predir_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_street_col =
+                            (street_idx < 0) ? -1 : street_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_type_col =
+                            (strtype_idx < 0) ? -1 : strtype_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_postdir_col =
+                            (postdir_idx < 0) ? -1 : postdir_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_unit_type_col =
+                            (unitype_idx < 0) ? -1 : unitype_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_unit_col =
+                            (unit_idx < 0) ? -1 : unit_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_city_col =
+                            (city_idx < 0) ? -1 : city_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_state_col =
+                            (state_idx < 0) ? -1 : state_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_zip_col =
+                            (zip_idx < 0) ? -1 : zip_idx + (int)EE_FROZEN_COLUMN_COUNT;
+                        out_table->addr_zip4_col =
+                            (zip4_idx < 0) ? -1 : zip4_idx + (int)EE_FROZEN_COLUMN_COUNT;
 
-                        /* Display columns: Voter ID, Name, then all source columns. */
+                        /* Display columns: Voter ID, Name, Address, then source columns. */
                         display_cols = EE_FROZEN_COLUMN_COUNT + src_col_count;
                         out_table->column_count = display_cols;
                         if (!utf8_to_wide_dup("Voter ID", &out_table->column_titles[0]) ||
-                            !utf8_to_wide_dup("Name", &out_table->column_titles[1]))
+                            !utf8_to_wide_dup("Name", &out_table->column_titles[1]) ||
+                            !utf8_to_wide_dup("Address", &out_table->column_titles[2]))
                         {
                             free(read_buf);
                             free(line);
@@ -1641,6 +2037,39 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             EeVoterTable_Clear(out_table);
                             set_error(error_message, error_cch, L"Out of memory.");
                             return EeLoadStatus_Error;
+                        }
+
+                        {
+                            char addr_buf[512];
+                            if (!compose_address(&row_fields,
+                                                 addr_full_idx,
+                                                 house_idx,
+                                                 predir_idx,
+                                                 street_idx,
+                                                 strtype_idx,
+                                                 postdir_idx,
+                                                 unitype_idx,
+                                                 unit_idx,
+                                                 city_idx,
+                                                 state_idx,
+                                                 zip_idx,
+                                                 zip4_idx,
+                                                 addr_buf,
+                                                 sizeof(addr_buf)))
+                            {
+                                addr_buf[0] = '\0';
+                            }
+                            if (!pool_add(out_table, addr_buf, strlen(addr_buf), &cell[2]))
+                            {
+                                free(read_buf);
+                                free(line);
+                                field_list_free(&header_fields);
+                                field_list_free(&row_fields);
+                                fclose(fp);
+                                EeVoterTable_Clear(out_table);
+                                set_error(error_message, error_cch, L"Out of memory.");
+                                return EeLoadStatus_Error;
+                            }
                         }
 
                         for (c = 0; c < src_col_count; c++)

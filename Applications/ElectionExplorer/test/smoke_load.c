@@ -156,7 +156,7 @@ static int test_copy_format(void)
         wprintf(L"copy: prepend format failed\n");
         goto done;
     }
-    if (strncmp(text, "100001,\"Smith, John A\",100001,", 30) != 0)
+    if (strncmp(text, "100001,\"Smith, John A\",\"123 Main ST, Austin, 78701\",100001,", 59) != 0)
     {
         wprintf(L"copy: prepend prefix mismatch\n");
         goto done;
@@ -221,6 +221,12 @@ static int test_copy_format(void)
             wprintf(L"copy: default surname-first mismatch (%s)\n", buf);
             goto done;
         }
+        EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+        if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
+        {
+            wprintf(L"copy: address mismatch (%s)\n", buf);
+            goto done;
+        }
         if (!EeVoterTable_SetNameSurnameFirst(&t, FALSE, NULL, NULL))
         {
             wprintf(L"copy: set given-first failed\n");
@@ -258,6 +264,97 @@ done:
     return rc;
 }
 
+static int test_zip4_omits_zeros(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[128];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_zip4_voters.csv")))
+    {
+        wprintf(L"zip4: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"zip4: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUIDNO,LSTNAM,FSTNAM,BLKNUM,STRNAM,STRTYP,RSCITY,RZIPCD,RZIP+4\n", fp);
+    fputs("1,Smith,John,123,Main,ST,Austin,78701,0000\n", fp);
+    fputs("2,Jones,Jane,456,Oak,AVE,Austin,78702,1234\n", fp);
+    fputs("3,Lee,Ann,789,Pine,RD,Austin,78703,\n", fp);
+    fputs("4,Ng,Tom,10,Elm,CT,Austin,787010000,\n", fp);
+    fputs("5,Ortiz,Ana,20,Ash,LN,Austin,78701-0000,\n", fp);
+    fputs("6,Park,Kim,30,Bay,DR,Austin,787011111,\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 6)
+    {
+        wprintf(L"zip4: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
+    {
+        wprintf(L"zip4: zero +4 field mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"456 Oak AVE, Austin, 78702-1234") != 0)
+    {
+        wprintf(L"zip4: real +4 field mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"789 Pine RD, Austin, 78703") != 0)
+    {
+        wprintf(L"zip4: missing +4 mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 3, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"10 Elm CT, Austin, 78701") != 0)
+    {
+        wprintf(L"zip4: combined 0000 mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 4, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"20 Ash LN, Austin, 78701") != 0)
+    {
+        wprintf(L"zip4: hyphen 0000 mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 5, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"30 Bay DR, Austin, 78701-1111") != 0)
+    {
+        wprintf(L"zip4: combined 1111 mismatch (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"zip4 ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"zip4 test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -266,5 +363,6 @@ int wmain(void)
     failed |= load_sample(L"test\\sample_voters.txt", L"txt");
     failed |= load_wide_history();
     failed |= test_copy_format();
+    failed |= test_zip4_omits_zeros();
     return failed == 0 ? 0 : 1;
 }

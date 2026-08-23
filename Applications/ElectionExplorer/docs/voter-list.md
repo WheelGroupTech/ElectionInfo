@@ -9,7 +9,8 @@ display them in a high-performance grid.
 
 | Action | How |
 |--------|-----|
-| Open a list | **File → Open Voter List…** (or `Ctrl+O`) |
+| Load a list | **File → Load Voter List…** (or `Ctrl+O`). Empty window loads in place. A different file opens a new window. A file already open is brought to the front. |
+| Close a list | **File → Close Voter List** or the title-bar **X** closes that window only. **File → Exit** closes every window. |
 | Formats | `.csv` (comma) or `.txt` (tab); delimiter also sniffed from the header |
 | Progress | Modal progress window with percent complete and **Cancel** |
 | Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane. Selected cells use the system highlight color on **both** panes (Voter ID, Name, and the scrolling columns). |

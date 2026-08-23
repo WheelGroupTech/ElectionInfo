@@ -81,6 +81,7 @@ typedef struct AppState
     COLORREF header_line;
     EeVoterTable table;
     BOOL loading;
+    BOOL close_pending;
     volatile LONG load_cancel;
     HANDLE load_thread;
     wchar_t load_path[MAX_PATH];
@@ -89,9 +90,211 @@ typedef struct AppState
     CRITICAL_SECTION progress_lock;
     EeLoadProgress last_progress;
     BOOL progress_dirty;
+    LONG sel_syncing;
+    LONG sel_sync_posted;
+    HWND sel_sync_source;
+    struct AppState *next;
 } AppState;
 
-static AppState g_app;
+static AppState *g_viewers = NULL;
+static int g_viewer_count = 0;
+static WNDPROC g_old_frozen_proc = NULL;
+static WNDPROC g_old_scroll_proc = NULL;
+static WNDPROC g_old_title_proc = NULL;
+
+static int App_ClampZoom(int zoom_percent);
+static LRESULT CALLBACK FrozenSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK ScrollSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+static AppState *App_FromMain(HWND hwnd);
+static AppState *App_FromChild(HWND hwnd);
+static AppState *App_CreateViewer(HINSTANCE instance,
+                                  int nCmdShow,
+                                  HWND offset_from,
+                                  const AppState *prefs);
+static void App_StartLoad(AppState *app, const wchar_t *path);
+static void App_RequestClose(AppState *app);
+static void App_ExitAll(void);
+
+static AppState *App_FromMain(HWND hwnd)
+{
+    if (hwnd == NULL)
+    {
+        return NULL;
+    }
+    return (AppState *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+}
+
+static AppState *App_FromChild(HWND hwnd)
+{
+    if (hwnd == NULL)
+    {
+        return NULL;
+    }
+    return App_FromMain(GetParent(hwnd));
+}
+
+static void App_LinkViewer(AppState *app)
+{
+    if (app == NULL)
+    {
+        return;
+    }
+    app->next = g_viewers;
+    g_viewers = app;
+    g_viewer_count++;
+}
+
+static void App_UnlinkViewer(AppState *app)
+{
+    AppState **pp;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    for (pp = &g_viewers; *pp != NULL; pp = &(*pp)->next)
+    {
+        if (*pp == app)
+        {
+            *pp = app->next;
+            app->next = NULL;
+            if (g_viewer_count > 0)
+            {
+                g_viewer_count--;
+            }
+            return;
+        }
+    }
+}
+
+static BOOL App_PathsEqual(const wchar_t *a, const wchar_t *b)
+{
+    if (a == NULL || b == NULL || a[0] == L'\0' || b[0] == L'\0')
+    {
+        return FALSE;
+    }
+    return CompareStringOrdinal(a, -1, b, -1, TRUE) == CSTR_EQUAL;
+}
+
+static BOOL App_CanonicalPath(const wchar_t *in, wchar_t *out, DWORD cch)
+{
+    DWORD n;
+
+    if (in == NULL || out == NULL || cch == 0)
+    {
+        return FALSE;
+    }
+    n = GetFullPathNameW(in, cch, out, NULL);
+    return n > 0 && n < cch;
+}
+
+static AppState *App_FindViewerByPath(const wchar_t *path)
+{
+    AppState *p;
+
+    for (p = g_viewers; p != NULL; p = p->next)
+    {
+        if (App_PathsEqual(p->load_path, path))
+        {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+static void App_ActivateViewer(AppState *app)
+{
+    if (app == NULL || app->hwnd_main == NULL)
+    {
+        return;
+    }
+    if (IsIconic(app->hwnd_main))
+    {
+        ShowWindow(app->hwnd_main, SW_RESTORE);
+    }
+    SetForegroundWindow(app->hwnd_main);
+}
+
+static BOOL App_RouteDialogMessage(MSG *msg)
+{
+    AppState *p;
+
+    for (p = g_viewers; p != NULL; p = p->next)
+    {
+        if (p->hwnd_options != NULL && IsDialogMessageW(p->hwnd_options, msg))
+        {
+            return TRUE;
+        }
+        if (p->hwnd_progress != NULL && IsDialogMessageW(p->hwnd_progress, msg))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void App_InitViewerState(AppState *app, HINSTANCE instance, const AppState *prefs)
+{
+    ZeroMemory(app, sizeof(*app));
+    app->instance = instance;
+    app->dpi = 96;
+    if (prefs != NULL)
+    {
+        app->copy_prepend_normalized = prefs->copy_prepend_normalized;
+        app->name_surname_first = prefs->name_surname_first;
+        app->zoom_percent = App_ClampZoom(prefs->zoom_percent);
+    }
+    else
+    {
+        app->copy_prepend_normalized = TRUE;
+        app->name_surname_first = TRUE;
+        app->zoom_percent = k_ZoomDefault;
+    }
+    InitializeCriticalSection(&app->progress_lock);
+    EeVoterTable_Init(&app->table);
+}
+
+static void App_SubclassViewer(AppState *app)
+{
+    WNDPROC old;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    if (app->hwnd_frozen != NULL)
+    {
+        old = (WNDPROC)SetWindowLongPtrW(app->hwnd_frozen, GWLP_WNDPROC, (LONG_PTR)FrozenSubclass);
+        if (g_old_frozen_proc == NULL)
+        {
+            g_old_frozen_proc = old;
+        }
+    }
+    if (app->hwnd_scroll != NULL)
+    {
+        old = (WNDPROC)SetWindowLongPtrW(app->hwnd_scroll, GWLP_WNDPROC, (LONG_PTR)ScrollSubclass);
+        if (g_old_scroll_proc == NULL)
+        {
+            g_old_scroll_proc = old;
+        }
+    }
+    if (app->hwnd_frozen_title != NULL)
+    {
+        old = (WNDPROC)SetWindowLongPtrW(app->hwnd_frozen_title,
+                                         GWLP_WNDPROC,
+                                         (LONG_PTR)PaneTitleSubclass);
+        if (g_old_title_proc == NULL)
+        {
+            g_old_title_proc = old;
+        }
+    }
+    if (app->hwnd_scroll_title != NULL)
+    {
+        SetWindowLongPtrW(app->hwnd_scroll_title, GWLP_WNDPROC, (LONG_PTR)PaneTitleSubclass);
+    }
+}
 
 /* -------------------------------------------------------------------------- */
 /* DPI helpers                                                                */
@@ -573,13 +776,17 @@ static void App_ClearListColumns(HWND hwnd)
     }
 }
 
-static void App_SetHeaderSortArrow(HWND hwnd_list, int column, int sort_column, BOOL ascending)
+static void App_SetHeaderSortArrow(AppState *app,
+                                   HWND hwnd_list,
+                                   int column,
+                                   int sort_column,
+                                   BOOL ascending)
 {
     HWND header = ListView_GetHeader(hwnd_list);
     int count = Header_GetItemCount(header);
     int i;
     HDITEMW item;
-    BOOL frozen = (hwnd_list == g_app.hwnd_frozen);
+    BOOL frozen = (app != NULL && hwnd_list == app->hwnd_frozen);
 
     for (i = 0; i < count; i++)
     {
@@ -723,16 +930,18 @@ static void App_RebuildColumns(AppState *app)
     {
         if (app->table.sort_column < EE_FROZEN_COLUMN_COUNT)
         {
-            App_SetHeaderSortArrow(app->hwnd_frozen,
+            App_SetHeaderSortArrow(app,
+                                   app->hwnd_frozen,
                                    app->table.sort_column,
                                    app->table.sort_column,
                                    app->table.sort_ascending);
-            App_SetHeaderSortArrow(app->hwnd_scroll, -1, -1, TRUE);
+            App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
         }
         else
         {
-            App_SetHeaderSortArrow(app->hwnd_frozen, -1, -1, TRUE);
-            App_SetHeaderSortArrow(app->hwnd_scroll,
+            App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
+            App_SetHeaderSortArrow(app,
+                                   app->hwnd_scroll,
                                    app->table.sort_column - EE_FROZEN_COLUMN_COUNT,
                                    app->table.sort_column - EE_FROZEN_COLUMN_COUNT,
                                    app->table.sort_ascending);
@@ -826,17 +1035,18 @@ static void App_SortFromHeader(AppState *app, HWND hwnd_list, int local_column)
 
         if (table_column < EE_FROZEN_COLUMN_COUNT)
         {
-            App_SetHeaderSortArrow(app->hwnd_frozen,
+            App_SetHeaderSortArrow(app,
+                                   app->hwnd_frozen,
                                    (int)table_column,
                                    (int)table_column,
                                    app->table.sort_ascending);
-            App_SetHeaderSortArrow(app->hwnd_scroll, -1, -1, TRUE);
+            App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
         }
         else
         {
             int local = (int)table_column - EE_FROZEN_COLUMN_COUNT;
-            App_SetHeaderSortArrow(app->hwnd_frozen, -1, -1, TRUE);
-            App_SetHeaderSortArrow(app->hwnd_scroll, local, local, app->table.sort_ascending);
+            App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
+            App_SetHeaderSortArrow(app, app->hwnd_scroll, local, local, app->table.sort_ascending);
         }
         {
             HWND hf = ListView_GetHeader(app->hwnd_frozen);
@@ -1098,12 +1308,52 @@ static DWORD WINAPI LoadThreadProc(void *param)
     return 0;
 }
 
+static void App_StartLoad(AppState *app, const wchar_t *path)
+{
+    if (app == NULL || path == NULL || path[0] == L'\0' || app->loading)
+    {
+        return;
+    }
+
+    StringCchCopyW(app->load_path, ARRAYSIZE(app->load_path), path);
+    InterlockedExchange(&app->load_cancel, 0);
+    app->loading = TRUE;
+    App_SetStatus(app, L"Loading voter list…");
+
+    if (!App_ShowProgress(app))
+    {
+        app->loading = FALSE;
+        app->load_path[0] = L'\0';
+        MessageBoxW(app->hwnd_main,
+                    L"Could not create the progress window.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+
+    app->table.name_surname_first = app->name_surname_first;
+    app->load_thread = CreateThread(NULL, 0, LoadThreadProc, app, 0, NULL);
+    if (app->load_thread == NULL)
+    {
+        app->loading = FALSE;
+        app->load_path[0] = L'\0';
+        EnableWindow(app->hwnd_main, TRUE);
+        App_DestroyProgress(app);
+        MessageBoxW(app->hwnd_main,
+                    L"Could not start the load thread.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+    }
+}
+
 static void App_BeginOpenVoterList(AppState *app)
 {
     OPENFILENAMEW ofn;
     wchar_t path[MAX_PATH];
+    wchar_t canon[MAX_PATH];
+    AppState *existing;
 
-    if (app->loading)
+    if (app == NULL || app->loading)
     {
         return;
     }
@@ -1119,40 +1369,40 @@ static void App_BeginOpenVoterList(AppState *app)
     ofn.lpstrFile = path;
     ofn.nMaxFile = ARRAYSIZE(path);
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
-    ofn.lpstrTitle = L"Open Voter List";
+    ofn.lpstrTitle = L"Load Voter List";
 
     if (!GetOpenFileNameW(&ofn))
     {
         return;
     }
-
-    StringCchCopyW(app->load_path, ARRAYSIZE(app->load_path), path);
-    InterlockedExchange(&app->load_cancel, 0);
-    app->loading = TRUE;
-    App_SetStatus(app, L"Loading voter list…");
-
-    if (!App_ShowProgress(app))
+    if (!App_CanonicalPath(path, canon, ARRAYSIZE(canon)))
     {
-        app->loading = FALSE;
-        MessageBoxW(app->hwnd_main,
-                    L"Could not create the progress window.",
-                    k_WindowTitle,
-                    MB_ICONERROR | MB_OK);
+        StringCchCopyW(canon, ARRAYSIZE(canon), path);
+    }
+
+    existing = App_FindViewerByPath(canon);
+    if (existing != NULL)
+    {
+        App_ActivateViewer(existing);
         return;
     }
 
-    app->table.name_surname_first = app->name_surname_first;
-    app->load_thread = CreateThread(NULL, 0, LoadThreadProc, app, 0, NULL);
-    if (app->load_thread == NULL)
+    if (app->load_path[0] != L'\0' || app->table.row_count > 0)
     {
-        app->loading = FALSE;
-        EnableWindow(app->hwnd_main, TRUE);
-        App_DestroyProgress(app);
-        MessageBoxW(app->hwnd_main,
-                    L"Could not start the load thread.",
-                    k_WindowTitle,
-                    MB_ICONERROR | MB_OK);
+        AppState *created = App_CreateViewer(app->instance, SW_SHOWNORMAL, app->hwnd_main, app);
+        if (created == NULL)
+        {
+            MessageBoxW(app->hwnd_main,
+                        L"Could not open another window.",
+                        k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+            return;
+        }
+        App_StartLoad(created, canon);
+        return;
     }
+
+    App_StartLoad(app, canon);
 }
 
 static void App_OnLoadFinished(AppState *app)
@@ -1167,6 +1417,14 @@ static void App_OnLoadFinished(AppState *app)
     }
 
     app->loading = FALSE;
+
+    if (app->close_pending)
+    {
+        EnableWindow(app->hwnd_main, TRUE);
+        App_DestroyProgress(app);
+        DestroyWindow(app->hwnd_main);
+        return;
+    }
 
     /* 100% only when data is ready for interaction. */
     done.percent = 100;
@@ -1191,6 +1449,7 @@ static void App_OnLoadFinished(AppState *app)
     else if (app->load_status == EeLoadStatus_Cancelled)
     {
         EeVoterTable_Clear(&app->table);
+        app->load_path[0] = L'\0';
         App_RebuildColumns(app);
         App_SetStatus(app, L"Load cancelled.");
         SetWindowTextW(app->hwnd_main, k_WindowTitle);
@@ -1198,6 +1457,7 @@ static void App_OnLoadFinished(AppState *app)
     else
     {
         EeVoterTable_Clear(&app->table);
+        app->load_path[0] = L'\0';
         App_RebuildColumns(app);
         App_SetStatus(app, L"Load failed.");
         SetWindowTextW(app->hwnd_main, k_WindowTitle);
@@ -1696,7 +1956,8 @@ static HMENU App_CreateMenu(void)
     HMENU menu = CreateMenu();
     HMENU file_menu = CreatePopupMenu();
     HMENU edit_menu = CreatePopupMenu();
-    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Open Voter List…\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter List");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
@@ -1711,10 +1972,6 @@ static HMENU App_CreateMenu(void)
 /* Selection, copy, options                                                   */
 /* -------------------------------------------------------------------------- */
 
-static LONG g_syncing_selection = 0;
-static LONG g_sel_sync_posted = 0;
-static HWND g_sel_sync_source = NULL;
-
 static BOOL App_HasSelection(const AppState *app)
 {
     if (app == NULL || app->hwnd_frozen == NULL || app->table.row_count == 0)
@@ -1726,13 +1983,12 @@ static BOOL App_HasSelection(const AppState *app)
 
 static void App_RequestSelectionSync(AppState *app, HWND source)
 {
-    if (app == NULL || source == NULL ||
-        InterlockedCompareExchange(&g_syncing_selection, 0, 0) != 0)
+    if (app == NULL || source == NULL || InterlockedCompareExchange(&app->sel_syncing, 0, 0) != 0)
     {
         return;
     }
-    g_sel_sync_source = source;
-    if (InterlockedCompareExchange(&g_sel_sync_posted, 1, 0) == 0)
+    app->sel_sync_source = source;
+    if (InterlockedCompareExchange(&app->sel_sync_posted, 1, 0) == 0)
     {
         PostMessageW(app->hwnd_main, EEM_SYNC_SELECTION, 0, 0);
     }
@@ -1758,14 +2014,14 @@ static void App_CopySelectionToOtherPane(AppState *app, HWND source)
         return;
     }
 
-    InterlockedExchange(&g_syncing_selection, 1);
+    InterlockedExchange(&app->sel_syncing, 1);
     ListView_SetItemState(dest, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     i = -1;
     while ((i = ListView_GetNextItem(source, i, LVNI_SELECTED)) >= 0)
     {
         ListView_SetItemState(dest, i, LVIS_SELECTED, LVIS_SELECTED);
     }
-    InterlockedExchange(&g_syncing_selection, 0);
+    InterlockedExchange(&app->sel_syncing, 0);
     InvalidateRect(dest, NULL, TRUE);
 }
 
@@ -1775,7 +2031,7 @@ static void App_ClearSelection(AppState *app)
     {
         return;
     }
-    InterlockedExchange(&g_syncing_selection, 1);
+    InterlockedExchange(&app->sel_syncing, 1);
     if (app->hwnd_frozen != NULL)
     {
         ListView_SetItemState(app->hwnd_frozen, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -1784,7 +2040,7 @@ static void App_ClearSelection(AppState *app)
     {
         ListView_SetItemState(app->hwnd_scroll, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     }
-    InterlockedExchange(&g_syncing_selection, 0);
+    InterlockedExchange(&app->sel_syncing, 0);
 }
 
 static BOOL App_SetClipboardUtf8(HWND hwnd, const char *utf8)
@@ -2026,11 +2282,7 @@ static void App_PumpUi(void)
             PostQuitMessage((int)msg.wParam);
             break;
         }
-        if (g_app.hwnd_options != NULL && IsDialogMessageW(g_app.hwnd_options, &msg))
-        {
-            continue;
-        }
-        if (g_app.hwnd_progress != NULL && IsDialogMessageW(g_app.hwnd_progress, &msg))
+        if (App_RouteDialogMessage(&msg))
         {
             continue;
         }
@@ -2726,13 +2978,25 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
 
 static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    AppState *app = &g_app;
+    AppState *app = App_FromMain(hwnd);
+
+    if (app == NULL && msg != WM_CREATE)
+    {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
 
     switch (msg)
     {
         case WM_CREATE:
         {
             HMENU menu;
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            app = (AppState *)cs->lpCreateParams;
+            if (app == NULL)
+            {
+                return -1;
+            }
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
             app->hwnd_main = hwnd;
             App_UpdateDpiMetrics(app, GetDpiForWindow(hwnd));
             menu = App_CreateMenu();
@@ -2874,8 +3138,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_FILE_OPEN_VOTER_LIST:
                     App_BeginOpenVoterList(app);
                     return 0;
+                case IDM_FILE_CLOSE_VOTER_LIST:
+                    App_RequestClose(app);
+                    return 0;
                 case IDM_FILE_EXIT:
-                    PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                    App_ExitAll();
                     return 0;
                 case IDM_EDIT_COPY:
                     App_CopySelection(app);
@@ -2925,8 +3192,8 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case EEM_SYNC_SELECTION:
-            InterlockedExchange(&g_sel_sync_posted, 0);
-            App_CopySelectionToOtherPane(app, g_sel_sync_source);
+            InterlockedExchange(&app->sel_sync_posted, 0);
+            App_CopySelectionToOtherPane(app, app->sel_sync_source);
             return 0;
 
         case WM_CTLCOLORSTATIC:
@@ -2952,13 +3219,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             break;
 
         case WM_CLOSE:
-            if (app->loading)
-            {
-                InterlockedExchange(&app->load_cancel, 1);
-                App_SetStatus(app, L"Cancelling load…");
-                return 0;
-            }
-            DestroyWindow(hwnd);
+            App_RequestClose(app);
             return 0;
 
         case WM_DESTROY:
@@ -2991,7 +3252,13 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 app->pen_header_line = NULL;
             }
             DeleteCriticalSection(&app->progress_lock);
-            PostQuitMessage(0);
+            App_UnlinkViewer(app);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            HeapFree(GetProcessHeap(), 0, app);
+            if (g_viewer_count <= 0)
+            {
+                PostQuitMessage(0);
+            }
             return 0;
 
         default:
@@ -3001,10 +3268,6 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 }
 
 /* Subclass list views to sync vertical scrolling on wheel / scroll messages. */
-static WNDPROC g_old_frozen_proc;
-static WNDPROC g_old_scroll_proc;
-static WNDPROC g_old_title_proc;
-
 static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_ERASEBKGND)
@@ -3017,6 +3280,7 @@ static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LP
         HDC hdc = BeginPaint(hwnd, &ps);
         if (hdc != NULL)
         {
+            AppState *app = App_FromChild(hwnd);
             RECT rc;
             wchar_t text[64];
             HFONT font;
@@ -3024,15 +3288,18 @@ static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LP
             HPEN pen;
             HPEN old_pen;
             int pen_w;
-            HBRUSH brush =
-                g_app.brush_header != NULL ? g_app.brush_header : GetSysColorBrush(COLOR_BTNFACE);
+            HBRUSH brush = (app != NULL && app->brush_header != NULL)
+                               ? app->brush_header
+                               : GetSysColorBrush(COLOR_BTNFACE);
 
             GetClientRect(hwnd, &rc);
             FillRect(hdc, &rc, brush);
 
             text[0] = L'\0';
             GetWindowTextW(hwnd, text, ARRAYSIZE(text));
-            font = g_app.font_header != NULL ? g_app.font_header : g_app.font_ui;
+            font = (app != NULL && app->font_header != NULL) ? app->font_header
+                   : (app != NULL)                           ? app->font_ui
+                                                             : NULL;
             if (font != NULL)
             {
                 old_font = (HFONT)SelectObject(hdc, font);
@@ -3045,7 +3312,7 @@ static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LP
                 SelectObject(hdc, old_font);
             }
 
-            pen_w = Scale(&g_app, 1);
+            pen_w = (app != NULL) ? Scale(app, 1) : 1;
             if (pen_w < 1)
             {
                 pen_w = 1;
@@ -3080,9 +3347,14 @@ static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
                                          LPARAM lParam,
                                          WNDPROC old_proc)
 {
+    AppState *app = App_FromChild(hwnd);
+
     if (msg == WM_CONTEXTMENU)
     {
-        App_ShowCopyContextMenu(&g_app, hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        if (app != NULL)
+        {
+            App_ShowCopyContextMenu(app, hwnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        }
         return 0;
     }
 
@@ -3091,17 +3363,19 @@ static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
     {
         NMHDR *nm = (NMHDR *)lParam;
         HWND header = ListView_GetHeader(hwnd);
-        if (nm != NULL && header != NULL && nm->hwndFrom == header && nm->code == NM_CUSTOMDRAW)
+        if (app != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
         {
-            return App_HeaderCustomDraw(&g_app, (NMCUSTOMDRAW *)lParam);
+            return App_HeaderCustomDraw(app, (NMCUSTOMDRAW *)lParam);
         }
     }
 
     {
         LRESULT r = CallWindowProcW(old_proc, hwnd, msg, wParam, lParam);
-        if (msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL || msg == WM_KEYDOWN)
+        if (app != NULL && (msg == WM_VSCROLL || msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL ||
+                            msg == WM_KEYDOWN))
         {
-            App_SyncVerticalScroll(&g_app, hwnd);
+            App_SyncVerticalScroll(app, hwnd);
         }
         return r;
     }
@@ -3117,6 +3391,113 @@ static LRESULT CALLBACK ScrollSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARA
     return ListSubclassProc(hwnd, msg, wParam, lParam, g_old_scroll_proc);
 }
 
+static void App_RequestClose(AppState *app)
+{
+    if (app == NULL || app->hwnd_main == NULL)
+    {
+        return;
+    }
+    if (app->loading)
+    {
+        app->close_pending = TRUE;
+        InterlockedExchange(&app->load_cancel, 1);
+        App_SetStatus(app, L"Cancelling load…");
+        return;
+    }
+    DestroyWindow(app->hwnd_main);
+}
+
+static void App_ExitAll(void)
+{
+    HWND hwnds[64];
+    int n = 0;
+    int i;
+    AppState *p;
+
+    for (p = g_viewers; p != NULL && n < (int)ARRAYSIZE(hwnds); p = p->next)
+    {
+        hwnds[n++] = p->hwnd_main;
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (hwnds[i] != NULL && IsWindow(hwnds[i]))
+        {
+            SendMessageW(hwnds[i], WM_CLOSE, 0, 0);
+        }
+    }
+}
+
+static AppState *App_CreateViewer(HINSTANCE instance,
+                                  int nCmdShow,
+                                  HWND offset_from,
+                                  const AppState *prefs)
+{
+    AppState *app;
+    HWND hwnd;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int w = k_DefaultWidth;
+    int h = k_DefaultHeight;
+
+    app = (AppState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AppState));
+    if (app == NULL)
+    {
+        return NULL;
+    }
+    App_InitViewerState(app, instance, prefs);
+
+    if (offset_from != NULL)
+    {
+        RECT wr;
+        if (GetWindowRect(offset_from, &wr))
+        {
+            x = wr.left + 32;
+            y = wr.top + 32;
+            w = wr.right - wr.left;
+            h = wr.bottom - wr.top;
+        }
+    }
+
+    hwnd = CreateWindowExW(0,
+                           k_WindowClassName,
+                           k_WindowTitle,
+                           WS_OVERLAPPEDWINDOW,
+                           x,
+                           y,
+                           w,
+                           h,
+                           NULL,
+                           NULL,
+                           instance,
+                           app);
+    if (hwnd == NULL)
+    {
+        /* WM_DESTROY frees app if WM_CREATE ran; otherwise this is a rare leak. */
+        return NULL;
+    }
+
+    App_LinkViewer(app);
+    App_UpdateDpiMetrics(app, GetDpiForWindow(hwnd));
+    App_ApplyFont(app);
+    if (offset_from == NULL)
+    {
+        RECT wr;
+        GetWindowRect(hwnd, &wr);
+        SetWindowPos(hwnd,
+                     NULL,
+                     wr.left,
+                     wr.top,
+                     Scale(app, k_DefaultWidth),
+                     Scale(app, k_DefaultHeight),
+                     SWP_NOZORDER | SWP_NOMOVE);
+    }
+    App_Layout(app);
+    App_SubclassViewer(app);
+    ShowWindow(hwnd, nCmdShow);
+    UpdateWindow(hwnd);
+    return app;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Entry                                                                      */
 /* -------------------------------------------------------------------------- */
@@ -3129,29 +3510,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     WNDCLASSEXW wc;
     WNDCLASSEXW pc;
     WNDCLASSEXW oc;
-    HWND hwnd;
     MSG msg;
     INITCOMMONCONTROLSEX icc;
     ACCEL accels[2];
     HACCEL haccel;
     BOOL getResult;
-    UINT dpi;
 
     (void)hPrevInstance;
     (void)lpCmdLine;
 
     /* Per-monitor v2 (manifest also declares this). */
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-
-    ZeroMemory(&g_app, sizeof(g_app));
-    g_app.instance = hInstance;
-    g_app.dpi = 96;
-    g_app.copy_prepend_normalized = TRUE;
-    g_app.name_surname_first = TRUE;
-    g_app.zoom_percent = k_ZoomDefault;
-    App_UpdateDpiMetrics(&g_app, GetDpiForSystem());
-    InitializeCriticalSection(&g_app.progress_lock);
-    EeVoterTable_Init(&g_app.table);
 
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES |
@@ -3206,49 +3575,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return 1;
     }
 
-    hwnd = CreateWindowExW(0,
-                           k_WindowClassName,
-                           k_WindowTitle,
-                           WS_OVERLAPPEDWINDOW,
-                           CW_USEDEFAULT,
-                           CW_USEDEFAULT,
-                           k_DefaultWidth,
-                           k_DefaultHeight,
-                           NULL,
-                           NULL,
-                           hInstance,
-                           NULL);
-    if (hwnd == NULL)
+    if (App_CreateViewer(hInstance, nCmdShow, NULL, NULL) == NULL)
     {
         return 1;
     }
-
-    dpi = GetDpiForWindow(hwnd);
-    App_UpdateDpiMetrics(&g_app, dpi);
-    App_ApplyFont(&g_app);
-
-    /* Scale initial size for DPI. */
-    {
-        RECT wr;
-        GetWindowRect(hwnd, &wr);
-        SetWindowPos(hwnd,
-                     NULL,
-                     wr.left,
-                     wr.top,
-                     Scale(&g_app, k_DefaultWidth),
-                     Scale(&g_app, k_DefaultHeight),
-                     SWP_NOZORDER | SWP_NOMOVE);
-    }
-    App_Layout(&g_app);
-
-    g_old_frozen_proc =
-        (WNDPROC)SetWindowLongPtrW(g_app.hwnd_frozen, GWLP_WNDPROC, (LONG_PTR)FrozenSubclass);
-    g_old_scroll_proc =
-        (WNDPROC)SetWindowLongPtrW(g_app.hwnd_scroll, GWLP_WNDPROC, (LONG_PTR)ScrollSubclass);
-    g_old_title_proc = (WNDPROC)SetWindowLongPtrW(g_app.hwnd_frozen_title,
-                                                  GWLP_WNDPROC,
-                                                  (LONG_PTR)PaneTitleSubclass);
-    SetWindowLongPtrW(g_app.hwnd_scroll_title, GWLP_WNDPROC, (LONG_PTR)PaneTitleSubclass);
 
     accels[0].fVirt = FCONTROL | FVIRTKEY;
     accels[0].key = 'O';
@@ -3258,20 +3588,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     accels[1].cmd = IDM_EDIT_COPY;
     haccel = CreateAcceleratorTableW(accels, 2);
 
-    ShowWindow(hwnd, nCmdShow);
-    UpdateWindow(hwnd);
-
     while ((getResult = GetMessageW(&msg, NULL, 0, 0)) != 0)
     {
+        HWND accel_hwnd;
+
         if (getResult == -1)
         {
             break;
         }
-        if (g_app.hwnd_options != NULL && IsDialogMessageW(g_app.hwnd_options, &msg))
+        if (App_RouteDialogMessage(&msg))
         {
             continue;
         }
-        if (haccel == NULL || !TranslateAcceleratorW(hwnd, haccel, &msg))
+        accel_hwnd = GetForegroundWindow();
+        if (haccel == NULL || accel_hwnd == NULL ||
+            !TranslateAcceleratorW(accel_hwnd, haccel, &msg))
         {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);

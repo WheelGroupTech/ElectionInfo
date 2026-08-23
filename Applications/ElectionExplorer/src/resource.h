@@ -7,10 +7,11 @@
 #define IDI_APPICON  1
 #define IDR_MAINMENU 101
 
-#define IDM_FILE_OPEN_VOTER_LIST 40001
-#define IDM_FILE_EXIT            40002
-#define IDM_EDIT_COPY            40010
-#define IDM_EDIT_OPTIONS         40011
+#define IDM_FILE_OPEN_VOTER_LIST  40001
+#define IDM_FILE_EXIT             40002
+#define IDM_FILE_CLOSE_VOTER_LIST 40003
+#define IDM_EDIT_COPY             40010
+#define IDM_EDIT_OPTIONS          40011
 
 #define IDC_OPT_PREPEND       41010
 #define IDC_OPT_SURNAME_FIRST 41011

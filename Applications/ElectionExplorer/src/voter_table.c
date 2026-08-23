@@ -530,6 +530,41 @@ static void normalize_header(const char *in, char *out, size_t out_cch)
     out[o] = '\0';
 }
 
+static BOOL header_contains(const char *norm, const char *token)
+{
+    return norm != NULL && token != NULL && strstr(norm, token) != NULL;
+}
+
+static BOOL is_mailing_header(const char *norm)
+{
+    const char *p;
+
+    if (norm == NULL)
+    {
+        return FALSE;
+    }
+    if (header_contains(norm, "MAILING"))
+    {
+        return TRUE;
+    }
+    p = norm;
+    while ((p = strstr(p, "MAIL")) != NULL)
+    {
+        BOOL email = (p > norm && *(p - 1) == 'E');
+        if (!email)
+        {
+            return header_contains(norm, "ADDR") || header_contains(norm, "ADRS") ||
+                   header_contains(norm, "ADDRESS") || header_contains(norm, "CITY") ||
+                   header_contains(norm, "ZIP") || header_contains(norm, "POSTAL") ||
+                   header_contains(norm, "PROVINCE") || header_contains(norm, "STATE") ||
+                   header_contains(norm, "STREET") || header_contains(norm, "APT") ||
+                   header_contains(norm, "UNIT");
+        }
+        p += 4;
+    }
+    return FALSE;
+}
+
 static FieldRole classify_field(const char *norm)
 {
     if (norm[0] == '\0')
@@ -586,9 +621,16 @@ static FieldRole classify_field(const char *norm)
         return Role_NameSuffix;
     }
 
+    if (is_mailing_header(norm))
+    {
+        return Role_None;
+    }
+
     if (strcmp(norm, "ADDRESS") == 0 || strcmp(norm, "FULLADDRESS") == 0 ||
-        strcmp(norm, "RESADDRESS") == 0 || strcmp(norm, "STREETADDRESS") == 0 ||
-        strcmp(norm, "RESIDENTIALADDRESS") == 0)
+        strcmp(norm, "RESADDRESS") == 0 || strcmp(norm, "RESADDR") == 0 ||
+        strcmp(norm, "RESADRS") == 0 || strcmp(norm, "RESIDENTADDR") == 0 ||
+        strcmp(norm, "RESIDENTADRS") == 0 || strcmp(norm, "RESIDENTADDRESS") == 0 ||
+        strcmp(norm, "STREETADDRESS") == 0 || strcmp(norm, "RESIDENTIALADDRESS") == 0)
     {
         return Role_AddrFull;
     }
@@ -638,16 +680,19 @@ static FieldRole classify_field(const char *norm)
         return Role_AddrUnit;
     }
     if (strcmp(norm, "RSCITY") == 0 || strcmp(norm, "RESCITY") == 0 ||
-        strcmp(norm, "RESIDENCECITY") == 0 || strcmp(norm, "CITY") == 0)
+        strcmp(norm, "RESIDENCECITY") == 0 || strcmp(norm, "RESIDENTCITY") == 0 ||
+        strcmp(norm, "CITY") == 0)
     {
         return Role_AddrCity;
     }
     if (strcmp(norm, "RSTATE") == 0 || strcmp(norm, "RESSTATE") == 0 ||
-        strcmp(norm, "RESIDENCESTATE") == 0 || strcmp(norm, "STATE") == 0)
+        strcmp(norm, "RESIDENCESTATE") == 0 || strcmp(norm, "RESIDENTSTATE") == 0 ||
+        strcmp(norm, "STATE") == 0)
     {
         return Role_AddrState;
     }
     if (strcmp(norm, "RZIPCD") == 0 || strcmp(norm, "RZIP") == 0 || strcmp(norm, "RESZIP") == 0 ||
+        strcmp(norm, "RESIDENTZIPCODE") == 0 || strcmp(norm, "RESIDENTZIP") == 0 ||
         strcmp(norm, "ZIPCODE") == 0 || strcmp(norm, "ZIPCD") == 0 || strcmp(norm, "ZIP") == 0)
     {
         return Role_AddrZip;
@@ -655,6 +700,23 @@ static FieldRole classify_field(const char *norm)
     if (strcmp(norm, "RZIP4") == 0 || strcmp(norm, "ZIP4") == 0 || strcmp(norm, "PLUS4") == 0)
     {
         return Role_AddrZip4;
+    }
+
+    if (header_contains(norm, "ZIP4") || header_contains(norm, "PLUS4"))
+    {
+        return Role_AddrZip4;
+    }
+    if (header_contains(norm, "ZIP") || header_contains(norm, "POSTALCODE"))
+    {
+        return Role_AddrZip;
+    }
+    if (header_contains(norm, "CITY"))
+    {
+        return Role_AddrCity;
+    }
+    if (header_contains(norm, "STATE") && !header_contains(norm, "COUNTY"))
+    {
+        return Role_AddrState;
     }
 
     return Role_None;
@@ -1221,16 +1283,19 @@ static BOOL compose_address(const FieldList *fields,
     out[0] = '\0';
     if (full[0] != '\0')
     {
-        return SUCCEEDED(StringCchCopyA(out, out_cap, full));
+        /* Street-line fields such as RES_ADDR still get city/ZIP appended. */
+        if (!append_name_part(out, out_cap, &len, full))
+        {
+            return FALSE;
+        }
     }
-
-    if (!append_name_part(out, out_cap, &len, field_at(fields, number_idx)) ||
-        !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
-        !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
-        !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
-        !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
-        !append_name_part(out, out_cap, &len, field_at(fields, unit_type_idx)) ||
-        !append_name_part(out, out_cap, &len, field_at(fields, unit_idx)))
+    else if (!append_name_part(out, out_cap, &len, field_at(fields, number_idx)) ||
+             !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
+             !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
+             !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
+             !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
+             !append_name_part(out, out_cap, &len, field_at(fields, unit_type_idx)) ||
+             !append_name_part(out, out_cap, &len, field_at(fields, unit_idx)))
     {
         return FALSE;
     }

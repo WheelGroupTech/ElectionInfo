@@ -52,10 +52,10 @@ matching pad) so the last data row is not covered by the bar.
    (a progress window appears for large lists).
 3. **Address** — residence street composed from house number, direction,
    street name/type, unit, city, state, and ZIP (`BLKNUM`, `STRNAM`,
-   `RSCITY`, `streetnumber`, …). A 9-digit ZIP (`78701-1234` or a separate
-   +4 field) is shown only when the extra four digits exist and are not
-   all zeros; otherwise the 5-digit ZIP is used. A single full-address
-   field is used when present.
+   `RSCITY`, `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, …). A
+   street-line field is combined with city/ZIP. Mailing columns (`MAIL_*`)
+   are ignored. A 9-digit ZIP is shown only when the extra four digits
+   exist and are not all zeros.
 4. **All original file columns** — in file order, using the source headers.
    Historical Travis-style files with per-election `VOTED` / `PLACE` / `PARTY`
    fields are included (hundreds of columns). The loader accepts up to

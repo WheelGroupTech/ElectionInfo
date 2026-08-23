@@ -355,6 +355,58 @@ done:
     return rc;
 }
 
+static int test_res_addr_fields(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[160];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_res_addr.csv")))
+    {
+        wprintf(L"resaddr: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"resaddr: could not create %s\n", path);
+        return 1;
+    }
+    fputs("COUNTY_CODE,LAST_NAME,FIRST_NAME,MIDDLE_NAME,VUID,RES_ADDR,RESIDENT_CITY,"
+          "RESIDENT_ZIP_CODE,MAIL_ADRS_1,MAIL_CITY,MAIL_POSTAL_CODE\n",
+          fp);
+    fputs("227,Smith,John,A,100001,123 Main St,Austin,78701,PO Box 9,Dallas,75201\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"resaddr: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"123 Main St, Austin, 78701") != 0)
+    {
+        wprintf(L"resaddr: mismatch (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    rc = 0;
+    wprintf(L"resaddr ok\n");
+    EeVoterTable_Clear(&t);
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -364,5 +416,6 @@ int wmain(void)
     failed |= load_wide_history();
     failed |= test_copy_format();
     failed |= test_zip4_omits_zeros();
+    failed |= test_res_addr_fields();
     return failed == 0 ? 0 : 1;
 }

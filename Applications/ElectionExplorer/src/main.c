@@ -6,6 +6,7 @@
 #include "main.h"
 #include "resource.h"
 #include "voter_table.h"
+#include "filter.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -27,6 +28,7 @@ static const wchar_t k_WindowClassName[] = L"ElectionExplorerMainWindow";
 static const wchar_t k_WindowTitle[] = L"Election Explorer";
 static const wchar_t k_ProgressClassName[] = L"ElectionExplorerLoadProgress";
 static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
+static const wchar_t k_FilterClassName[] = L"ElectionExplorerFilter";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -64,6 +66,7 @@ typedef struct AppState
     HWND hwnd_progress_bar;
     HWND hwnd_progress_status;
     HWND hwnd_options;
+    HWND hwnd_filter;
     BOOL copy_prepend_normalized;
     BOOL name_surname_first;
     int zoom_percent;  /* 50..250; 100 is actual size */
@@ -93,6 +96,9 @@ typedef struct AppState
     LONG sel_syncing;
     LONG sel_sync_posted;
     HWND sel_sync_source;
+    EeFilterSet filters;
+    uint32_t *filter_map;
+    uint32_t filter_count;
     struct AppState *next;
 } AppState;
 
@@ -116,6 +122,14 @@ static AppState *App_CreateViewer(HINSTANCE instance,
 static void App_StartLoad(AppState *app, const wchar_t *path);
 static void App_RequestClose(AppState *app);
 static void App_ExitAll(void);
+static void App_ApplyFilter(AppState *app);
+static BOOL App_ShowFilter(AppState *app);
+static void App_ResetFilter(AppState *app);
+static void App_AddQuickFilter(AppState *app,
+                               uint32_t column,
+                               const wchar_t *value,
+                               EeFilterAction action);
+static void App_DestroyFilter(AppState *app);
 
 static AppState *App_FromMain(HWND hwnd)
 {
@@ -231,6 +245,10 @@ static BOOL App_RouteDialogMessage(MSG *msg)
         {
             return TRUE;
         }
+        if (p->hwnd_filter != NULL && IsDialogMessageW(p->hwnd_filter, msg))
+        {
+            return TRUE;
+        }
     }
     return FALSE;
 }
@@ -254,6 +272,7 @@ static void App_InitViewerState(AppState *app, HINSTANCE instance, const AppStat
     }
     InitializeCriticalSection(&app->progress_lock);
     EeVoterTable_Init(&app->table);
+    EeFilter_Init(&app->filters);
 }
 
 static void App_SubclassViewer(AppState *app)
@@ -751,14 +770,90 @@ static void App_SetStatus(AppState *app, const wchar_t *text)
 
 static void App_UpdateRowStatus(AppState *app)
 {
-    wchar_t buf[128];
+    wchar_t buf[160];
     if (app->table.row_count == 0)
     {
         App_SetStatus(app, L"No voter list loaded.");
         return;
     }
-    StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u voters loaded", app->table.row_count);
+    if (EeFilter_HasEnabled(&app->filters))
+    {
+        StringCchPrintfW(buf,
+                         ARRAYSIZE(buf),
+                         L"Filtered: %u of %u voters",
+                         app->filter_count,
+                         app->table.row_count);
+    }
+    else
+    {
+        StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u voters loaded", app->table.row_count);
+    }
     App_SetStatus(app, buf);
+}
+
+static uint32_t App_VisibleCount(const AppState *app)
+{
+    if (app == NULL)
+    {
+        return 0;
+    }
+    if (EeFilter_HasEnabled(&app->filters))
+    {
+        return app->filter_count;
+    }
+    return app->table.row_count;
+}
+
+static uint32_t App_ViewRowFromDisplay(const AppState *app, uint32_t display)
+{
+    if (app == NULL)
+    {
+        return display;
+    }
+    if (app->filter_map != NULL && display < app->filter_count)
+    {
+        return app->filter_map[display];
+    }
+    return display;
+}
+
+static void App_ApplyFilter(AppState *app)
+{
+    uint32_t *map = NULL;
+    uint32_t count = 0;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    free(app->filter_map);
+    app->filter_map = NULL;
+    app->filter_count = 0;
+    if (!EeFilter_BuildMap(&app->filters, &app->table, &map, &count))
+    {
+        app->filter_count = app->table.row_count;
+        count = app->table.row_count;
+    }
+    else
+    {
+        app->filter_map = map;
+        app->filter_count = count;
+    }
+    if (app->hwnd_frozen)
+    {
+        ListView_SetItemCountEx(app->hwnd_frozen,
+                                (int)App_VisibleCount(app),
+                                LVSICF_NOINVALIDATEALL);
+        InvalidateRect(app->hwnd_frozen, NULL, TRUE);
+    }
+    if (app->hwnd_scroll)
+    {
+        ListView_SetItemCountEx(app->hwnd_scroll,
+                                (int)App_VisibleCount(app),
+                                LVSICF_NOINVALIDATEALL);
+        InvalidateRect(app->hwnd_scroll, NULL, TRUE);
+    }
+    App_UpdateRowStatus(app);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -861,8 +956,7 @@ static void App_RebuildColumns(AppState *app)
 
     if (app->table.column_count == 0)
     {
-        ListView_SetItemCountEx(app->hwnd_frozen, 0, LVSICF_NOINVALIDATEALL);
-        ListView_SetItemCountEx(app->hwnd_scroll, 0, LVSICF_NOINVALIDATEALL);
+        App_ApplyFilter(app);
         return;
     }
 
@@ -919,12 +1013,7 @@ static void App_RebuildColumns(AppState *app)
         ListView_InsertColumn(app->hwnd_scroll, idx, &col);
     }
 
-    ListView_SetItemCountEx(app->hwnd_frozen,
-                            (int)app->table.row_count,
-                            LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-    ListView_SetItemCountEx(app->hwnd_scroll,
-                            (int)app->table.row_count,
-                            LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+    App_ApplyFilter(app);
 
     if (app->table.sort_column >= 0)
     {
@@ -1026,12 +1115,7 @@ static void App_SortFromHeader(AppState *app, HWND hwnd_list, int local_column)
     App_SetStatus(app, L"Sorting…");
     if (EeVoterTable_SortByColumn(&app->table, table_column))
     {
-        ListView_SetItemCountEx(app->hwnd_frozen,
-                                (int)app->table.row_count,
-                                LVSICF_NOINVALIDATEALL);
-        ListView_SetItemCountEx(app->hwnd_scroll,
-                                (int)app->table.row_count,
-                                LVSICF_NOINVALIDATEALL);
+        App_ApplyFilter(app);
 
         if (table_column < EE_FROZEN_COLUMN_COUNT)
         {
@@ -1063,7 +1147,6 @@ static void App_SortFromHeader(AppState *app, HWND hwnd_list, int local_column)
         InvalidateRect(app->hwnd_frozen, NULL, TRUE);
         InvalidateRect(app->hwnd_scroll, NULL, TRUE);
     }
-    App_UpdateRowStatus(app);
     SetCursor(prev);
 }
 
@@ -1963,8 +2046,12 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
     AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_OPTIONS, L"&Options…");
+    HMENU filter_menu = CreatePopupMenu();
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…\tCtrl+L");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     return menu;
 }
 
@@ -2150,7 +2237,7 @@ static void App_CopySelection(AppState *app)
             rows = grown;
             cap = new_cap;
         }
-        rows[n++] = (uint32_t)i;
+        rows[n++] = App_ViewRowFromDisplay(app, (uint32_t)i);
         i = ListView_GetNextItem(app->hwnd_frozen, i, LVNI_SELECTED);
     }
 
@@ -2263,12 +2350,97 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         return;
     }
     AppendMenuW(menu, MF_STRING, IDM_EDIT_COPY, L"&Copy");
-    cmd = (UINT)
-        TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, app->hwnd_main, NULL);
-    DestroyMenu(menu);
-    if (cmd == IDM_EDIT_COPY)
+
     {
-        App_CopySelection(app);
+        LVHITTESTINFO sub;
+        POINT client = pt;
+        uint32_t hit_col = 0;
+        wchar_t hit_value[EE_FILTER_VALUE_CCH];
+        BOOL have_cell = FALSE;
+
+        hit_value[0] = L'\0';
+        ScreenToClient(hwnd_list, &client);
+        ZeroMemory(&sub, sizeof(sub));
+        sub.pt = client;
+        ListView_SubItemHitTest(hwnd_list, &sub);
+        if (sub.iItem >= 0)
+        {
+            if (hwnd_list == app->hwnd_frozen)
+            {
+                hit_col = (uint32_t)sub.iSubItem;
+            }
+            else
+            {
+                hit_col = (uint32_t)sub.iSubItem + EE_FROZEN_COLUMN_COUNT;
+            }
+            if (hit_col < app->table.column_count)
+            {
+                uint32_t view_row = App_ViewRowFromDisplay(app, (uint32_t)sub.iItem);
+                EeVoterTable_GetViewCellW(&app->table,
+                                          view_row,
+                                          hit_col,
+                                          hit_value,
+                                          ARRAYSIZE(hit_value));
+                have_cell = TRUE;
+            }
+        }
+
+        if (have_cell)
+        {
+            wchar_t shown[48];
+            wchar_t inc[96];
+            wchar_t exc[96];
+            StringCchCopyW(shown, ARRAYSIZE(shown), hit_value);
+            if (wcslen(hit_value) >= 40)
+            {
+                shown[36] = L'.';
+                shown[37] = L'.';
+                shown[38] = L'.';
+                shown[39] = L'\0';
+            }
+            if (shown[0] == L'\0')
+            {
+                StringCchCopyW(shown, ARRAYSIZE(shown), L"(empty)");
+            }
+            StringCchPrintfW(inc, ARRAYSIZE(inc), L"&Include \"%s\"", shown);
+            StringCchPrintfW(exc, ARRAYSIZE(exc), L"&Exclude \"%s\"", shown);
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_FILTER_INCLUDE, inc);
+            AppendMenuW(menu, MF_STRING, IDM_FILTER_EXCLUDE, exc);
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…");
+
+        cmd = (UINT)TrackPopupMenu(menu,
+                                   TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                   pt.x,
+                                   pt.y,
+                                   0,
+                                   app->hwnd_main,
+                                   NULL);
+        DestroyMenu(menu);
+        if (cmd == IDM_EDIT_COPY)
+        {
+            App_CopySelection(app);
+        }
+        else if (cmd == IDM_FILTER_INCLUDE && have_cell)
+        {
+            App_AddQuickFilter(app, hit_col, hit_value, EeFilt_Include);
+        }
+        else if (cmd == IDM_FILTER_EXCLUDE && have_cell)
+        {
+            App_AddQuickFilter(app, hit_col, hit_value, EeFilt_Exclude);
+        }
+        else if (cmd == IDM_FILTER_EDIT)
+        {
+            if (!App_ShowFilter(app))
+            {
+                MessageBoxW(app->hwnd_main,
+                            L"Could not open the filter window.",
+                            k_WindowTitle,
+                            MB_ICONERROR | MB_OK);
+            }
+        }
     }
 }
 
@@ -2375,6 +2547,7 @@ static void App_ApplyNameFormat(AppState *app, BOOL surname_first)
     InvalidateRect(app->hwnd_frozen, NULL, TRUE);
     InvalidateRect(app->hwnd_scroll, NULL, TRUE);
     App_FitFrozenColumns(app);
+    App_ApplyFilter(app);
     App_SetStatus(app,
                   surname_first ? L"Names shown surname-first." : L"Names shown given-name first.");
 }
@@ -2771,6 +2944,849 @@ static BOOL App_ShowOptions(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Filter dialog                                                              */
+/* -------------------------------------------------------------------------- */
+
+typedef struct FilterDlgState
+{
+    AppState *app;
+    EeFilterSet draft;
+    int edit_index;
+    BOOL refreshing;
+} FilterDlgState;
+
+static RECT g_filter_dlg_rect;
+static BOOL g_filter_dlg_have_rect;
+
+static void FilterDlg_PopulateColumns(HWND combo, const EeVoterTable *table)
+{
+    uint32_t i;
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    if (table == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < table->column_count; i++)
+    {
+        int idx;
+        const wchar_t *title = table->column_titles[i] ? table->column_titles[i] : L"";
+        idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)title);
+        if (idx >= 0)
+        {
+            SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)i);
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+static void FilterDlg_PopulateRelations(HWND combo)
+{
+    static const EeFilterRelation rels[] = {EeRel_Is,
+                                            EeRel_IsNot,
+                                            EeRel_LessThan,
+                                            EeRel_MoreThan,
+                                            EeRel_BeginsWith,
+                                            EeRel_EndsWith,
+                                            EeRel_Contains,
+                                            EeRel_Excludes};
+    int i;
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < (int)ARRAYSIZE(rels); i++)
+    {
+        int idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)EeFilter_RelationText(rels[i]));
+        if (idx >= 0)
+        {
+            SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)rels[i]);
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+static void FilterDlg_PopulateActions(HWND combo)
+{
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)L"Include");
+    SendMessageW(combo, CB_SETITEMDATA, 0, (LPARAM)EeFilt_Include);
+    SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)L"Exclude");
+    SendMessageW(combo, CB_SETITEMDATA, 1, (LPARAM)EeFilt_Exclude);
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+static uint32_t FilterDlg_ComboData(HWND combo, uint32_t fallback)
+{
+    int sel = (int)SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (sel < 0)
+    {
+        return fallback;
+    }
+    return (uint32_t)SendMessageW(combo, CB_GETITEMDATA, (WPARAM)sel, 0);
+}
+
+static void FilterDlg_FillValues(HWND combo, AppState *app, uint32_t column)
+{
+    wchar_t **vals = NULL;
+    uint32_t n = 0;
+    uint32_t i;
+    HCURSOR prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    if (app != NULL &&
+        EeFilter_CollectDistinct(&app->table, column, EE_FILTER_MAX_DISTINCT, &vals, &n))
+    {
+        for (i = 0; i < n; i++)
+        {
+            SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)vals[i]);
+            free(vals[i]);
+        }
+        free(vals);
+    }
+    SetWindowTextW(combo, L"");
+    SetCursor(prev);
+}
+
+static void FilterDlg_RefreshList(HWND list, FilterDlgState *st)
+{
+    uint32_t i;
+    if (list == NULL || st == NULL)
+    {
+        return;
+    }
+    st->refreshing = TRUE;
+    ListView_DeleteAllItems(list);
+    for (i = 0; i < st->draft.count; i++)
+    {
+        const EeFilterRule *r = &st->draft.rules[i];
+        LVITEMW it;
+        const wchar_t *colname = L"?";
+        ZeroMemory(&it, sizeof(it));
+        if (st->app != NULL && r->column < st->app->table.column_count &&
+            st->app->table.column_titles[r->column] != NULL)
+        {
+            colname = st->app->table.column_titles[r->column];
+        }
+        it.mask = LVIF_TEXT | LVIF_PARAM;
+        it.iItem = (int)i;
+        it.pszText = (LPWSTR)colname;
+        it.lParam = (LPARAM)i;
+        ListView_InsertItem(list, &it);
+        ListView_SetItemText(list, (int)i, 1, (LPWSTR)EeFilter_RelationText(r->relation));
+        ListView_SetItemText(list, (int)i, 2, (LPWSTR)r->value);
+        ListView_SetItemText(list, (int)i, 3, (LPWSTR)EeFilter_ActionText(r->action));
+        ListView_SetCheckState(list, (int)i, r->enabled);
+    }
+    st->refreshing = FALSE;
+}
+
+static void FilterDlg_LoadRuleToControls(HWND hwnd, FilterDlgState *st, const EeFilterRule *r)
+{
+    HWND col = GetDlgItem(hwnd, IDC_FLT_COLUMN);
+    HWND rel = GetDlgItem(hwnd, IDC_FLT_RELATION);
+    HWND val = GetDlgItem(hwnd, IDC_FLT_VALUE);
+    HWND act = GetDlgItem(hwnd, IDC_FLT_ACTION);
+    int i;
+    int n;
+
+    n = (int)SendMessageW(col, CB_GETCOUNT, 0, 0);
+    for (i = 0; i < n; i++)
+    {
+        if ((uint32_t)SendMessageW(col, CB_GETITEMDATA, (WPARAM)i, 0) == r->column)
+        {
+            SendMessageW(col, CB_SETCURSEL, (WPARAM)i, 0);
+            break;
+        }
+    }
+    FilterDlg_FillValues(val, st != NULL ? st->app : NULL, r->column);
+    n = (int)SendMessageW(rel, CB_GETCOUNT, 0, 0);
+    for (i = 0; i < n; i++)
+    {
+        if ((EeFilterRelation)SendMessageW(rel, CB_GETITEMDATA, (WPARAM)i, 0) == r->relation)
+        {
+            SendMessageW(rel, CB_SETCURSEL, (WPARAM)i, 0);
+            break;
+        }
+    }
+    SetWindowTextW(val, r->value);
+    SendMessageW(act, CB_SETCURSEL, (WPARAM)(r->action == EeFilt_Exclude ? 1 : 0), 0);
+}
+
+static void FilterDlg_EditSelected(HWND hwnd, FilterDlgState *st)
+{
+    HWND list;
+    int i;
+
+    if (st == NULL)
+    {
+        return;
+    }
+    list = GetDlgItem(hwnd, IDC_FLT_LIST);
+    i = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (i >= 0 && (uint32_t)i < st->draft.count)
+    {
+        st->edit_index = i;
+        FilterDlg_LoadRuleToControls(hwnd, st, &st->draft.rules[i]);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Update");
+    }
+}
+
+static void FilterDlg_SetSelectedEnabled(HWND hwnd, FilterDlgState *st, BOOL enabled)
+{
+    HWND list;
+    int i;
+
+    if (st == NULL)
+    {
+        return;
+    }
+    list = GetDlgItem(hwnd, IDC_FLT_LIST);
+    for (i = 0; i < (int)st->draft.count; i++)
+    {
+        if (ListView_GetItemState(list, i, LVIS_SELECTED) & LVIS_SELECTED)
+        {
+            st->draft.rules[i].enabled = enabled;
+        }
+    }
+    FilterDlg_RefreshList(list, st);
+}
+
+static BOOL FilterDlg_ReadControls(HWND hwnd, EeFilterRule *r)
+{
+    if (r == NULL)
+    {
+        return FALSE;
+    }
+    ZeroMemory(r, sizeof(*r));
+    r->column = FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0);
+    r->relation = (EeFilterRelation)FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_RELATION),
+                                                        (uint32_t)EeRel_Is);
+    r->action = (EeFilterAction)FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_ACTION),
+                                                    (uint32_t)EeFilt_Include);
+    r->enabled = TRUE;
+    GetWindowTextW(GetDlgItem(hwnd, IDC_FLT_VALUE), r->value, EE_FILTER_VALUE_CCH);
+    return TRUE;
+}
+
+static void FilterDlg_Layout(HWND hwnd, AppState *app)
+{
+    RECT rc;
+    int m = Scale(app, 12);
+    int row_h = Scale(app, 24);
+    int gap = Scale(app, 6);
+    int btn_w = Scale(app, 80);
+    int btn_h = Scale(app, 26);
+    int y;
+    int x;
+    int cw;
+    int ch;
+    int list_bottom;
+
+    GetClientRect(hwnd, &rc);
+    cw = rc.right - rc.left;
+    ch = rc.bottom - rc.top;
+    y = m;
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_PROMPT), m, y, cw - m * 2, row_h, TRUE);
+    y += row_h + gap;
+    x = m;
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_COLUMN), x, y, Scale(app, 170), Scale(app, 200), TRUE);
+    x += Scale(app, 176);
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_RELATION), x, y, Scale(app, 110), Scale(app, 200), TRUE);
+    x += Scale(app, 116);
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_VALUE), x, y, Scale(app, 180), Scale(app, 200), TRUE);
+    x += Scale(app, 186);
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_ACTION), x, y, Scale(app, 90), Scale(app, 200), TRUE);
+    x += Scale(app, 96);
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_ADD), x, y, btn_w, btn_h, TRUE);
+    x += btn_w + gap;
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_REMOVE), x, y, btn_w, btn_h, TRUE);
+    y += row_h + gap;
+    list_bottom = ch - m - btn_h - gap;
+    if (list_bottom < y + Scale(app, 80))
+    {
+        list_bottom = y + Scale(app, 80);
+    }
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_LIST), m, y, cw - m * 2, list_bottom - y, TRUE);
+    y = ch - m - btn_h;
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_RESET), m, y, btn_w, btn_h, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDC_FLT_APPLY),
+               cw - m - btn_w * 3 - gap * 2,
+               y,
+               btn_w,
+               btn_h,
+               TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDOK), cw - m - btn_w * 2 - gap, y, btn_w, btn_h, TRUE);
+    MoveWindow(GetDlgItem(hwnd, IDCANCEL), cw - m - btn_w, y, btn_w, btn_h, TRUE);
+}
+
+static void FilterDlg_Apply(FilterDlgState *st)
+{
+    if (st == NULL || st->app == NULL)
+    {
+        return;
+    }
+    if (!EeFilter_Copy(&st->app->filters, &st->draft))
+    {
+        MessageBoxW(st->app->hwnd_main,
+                    L"Could not apply the filter.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    App_ClearSelection(st->app);
+    App_ApplyFilter(st->app);
+}
+
+static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    FilterDlgState *st = (FilterDlgState *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            st = (FilterDlgState *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)st);
+            return 0;
+        }
+        case WM_SIZE:
+            if (st != NULL && st->app != NULL)
+            {
+                FilterDlg_Layout(hwnd, st->app);
+            }
+            return 0;
+        case WM_GETMINMAXINFO:
+        {
+            MINMAXINFO *mm = (MINMAXINFO *)lParam;
+            int min_w = 640;
+            int min_h = 360;
+            if (st != NULL && st->app != NULL)
+            {
+                min_w = Scale(st->app, 640);
+                min_h = Scale(st->app, 360);
+            }
+            mm->ptMinTrackSize.x = min_w;
+            mm->ptMinTrackSize.y = min_h;
+            return 0;
+        }
+        case WM_COMMAND:
+            if (st == NULL)
+            {
+                return 0;
+            }
+            switch (LOWORD(wParam))
+            {
+                case IDC_FLT_COLUMN:
+                    if (HIWORD(wParam) == CBN_SELCHANGE)
+                    {
+                        uint32_t col = FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0);
+                        FilterDlg_FillValues(GetDlgItem(hwnd, IDC_FLT_VALUE), st->app, col);
+                    }
+                    return 0;
+                case IDC_FLT_ADD:
+                {
+                    EeFilterRule r;
+                    if (FilterDlg_ReadControls(hwnd, &r))
+                    {
+                        if (st->edit_index >= 0 && (uint32_t)st->edit_index < st->draft.count)
+                        {
+                            EeFilter_Set(&st->draft, (uint32_t)st->edit_index, &r);
+                        }
+                        else
+                        {
+                            EeFilter_Add(&st->draft, &r);
+                        }
+                        st->edit_index = -1;
+                        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_VALUE), L"");
+                        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                        FilterDlg_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
+                    }
+                    return 0;
+                }
+                case IDC_FLT_REMOVE:
+                {
+                    HWND list = GetDlgItem(hwnd, IDC_FLT_LIST);
+                    int i;
+                    for (i = ListView_GetItemCount(list) - 1; i >= 0; i--)
+                    {
+                        if (ListView_GetItemState(list, i, LVIS_SELECTED) & LVIS_SELECTED)
+                        {
+                            EeFilter_Remove(&st->draft, (uint32_t)i);
+                        }
+                    }
+                    st->edit_index = -1;
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                    FilterDlg_RefreshList(list, st);
+                    return 0;
+                }
+                case IDC_FLT_EDIT:
+                    FilterDlg_EditSelected(hwnd, st);
+                    return 0;
+                case IDC_FLT_ENABLE:
+                    FilterDlg_SetSelectedEnabled(hwnd, st, TRUE);
+                    return 0;
+                case IDC_FLT_DISABLE:
+                    FilterDlg_SetSelectedEnabled(hwnd, st, FALSE);
+                    return 0;
+                case IDC_FLT_RESET:
+                    EeFilter_Clear(&st->draft);
+                    st->edit_index = -1;
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                    FilterDlg_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
+                    return 0;
+                case IDC_FLT_APPLY:
+                    FilterDlg_Apply(st);
+                    return 0;
+                case IDOK:
+                    FilterDlg_Apply(st);
+                    DestroyWindow(hwnd);
+                    return 0;
+                case IDCANCEL:
+                    DestroyWindow(hwnd);
+                    return 0;
+                default:
+                    break;
+            }
+            return 0;
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (st != NULL && hdr != NULL && hdr->idFrom == IDC_FLT_LIST)
+            {
+                if (hdr->code == LVN_ITEMCHANGED && !st->refreshing)
+                {
+                    NMLISTVIEW *lv = (NMLISTVIEW *)hdr;
+                    if (lv->uChanged & LVIF_STATE)
+                    {
+                        BOOL now = (lv->uNewState & LVIS_STATEIMAGEMASK) != 0;
+                        BOOL was = (lv->uOldState & LVIS_STATEIMAGEMASK) != 0;
+                        /* Checkboxes use state image index 1/2. */
+                        UINT ni = (lv->uNewState & LVIS_STATEIMAGEMASK) >> 12;
+                        UINT oi = (lv->uOldState & LVIS_STATEIMAGEMASK) >> 12;
+                        if (ni != oi && lv->iItem >= 0 && (uint32_t)lv->iItem < st->draft.count)
+                        {
+                            st->draft.rules[lv->iItem].enabled = (ni == 2);
+                        }
+                        (void)now;
+                        (void)was;
+                    }
+                }
+                if (hdr->code == NM_DBLCLK)
+                {
+                    FilterDlg_EditSelected(hwnd, st);
+                }
+                if (hdr->code == LVN_KEYDOWN)
+                {
+                    NMLVKEYDOWN *kd = (NMLVKEYDOWN *)hdr;
+                    if (kd->wVKey == VK_DELETE)
+                    {
+                        SendMessageW(hwnd, WM_COMMAND, IDC_FLT_REMOVE, 0);
+                    }
+                }
+            }
+            return 0;
+        }
+        case WM_CONTEXTMENU:
+            if (st != NULL)
+            {
+                POINT pt;
+                HMENU menu;
+                UINT cmd;
+                pt.x = GET_X_LPARAM(lParam);
+                pt.y = GET_Y_LPARAM(lParam);
+                if (pt.x == -1 && pt.y == -1)
+                {
+                    GetCursorPos(&pt);
+                }
+                menu = CreatePopupMenu();
+                if (menu)
+                {
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_EDIT, L"&Edit");
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_REMOVE, L"&Remove");
+                    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_ENABLE, L"E&nable");
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_DISABLE, L"&Disable");
+                    cmd = (UINT)TrackPopupMenu(menu,
+                                               TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                                               pt.x,
+                                               pt.y,
+                                               0,
+                                               hwnd,
+                                               NULL);
+                    DestroyMenu(menu);
+                    if (cmd != 0)
+                    {
+                        SendMessageW(hwnd, WM_COMMAND, cmd, 0);
+                    }
+                }
+            }
+            return 0;
+        case WM_KEYDOWN:
+            if (wParam == VK_DELETE)
+            {
+                SendMessageW(hwnd, WM_COMMAND, IDC_FLT_REMOVE, 0);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+        {
+            RECT wr;
+            GetWindowRect(hwnd, &wr);
+            g_filter_dlg_rect = wr;
+            g_filter_dlg_have_rect = TRUE;
+            if (st != NULL)
+            {
+                if (st->app != NULL)
+                {
+                    if (st->app->hwnd_progress == NULL)
+                    {
+                        EnableWindow(st->app->hwnd_main, TRUE);
+                    }
+                    st->app->hwnd_filter = NULL;
+                }
+                EeFilter_Clear(&st->draft);
+                HeapFree(GetProcessHeap(), 0, st);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+        }
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static BOOL App_ShowFilter(AppState *app)
+{
+    FilterDlgState *st;
+    RECT rc_wnd;
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+    int client_w;
+    int client_h;
+    int x;
+    int y;
+    int outer_w;
+    int outer_h;
+    HWND hwnd;
+    HWND list;
+    LVCOLUMNW col;
+
+    if (app == NULL)
+    {
+        return FALSE;
+    }
+    if (app->hwnd_filter != NULL)
+    {
+        SetForegroundWindow(app->hwnd_filter);
+        return TRUE;
+    }
+    if (app->table.row_count == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Load a voter list before filtering.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return TRUE;
+    }
+
+    st = (FilterDlgState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FilterDlgState));
+    if (st == NULL)
+    {
+        return FALSE;
+    }
+    st->app = app;
+    st->edit_index = -1;
+    EeFilter_Init(&st->draft);
+    if (!EeFilter_Copy(&st->draft, &app->filters))
+    {
+        HeapFree(GetProcessHeap(), 0, st);
+        return FALSE;
+    }
+
+    client_w = Scale(app, 720);
+    client_h = Scale(app, 480);
+    rc_wnd.left = 0;
+    rc_wnd.top = 0;
+    rc_wnd.right = client_w;
+    rc_wnd.bottom = client_h;
+    if (!AdjustWindowRectExForDpi(&rc_wnd, style, FALSE, ex_style, app->dpi))
+    {
+        rc_wnd.right = client_w + Scale(app, 16);
+        rc_wnd.bottom = client_h + Scale(app, 40);
+    }
+    outer_w = rc_wnd.right - rc_wnd.left;
+    outer_h = rc_wnd.bottom - rc_wnd.top;
+    if (g_filter_dlg_have_rect)
+    {
+        x = g_filter_dlg_rect.left;
+        y = g_filter_dlg_rect.top;
+        outer_w = g_filter_dlg_rect.right - g_filter_dlg_rect.left;
+        outer_h = g_filter_dlg_rect.bottom - g_filter_dlg_rect.top;
+    }
+    else
+    {
+        RECT rc_main;
+        GetWindowRect(app->hwnd_main, &rc_main);
+        x = rc_main.left + ((rc_main.right - rc_main.left) - outer_w) / 2;
+        y = rc_main.top + ((rc_main.bottom - rc_main.top) - outer_h) / 2;
+    }
+
+    hwnd = CreateWindowExW(ex_style,
+                           k_FilterClassName,
+                           L"Election Explorer Filter",
+                           style,
+                           x,
+                           y,
+                           outer_w,
+                           outer_h,
+                           app->hwnd_main,
+                           NULL,
+                           app->instance,
+                           st);
+    if (hwnd == NULL)
+    {
+        EeFilter_Clear(&st->draft);
+        HeapFree(GetProcessHeap(), 0, st);
+        return FALSE;
+    }
+    app->hwnd_filter = hwnd;
+
+    CreateWindowExW(0,
+                    L"STATIC",
+                    L"Display entries matching these conditions:",
+                    WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_PROMPT,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"COMBOBOX",
+                    L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                        CBS_HASSTRINGS,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_COLUMN,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"COMBOBOX",
+                    L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                        CBS_HASSTRINGS,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_RELATION,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"COMBOBOX",
+                    L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN |
+                        CBS_HASSTRINGS | CBS_AUTOHSCROLL,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_VALUE,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"COMBOBOX",
+                    L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST |
+                        CBS_HASSTRINGS,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_ACTION,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Add",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_ADD,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Remove",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_REMOVE,
+                    app->instance,
+                    NULL);
+    list = CreateWindowExW(WS_EX_CLIENTEDGE,
+                           WC_LISTVIEWW,
+                           L"",
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS |
+                               LVS_SHAREIMAGELISTS,
+                           0,
+                           0,
+                           0,
+                           0,
+                           hwnd,
+                           (HMENU)(INT_PTR)IDC_FLT_LIST,
+                           app->instance,
+                           NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Reset",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_RESET,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Apply",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_APPLY,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"OK",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDOK,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Cancel",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDCANCEL,
+                    app->instance,
+                    NULL);
+
+    if (app->font_ui)
+    {
+        HWND child = GetWindow(hwnd, GW_CHILD);
+        while (child)
+        {
+            SendMessageW(child, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+    }
+
+    ListView_SetExtendedListViewStyle(list,
+                                      LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT |
+                                          LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES);
+    ZeroMemory(&col, sizeof(col));
+    col.mask = LVCF_TEXT | LVCF_WIDTH;
+    col.pszText = L"Column";
+    col.cx = Scale(app, 180);
+    ListView_InsertColumn(list, 0, &col);
+    col.pszText = L"Relation";
+    col.cx = Scale(app, 110);
+    ListView_InsertColumn(list, 1, &col);
+    col.pszText = L"Value";
+    col.cx = Scale(app, 200);
+    ListView_InsertColumn(list, 2, &col);
+    col.pszText = L"Action";
+    col.cx = Scale(app, 90);
+    ListView_InsertColumn(list, 3, &col);
+
+    FilterDlg_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), &app->table);
+    FilterDlg_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION));
+    FilterDlg_PopulateActions(GetDlgItem(hwnd, IDC_FLT_ACTION));
+    FilterDlg_FillValues(GetDlgItem(hwnd, IDC_FLT_VALUE), app, 0);
+    FilterDlg_RefreshList(list, st);
+    FilterDlg_Layout(hwnd, app);
+
+    EnableWindow(app->hwnd_main, FALSE);
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+    return TRUE;
+}
+
+static void App_ResetFilter(AppState *app)
+{
+    if (app == NULL)
+    {
+        return;
+    }
+    EeFilter_Clear(&app->filters);
+    App_ClearSelection(app);
+    App_ApplyFilter(app);
+}
+
+static void App_AddQuickFilter(AppState *app,
+                               uint32_t column,
+                               const wchar_t *value,
+                               EeFilterAction action)
+{
+    EeFilterRule r;
+    if (app == NULL || value == NULL || app->table.row_count == 0)
+    {
+        return;
+    }
+    ZeroMemory(&r, sizeof(r));
+    r.column = column;
+    r.relation = EeRel_Is;
+    r.action = action;
+    r.enabled = TRUE;
+    StringCchCopyW(r.value, ARRAYSIZE(r.value), value);
+    if (EeFilter_Add(&app->filters, &r))
+    {
+        App_ClearSelection(app);
+        App_ApplyFilter(app);
+    }
+}
+
+static void App_DestroyFilter(AppState *app)
+{
+    if (app != NULL && app->hwnd_filter != NULL)
+    {
+        DestroyWindow(app->hwnd_filter);
+        app->hwnd_filter = NULL;
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Window procedure                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -2819,7 +3835,7 @@ static LRESULT App_ListCustomDraw(AppState *app, NMLVCUSTOMDRAW *lvcd)
             {
                 RECT rc;
                 wchar_t text[256];
-                uint32_t view_row = (uint32_t)item;
+                uint32_t view_row = App_ViewRowFromDisplay(app, (uint32_t)item);
                 HDC hdc = lvcd->nmcd.hdc;
                 HFONT old_font;
                 COLORREF old_text;
@@ -2914,7 +3930,7 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
     if (hdr->code == LVN_GETDISPINFOW)
     {
         NMLVDISPINFOW *di = (NMLVDISPINFOW *)hdr;
-        uint32_t view_row = (uint32_t)di->item.iItem;
+        uint32_t view_row = App_ViewRowFromDisplay(app, (uint32_t)di->item.iItem);
         uint32_t column;
 
         if (hdr->hwndFrom == app->hwnd_frozen)
@@ -3130,6 +4146,13 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                            IDM_EDIT_COPY,
                            MF_BYCOMMAND |
                                ((App_HasSelection(app) && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem((HMENU)wParam,
+                           IDM_FILTER_EDIT,
+                           MF_BYCOMMAND | (app->loading ? MF_GRAYED : MF_ENABLED));
+            EnableMenuItem((HMENU)wParam,
+                           IDM_FILTER_RESET,
+                           MF_BYCOMMAND | ((app->filters.count > 0 && !app->loading) ? MF_ENABLED
+                                                                                     : MF_GRAYED));
             return 0;
 
         case WM_COMMAND:
@@ -3155,6 +4178,18 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                     k_WindowTitle,
                                     MB_ICONERROR | MB_OK);
                     }
+                    return 0;
+                case IDM_FILTER_EDIT:
+                    if (!App_ShowFilter(app))
+                    {
+                        MessageBoxW(hwnd,
+                                    L"Could not open the filter window.",
+                                    k_WindowTitle,
+                                    MB_ICONERROR | MB_OK);
+                    }
+                    return 0;
+                case IDM_FILTER_RESET:
+                    App_ResetFilter(app);
                     return 0;
                 default:
                     break;
@@ -3225,6 +4260,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_DESTROY:
             App_DestroyOptions(app);
             App_DestroyProgress(app);
+            App_DestroyFilter(app);
+            EeFilter_Clear(&app->filters);
+            free(app->filter_map);
+            app->filter_map = NULL;
+            app->filter_count = 0;
             EeVoterTable_Clear(&app->table);
             if (app->font_ui)
             {
@@ -3512,7 +4552,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     WNDCLASSEXW oc;
     MSG msg;
     INITCOMMONCONTROLSEX icc;
-    ACCEL accels[2];
+    ACCEL accels[3];
     HACCEL haccel;
     BOOL getResult;
 
@@ -3575,6 +4615,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         return 1;
     }
 
+    {
+        WNDCLASSEXW fc;
+        ZeroMemory(&fc, sizeof(fc));
+        fc.cbSize = sizeof(fc);
+        fc.lpfnWndProc = FilterWndProc;
+        fc.hInstance = hInstance;
+        fc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        fc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        fc.lpszClassName = k_FilterClassName;
+        fc.hIcon = wc.hIcon;
+        fc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&fc) == 0)
+        {
+            return 1;
+        }
+    }
+
     if (App_CreateViewer(hInstance, nCmdShow, NULL, NULL) == NULL)
     {
         return 1;
@@ -3586,7 +4643,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     accels[1].fVirt = FCONTROL | FVIRTKEY;
     accels[1].key = 'C';
     accels[1].cmd = IDM_EDIT_COPY;
-    haccel = CreateAcceleratorTableW(accels, 2);
+    accels[2].fVirt = FCONTROL | FVIRTKEY;
+    accels[2].key = 'L';
+    accels[2].cmd = IDM_FILTER_EDIT;
+    haccel = CreateAcceleratorTableW(accels, 3);
 
     while ((getResult = GetMessageW(&msg, NULL, 0, 0)) != 0)
     {

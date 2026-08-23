@@ -3,6 +3,7 @@
  * @brief Console smoke test for EeVoterTable_LoadFromFile.
  */
 
+#include "filter.h"
 #include "voter_table.h"
 
 #include <stdio.h>
@@ -407,6 +408,239 @@ static int test_res_addr_fields(void)
     return rc;
 }
 
+static int find_column(const EeVoterTable *t, const wchar_t *title)
+{
+    uint32_t i;
+    if (t == NULL || title == NULL)
+    {
+        return -1;
+    }
+    for (i = 0; i < t->column_count; i++)
+    {
+        if (t->column_titles[i] != NULL && _wcsicmp(t->column_titles[i], title) == 0)
+        {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static EeFilterRule make_rule(uint32_t column,
+                              EeFilterRelation rel,
+                              EeFilterAction action,
+                              const wchar_t *value,
+                              BOOL enabled)
+{
+    EeFilterRule r;
+    ZeroMemory(&r, sizeof(r));
+    r.column = column;
+    r.relation = rel;
+    r.action = action;
+    r.enabled = enabled;
+    if (value != NULL)
+    {
+        StringCchCopyW(r.value, ARRAYSIZE(r.value), value);
+    }
+    return r;
+}
+
+static uint32_t count_accepted(const EeFilterSet *set, const EeVoterTable *t)
+{
+    uint32_t i;
+    uint32_t n = 0;
+    for (i = 0; i < t->row_count; i++)
+    {
+        if (EeFilter_AcceptsViewRow(set, t, i))
+        {
+            n++;
+        }
+    }
+    return n;
+}
+
+static int test_filter_logic(void)
+{
+    EeVoterTable t;
+    EeFilterSet set;
+    EeFilterRule r;
+    wchar_t err[256];
+    uint32_t *map = NULL;
+    uint32_t map_n = 0;
+    int city;
+    int pct;
+    int gender;
+    int rc = 1;
+
+    EeVoterTable_Init(&t);
+    EeFilter_Init(&set);
+    err[0] = L'\0';
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.csv",
+                                  &t,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"filter: csv load failed %s\n", err);
+        goto done;
+    }
+    city = find_column(&t, L"RSCITY");
+    pct = find_column(&t, L"PCTCOD");
+    gender = find_column(&t, L"GENDER");
+    if (city < 0 || pct < 0 || gender < 0 || t.row_count != 5)
+    {
+        wprintf(L"filter: unexpected columns/rows city=%d pct=%d gender=%d rows=%u\n",
+                city,
+                pct,
+                gender,
+                t.row_count);
+        goto done;
+    }
+
+    if (EeFilter_HasEnabled(&set) || count_accepted(&set, &t) != 5)
+    {
+        wprintf(L"filter: empty set should accept every row\n");
+        goto done;
+    }
+    if (!EeFilter_BuildMap(&set, &t, &map, &map_n) || map != NULL || map_n != 5)
+    {
+        wprintf(L"filter: empty BuildMap should return NULL map\n");
+        goto done;
+    }
+
+    r = make_rule((uint32_t)city, EeRel_Is, EeFilt_Exclude, L"Austin", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
+    {
+        wprintf(L"filter: exclude Austin expected 1 row\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)city, EeRel_Is, EeFilt_Include, L"Austin", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 4)
+    {
+        wprintf(L"filter: include Austin expected 4 rows\n");
+        goto done;
+    }
+
+    r = make_rule((uint32_t)city, EeRel_Is, EeFilt_Include, L"Round Rock", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 5)
+    {
+        wprintf(L"filter: same-column includes should OR\n");
+        goto done;
+    }
+
+    r = make_rule((uint32_t)pct, EeRel_Is, EeFilt_Include, L"101", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 3)
+    {
+        wprintf(L"filter: different-column includes should AND (expected 3)\n");
+        goto done;
+    }
+
+    r = make_rule((uint32_t)gender, EeRel_Is, EeFilt_Exclude, L"M", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 0)
+    {
+        wprintf(L"filter: exclude matching include group should hide all\n");
+        goto done;
+    }
+
+    set.rules[set.count - 1].enabled = FALSE;
+    if (count_accepted(&set, &t) != 3)
+    {
+        wprintf(L"filter: disabled exclude should be ignored\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)gender, EeRel_IsNot, EeFilt_Include, L"F", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 3)
+    {
+        wprintf(L"filter: is not F expected 3 rows\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule(2, EeRel_Contains, EeFilt_Include, L"Oak", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
+    {
+        wprintf(L"filter: contains Oak expected 1 row\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule(1, EeRel_BeginsWith, EeFilt_Include, L"Smith", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
+    {
+        wprintf(L"filter: begins with Smith expected 1 row\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)pct, EeRel_LessThan, EeFilt_Include, L"102", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 3)
+    {
+        wprintf(L"filter: PCTCOD less than 102 expected 3 rows\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)pct, EeRel_MoreThan, EeFilt_Include, L"102", TRUE);
+    if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
+    {
+        wprintf(L"filter: PCTCOD more than 102 expected 1 row\n");
+        goto done;
+    }
+
+    {
+        wchar_t **vals = NULL;
+        uint32_t n = 0;
+        if (!EeFilter_CollectDistinct(&t, (uint32_t)city, EE_FILTER_MAX_DISTINCT, &vals, &n) ||
+            n != 2)
+        {
+            wprintf(L"filter: CollectDistinct RSCITY expected 2 values, got %u\n", n);
+            goto done;
+        }
+        if (_wcsicmp(vals[0], L"Austin") != 0 || _wcsicmp(vals[1], L"Round Rock") != 0)
+        {
+            wprintf(L"filter: CollectDistinct order/values mismatch\n");
+            goto done;
+        }
+        {
+            uint32_t i;
+            for (i = 0; i < n; i++)
+            {
+                free(vals[i]);
+            }
+        }
+        free(vals);
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)city, EeRel_Is, EeFilt_Exclude, L"Austin", TRUE);
+    if (!EeFilter_Add(&set, &r) || !EeFilter_BuildMap(&set, &t, &map, &map_n) || map == NULL ||
+        map_n != 1)
+    {
+        wprintf(L"filter: BuildMap exclude Austin expected 1 row\n");
+        goto done;
+    }
+    free(map);
+    map = NULL;
+
+    rc = 0;
+    wprintf(L"filter ok\n");
+
+done:
+    free(map);
+    EeFilter_Clear(&set);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"filter test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -417,5 +651,6 @@ int wmain(void)
     failed |= test_copy_format();
     failed |= test_zip4_omits_zeros();
     failed |= test_res_addr_fields();
+    failed |= test_filter_logic();
     return failed == 0 ? 0 : 1;
 }

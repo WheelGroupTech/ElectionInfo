@@ -24,6 +24,7 @@ display them in a high-performance grid.
 | Resize frozen pane | Drag the **vertical splitter** between the left and right panes (`↔` cursor) |
 | Voter ID alignment | **Voter ID** header and cell text are **center**-aligned; other columns are left-aligned |
 | Sort | Click a column header to toggle ascending / descending (arrow in header) |
+| Filter | **Filter → Filter…** (`Ctrl+L`) opens a Process Monitor-style dialog. Rules never delete rows; they only hide them. **Filter → Reset Filter** clears every rule. Right-click a cell for **Include** / **Exclude** of that value. |
 
 Loading runs on a **background thread** so the UI stays responsive. Progress
 reaches **100%** only after the grid has been populated and the app is ready
@@ -40,6 +41,29 @@ pane title:
 Vertical scroll position and row selection stay in sync. When only one pane
 shows a horizontal scrollbar, the other pane’s height is adjusted (with a
 matching pad) so the last data row is not covered by the bar.
+
+### Filter (Process Monitor style)
+
+**Filter → Filter…** (`Ctrl+L`) opens the modal **Election Explorer Filter**
+dialog. There are no built-in default rules; **Reset** and **Reset Filter**
+clear the list.
+
+Add a rule with **Column** (every frozen and source field), **Relation**
+(`is`, `is not`, `less than`, `more than`, `begins with`, `ends with`,
+`contains`, `excludes`), **Value** (distinct values from the loaded data,
+or type your own), **Include** / **Exclude**, and **Add**. Each rule can be
+enabled or disabled with its checkbox. **Apply** updates the grid without
+closing; **OK** applies and closes; **Cancel** discards edits.
+
+Evaluation matches Process Monitor:
+
+1. Any matching **Exclude** hides the row.
+2. Enabled **Include** rules on the **same column** are ORed.
+3. **Include** groups on **different columns** are ANDed.
+4. If there are no enabled Include rules, every row that is not Excluded is
+   shown.
+
+The status bar shows `Filtered: N of M voters` while any rule is enabled.
 
 ## Display columns
 
@@ -74,6 +98,7 @@ pane width is preserved across DPI changes (scaled, not reset).
 |------|----------|
 | UI, menus, progress, dual grid, splitter, DPI | `src/main.c` |
 | Load, parse, pool storage, sort | `src/voter_table.c` / `voter_table.h` |
+| Filter rules and ProcMon evaluation | `src/filter.c` / `filter.h` |
 | Command / message IDs | `src/resource.h` |
 
 Cell text is stored in a shared **UTF-8** pool with `uint32_t` offsets. Display

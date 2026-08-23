@@ -21,12 +21,18 @@
     <ClCompile Include="src\voter_table.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\filter.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\main.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\voter_table.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\filter.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\resource.h">

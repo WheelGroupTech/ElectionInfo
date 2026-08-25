@@ -408,6 +408,68 @@ static int test_res_addr_fields(void)
     return rc;
 }
 
+static int test_res_addr_no_duplicate_city_state_zip(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[200];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_res_dup.csv")))
+    {
+        wprintf(L"resdup: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"resdup: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,NAME,Residential Address,City,State,Zip Code 5\n", fp);
+    fputs("100001,Smith John,1109 N IH 35  NB AUSTIN TX 78702,AUSTIN,TX,78702\n", fp);
+    fputs("100002,Jones Jane,123 Main St,Austin,TX,78701\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 2)
+    {
+        wprintf(L"resdup: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"1109 N IH 35  NB AUSTIN TX 78702") != 0)
+    {
+        wprintf(L"resdup: duplicate city/state/zip (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"123 Main St, Austin, TX 78701") != 0)
+    {
+        wprintf(L"resdup: street-only append mismatch (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"resdup ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"resdup test failed\n");
+    }
+    return rc;
+}
+
 static int find_column(const EeVoterTable *t, const wchar_t *title)
 {
     uint32_t i;
@@ -727,6 +789,7 @@ int wmain(void)
     failed |= test_copy_format();
     failed |= test_zip4_omits_zeros();
     failed |= test_res_addr_fields();
+    failed |= test_res_addr_no_duplicate_city_state_zip();
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
     return failed == 0 ? 0 : 1;

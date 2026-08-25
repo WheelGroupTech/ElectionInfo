@@ -11,6 +11,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <intsafe.h>
+#include <shellapi.h>
 #include <strsafe.h>
 #include <stdlib.h>
 #include <uxtheme.h>
@@ -19,6 +20,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "uxtheme.lib")
+#pragma comment(lib, "shell32.lib")
 
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
@@ -37,6 +39,14 @@ static const uint32_t k_NameUpdateProgressMinRows = 25000;
 static const int k_ZoomMin = 50;
 static const int k_ZoomMax = 250;
 static const int k_ZoomDefault = 100;
+
+typedef enum EeMapEngine
+{
+    EeMap_Google = 0,
+    EeMap_Bing,
+    EeMap_Apple,
+    EeMap_OpenStreetMap
+} EeMapEngine;
 
 enum
 {
@@ -70,6 +80,7 @@ typedef struct AppState
     BOOL copy_prepend_normalized;
     BOOL name_surname_first;
     int zoom_percent;  /* 50..250; 100 is actual size */
+    EeMapEngine map_engine;
     HFONT font_ui;     /* Dialogs / status (DPI only) */
     HFONT font_grid;   /* List cells (DPI × zoom) */
     HFONT font_header; /* Bold captions (DPI × zoom) */
@@ -109,6 +120,7 @@ static WNDPROC g_old_scroll_proc = NULL;
 static WNDPROC g_old_title_proc = NULL;
 
 static int App_ClampZoom(int zoom_percent);
+static EeMapEngine App_ClampMapEngine(int engine);
 static LRESULT CALLBACK FrozenSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK ScrollSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -263,12 +275,14 @@ static void App_InitViewerState(AppState *app, HINSTANCE instance, const AppStat
         app->copy_prepend_normalized = prefs->copy_prepend_normalized;
         app->name_surname_first = prefs->name_surname_first;
         app->zoom_percent = App_ClampZoom(prefs->zoom_percent);
+        app->map_engine = App_ClampMapEngine((int)prefs->map_engine);
     }
     else
     {
         app->copy_prepend_normalized = TRUE;
         app->name_surname_first = TRUE;
         app->zoom_percent = k_ZoomDefault;
+        app->map_engine = EeMap_Google;
     }
     InitializeCriticalSection(&app->progress_lock);
     EeVoterTable_Init(&app->table);
@@ -335,6 +349,135 @@ static int App_ClampZoom(int zoom_percent)
         return k_ZoomMax;
     }
     return zoom_percent;
+}
+
+static EeMapEngine App_ClampMapEngine(int engine)
+{
+    if (engine < (int)EeMap_Google || engine > (int)EeMap_OpenStreetMap)
+    {
+        return EeMap_Google;
+    }
+    return (EeMapEngine)engine;
+}
+
+static const wchar_t *App_MapEngineName(EeMapEngine engine)
+{
+    switch (App_ClampMapEngine((int)engine))
+    {
+        case EeMap_Bing:
+            return L"Bing Maps";
+        case EeMap_Apple:
+            return L"Apple Maps";
+        case EeMap_OpenStreetMap:
+            return L"Open Street Maps";
+        case EeMap_Google:
+        default:
+            return L"Google Maps";
+    }
+}
+
+static BOOL App_AppendUrlEncoded(wchar_t *dst, size_t cch, const wchar_t *text)
+{
+    char utf8[EE_FILTER_VALUE_CCH * 3];
+    int n;
+    int i;
+
+    if (dst == NULL || cch == 0 || text == NULL)
+    {
+        return FALSE;
+    }
+    n = WideCharToMultiByte(CP_UTF8, 0, text, -1, utf8, (int)sizeof(utf8), NULL, NULL);
+    if (n <= 0)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n - 1; i++)
+    {
+        unsigned char b = (unsigned char)utf8[i];
+        size_t used = wcslen(dst);
+        if ((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') ||
+            b == '-' || b == '_' || b == '.' || b == '~')
+        {
+            if (used + 1 >= cch)
+            {
+                return FALSE;
+            }
+            dst[used] = (wchar_t)b;
+            dst[used + 1] = L'\0';
+        }
+        else
+        {
+            if (used + 3 >= cch)
+            {
+                return FALSE;
+            }
+            if (FAILED(StringCchPrintfW(dst + used, cch - used, L"%%%02X", b)))
+            {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
+static BOOL App_BuildMapUrl(EeMapEngine engine, const wchar_t *address, wchar_t *url, size_t cch)
+{
+    const wchar_t *prefix;
+
+    if (address == NULL || address[0] == L'\0' || url == NULL || cch == 0)
+    {
+        return FALSE;
+    }
+    switch (App_ClampMapEngine((int)engine))
+    {
+        case EeMap_Bing:
+            prefix = L"https://www.bing.com/maps?q=";
+            break;
+        case EeMap_Apple:
+            prefix = L"https://maps.apple.com/?q=";
+            break;
+        case EeMap_OpenStreetMap:
+            prefix = L"https://www.openstreetmap.org/search?query=";
+            break;
+        case EeMap_Google:
+        default:
+            prefix = L"https://www.google.com/maps/search/?api=1&query=";
+            break;
+    }
+    if (FAILED(StringCchCopyW(url, cch, prefix)))
+    {
+        return FALSE;
+    }
+    return App_AppendUrlEncoded(url, cch, address);
+}
+
+static BOOL App_ShowAddressInMaps(AppState *app, const wchar_t *address)
+{
+    wchar_t url[2048];
+    HINSTANCE rc;
+
+    if (app == NULL || address == NULL || address[0] == L'\0')
+    {
+        return FALSE;
+    }
+    if (!App_BuildMapUrl(app->map_engine, address, url, ARRAYSIZE(url)))
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Could not build a map link for this address.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    rc = ShellExecuteW(app->hwnd_main, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)rc <= 32)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Could not open the map in a browser.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static int ScaleDisplay(AppState *app, int value_96)
@@ -2357,6 +2500,7 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         uint32_t hit_col = 0;
         wchar_t hit_value[EE_FILTER_VALUE_CCH];
         BOOL have_cell = FALSE;
+        BOOL have_address = FALSE;
 
         hit_value[0] = L'\0';
         ScreenToClient(hwnd_list, &client);
@@ -2384,6 +2528,10 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
                 if (hit_value[0] != L'\0')
                 {
                     have_cell = TRUE;
+                    if (hwnd_list == app->hwnd_frozen && hit_col == 2)
+                    {
+                        have_address = TRUE;
+                    }
                 }
             }
         }
@@ -2407,6 +2555,11 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
             AppendMenuW(menu, MF_STRING, IDM_FILTER_INCLUDE, inc);
             AppendMenuW(menu, MF_STRING, IDM_FILTER_EXCLUDE, exc);
         }
+        if (have_address)
+        {
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_SHOW_IN_MAPS, L"Show in &Maps…");
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…");
 
@@ -2429,6 +2582,10 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         else if (cmd == IDM_FILTER_EXCLUDE && have_cell)
         {
             App_AddQuickFilter(app, hit_col, hit_value, EeFilt_Exclude);
+        }
+        else if (cmd == IDM_SHOW_IN_MAPS && have_address)
+        {
+            App_ShowAddressInMaps(app, hit_value);
         }
         else if (cmd == IDM_FILTER_EDIT)
         {
@@ -2669,10 +2826,18 @@ static LRESULT CALLBACK OptionsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                     {
                         BOOL parsed = FALSE;
                         UINT zoom = GetDlgItemInt(hwnd, IDC_OPT_ZOOM_EDIT, &parsed, FALSE);
+                        HWND cmb_map = GetDlgItem(hwnd, IDC_OPT_MAP_ENGINE);
+                        int map_sel =
+                            (cmb_map != NULL) ? (int)SendMessageW(cmb_map, CB_GETCURSEL, 0, 0) : 0;
                         if (!parsed)
                         {
                             zoom =
                                 (UINT)(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault);
+                        }
+                        if (map_sel >= 0)
+                        {
+                            app->map_engine = App_ClampMapEngine(
+                                (int)SendMessageW(cmb_map, CB_GETITEMDATA, (WPARAM)map_sel, 0));
                         }
                         if (app->hwnd_progress == NULL)
                         {
@@ -2739,6 +2904,8 @@ static BOOL App_ShowOptions(AppState *app)
     HWND edit_zoom;
     HWND spin_zoom;
     HWND lbl_pct;
+    HWND lbl_map;
+    HWND cmb_map;
     HWND btn_ok;
     HWND btn_cancel;
 
@@ -2753,7 +2920,7 @@ static BOOL App_ShowOptions(AppState *app)
     }
 
     client_w = Scale(app, 420);
-    client_h = Scale(app, 210);
+    client_h = Scale(app, 250);
     margin = Scale(app, 16);
     btn_w = Scale(app, 90);
     btn_h = Scale(app, 28);
@@ -2892,6 +3059,59 @@ static BOOL App_ShowOptions(AppState *app)
                 (LPARAM)App_ClampZoom(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault));
         }
     }
+    {
+        int my = margin + Scale(app, 100);
+        int mh = Scale(app, 24);
+        int i;
+        static const EeMapEngine engines[] = {EeMap_Google,
+                                              EeMap_Bing,
+                                              EeMap_Apple,
+                                              EeMap_OpenStreetMap};
+
+        lbl_map = CreateWindowExW(0,
+                                  L"STATIC",
+                                  L"Map engine:",
+                                  WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                                  margin,
+                                  my,
+                                  Scale(app, 90),
+                                  mh,
+                                  app->hwnd_options,
+                                  NULL,
+                                  app->instance,
+                                  NULL);
+        cmb_map = CreateWindowExW(0,
+                                  L"COMBOBOX",
+                                  L"",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                                      CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+                                  margin + Scale(app, 94),
+                                  my,
+                                  Scale(app, 180),
+                                  Scale(app, 200),
+                                  app->hwnd_options,
+                                  (HMENU)(INT_PTR)IDC_OPT_MAP_ENGINE,
+                                  app->instance,
+                                  NULL);
+        if (cmb_map != NULL)
+        {
+            int sel = 0;
+            for (i = 0; i < (int)ARRAYSIZE(engines); i++)
+            {
+                int idx = (int)
+                    SendMessageW(cmb_map, CB_ADDSTRING, 0, (LPARAM)App_MapEngineName(engines[i]));
+                if (idx >= 0)
+                {
+                    SendMessageW(cmb_map, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)engines[i]);
+                    if (engines[i] == App_ClampMapEngine((int)app->map_engine))
+                    {
+                        sel = idx;
+                    }
+                }
+            }
+            SendMessageW(cmb_map, CB_SETCURSEL, (WPARAM)sel, 0);
+        }
+    }
     btn_ok = CreateWindowExW(0,
                              L"BUTTON",
                              L"OK",
@@ -2925,6 +3145,8 @@ static BOOL App_ShowOptions(AppState *app)
         SendMessageW(lbl_zoom, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(edit_zoom, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(lbl_pct, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(lbl_map, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        SendMessageW(cmb_map, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
     }

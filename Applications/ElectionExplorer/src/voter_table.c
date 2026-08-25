@@ -978,7 +978,8 @@ static FieldRole classify_field(const char *norm)
         return Role_AddrZip4;
     }
 
-    if (header_contains(norm, "ZIP4") || header_contains(norm, "PLUS4"))
+    if (header_contains(norm, "ZIP4") || header_contains(norm, "PLUS4") ||
+        strcmp(norm, "ZIPCODE4") == 0)
     {
         return Role_AddrZip4;
     }
@@ -1526,6 +1527,139 @@ static void split_zip(const char *zip,
     }
 }
 
+static int ascii_fold(unsigned char c)
+{
+    if (c >= 'a' && c <= 'z')
+    {
+        return (int)(c - 'a' + 'A');
+    }
+    return (int)c;
+}
+
+static BOOL is_addr_sep(unsigned char c)
+{
+    return c == ' ' || c == '\t' || c == ',' || c == ';' || c == '.';
+}
+
+static BOOL is_digit_span(const char *s, size_t n)
+{
+    size_t i;
+    if (s == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (s[i] < '0' || s[i] > '9')
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static const char *skip_leading_ws(const char *s)
+{
+    if (s == NULL)
+    {
+        return "";
+    }
+    while (*s == ' ' || *s == '\t')
+    {
+        s++;
+    }
+    return s;
+}
+
+static size_t trimmed_text_len(const char *s)
+{
+    size_t n;
+    s = skip_leading_ws(s);
+    n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t'))
+    {
+        n--;
+    }
+    return n;
+}
+
+static void skip_trailing_addr_seps(const char *s, size_t *len)
+{
+    if (s == NULL || len == NULL)
+    {
+        return;
+    }
+    while (*len > 0 && is_addr_sep((unsigned char)s[*len - 1]))
+    {
+        (*len)--;
+    }
+}
+
+static BOOL ends_with_phrase_ci(const char *s, size_t slen, const char *phrase, size_t *out_len)
+{
+    const char *p = skip_leading_ws(phrase);
+    size_t plen = trimmed_text_len(p);
+    size_t i;
+    size_t end = slen;
+
+    if (s == NULL || plen == 0)
+    {
+        return FALSE;
+    }
+    skip_trailing_addr_seps(s, &end);
+    if (end < plen)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < plen; i++)
+    {
+        if (ascii_fold((unsigned char)s[end - plen + i]) != ascii_fold((unsigned char)p[i]))
+        {
+            return FALSE;
+        }
+    }
+    if (end > plen && !is_addr_sep((unsigned char)s[end - plen - 1]))
+    {
+        return FALSE;
+    }
+    if (out_len != NULL)
+    {
+        *out_len = end - plen;
+    }
+    return TRUE;
+}
+
+static BOOL ends_with_zip5(const char *s, size_t slen, const char *zip5, size_t *out_len)
+{
+    const char *z = skip_leading_ws(zip5);
+    size_t zlen = trimmed_text_len(z);
+    size_t end = slen;
+
+    if (s == NULL || zlen == 0)
+    {
+        return FALSE;
+    }
+    skip_trailing_addr_seps(s, &end);
+
+    /* ZIP+4: 78702-1234 */
+    if (end >= zlen + 5 && s[end - 5] == '-' && is_digit_span(s + end - 4, 4) &&
+        ends_with_phrase_ci(s, end - 5, z, out_len))
+    {
+        return TRUE;
+    }
+    /* Combined 9-digit ZIP: 787021234 */
+    if (zlen == 5 && end >= 9 && is_digit_span(s + end - 9, 9) &&
+        _strnicmp(s + end - 9, z, 5) == 0 && (end == 9 || is_addr_sep((unsigned char)s[end - 10])))
+    {
+        if (out_len != NULL)
+        {
+            *out_len = end - 9;
+        }
+        return TRUE;
+    }
+    return ends_with_phrase_ci(s, end, z, out_len);
+}
+
 static BOOL compose_address(const FieldList *fields,
                             int full_idx,
                             int number_idx,
@@ -1559,7 +1693,8 @@ static BOOL compose_address(const FieldList *fields,
     out[0] = '\0';
     if (full[0] != '\0')
     {
-        /* Street-line fields such as RES_ADDR still get city/ZIP appended. */
+        /* Street-line fields such as RES_ADDR still get city/ZIP appended
+         * unless those tokens are already at the end of the line. */
         if (!append_name_part(out, out_cap, &len, full))
         {
             return FALSE;
@@ -1576,36 +1711,66 @@ static BOOL compose_address(const FieldList *fields,
         return FALSE;
     }
 
-    if (city[0] != '\0' || state[0] != '\0' || zip5[0] != '\0')
     {
-        if (len > 0 && !append_literal(out, out_cap, &len, ","))
+        size_t remain = len;
+        BOOL have_zip = FALSE;
+        BOOL have_state = FALSE;
+        BOOL have_city = FALSE;
+        BOOL need_city;
+        BOOL need_state;
+        BOOL need_zip;
+
+        if (zip5[0] != '\0' && ends_with_zip5(out, remain, zip5, &remain))
         {
-            return FALSE;
+            have_zip = TRUE;
         }
-        if (!append_name_part(out, out_cap, &len, city))
+        if (state[0] != '\0' && ends_with_phrase_ci(out, remain, state, &remain))
         {
-            return FALSE;
+            have_state = TRUE;
         }
-        if (state[0] != '\0' || zip5[0] != '\0')
+        if (city[0] != '\0' && ends_with_phrase_ci(out, remain, city, &remain))
         {
-            if (city[0] != '\0' && !append_literal(out, out_cap, &len, ","))
+            have_city = TRUE;
+        }
+
+        need_city = city[0] != '\0' && !have_city;
+        need_state = state[0] != '\0' && !have_state;
+        need_zip = zip5[0] != '\0' && !have_zip;
+
+        if (need_city || need_state || need_zip)
+        {
+            if (len > 0 && !append_literal(out, out_cap, &len, ","))
             {
                 return FALSE;
             }
-            if (!append_name_part(out, out_cap, &len, state))
+            if (need_city && !append_name_part(out, out_cap, &len, city))
             {
                 return FALSE;
             }
-            if (!append_name_part(out, out_cap, &len, zip5))
+            if (need_state || need_zip)
             {
-                return FALSE;
-            }
-            if (zip5[0] != '\0' && zip4_use[0] != '\0')
-            {
-                if (!append_literal(out, out_cap, &len, "-") ||
-                    !append_literal(out, out_cap, &len, zip4_use))
+                if (need_city && !append_literal(out, out_cap, &len, ","))
                 {
                     return FALSE;
+                }
+                if (need_state && !append_name_part(out, out_cap, &len, state))
+                {
+                    return FALSE;
+                }
+                if (need_zip)
+                {
+                    if (!append_name_part(out, out_cap, &len, zip5))
+                    {
+                        return FALSE;
+                    }
+                    if (zip4_use[0] != '\0')
+                    {
+                        if (!append_literal(out, out_cap, &len, "-") ||
+                            !append_literal(out, out_cap, &len, zip4_use))
+                        {
+                            return FALSE;
+                        }
+                    }
                 }
             }
         }

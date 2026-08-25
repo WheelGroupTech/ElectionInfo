@@ -10,6 +10,7 @@
 #include <string.h>
 #include <strsafe.h>
 #include <intsafe.h>
+#include <limits.h>
 
 /* -------------------------------------------------------------------------- */
 /* UTF-8 pool                                                                 */
@@ -92,6 +93,281 @@ static BOOL pool_add(EeVoterTable *table, const char *text, size_t len, uint32_t
     table->pool_len += len;
     table->pool[table->pool_len++] = '\0';
     return TRUE;
+}
+
+enum
+{
+    k_ColKindUnknown = 0,
+    k_ColKindNumeric = 1,
+    k_ColKindText = 2
+};
+
+static const char *skip_ws(const char *s)
+{
+    while (s != NULL && (*s == ' ' || *s == '\t'))
+    {
+        s++;
+    }
+    return s;
+}
+
+static BOOL utf8_is_number(const char *s)
+{
+    BOOL any_digit = FALSE;
+
+    s = skip_ws(s);
+    if (s == NULL || *s == '\0')
+    {
+        return FALSE;
+    }
+    if (*s == '+' || *s == '-')
+    {
+        s++;
+    }
+    while (*s >= '0' && *s <= '9')
+    {
+        any_digit = TRUE;
+        s++;
+    }
+    if (*s == '.')
+    {
+        s++;
+        while (*s >= '0' && *s <= '9')
+        {
+            any_digit = TRUE;
+            s++;
+        }
+    }
+    s = skip_ws(s);
+    return any_digit && *s == '\0';
+}
+
+static BOOL utf8_read_uint(const char **ps, unsigned *out)
+{
+    const char *s = *ps;
+    unsigned v = 0;
+    BOOL any = FALSE;
+
+    if (s == NULL || *s < '0' || *s > '9')
+    {
+        return FALSE;
+    }
+    while (*s >= '0' && *s <= '9')
+    {
+        unsigned d = (unsigned)(*s - '0');
+        if (v > (UINT_MAX - d) / 10u)
+        {
+            return FALSE;
+        }
+        v = v * 10u + d;
+        s++;
+        any = TRUE;
+    }
+    if (!any)
+    {
+        return FALSE;
+    }
+    *out = v;
+    *ps = s;
+    return TRUE;
+}
+
+static BOOL utf8_is_valid_ymd(unsigned y, unsigned m, unsigned d)
+{
+    (void)y;
+    return m >= 1 && m <= 12 && d >= 1 && d <= 31;
+}
+
+static BOOL utf8_is_date(const char *s)
+{
+    const char *p;
+    unsigned a = 0;
+    unsigned b = 0;
+    unsigned c = 0;
+    size_t n;
+
+    p = skip_ws(s);
+    if (p == NULL || *p == '\0')
+    {
+        return FALSE;
+    }
+
+    n = strlen(p);
+    while (n > 0 && (p[n - 1] == ' ' || p[n - 1] == '\t'))
+    {
+        n--;
+    }
+
+    /* YYYYMMDD */
+    if (n == 8)
+    {
+        int i;
+        for (i = 0; i < 8; i++)
+        {
+            if (p[i] < '0' || p[i] > '9')
+            {
+                break;
+            }
+        }
+        if (i == 8)
+        {
+            a = (unsigned)((p[0] - '0') * 1000 + (p[1] - '0') * 100 + (p[2] - '0') * 10 +
+                           (p[3] - '0'));
+            b = (unsigned)((p[4] - '0') * 10 + (p[5] - '0'));
+            c = (unsigned)((p[6] - '0') * 10 + (p[7] - '0'));
+            return utf8_is_valid_ymd(a, b, c);
+        }
+    }
+
+    if (!utf8_read_uint(&p, &a))
+    {
+        return FALSE;
+    }
+    if (*p == '-' || *p == '/')
+    {
+        char sep = *p++;
+        if (!utf8_read_uint(&p, &b) || *p != sep || !utf8_read_uint(&p, &c))
+        {
+            return FALSE;
+        }
+        p = skip_ws(p);
+        if (*p != '\0')
+        {
+            return FALSE;
+        }
+        if (sep == '-')
+        {
+            return utf8_is_valid_ymd(a, b, c);
+        }
+        if (c < 100)
+        {
+            c += 2000;
+        }
+        return utf8_is_valid_ymd(c, a, b);
+    }
+    return FALSE;
+}
+
+static void note_column_value(EeVoterTable *table, uint32_t column, const char *text)
+{
+    if (table == NULL || column >= EE_MAX_COLUMNS)
+    {
+        return;
+    }
+    if (table->column_value_kind[column] == k_ColKindText)
+    {
+        return;
+    }
+    text = skip_ws(text);
+    if (text == NULL || text[0] == '\0')
+    {
+        return;
+    }
+    if (utf8_is_number(text) || utf8_is_date(text))
+    {
+        table->column_value_kind[column] = k_ColKindNumeric;
+    }
+    else
+    {
+        table->column_value_kind[column] = k_ColKindText;
+    }
+}
+
+static BOOL pool_add_cell(EeVoterTable *table,
+                          uint32_t column,
+                          const char *text,
+                          size_t len,
+                          uint32_t *out_ofs)
+{
+    if (!pool_add(table, text, len, out_ofs))
+    {
+        return FALSE;
+    }
+    note_column_value(table, column, text);
+    return TRUE;
+}
+
+static void compact_title(const wchar_t *title, char *out, size_t out_cch)
+{
+    size_t n = 0;
+    if (out == NULL || out_cch == 0)
+    {
+        return;
+    }
+    out[0] = '\0';
+    if (title == NULL)
+    {
+        return;
+    }
+    while (*title != L'\0' && n + 1 < out_cch)
+    {
+        wchar_t ch = *title++;
+        if (ch >= L'A' && ch <= L'Z')
+        {
+            ch = (wchar_t)(ch - L'A' + L'a');
+        }
+        if ((ch >= L'a' && ch <= L'z') || (ch >= L'0' && ch <= L'9'))
+        {
+            out[n++] = (char)ch;
+        }
+    }
+    out[n] = '\0';
+}
+
+static BOOL title_suggests_numeric_or_date(const wchar_t *title)
+{
+    char compact[96];
+    static const char *const exact[] = {
+        "voterid",     "vuid",       "vuidno",      "sosvoterid",   "idnumber", "dob",
+        "dateofbirth", "birthdate",  "birthday",    "birthdt",      "bdate",    "age",
+        "precinct",    "precinctno", "precinctnbr", "precinctcode", "pctcod",   "pctcode",
+        "pctnbr",      "pctno",      "edrdat"};
+    size_t i;
+
+    compact_title(title, compact, sizeof(compact));
+    if (compact[0] == '\0')
+    {
+        return FALSE;
+    }
+    for (i = 0; i < ARRAYSIZE(exact); i++)
+    {
+        if (strcmp(compact, exact[i]) == 0)
+        {
+            return TRUE;
+        }
+    }
+    if (strstr(compact, "voterid") != NULL || strstr(compact, "dateofbirth") != NULL ||
+        strstr(compact, "birthdate") != NULL || strstr(compact, "precinct") != NULL)
+    {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void finalize_column_kinds(EeVoterTable *table)
+{
+    uint32_t i;
+    if (table == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < table->column_count; i++)
+    {
+        if (table->column_value_kind[i] == k_ColKindUnknown &&
+            title_suggests_numeric_or_date(table->column_titles[i]))
+        {
+            table->column_value_kind[i] = k_ColKindNumeric;
+        }
+    }
+}
+
+BOOL EeVoterTable_ColumnIsNumericOrDate(const EeVoterTable *table, uint32_t column)
+{
+    if (table == NULL || column >= table->column_count)
+    {
+        return FALSE;
+    }
+    return table->column_value_kind[column] == k_ColKindNumeric;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -2067,7 +2343,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         {
                             vuid_text = row_fields.items[vuid_idx];
                         }
-                        if (!pool_add(out_table, vuid_text, strlen(vuid_text), &cell[0]))
+                        if (!pool_add_cell(out_table, 0, vuid_text, strlen(vuid_text), &cell[0]))
                         {
                             free(read_buf);
                             free(line);
@@ -2092,7 +2368,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         {
                             name_buf[0] = '\0';
                         }
-                        if (!pool_add(out_table, name_buf, strlen(name_buf), &cell[1]))
+                        if (!pool_add_cell(out_table, 1, name_buf, strlen(name_buf), &cell[1]))
                         {
                             free(read_buf);
                             free(line);
@@ -2124,7 +2400,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             {
                                 addr_buf[0] = '\0';
                             }
-                            if (!pool_add(out_table, addr_buf, strlen(addr_buf), &cell[2]))
+                            if (!pool_add_cell(out_table, 2, addr_buf, strlen(addr_buf), &cell[2]))
                             {
                                 free(read_buf);
                                 free(line);
@@ -2146,7 +2422,11 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                                 t = row_fields.items[c];
                                 tlen = row_fields.lengths[c];
                             }
-                            if (!pool_add(out_table, t, tlen, &cell[EE_FROZEN_COLUMN_COUNT + c]))
+                            if (!pool_add_cell(out_table,
+                                               EE_FROZEN_COLUMN_COUNT + c,
+                                               t,
+                                               tlen,
+                                               &cell[EE_FROZEN_COLUMN_COUNT + c]))
                             {
                                 free(read_buf);
                                 free(line);
@@ -2244,6 +2524,8 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
         set_error(error_message, error_cch, L"No header row found.");
         return EeLoadStatus_Error;
     }
+
+    finalize_column_kinds(out_table);
 
     /* Progress 99%: data parsed; UI will push 100% when grid is ready. */
     report_progress(progress_fn, progress_user, 99, out_table->row_count, bytes_read, file_size);

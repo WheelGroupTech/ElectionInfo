@@ -102,7 +102,8 @@ extern "C"
 
     /**
  * @brief Distinct cell values for a display column (sorted, case-insensitive).
- *        Caller frees *out_values and each string.
+ *        Stops after @p max_values unique entries. Caller frees *out_values
+ *        and each string.
  */
     BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
                                   uint32_t column,

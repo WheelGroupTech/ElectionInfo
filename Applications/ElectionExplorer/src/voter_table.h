@@ -38,6 +38,9 @@ extern "C"
         uint32_t column_count;
         char delimiter; /* ',' or '\t' from the loaded file */
 
+        /* Per display column: 0 unknown, 1 numeric/date only, 2 text. */
+        uint8_t column_value_kind[EE_MAX_COLUMNS];
+
         char *pool;
         size_t pool_len;
         size_t pool_cap;
@@ -123,6 +126,14 @@ extern "C"
                                    uint32_t column,
                                    wchar_t *buffer,
                                    size_t buffer_cch);
+
+    /**
+     * @brief TRUE if this display column is known to hold only numbers or dates.
+     *
+     * Confirmed from loaded cell text. If every value is empty, known headers
+     * such as Voter ID, DOB, Age, and Precinct still count as numeric/date.
+     */
+    BOOL EeVoterTable_ColumnIsNumericOrDate(const EeVoterTable *table, uint32_t column);
 
     /**
  * @brief Sort by display column; toggles direction if same column.

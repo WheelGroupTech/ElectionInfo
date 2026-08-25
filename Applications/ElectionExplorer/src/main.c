@@ -2905,18 +2905,19 @@ static BOOL App_ShowOptions(AppState *app)
                              (HMENU)(INT_PTR)IDOK,
                              app->instance,
                              NULL);
-    btn_cancel = CreateWindowExW(0,
-                                 L"BUTTON",
-                                 L"Cancel",
-                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                 client_w - margin - btn_w,
-                                 client_h - margin - btn_h,
-                                 btn_w,
-                                 btn_h,
-                                 app->hwnd_options,
-                                 (HMENU)(INT_PTR)IDCANCEL,
-                                 app->instance,
-                                 NULL);
+    btn_cancel =
+        CreateWindowExW(0,
+                        L"BUTTON",
+                        L"Cancel",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
+                        client_w - margin - btn_w,
+                        client_h - margin - btn_h,
+                        btn_w,
+                        btn_h,
+                        app->hwnd_options,
+                        (HMENU)(INT_PTR)IDCANCEL,
+                        app->instance,
+                        NULL);
 
     if (app->font_ui)
     {
@@ -2953,6 +2954,8 @@ typedef struct FilterDlgState
     EeFilterSet draft;
     int edit_index;
     BOOL refreshing;
+    BOOL values_ready;
+    uint32_t values_column;
 } FilterDlgState;
 
 static RECT g_filter_dlg_rect;
@@ -2979,17 +2982,25 @@ static void FilterDlg_PopulateColumns(HWND combo, const EeVoterTable *table)
     SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
-static void FilterDlg_PopulateRelations(HWND combo)
+static uint32_t FilterDlg_ComboData(HWND combo, uint32_t fallback)
 {
-    static const EeFilterRelation rels[] = {EeRel_Is,
-                                            EeRel_IsNot,
-                                            EeRel_LessThan,
-                                            EeRel_MoreThan,
-                                            EeRel_BeginsWith,
-                                            EeRel_EndsWith,
-                                            EeRel_Contains,
-                                            EeRel_Excludes};
+    int sel = (int)SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (sel < 0)
+    {
+        return fallback;
+    }
+    return (uint32_t)SendMessageW(combo, CB_GETITEMDATA, (WPARAM)sel, 0);
+}
+
+static void FilterDlg_PopulateRelations(HWND combo, BOOL allow_order)
+{
+    static const EeFilterRelation rels[] =
+        {EeRel_Contains, EeRel_Excludes, EeRel_Is, EeRel_IsNot, EeRel_BeginsWith, EeRel_EndsWith};
+    EeFilterRelation keep;
+    int keep_idx = 0;
     int i;
+
+    keep = (EeFilterRelation)FilterDlg_ComboData(combo, (uint32_t)EeRel_Contains);
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
     for (i = 0; i < (int)ARRAYSIZE(rels); i++)
     {
@@ -2997,9 +3008,35 @@ static void FilterDlg_PopulateRelations(HWND combo)
         if (idx >= 0)
         {
             SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)rels[i]);
+            if (rels[i] == keep)
+            {
+                keep_idx = idx;
+            }
         }
     }
-    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+    if (allow_order)
+    {
+        static const EeFilterRelation extra[] = {EeRel_LessThan, EeRel_MoreThan};
+        for (i = 0; i < (int)ARRAYSIZE(extra); i++)
+        {
+            int idx =
+                (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)EeFilter_RelationText(extra[i]));
+            if (idx >= 0)
+            {
+                SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)extra[i]);
+                if (extra[i] == keep)
+                {
+                    keep_idx = idx;
+                }
+            }
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, (WPARAM)keep_idx, 0);
+}
+
+static BOOL FilterDlg_ColumnAllowsOrder(const AppState *app, uint32_t column)
+{
+    return app != NULL && EeVoterTable_ColumnIsNumericOrDate(&app->table, column);
 }
 
 static void FilterDlg_PopulateActions(HWND combo)
@@ -3012,26 +3049,37 @@ static void FilterDlg_PopulateActions(HWND combo)
     SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
-static uint32_t FilterDlg_ComboData(HWND combo, uint32_t fallback)
+static void FilterDlg_FillValues(HWND hwnd, FilterDlgState *st)
 {
-    int sel = (int)SendMessageW(combo, CB_GETCURSEL, 0, 0);
-    if (sel < 0)
-    {
-        return fallback;
-    }
-    return (uint32_t)SendMessageW(combo, CB_GETITEMDATA, (WPARAM)sel, 0);
-}
-
-static void FilterDlg_FillValues(HWND combo, AppState *app, uint32_t column)
-{
+    HWND combo;
+    wchar_t keep[EE_FILTER_VALUE_CCH];
     wchar_t **vals = NULL;
     uint32_t n = 0;
     uint32_t i;
-    HCURSOR prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    if (app != NULL &&
-        EeFilter_CollectDistinct(&app->table, column, EE_FILTER_MAX_DISTINCT, &vals, &n))
+    uint32_t column;
+    HCURSOR prev;
+
+    if (hwnd == NULL || st == NULL || st->app == NULL)
     {
+        return;
+    }
+    combo = GetDlgItem(hwnd, IDC_FLT_VALUE);
+    column = FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0);
+    if (st->values_ready && st->values_column == column)
+    {
+        return;
+    }
+
+    keep[0] = L'\0';
+    GetWindowTextW(combo, keep, ARRAYSIZE(keep));
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    if (EeFilter_CollectDistinct(&st->app->table, column, EE_FILTER_MAX_DISTINCT, &vals, &n))
+    {
+        if (n > 0)
+        {
+            SendMessageW(combo, CB_INITSTORAGE, (WPARAM)n, (LPARAM)(n * 32u));
+        }
         for (i = 0; i < n; i++)
         {
             SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)vals[i]);
@@ -3039,8 +3087,27 @@ static void FilterDlg_FillValues(HWND combo, AppState *app, uint32_t column)
         }
         free(vals);
     }
-    SetWindowTextW(combo, L"");
+    SetWindowTextW(combo, keep);
     SetCursor(prev);
+    st->values_ready = TRUE;
+    st->values_column = column;
+}
+
+static void FilterDlg_InvalidateValues(HWND hwnd, FilterDlgState *st, BOOL clear_text)
+{
+    HWND combo = GetDlgItem(hwnd, IDC_FLT_VALUE);
+    if (st != NULL)
+    {
+        st->values_ready = FALSE;
+    }
+    if (combo != NULL)
+    {
+        SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+        if (clear_text)
+        {
+            SetWindowTextW(combo, L"");
+        }
+    }
 }
 
 static void FilterDlg_RefreshList(HWND list, FilterDlgState *st)
@@ -3094,7 +3161,10 @@ static void FilterDlg_LoadRuleToControls(HWND hwnd, FilterDlgState *st, const Ee
             break;
         }
     }
-    FilterDlg_FillValues(val, st != NULL ? st->app : NULL, r->column);
+    FilterDlg_InvalidateValues(hwnd, st, FALSE);
+    FilterDlg_PopulateRelations(
+        rel,
+        FilterDlg_ColumnAllowsOrder(st != NULL ? st->app : NULL, r->column));
     n = (int)SendMessageW(rel, CB_GETCOUNT, 0, 0);
     for (i = 0; i < n; i++)
     {
@@ -3156,7 +3226,7 @@ static BOOL FilterDlg_ReadControls(HWND hwnd, EeFilterRule *r)
     ZeroMemory(r, sizeof(*r));
     r->column = FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0);
     r->relation = (EeFilterRelation)FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_RELATION),
-                                                        (uint32_t)EeRel_Is);
+                                                        (uint32_t)EeRel_Contains);
     r->action = (EeFilterAction)FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_ACTION),
                                                     (uint32_t)EeFilt_Include);
     r->enabled = TRUE;
@@ -3164,55 +3234,120 @@ static BOOL FilterDlg_ReadControls(HWND hwnd, EeFilterRule *r)
     return TRUE;
 }
 
+static HDWP FilterDlg_Defer(HDWP hdwp, HWND hwnd, int id, int x, int y, int w, int h)
+{
+    HWND child;
+    if (hdwp == NULL)
+    {
+        return NULL;
+    }
+    child = GetDlgItem(hwnd, id);
+    if (child == NULL)
+    {
+        return hdwp;
+    }
+    return DeferWindowPos(hdwp,
+                          child,
+                          NULL,
+                          x,
+                          y,
+                          w,
+                          h,
+                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+}
+
 static void FilterDlg_Layout(HWND hwnd, AppState *app)
 {
     RECT rc;
+    HDWP hdwp;
     int m = Scale(app, 12);
     int row_h = Scale(app, 24);
     int gap = Scale(app, 6);
     int btn_w = Scale(app, 80);
     int btn_h = Scale(app, 26);
-    int y;
-    int x;
     int cw;
     int ch;
-    int list_bottom;
+    int prompt_y;
+    int add_y;
+    int list_y;
+    int btn_y;
+    int list_h;
+    int x;
 
     GetClientRect(hwnd, &rc);
     cw = rc.right - rc.left;
     ch = rc.bottom - rc.top;
-    y = m;
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_PROMPT), m, y, cw - m * 2, row_h, TRUE);
-    y += row_h + gap;
-    x = m;
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_COLUMN), x, y, Scale(app, 170), Scale(app, 200), TRUE);
-    x += Scale(app, 176);
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_RELATION), x, y, Scale(app, 110), Scale(app, 200), TRUE);
-    x += Scale(app, 116);
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_VALUE), x, y, Scale(app, 180), Scale(app, 200), TRUE);
-    x += Scale(app, 186);
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_ACTION), x, y, Scale(app, 90), Scale(app, 200), TRUE);
-    x += Scale(app, 96);
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_ADD), x, y, btn_w, btn_h, TRUE);
-    x += btn_w + gap;
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_REMOVE), x, y, btn_w, btn_h, TRUE);
-    y += row_h + gap;
-    list_bottom = ch - m - btn_h - gap;
-    if (list_bottom < y + Scale(app, 80))
+
+    prompt_y = m;
+    add_y = prompt_y + row_h + gap;
+    list_y = add_y + row_h + gap;
+    btn_y = ch - m - btn_h;
+    list_h = btn_y - gap - list_y;
+    if (list_h < 0)
     {
-        list_bottom = y + Scale(app, 80);
+        list_h = 0;
     }
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_LIST), m, y, cw - m * 2, list_bottom - y, TRUE);
-    y = ch - m - btn_h;
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_RESET), m, y, btn_w, btn_h, TRUE);
-    MoveWindow(GetDlgItem(hwnd, IDC_FLT_APPLY),
-               cw - m - btn_w * 3 - gap * 2,
-               y,
-               btn_w,
-               btn_h,
-               TRUE);
-    MoveWindow(GetDlgItem(hwnd, IDOK), cw - m - btn_w * 2 - gap, y, btn_w, btn_h, TRUE);
-    MoveWindow(GetDlgItem(hwnd, IDCANCEL), cw - m - btn_w, y, btn_w, btn_h, TRUE);
+
+    x = m;
+    hdwp = BeginDeferWindowPos(12);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_PROMPT, m, prompt_y, cw - m * 2, row_h);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_COLUMN, x, add_y, Scale(app, 170), Scale(app, 200));
+    x += Scale(app, 176);
+    hdwp =
+        FilterDlg_Defer(hdwp, hwnd, IDC_FLT_RELATION, x, add_y, Scale(app, 110), Scale(app, 200));
+    x += Scale(app, 116);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_VALUE, x, add_y, Scale(app, 180), Scale(app, 200));
+    x += Scale(app, 186);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_ACTION, x, add_y, Scale(app, 90), Scale(app, 200));
+    x += Scale(app, 96);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_ADD, x, add_y, btn_w, btn_h);
+    x += btn_w + gap;
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_REMOVE, x, add_y, btn_w, btn_h);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_LIST, m, list_y, cw - m * 2, list_h);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_RESET, m, btn_y, btn_w, btn_h);
+    hdwp = FilterDlg_Defer(hdwp,
+                           hwnd,
+                           IDC_FLT_APPLY,
+                           cw - m - btn_w * 3 - gap * 2,
+                           btn_y,
+                           btn_w,
+                           btn_h);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDOK, cw - m - btn_w * 2 - gap, btn_y, btn_w, btn_h);
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDCANCEL, cw - m - btn_w, btn_y, btn_w, btn_h);
+    if (hdwp != NULL)
+    {
+        EndDeferWindowPos(hdwp);
+    }
+
+    /* Keep the button row above the list if a resize ever clips. */
+    SetWindowPos(GetDlgItem(hwnd, IDC_FLT_RESET),
+                 HWND_TOP,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(hwnd, IDC_FLT_APPLY),
+                 HWND_TOP,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(hwnd, IDOK),
+                 HWND_TOP,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(hwnd, IDCANCEL),
+                 HWND_TOP,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 static void FilterDlg_Apply(FilterDlgState *st)
@@ -3252,6 +3387,12 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 FilterDlg_Layout(hwnd, st->app);
             }
             return 0;
+        case WM_EXITSIZEMOVE:
+            RedrawWindow(hwnd,
+                         NULL,
+                         NULL,
+                         RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+            return 0;
         case WM_GETMINMAXINFO:
         {
             MINMAXINFO *mm = (MINMAXINFO *)lParam;
@@ -3277,7 +3418,15 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     if (HIWORD(wParam) == CBN_SELCHANGE)
                     {
                         uint32_t col = FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0);
-                        FilterDlg_FillValues(GetDlgItem(hwnd, IDC_FLT_VALUE), st->app, col);
+                        FilterDlg_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION),
+                                                    FilterDlg_ColumnAllowsOrder(st->app, col));
+                        FilterDlg_InvalidateValues(hwnd, st, TRUE);
+                    }
+                    return 0;
+                case IDC_FLT_VALUE:
+                    if (HIWORD(wParam) == CBN_DROPDOWN)
+                    {
+                        FilterDlg_FillValues(hwnd, st);
                     }
                     return 0;
                 case IDC_FLT_ADD:
@@ -3460,7 +3609,8 @@ static BOOL App_ShowFilter(AppState *app)
 {
     FilterDlgState *st;
     RECT rc_wnd;
-    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX;
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX |
+                        WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
     int client_w;
     int client_h;
@@ -3619,7 +3769,7 @@ static BOOL App_ShowFilter(AppState *app)
     CreateWindowExW(0,
                     L"BUTTON",
                     L"Add",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
                     0,
                     0,
                     0,
@@ -3631,7 +3781,7 @@ static BOOL App_ShowFilter(AppState *app)
     CreateWindowExW(0,
                     L"BUTTON",
                     L"Remove",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
                     0,
                     0,
                     0,
@@ -3643,8 +3793,8 @@ static BOOL App_ShowFilter(AppState *app)
     list = CreateWindowExW(WS_EX_CLIENTEDGE,
                            WC_LISTVIEWW,
                            L"",
-                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS |
-                               LVS_SHAREIMAGELISTS,
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | LVS_REPORT |
+                               LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS,
                            0,
                            0,
                            0,
@@ -3656,7 +3806,7 @@ static BOOL App_ShowFilter(AppState *app)
     CreateWindowExW(0,
                     L"BUTTON",
                     L"Reset",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
                     0,
                     0,
                     0,
@@ -3668,7 +3818,7 @@ static BOOL App_ShowFilter(AppState *app)
     CreateWindowExW(0,
                     L"BUTTON",
                     L"Apply",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
                     0,
                     0,
                     0,
@@ -3680,7 +3830,7 @@ static BOOL App_ShowFilter(AppState *app)
     CreateWindowExW(0,
                     L"BUTTON",
                     L"OK",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_DEFPUSHBUTTON,
                     0,
                     0,
                     0,
@@ -3692,7 +3842,7 @@ static BOOL App_ShowFilter(AppState *app)
     CreateWindowExW(0,
                     L"BUTTON",
                     L"Cancel",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
                     0,
                     0,
                     0,
@@ -3731,9 +3881,9 @@ static BOOL App_ShowFilter(AppState *app)
     ListView_InsertColumn(list, 3, &col);
 
     FilterDlg_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), &app->table);
-    FilterDlg_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION));
+    FilterDlg_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION),
+                                FilterDlg_ColumnAllowsOrder(app, 0));
     FilterDlg_PopulateActions(GetDlgItem(hwnd, IDC_FLT_ACTION));
-    FilterDlg_FillValues(GetDlgItem(hwnd, IDC_FLT_VALUE), app, 0);
     FilterDlg_RefreshList(list, st);
     FilterDlg_Layout(hwnd, app);
 

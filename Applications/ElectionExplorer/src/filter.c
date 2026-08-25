@@ -469,20 +469,76 @@ BOOL EeFilter_BuildMap(const EeFilterSet *set,
     return TRUE;
 }
 
-static int distinct_cmp(void *ctx, const void *a, const void *b)
+static unsigned hash_ci_utf8(const char *s)
 {
-    const char *sa = *(const char *const *)a;
-    const char *sb = *(const char *const *)b;
+    unsigned h = 2166136261u;
+    if (s == NULL)
+    {
+        s = "";
+    }
+    while (*s != '\0')
+    {
+        unsigned char c = (unsigned char)*s++;
+        if (c >= 'A' && c <= 'Z')
+        {
+            c = (unsigned char)(c + ('a' - 'A'));
+        }
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static uint32_t distinct_bucket_count(uint32_t max_values)
+{
+    ULONG n = 0;
+    if (FAILED(ULongMult((ULONG)max_values, 2u, &n)))
+    {
+        return 0;
+    }
+    if (n < 16u)
+    {
+        n = 16u;
+    }
+    /* Next power of two so probes can mask instead of divide. */
+    n--;
+    n |= n >> 1;
+    n |= n >> 2;
+    n |= n >> 4;
+    n |= n >> 8;
+    n |= n >> 16;
+    n++;
+    return (uint32_t)n;
+}
+
+static int distinct_wide_cmp(void *ctx, const void *a, const void *b)
+{
+    const wchar_t *sa = *(const wchar_t *const *)a;
+    const wchar_t *sb = *(const wchar_t *const *)b;
     (void)ctx;
     if (sa == NULL)
     {
-        sa = "";
+        sa = L"";
     }
     if (sb == NULL)
     {
-        sb = "";
+        sb = L"";
     }
-    return _stricmp(sa, sb);
+    return _wcsicmp(sa, sb);
+}
+
+static void distinct_free_vals(wchar_t **vals, uint32_t count)
+{
+    uint32_t i;
+    if (vals == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(vals[i]);
+    }
+    free(vals);
 }
 
 BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
@@ -491,8 +547,10 @@ BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
                               wchar_t ***out_values,
                               uint32_t *out_count)
 {
-    const char **ptrs = NULL;
+    const char **slots = NULL;
     wchar_t **vals = NULL;
+    uint32_t cap;
+    uint32_t mask;
     uint32_t i;
     uint32_t unique = 0;
 
@@ -507,56 +565,78 @@ BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
         return TRUE;
     }
 
-    ptrs = (const char **)malloc((size_t)table->row_count * sizeof(char *));
-    if (ptrs == NULL)
+    cap = distinct_bucket_count(max_values);
+    if (cap == 0)
     {
         return FALSE;
     }
-    for (i = 0; i < table->row_count; i++)
+    mask = cap - 1u;
+    slots = (const char **)calloc((size_t)cap, sizeof(char *));
+    if (slots == NULL)
     {
-        ptrs[i] = EeVoterTable_GetViewCellUtf8(table, i, column);
+        return FALSE;
     }
-    qsort_s((void *)ptrs, table->row_count, sizeof(char *), distinct_cmp, NULL);
 
-    vals = (wchar_t **)calloc((size_t)max_values, sizeof(wchar_t *));
-    if (vals == NULL)
-    {
-        free(ptrs);
-        return FALSE;
-    }
     for (i = 0; i < table->row_count && unique < max_values; i++)
     {
-        const char *cur = ptrs[i] ? ptrs[i] : "";
-        if (i > 0)
+        const char *cur = EeVoterTable_GetViewCellUtf8(table, i, column);
+        uint32_t b;
+        if (cur == NULL)
         {
-            const char *prev = ptrs[i - 1] ? ptrs[i - 1] : "";
-            if (_stricmp(cur, prev) == 0)
-            {
-                continue;
-            }
+            cur = "";
         }
+        b = hash_ci_utf8(cur) & mask;
+        for (;;)
         {
-            wchar_t tmp[EE_FILTER_VALUE_CCH];
-            size_t cch;
-            cell_to_wide(cur, tmp, ARRAYSIZE(tmp));
-            cch = wcslen(tmp) + 1;
-            vals[unique] = (wchar_t *)malloc(cch * sizeof(wchar_t));
-            if (vals[unique] == NULL)
+            if (slots[b] == NULL)
             {
-                uint32_t k;
-                for (k = 0; k < unique; k++)
-                {
-                    free(vals[k]);
-                }
-                free(vals);
-                free(ptrs);
-                return FALSE;
+                slots[b] = cur;
+                unique++;
+                break;
             }
-            StringCchCopyW(vals[unique], cch, tmp);
-            unique++;
+            if (_stricmp(slots[b], cur) == 0)
+            {
+                break;
+            }
+            b = (b + 1u) & mask;
         }
     }
-    free(ptrs);
+
+    if (unique == 0)
+    {
+        free(slots);
+        return TRUE;
+    }
+
+    vals = (wchar_t **)calloc((size_t)unique, sizeof(wchar_t *));
+    if (vals == NULL)
+    {
+        free(slots);
+        return FALSE;
+    }
+    unique = 0;
+    for (i = 0; i < cap; i++)
+    {
+        wchar_t tmp[EE_FILTER_VALUE_CCH];
+        size_t cch;
+        if (slots[i] == NULL)
+        {
+            continue;
+        }
+        cell_to_wide(slots[i], tmp, ARRAYSIZE(tmp));
+        cch = wcslen(tmp) + 1;
+        vals[unique] = (wchar_t *)malloc(cch * sizeof(wchar_t));
+        if (vals[unique] == NULL)
+        {
+            distinct_free_vals(vals, unique);
+            free(slots);
+            return FALSE;
+        }
+        StringCchCopyW(vals[unique], cch, tmp);
+        unique++;
+    }
+    free(slots);
+    qsort_s((void *)vals, unique, sizeof(wchar_t *), distinct_wide_cmp, NULL);
     *out_values = vals;
     *out_count = unique;
     return TRUE;

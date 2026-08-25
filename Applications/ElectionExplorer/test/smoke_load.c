@@ -627,6 +627,32 @@ static int test_filter_logic(void)
     free(map);
     map = NULL;
 
+    if (!EeVoterTable_ColumnIsNumericOrDate(&t, 0) || EeVoterTable_ColumnIsNumericOrDate(&t, 1) ||
+        EeVoterTable_ColumnIsNumericOrDate(&t, 2) ||
+        !EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)pct) ||
+        EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)city) ||
+        EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)gender))
+    {
+        wprintf(L"filter: column kind mismatch id=%d name=%d addr=%d pct=%d city=%d gender=%d\n",
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, 0),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, 1),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, 2),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)pct),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)city),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)gender));
+        goto done;
+    }
+    {
+        int split = find_column(&t, L"PCTSPT");
+        int dob = find_column(&t, L"EDRDAT");
+        if (split < 0 || EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)split) || dob < 0 ||
+            !EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)dob))
+        {
+            wprintf(L"filter: PCTSPT/EDRDAT kind mismatch\n");
+            goto done;
+        }
+    }
+
     rc = 0;
     wprintf(L"filter ok\n");
 
@@ -641,6 +667,56 @@ done:
     return rc;
 }
 
+static int test_empty_numeric_header(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int age;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_empty_age.csv")))
+    {
+        wprintf(L"agehdr: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"agehdr: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUIDNO,AGE,LSTNAM\n1,,Smith\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"agehdr: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    age = find_column(&t, L"AGE");
+    if (age < 0 || !EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)age) ||
+        !EeVoterTable_ColumnIsNumericOrDate(&t, 0) || EeVoterTable_ColumnIsNumericOrDate(&t, 1))
+    {
+        wprintf(L"agehdr: expected empty AGE to be numeric by header\n");
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    rc = 0;
+    wprintf(L"agehdr ok\n");
+    EeVoterTable_Clear(&t);
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -652,5 +728,6 @@ int wmain(void)
     failed |= test_zip4_omits_zeros();
     failed |= test_res_addr_fields();
     failed |= test_filter_logic();
+    failed |= test_empty_numeric_header();
     return failed == 0 ? 0 : 1;
 }

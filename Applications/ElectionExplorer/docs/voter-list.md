@@ -49,11 +49,13 @@ dialog. There are no built-in default rules; **Reset** and **Reset Filter**
 clear the list.
 
 Add a rule with **Column** (every frozen and source field), **Relation**
-(`is`, `is not`, `less than`, `more than`, `begins with`, `ends with`,
-`contains`, `excludes`), **Value** (distinct values from the loaded data,
-or type your own), **Include** / **Exclude**, and **Add**. Each rule can be
-enabled or disabled with its checkbox. **Apply** updates the grid without
-closing; **OK** applies and closes; **Cancel** discards edits.
+(`contains`, `excludes`, `is`, `is not`, `begins with`, `ends with`; plus
+`less than` / `more than` only for number or date columns such as Voter ID,
+DOB, Age, and Precinct, or any field whose loaded values are only numbers
+or dates), **Value** (distinct values from the loaded data, or type your
+own), **Include** / **Exclude**, and **Add**. Each rule can be enabled or
+disabled with its checkbox. **Apply** updates the grid without closing;
+**OK** applies and closes; **Cancel** discards edits.
 
 Evaluation matches Process Monitor:
 

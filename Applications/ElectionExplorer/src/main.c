@@ -2381,7 +2381,10 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
                                           hit_col,
                                           hit_value,
                                           ARRAYSIZE(hit_value));
-                have_cell = TRUE;
+                if (hit_value[0] != L'\0')
+                {
+                    have_cell = TRUE;
+                }
             }
         }
 
@@ -2397,10 +2400,6 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
                 shown[37] = L'.';
                 shown[38] = L'.';
                 shown[39] = L'\0';
-            }
-            if (shown[0] == L'\0')
-            {
-                StringCchCopyW(shown, ARRAYSIZE(shown), L"(empty)");
             }
             StringCchPrintfW(inc, ARRAYSIZE(inc), L"&Include \"%s\"", shown);
             StringCchPrintfW(exc, ARRAYSIZE(exc), L"&Exclude \"%s\"", shown);

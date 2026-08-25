@@ -3368,6 +3368,31 @@ static void FilterDlg_Apply(FilterDlgState *st)
     App_ApplyFilter(st->app);
 }
 
+static void FilterDlg_RestoreOwner(AppState *app)
+{
+    if (app == NULL || app->hwnd_main == NULL)
+    {
+        return;
+    }
+    /* Owner must be enabled before the dialog is destroyed; otherwise Windows
+     * activates some other top-level window and the viewer drops behind it. */
+    if (app->hwnd_progress == NULL)
+    {
+        EnableWindow(app->hwnd_main, TRUE);
+        SetForegroundWindow(app->hwnd_main);
+        SetActiveWindow(app->hwnd_main);
+    }
+}
+
+static void FilterDlg_Close(HWND hwnd, FilterDlgState *st)
+{
+    if (st != NULL)
+    {
+        FilterDlg_RestoreOwner(st->app);
+    }
+    DestroyWindow(hwnd);
+}
+
 static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     FilterDlgState *st = (FilterDlgState *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -3485,10 +3510,10 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     return 0;
                 case IDOK:
                     FilterDlg_Apply(st);
-                    DestroyWindow(hwnd);
+                    FilterDlg_Close(hwnd, st);
                     return 0;
                 case IDCANCEL:
-                    DestroyWindow(hwnd);
+                    FilterDlg_Close(hwnd, st);
                     return 0;
                 default:
                     break;
@@ -3575,7 +3600,7 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             break;
         case WM_CLOSE:
-            DestroyWindow(hwnd);
+            FilterDlg_Close(hwnd, st);
             return 0;
         case WM_DESTROY:
         {
@@ -3587,7 +3612,7 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             {
                 if (st->app != NULL)
                 {
-                    if (st->app->hwnd_progress == NULL)
+                    if (st->app->hwnd_progress == NULL && st->app->hwnd_main != NULL)
                     {
                         EnableWindow(st->app->hwnd_main, TRUE);
                     }

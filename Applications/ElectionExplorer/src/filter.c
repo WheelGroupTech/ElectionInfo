@@ -122,6 +122,20 @@ BOOL EeFilter_HasEnabled(const EeFilterSet *set)
     return FALSE;
 }
 
+BOOL EeFilter_RuleIsValid(const EeFilterRule *rule, const EeVoterTable *table)
+{
+    if (rule == NULL || table == NULL || rule->column >= table->column_count)
+    {
+        return FALSE;
+    }
+    if ((rule->relation == EeRel_LessThan || rule->relation == EeRel_MoreThan) &&
+        EeVoterTable_ColumnIsDate(table, rule->column))
+    {
+        return EeVoterTable_ParseDateYmdW(rule->value, NULL);
+    }
+    return TRUE;
+}
+
 const wchar_t *EeFilter_RelationText(EeFilterRelation rel)
 {
     switch (rel)
@@ -180,76 +194,6 @@ static BOOL parse_number(const wchar_t *s, double *out)
     return TRUE;
 }
 
-static BOOL parse_date_ymd(const wchar_t *s, uint32_t *out_ymd)
-{
-    unsigned y = 0;
-    unsigned m = 0;
-    unsigned d = 0;
-    const wchar_t *p = s;
-    int n = 0;
-
-    if (s == NULL || s[0] == L'\0')
-    {
-        return FALSE;
-    }
-    while (*p == L' ' || *p == L'\t')
-    {
-        p++;
-    }
-    /* YYYYMMDD */
-    if (wcslen(p) >= 8)
-    {
-        int i;
-        BOOL digits = TRUE;
-        for (i = 0; i < 8; i++)
-        {
-            if (p[i] < L'0' || p[i] > L'9')
-            {
-                digits = FALSE;
-                break;
-            }
-        }
-        if (digits && (p[8] == L'\0' || p[8] == L' '))
-        {
-            y = (unsigned)((p[0] - L'0') * 1000 + (p[1] - L'0') * 100 + (p[2] - L'0') * 10 +
-                           (p[3] - L'0'));
-            m = (unsigned)((p[4] - L'0') * 10 + (p[5] - L'0'));
-            d = (unsigned)((p[6] - L'0') * 10 + (p[7] - L'0'));
-            if (m >= 1 && m <= 12 && d >= 1 && d <= 31)
-            {
-                if (out_ymd)
-                {
-                    *out_ymd = y * 10000u + m * 100u + d;
-                }
-                return TRUE;
-            }
-        }
-    }
-    if (swscanf_s(p, L"%u-%u-%u%n", &y, &m, &d, &n) == 3 && n > 0 && m >= 1 && m <= 12 && d >= 1 &&
-        d <= 31)
-    {
-        if (out_ymd)
-        {
-            *out_ymd = y * 10000u + m * 100u + d;
-        }
-        return TRUE;
-    }
-    if (swscanf_s(p, L"%u/%u/%u%n", &m, &d, &y, &n) == 3 && n > 0 && m >= 1 && m <= 12 && d >= 1 &&
-        d <= 31)
-    {
-        if (y < 100)
-        {
-            y += 2000;
-        }
-        if (out_ymd)
-        {
-            *out_ymd = y * 10000u + m * 100u + d;
-        }
-        return TRUE;
-    }
-    return FALSE;
-}
-
 static void cell_to_wide(const char *utf8, wchar_t *buf, size_t cch)
 {
     buf[0] = L'\0';
@@ -267,7 +211,7 @@ static void cell_to_wide(const char *utf8, wchar_t *buf, size_t cch)
     }
 }
 
-static BOOL rule_matches_cell(const EeFilterRule *rule, const wchar_t *cell)
+static BOOL rule_matches_cell(const EeFilterRule *rule, const wchar_t *cell, BOOL date_column)
 {
     wchar_t a[EE_FILTER_VALUE_CCH];
     wchar_t b[EE_FILTER_VALUE_CCH];
@@ -304,8 +248,13 @@ static BOOL rule_matches_cell(const EeFilterRule *rule, const wchar_t *cell)
         case EeRel_Excludes:
             return wcsstr(a, b) == NULL;
         case EeRel_LessThan:
-            if (parse_date_ymd(cell, &da) && parse_date_ymd(rule->value, &db))
+            if (date_column)
             {
+                if (!EeVoterTable_ParseDateYmdW(cell, &da) ||
+                    !EeVoterTable_ParseDateYmdW(rule->value, &db))
+                {
+                    return FALSE;
+                }
                 return da < db;
             }
             if (parse_number(cell, &na) && parse_number(rule->value, &nb))
@@ -314,8 +263,13 @@ static BOOL rule_matches_cell(const EeFilterRule *rule, const wchar_t *cell)
             }
             return CompareStringOrdinal(a, -1, b, -1, TRUE) == CSTR_LESS_THAN;
         case EeRel_MoreThan:
-            if (parse_date_ymd(cell, &da) && parse_date_ymd(rule->value, &db))
+            if (date_column)
             {
+                if (!EeVoterTable_ParseDateYmdW(cell, &da) ||
+                    !EeVoterTable_ParseDateYmdW(rule->value, &db))
+                {
+                    return FALSE;
+                }
                 return da > db;
             }
             if (parse_number(cell, &na) && parse_number(rule->value, &nb))
@@ -339,7 +293,7 @@ static BOOL rule_matches_row(const EeFilterRule *rule, const EeVoterTable *table
     }
     utf8 = EeVoterTable_GetViewCellUtf8(table, view_row, rule->column);
     cell_to_wide(utf8, cell, ARRAYSIZE(cell));
-    return rule_matches_cell(rule, cell);
+    return rule_matches_cell(rule, cell, EeVoterTable_ColumnIsDate(table, rule->column));
 }
 
 BOOL EeFilter_AcceptsViewRow(const EeFilterSet *set, const EeVoterTable *table, uint32_t view_row)

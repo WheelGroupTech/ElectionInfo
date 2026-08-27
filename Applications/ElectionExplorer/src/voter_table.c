@@ -489,6 +489,29 @@ BOOL EeVoterTable_ColumnIsNumericOrDate(const EeVoterTable *table, uint32_t colu
     return table->column_value_kind[column] == k_ColKindNumeric;
 }
 
+BOOL EeVoterTable_ColumnIsDate(const EeVoterTable *table, uint32_t column)
+{
+    if (table == NULL || column >= table->column_count)
+    {
+        return FALSE;
+    }
+    return table->column_is_date[column] != 0;
+}
+
+BOOL EeVoterTable_ParseDateYmdW(const wchar_t *s, uint32_t *out_ymd)
+{
+    char utf8[256];
+    if (s == NULL)
+    {
+        return FALSE;
+    }
+    if (WideCharToMultiByte(CP_UTF8, 0, s, -1, utf8, (int)sizeof(utf8), NULL, NULL) <= 0)
+    {
+        return FALSE;
+    }
+    return parse_utf8_ymd(utf8, out_ymd);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Rows                                                                       */
 /* -------------------------------------------------------------------------- */

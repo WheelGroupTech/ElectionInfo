@@ -3680,6 +3680,15 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     EeFilterRule r;
                     if (FilterDlg_ReadControls(hwnd, &r))
                     {
+                        if (!EeFilter_RuleIsValid(&r, &st->app->table))
+                        {
+                            MessageBoxW(hwnd,
+                                        L"Enter a date for this comparison "
+                                        L"(for example 1/15/2020 or 20200115).",
+                                        L"Election Explorer Filter",
+                                        MB_ICONINFORMATION | MB_OK);
+                            return 0;
+                        }
                         if (st->edit_index >= 0 && (uint32_t)st->edit_index < st->draft.count)
                         {
                             EeFilter_Set(&st->draft, (uint32_t)st->edit_index, &r);

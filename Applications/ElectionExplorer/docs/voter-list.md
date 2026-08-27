@@ -54,7 +54,9 @@ Add a rule with **Column** (every frozen and source field), **Relation**
 `less than` / `more than` only for number or date columns such as Voter ID,
 DOB, Age, and Precinct, or any field whose loaded values are only numbers
 or dates), **Value** (distinct values from the loaded data, or type your
-own), **Include** / **Exclude**, and **Add**. Each rule can be enabled or
+own), **Include** / **Exclude**, and **Add**. On date columns, **less than**
+and **more than** compare calendar dates (`M/D/YYYY`, `YYYY-MM-DD`,
+`YYYYMMDD`); a non-date value is not accepted. Each rule can be enabled or
 disabled with its checkbox. **Apply** updates the grid without closing;
 **OK** applies and closes; **Cancel** discards edits.
 

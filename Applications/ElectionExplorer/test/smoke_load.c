@@ -531,6 +531,7 @@ static int test_filter_logic(void)
     int city;
     int pct;
     int gender;
+    int edr;
     int rc = 1;
 
     EeVoterTable_Init(&t);
@@ -550,7 +551,8 @@ static int test_filter_logic(void)
     city = find_column(&t, L"RSCITY");
     pct = find_column(&t, L"PCTCOD");
     gender = find_column(&t, L"GENDER");
-    if (city < 0 || pct < 0 || gender < 0 || t.row_count != 5)
+    edr = find_column(&t, L"EDRDAT");
+    if (city < 0 || pct < 0 || gender < 0 || edr < 0 || t.row_count != 5)
     {
         wprintf(L"filter: unexpected columns/rows city=%d pct=%d gender=%d rows=%u\n",
                 city,
@@ -651,6 +653,28 @@ static int test_filter_logic(void)
     if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
     {
         wprintf(L"filter: PCTCOD more than 102 expected 1 row\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)edr, EeRel_LessThan, EeFilt_Include, L"abc", TRUE);
+    if (EeFilter_RuleIsValid(&r, &t))
+    {
+        wprintf(L"filter: date less-than should reject non-date value\n");
+        goto done;
+    }
+    r = make_rule((uint32_t)edr, EeRel_LessThan, EeFilt_Include, L"20200101", TRUE);
+    if (!EeFilter_RuleIsValid(&r, &t) || !EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 2)
+    {
+        wprintf(L"filter: EDRDAT less than 20200101 expected 2 rows\n");
+        goto done;
+    }
+
+    EeFilter_Clear(&set);
+    r = make_rule((uint32_t)edr, EeRel_MoreThan, EeFilt_Include, L"1/1/2020", TRUE);
+    if (!EeFilter_RuleIsValid(&r, &t) || !EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 3)
+    {
+        wprintf(L"filter: EDRDAT more than 1/1/2020 expected 3 rows\n");
         goto done;
     }
 

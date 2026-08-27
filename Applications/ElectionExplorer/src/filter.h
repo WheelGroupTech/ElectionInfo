@@ -84,6 +84,12 @@ extern "C"
     BOOL EeFilter_HasEnabled(const EeFilterSet *set);
 
     /**
+     * @brief TRUE if the rule can be added. Date columns with less than / more
+     *        than require a date compare value.
+     */
+    BOOL EeFilter_RuleIsValid(const EeFilterRule *rule, const EeVoterTable *table);
+
+    /**
  * @brief ProcMon visibility: same-column includes OR, different columns AND;
  *        any matching exclude hides the row.
  */

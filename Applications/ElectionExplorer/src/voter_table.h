@@ -138,6 +138,17 @@ extern "C"
     BOOL EeVoterTable_ColumnIsNumericOrDate(const EeVoterTable *table, uint32_t column);
 
     /**
+     * @brief TRUE if this display column is a date field (header contains Date, EDR, …).
+     */
+    BOOL EeVoterTable_ColumnIsDate(const EeVoterTable *table, uint32_t column);
+
+    /**
+     * @brief Parse a date to YYYYMMDD. Accepts YYYYMMDD, YYYY-MM-DD, and M/D/YYYY.
+     * @return FALSE if @p s is not a date. @p out_ymd may be NULL.
+     */
+    BOOL EeVoterTable_ParseDateYmdW(const wchar_t *s, uint32_t *out_ymd);
+
+    /**
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);

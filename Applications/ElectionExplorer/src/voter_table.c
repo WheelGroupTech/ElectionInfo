@@ -178,12 +178,15 @@ static BOOL utf8_is_valid_ymd(unsigned y, unsigned m, unsigned d)
     return m >= 1 && m <= 12 && d >= 1 && d <= 31;
 }
 
-static BOOL utf8_is_date(const char *s)
+static BOOL parse_utf8_ymd(const char *s, uint32_t *out_ymd)
 {
     const char *p;
     unsigned a = 0;
     unsigned b = 0;
     unsigned c = 0;
+    unsigned y = 0;
+    unsigned m = 0;
+    unsigned d = 0;
     size_t n;
 
     p = skip_ws(s);
@@ -211,11 +214,19 @@ static BOOL utf8_is_date(const char *s)
         }
         if (i == 8)
         {
-            a = (unsigned)((p[0] - '0') * 1000 + (p[1] - '0') * 100 + (p[2] - '0') * 10 +
+            y = (unsigned)((p[0] - '0') * 1000 + (p[1] - '0') * 100 + (p[2] - '0') * 10 +
                            (p[3] - '0'));
-            b = (unsigned)((p[4] - '0') * 10 + (p[5] - '0'));
-            c = (unsigned)((p[6] - '0') * 10 + (p[7] - '0'));
-            return utf8_is_valid_ymd(a, b, c);
+            m = (unsigned)((p[4] - '0') * 10 + (p[5] - '0'));
+            d = (unsigned)((p[6] - '0') * 10 + (p[7] - '0'));
+            if (utf8_is_valid_ymd(y, m, d))
+            {
+                if (out_ymd != NULL)
+                {
+                    *out_ymd = y * 10000u + m * 100u + d;
+                }
+                return TRUE;
+            }
+            return FALSE;
         }
     }
 
@@ -223,29 +234,58 @@ static BOOL utf8_is_date(const char *s)
     {
         return FALSE;
     }
-    if (*p == '-' || *p == '/')
+    if (*p != '-' && *p != '/')
+    {
+        return FALSE;
+    }
     {
         char sep = *p++;
-        if (!utf8_read_uint(&p, &b) || *p != sep || !utf8_read_uint(&p, &c))
+        if (!utf8_read_uint(&p, &b) || *p != sep)
         {
             return FALSE;
         }
-        p = skip_ws(p);
-        if (*p != '\0')
+        p++;
+        if (!utf8_read_uint(&p, &c))
         {
             return FALSE;
         }
-        if (sep == '-')
-        {
-            return utf8_is_valid_ymd(a, b, c);
-        }
-        if (c < 100)
-        {
-            c += 2000;
-        }
-        return utf8_is_valid_ymd(c, a, b);
     }
-    return FALSE;
+    p = skip_ws(p);
+    if (*p != '\0')
+    {
+        return FALSE;
+    }
+
+    if (a > 12)
+    {
+        y = a;
+        m = b;
+        d = c;
+    }
+    else
+    {
+        m = a;
+        d = b;
+        y = c;
+        if (y < 100)
+        {
+            y += 2000;
+        }
+    }
+    if (!utf8_is_valid_ymd(y, m, d))
+    {
+        return FALSE;
+    }
+    if (out_ymd != NULL)
+    {
+        *out_ymd = y * 10000u + m * 100u + d;
+    }
+    return TRUE;
+}
+
+static BOOL utf8_is_date(const char *s)
+{
+    return parse_utf8_ymd(s, NULL);
 }
 
 static void note_column_value(EeVoterTable *table, uint32_t column, const char *text)
@@ -314,6 +354,77 @@ static void compact_title(const wchar_t *title, char *out, size_t out_cch)
     out[n] = '\0';
 }
 
+static wchar_t fold_wchar(wchar_t ch)
+{
+    if (ch >= L'A' && ch <= L'Z')
+    {
+        return (wchar_t)(ch - L'A' + L'a');
+    }
+    return ch;
+}
+
+static BOOL wchar_is_alnum(wchar_t ch)
+{
+    return (ch >= L'0' && ch <= L'9') || (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z');
+}
+
+static BOOL title_has_word_ci(const wchar_t *title, const wchar_t *word)
+{
+    const wchar_t *p;
+
+    if (title == NULL || word == NULL || word[0] == L'\0')
+    {
+        return FALSE;
+    }
+    for (p = title; *p != L'\0'; p++)
+    {
+        const wchar_t *t = p;
+        const wchar_t *w = word;
+        while (*t != L'\0' && *w != L'\0' && fold_wchar(*t) == fold_wchar(*w))
+        {
+            t++;
+            w++;
+        }
+        if (*w == L'\0')
+        {
+            BOOL left_ok = (p == title) || !wchar_is_alnum(p[-1]);
+            BOOL right_ok = (*t == L'\0') || !wchar_is_alnum(*t);
+            if (left_ok && right_ok)
+            {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+static BOOL title_is_date_column(const wchar_t *title)
+{
+    static const wchar_t *const words[] =
+        {L"date", L"dates", L"edr", L"edrdat", L"dob", L"birthdate", L"birthday", L"birthdt"};
+    size_t i;
+    char compact[96];
+
+    if (title == NULL || title[0] == L'\0')
+    {
+        return FALSE;
+    }
+    for (i = 0; i < ARRAYSIZE(words); i++)
+    {
+        if (title_has_word_ci(title, words[i]))
+        {
+            return TRUE;
+        }
+    }
+    compact_title(title, compact, sizeof(compact));
+    if (strstr(compact, "dateofbirth") != NULL || strstr(compact, "effectivedate") != NULL ||
+        strstr(compact, "registrationdate") != NULL || strstr(compact, "statusdate") != NULL)
+    {
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static BOOL title_suggests_numeric_or_date(const wchar_t *title)
 {
     char compact[96];
@@ -353,8 +464,16 @@ static void finalize_column_kinds(EeVoterTable *table)
     }
     for (i = 0; i < table->column_count; i++)
     {
-        if (table->column_value_kind[i] == k_ColKindUnknown &&
-            title_suggests_numeric_or_date(table->column_titles[i]))
+        if (title_is_date_column(table->column_titles[i]))
+        {
+            table->column_is_date[i] = 1;
+            if (table->column_value_kind[i] == k_ColKindUnknown)
+            {
+                table->column_value_kind[i] = k_ColKindNumeric;
+            }
+        }
+        else if (table->column_value_kind[i] == k_ColKindUnknown &&
+                 title_suggests_numeric_or_date(table->column_titles[i]))
         {
             table->column_value_kind[i] = k_ColKindNumeric;
         }
@@ -1796,7 +1915,44 @@ static int sort_cmp(void *context, const void *a, const void *b)
     uint32_t rb = *(const uint32_t *)b;
     const char *sa = EeVoterTable_GetCellUtf8(ctx->table, ra, ctx->column);
     const char *sb = EeVoterTable_GetCellUtf8(ctx->table, rb, ctx->column);
-    int cmp = _stricmp(sa, sb);
+    int cmp;
+
+    if (ctx->column < EE_MAX_COLUMNS && ctx->table->column_is_date[ctx->column])
+    {
+        uint32_t da = 0;
+        uint32_t db = 0;
+        BOOL ga = parse_utf8_ymd(sa, &da);
+        BOOL gb = parse_utf8_ymd(sb, &db);
+        if (ga && gb)
+        {
+            if (da < db)
+            {
+                cmp = -1;
+            }
+            else if (da > db)
+            {
+                cmp = 1;
+            }
+            else
+            {
+                cmp = 0;
+            }
+        }
+        else if (ga != gb)
+        {
+            /* Blanks / unparseable values sort before real dates when ascending. */
+            cmp = ga ? 1 : -1;
+        }
+        else
+        {
+            cmp = _stricmp(sa, sb);
+        }
+    }
+    else
+    {
+        cmp = _stricmp(sa, sb);
+    }
+
     if (cmp == 0)
     {
         if (ra < rb)

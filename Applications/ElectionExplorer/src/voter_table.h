@@ -40,6 +40,8 @@ extern "C"
 
         /* Per display column: 0 unknown, 1 numeric/date only, 2 text. */
         uint8_t column_value_kind[EE_MAX_COLUMNS];
+        /* TRUE when the header is a date field (contains "Date", EDR, DOB, …). */
+        uint8_t column_is_date[EE_MAX_COLUMNS];
 
         char *pool;
         size_t pool_len;

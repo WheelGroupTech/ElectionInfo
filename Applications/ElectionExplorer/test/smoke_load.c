@@ -779,6 +779,117 @@ static int test_empty_numeric_header(void)
     return rc;
 }
 
+static int test_date_sort(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[64];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int reg;
+    int edr;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_dates.csv")))
+    {
+        wprintf(L"datesort: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"datesort: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,Registration Date,EDR,Status Date,Candidate\n", fp);
+    fputs("1,12/1/2019,20190115,1/15/2020,Smith\n", fp);
+    fputs("2,1/2/2020,20200615,12/1/2019,Jones\n", fp);
+    fputs("3,3/1/2019,20181201,2/1/2020,Garcia\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 3)
+    {
+        wprintf(L"datesort: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+
+    reg = find_column(&t, L"Registration Date");
+    edr = find_column(&t, L"EDR");
+    if (reg < 0 || edr < 0 || find_column(&t, L"Candidate") < 0)
+    {
+        wprintf(L"datesort: missing columns\n");
+        goto done;
+    }
+    if (!t.column_is_date[reg] || !t.column_is_date[edr] ||
+        !t.column_is_date[find_column(&t, L"Status Date")] ||
+        t.column_is_date[find_column(&t, L"Candidate")])
+    {
+        wprintf(L"datesort: date-column flags mismatch\n");
+        goto done;
+    }
+
+    if (!EeVoterTable_SortByColumn(&t, (uint32_t)reg))
+    {
+        wprintf(L"datesort: sort Registration Date failed\n");
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, (uint32_t)reg, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"3/1/2019") != 0)
+    {
+        wprintf(L"datesort: expected 3/1/2019 first, got %s\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, (uint32_t)reg, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"12/1/2019") != 0)
+    {
+        wprintf(L"datesort: expected 12/1/2019 second, got %s\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, (uint32_t)reg, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"1/2/2020") != 0)
+    {
+        wprintf(L"datesort: expected 1/2/2020 third, got %s\n", buf);
+        goto done;
+    }
+
+    if (!EeVoterTable_SortByColumn(&t, (uint32_t)edr))
+    {
+        wprintf(L"datesort: sort EDR failed\n");
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, (uint32_t)edr, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"20181201") != 0)
+    {
+        wprintf(L"datesort: expected 20181201 first EDR, got %s\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, (uint32_t)edr, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"20200615") != 0)
+    {
+        wprintf(L"datesort: expected 20200615 last EDR, got %s\n", buf);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"datesort ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"datesort test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -792,5 +903,6 @@ int wmain(void)
     failed |= test_res_addr_no_duplicate_city_state_zip();
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
+    failed |= test_date_sort();
     return failed == 0 ? 0 : 1;
 }

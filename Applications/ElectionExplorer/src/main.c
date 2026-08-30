@@ -3588,6 +3588,17 @@ static HDWP FilterDlg_Defer(HDWP hdwp, HWND hwnd, int id, int x, int y, int w, i
                           SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
 }
 
+static int FilterDlg_MinClientWidth(AppState *app)
+{
+    /* Left margin, four combos, Add, Remove, right margin (gaps included). */
+    return Scale(app, 12 + 170 + 6 + 110 + 6 + 180 + 6 + 90 + 6 + 80 + 6 + 80 + 12);
+}
+
+static int FilterDlg_MinClientHeight(AppState *app)
+{
+    return Scale(app, 360);
+}
+
 static void FilterDlg_Layout(HWND hwnd, AppState *app)
 {
     RECT rc;
@@ -3753,15 +3764,41 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_GETMINMAXINFO:
         {
             MINMAXINFO *mm = (MINMAXINFO *)lParam;
-            int min_w = 640;
-            int min_h = 360;
+            RECT wr;
+            DWORD style = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
+            DWORD ex_style = (DWORD)GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            UINT dpi = GetDpiForWindow(hwnd);
+            int min_cw;
+            int min_ch;
+
+            if (dpi == 0)
+            {
+                dpi = 96;
+            }
             if (st != NULL && st->app != NULL)
             {
-                min_w = Scale(st->app, 640);
-                min_h = Scale(st->app, 360);
+                min_cw = FilterDlg_MinClientWidth(st->app);
+                min_ch = FilterDlg_MinClientHeight(st->app);
+                dpi = st->app->dpi;
             }
-            mm->ptMinTrackSize.x = min_w;
-            mm->ptMinTrackSize.y = min_h;
+            else
+            {
+                min_cw = MulDiv(12 + 170 + 6 + 110 + 6 + 180 + 6 + 90 + 6 + 80 + 6 + 80 + 12,
+                                (int)dpi,
+                                96);
+                min_ch = MulDiv(360, (int)dpi, 96);
+            }
+            wr.left = 0;
+            wr.top = 0;
+            wr.right = min_cw;
+            wr.bottom = min_ch;
+            if (!AdjustWindowRectExForDpi(&wr, style, FALSE, ex_style, dpi))
+            {
+                wr.right += 16;
+                wr.bottom += 40;
+            }
+            mm->ptMinTrackSize.x = wr.right - wr.left;
+            mm->ptMinTrackSize.y = wr.bottom - wr.top;
             return 0;
         }
         case WM_COMMAND:
@@ -4020,7 +4057,11 @@ static BOOL App_ShowFilter(AppState *app)
         return FALSE;
     }
 
-    client_w = Scale(app, 720);
+    client_w = FilterDlg_MinClientWidth(app);
+    if (client_w < Scale(app, 800))
+    {
+        client_w = Scale(app, 800);
+    }
     client_h = Scale(app, 480);
     rc_wnd.left = 0;
     rc_wnd.top = 0;
@@ -4039,6 +4080,10 @@ static BOOL App_ShowFilter(AppState *app)
         y = g_filter_dlg_rect.top;
         outer_w = g_filter_dlg_rect.right - g_filter_dlg_rect.left;
         outer_h = g_filter_dlg_rect.bottom - g_filter_dlg_rect.top;
+        if (outer_w < rc_wnd.right - rc_wnd.left)
+        {
+            outer_w = rc_wnd.right - rc_wnd.left;
+        }
     }
     else
     {

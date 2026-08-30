@@ -1890,6 +1890,54 @@ static void tidy_zip_tail(char *s)
     }
 }
 
+/**
+ * Drop a trailing ".0" / ".00" on a house/block number (Excel-style 6007.0).
+ * Also applies to the first token of a full street line.
+ */
+static void tidy_house_number_token(char *s)
+{
+    char *p;
+    char *dot;
+    char *after_zeros;
+
+    if (s == NULL || s[0] == '\0')
+    {
+        return;
+    }
+    p = s;
+    while (*p == ' ' || *p == '\t')
+    {
+        p++;
+    }
+    if (*p < '0' || *p > '9')
+    {
+        return;
+    }
+    while (*p >= '0' && *p <= '9')
+    {
+        p++;
+    }
+    if (*p != '.')
+    {
+        return;
+    }
+    dot = p++;
+    if (*p != '0')
+    {
+        return;
+    }
+    while (*p == '0')
+    {
+        p++;
+    }
+    if (*p != '\0' && *p != ' ' && *p != '\t' && *p != ',')
+    {
+        return;
+    }
+    after_zeros = p;
+    memmove(dot, after_zeros, strlen(after_zeros) + 1);
+}
+
 static BOOL unit_type_is_lot(const char *unit_type)
 {
     const char *p = skip_leading_ws(unit_type);
@@ -1934,6 +1982,7 @@ BOOL EeVoterTable_NormalizedMatchesFullAddress(const wchar_t *normalized,
     {
         return FALSE;
     }
+    tidy_house_number_token(full_utf8);
     tidy_zip_tail(full_utf8);
     return _stricmp(norm_utf8, full_utf8) == 0;
 }
@@ -1963,6 +2012,7 @@ static BOOL compose_address(const FieldList *fields,
     char zip5[8];
     char zip4_use[8];
     char full_buf[512];
+    char num_buf[64];
     BOOL skip_unit = unit_type_is_lot(unit_type);
 
     split_zip(field_at(fields, zip_idx),
@@ -1979,6 +2029,7 @@ static BOOL compose_address(const FieldList *fields,
         {
             return FALSE;
         }
+        tidy_house_number_token(full_buf);
         tidy_zip_tail(full_buf);
         /* Complete-address columns are the normalized street line (after ZIP
          * tidy). City/ZIP are appended only when missing from that line. */
@@ -1987,15 +2038,23 @@ static BOOL compose_address(const FieldList *fields,
             return FALSE;
         }
     }
-    else if (!append_name_part(out, out_cap, &len, field_at(fields, number_idx)) ||
-             !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
-             !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
-             !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
-             !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
-             (!skip_unit && !append_name_part(out, out_cap, &len, unit_type)) ||
-             (!skip_unit && !append_name_part(out, out_cap, &len, unit)))
+    else
     {
-        return FALSE;
+        if (FAILED(StringCchCopyA(num_buf, ARRAYSIZE(num_buf), field_at(fields, number_idx))))
+        {
+            return FALSE;
+        }
+        tidy_house_number_token(num_buf);
+        if (!append_name_part(out, out_cap, &len, num_buf) ||
+            !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
+            !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
+            !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
+            !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
+            (!skip_unit && !append_name_part(out, out_cap, &len, unit_type)) ||
+            (!skip_unit && !append_name_part(out, out_cap, &len, unit)))
+        {
+            return FALSE;
+        }
     }
 
     {

@@ -592,6 +592,75 @@ static int find_column(const EeVoterTable *t, const wchar_t *title)
     return -1;
 }
 
+static int test_house_number_dot_zero(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[160];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_blk_dot.csv")))
+    {
+        wprintf(L"blkdot: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"blkdot: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM,BLKNUM,STRNAM,STRTYP,RSCITY,RZIPCD\n", fp);
+    fputs("1,Smith,John,6007.0,SUN VISTA,DR,Austin,78749\n", fp);
+    fputs("2,Jones,Jane,12,OAK,ST,Austin,78701\n", fp);
+    fputs("3,Lee,Ann,100.50,PINE,RD,Austin,78702\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 3)
+    {
+        wprintf(L"blkdot: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"6007 SUN VISTA DR, Austin, 78749") != 0)
+    {
+        wprintf(L"blkdot: .0 house number mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"12 OAK ST, Austin, 78701") != 0)
+    {
+        wprintf(L"blkdot: plain house number mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"100.50 PINE RD, Austin, 78702") != 0)
+    {
+        wprintf(L"blkdot: non-zero fraction should remain (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"blkdot ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"blkdot test failed\n");
+    }
+    return rc;
+}
+
 static int test_lot_unit_ignored(void)
 {
     wchar_t path[MAX_PATH];
@@ -1166,6 +1235,7 @@ int wmain(void)
     failed |= test_res_addr_fields();
     failed |= test_res_addr_no_duplicate_city_state_zip();
     failed |= test_res_addr_zip_dash_and_unit();
+    failed |= test_house_number_dot_zero();
     failed |= test_lot_unit_ignored();
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();

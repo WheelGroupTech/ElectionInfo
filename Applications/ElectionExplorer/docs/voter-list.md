@@ -90,7 +90,8 @@ The status bar shows `Filtered: N of M voters` while any rule is enabled.
    **Registered Address**, …) is the normalized street line after ZIP-tail
    tidy; city/state/ZIP are not duplicated. A trailing ` -` after the ZIP
    (empty +4) is dropped; `78705 -2119` is shown as `78705-2119`. Unit type
-   **LOT** (and its unit number) is omitted. Mailing columns (`MAIL_*`) are
+   **LOT** (and its unit number) is omitted. A house/block number like
+   `6007.0` is shown as `6007`. Mailing columns (`MAIL_*`) are
    ignored. A 9-digit ZIP is shown only when the extra four digits exist
    and are not all zeros.
 4. **All original file columns** — in file order, using the source headers.

@@ -914,6 +914,79 @@ done:
     return rc;
 }
 
+static int test_name_last_first_no_address(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[160];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_name_parts.csv")))
+    {
+        wprintf(L"nameparts: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"nameparts: could not create %s\n", path);
+        return 1;
+    }
+    fputs("ID_County_VR,Reg_Precinct,VID,VUID,Name_Last,Name_First,Name_Middle,Name_Suffix,"
+          "Date_Last_Voted,Date_Last_Election,Birth_Month,Birth_Day,Birth_Year,"
+          "Birth_Calculated_Age,Reg_Date,Date_Last_Contact,Date_Last_Modfied,Reg_Status,"
+          "section,finding,DOD,SubmissionURL,created_at,created_by,id\n",
+          fp);
+    fputs("11,101,99,100001,Smith,John,A,Jr,1/1/2020,11/5/2019,3,15,1970,54,1/2/2018,"
+          "2/2/2024,3/3/2024,Active,A,ok,,https://example.com/x,2024-01-01,admin,7\n",
+          fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"nameparts: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"100001") != 0)
+    {
+        wprintf(L"nameparts: VUID mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Smith, John A Jr") != 0)
+    {
+        wprintf(L"nameparts: Name mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (buf[0] != L'\0')
+    {
+        wprintf(L"nameparts: expected empty Address, got (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"nameparts ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"nameparts test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -928,5 +1001,6 @@ int wmain(void)
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();
+    failed |= test_name_last_first_no_address();
     return failed == 0 ? 0 : 1;
 }

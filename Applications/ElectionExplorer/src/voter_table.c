@@ -1000,7 +1000,8 @@ static FieldRole classify_field(const char *norm)
 
     /* Other / county IDs (not used as primary VUID unless no VUID). */
     if (strcmp(norm, "ID") == 0 || strcmp(norm, "IDNUMBER") == 0 ||
-        strcmp(norm, "LEGACYVOTERID") == 0 || strcmp(norm, "COUNTYID") == 0)
+        strcmp(norm, "LEGACYVOTERID") == 0 || strcmp(norm, "COUNTYID") == 0 ||
+        strcmp(norm, "VID") == 0)
     {
         return Role_OtherId;
     }
@@ -1019,17 +1020,19 @@ static FieldRole classify_field(const char *norm)
         return Role_NamePrefix;
     }
     if (strcmp(norm, "FSTNAM") == 0 || strcmp(norm, "FIRSTNAME") == 0 ||
-        strcmp(norm, "FIRST") == 0 || strcmp(norm, "FNAME") == 0 || strcmp(norm, "GIVENNAME") == 0)
+        strcmp(norm, "FIRST") == 0 || strcmp(norm, "FNAME") == 0 ||
+        strcmp(norm, "GIVENNAME") == 0 || strcmp(norm, "NAMEFIRST") == 0)
     {
         return Role_FirstName;
     }
     if (strcmp(norm, "MIDNAM") == 0 || strcmp(norm, "MIDDLENAME") == 0 ||
-        strcmp(norm, "MIDDLE") == 0 || strcmp(norm, "MNAME") == 0)
+        strcmp(norm, "MIDDLE") == 0 || strcmp(norm, "MNAME") == 0 ||
+        strcmp(norm, "NAMEMIDDLE") == 0 || strcmp(norm, "NAMEMID") == 0)
     {
         return Role_MiddleName;
     }
     if (strcmp(norm, "LSTNAM") == 0 || strcmp(norm, "LASTNAME") == 0 || strcmp(norm, "LAST") == 0 ||
-        strcmp(norm, "LNAME") == 0 || strcmp(norm, "SURNAME") == 0)
+        strcmp(norm, "LNAME") == 0 || strcmp(norm, "SURNAME") == 0 || strcmp(norm, "NAMELAST") == 0)
     {
         return Role_LastName;
     }

@@ -19,6 +19,7 @@ display them in a high-performance grid.
 | Name format | **Edit → Options…** — **Display name in surname-first format** (default on) shows the frozen **Name** column as `Last, First Middle`. Uncheck for `First Middle Last`. |
 | Zoom | **Edit → Options…** — **Zoom** (default **100%**, range **50–250%**) scales grid text, row height, column widths, and pane titles. Dialogs stay at system size. |
 | Maps | Right-click a non-empty **Address** cell in the frozen pane and choose **Show in Maps…**. Opens the default browser on the selected engine. **Edit → Options…** — **Map engine** (default **Google Maps**; also Bing Maps, Apple Maps, Open Street Maps). |
+| Links | Right-click a **File Data** cell that contains an `https://` URL and choose **Open link…**. |
 | Grid | Virtual list (owner-data) with **grid lines**, sized for hundreds of thousands to millions of rows |
 | Column headers | **Bold** captions, **light grey** background, **double underline** rule |
 | Frozen columns | **Voter ID** and **Name** stay visible while the rest of the grid scrolls horizontally |
@@ -75,7 +76,8 @@ The status bar shows `Filtered: N of M voters` while any rule is enabled.
 1. **Voter ID** — synthesized from the best available ID column (`VUID`,
    `VUIDNO`, `SOS_VoterID`, etc.; falls back to generic `ID` / legacy IDs).
 2. **Name** — from a full-name field when present, otherwise composed from
-   prefix / first / middle / last / suffix parts (`FSTNAM`, `LSTNAM`, …).
+   prefix / first / middle / last / suffix parts (`FSTNAM`, `LSTNAM`,
+   `Name_Last`, `Name_First`, `Name_Middle`, `Name_Suffix`, …).
    Default display is surname-first (`Smith, John A`). A full-name source
    field is shown as stored. Changing the option rebuilds the Name column
    (a progress window appears for large lists).

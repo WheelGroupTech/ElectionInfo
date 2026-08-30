@@ -480,6 +480,100 @@ static BOOL App_ShowAddressInMaps(AppState *app, const wchar_t *address)
     return TRUE;
 }
 
+static wchar_t fold_ascii_w(wchar_t ch)
+{
+    if (ch >= L'A' && ch <= L'Z')
+    {
+        return (wchar_t)(ch - L'A' + L'a');
+    }
+    return ch;
+}
+
+static BOOL App_ExtractHttpsUrl(const wchar_t *text, wchar_t *url, size_t url_cch)
+{
+    static const wchar_t k_prefix[] = L"https://";
+    const wchar_t *start;
+    const wchar_t *p;
+    size_t n;
+
+    if (text == NULL || url == NULL || url_cch < 9)
+    {
+        return FALSE;
+    }
+    url[0] = L'\0';
+    start = NULL;
+    for (p = text; *p != L'\0'; p++)
+    {
+        size_t i;
+        BOOL match = TRUE;
+        for (i = 0; k_prefix[i] != L'\0'; i++)
+        {
+            if (fold_ascii_w(p[i]) != k_prefix[i])
+            {
+                match = FALSE;
+                break;
+            }
+        }
+        if (match)
+        {
+            start = p;
+            break;
+        }
+    }
+    if (start == NULL)
+    {
+        return FALSE;
+    }
+    p = start;
+    while (*p != L'\0' && *p != L' ' && *p != L'\t' && *p != L'\r' && *p != L'\n' && *p != L'<' &&
+           *p != L'>' && *p != L'"' && *p != L'\'' && *p != L'(' && *p != L')')
+    {
+        p++;
+    }
+    n = (size_t)(p - start);
+    while (n > 0)
+    {
+        wchar_t last = start[n - 1];
+        if (last == L'.' || last == L',' || last == L';' || last == L':' || last == L']')
+        {
+            n--;
+            continue;
+        }
+        break;
+    }
+    if (n <= 8)
+    {
+        return FALSE;
+    }
+    if (n + 1 > url_cch)
+    {
+        n = url_cch - 1;
+    }
+    memcpy(url, start, n * sizeof(wchar_t));
+    url[n] = L'\0';
+    return TRUE;
+}
+
+static BOOL App_OpenHttpsLink(AppState *app, const wchar_t *url)
+{
+    HINSTANCE rc;
+
+    if (app == NULL || url == NULL || url[0] == L'\0')
+    {
+        return FALSE;
+    }
+    rc = ShellExecuteW(app->hwnd_main, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+    if ((INT_PTR)rc <= 32)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Could not open the link in a browser.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    return TRUE;
+}
+
 static int ScaleDisplay(AppState *app, int value_96)
 {
     int z = app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault;
@@ -2498,11 +2592,14 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         LVHITTESTINFO sub;
         POINT client = pt;
         uint32_t hit_col = 0;
-        wchar_t hit_value[EE_FILTER_VALUE_CCH];
+        wchar_t hit_value[2048];
+        wchar_t link_url[2048];
         BOOL have_cell = FALSE;
         BOOL have_address = FALSE;
+        BOOL have_link = FALSE;
 
         hit_value[0] = L'\0';
+        link_url[0] = L'\0';
         ScreenToClient(hwnd_list, &client);
         ZeroMemory(&sub, sizeof(sub));
         sub.pt = client;
@@ -2532,6 +2629,11 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
                     {
                         have_address = TRUE;
                     }
+                    if (hwnd_list == app->hwnd_scroll &&
+                        App_ExtractHttpsUrl(hit_value, link_url, ARRAYSIZE(link_url)))
+                    {
+                        have_link = TRUE;
+                    }
                 }
             }
         }
@@ -2560,6 +2662,11 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
             AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
             AppendMenuW(menu, MF_STRING, IDM_SHOW_IN_MAPS, L"Show in &Maps…");
         }
+        if (have_link)
+        {
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_STRING, IDM_OPEN_LINK, L"Open &link…");
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…");
 
@@ -2586,6 +2693,10 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         else if (cmd == IDM_SHOW_IN_MAPS && have_address)
         {
             App_ShowAddressInMaps(app, hit_value);
+        }
+        else if (cmd == IDM_OPEN_LINK && have_link)
+        {
+            App_OpenHttpsLink(app, link_url);
         }
         else if (cmd == IDM_FILTER_EDIT)
         {

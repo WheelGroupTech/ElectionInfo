@@ -17,6 +17,7 @@
 #define IDM_FILTER_INCLUDE        40022
 #define IDM_FILTER_EXCLUDE        40023
 #define IDM_SHOW_IN_MAPS          40024
+#define IDM_OPEN_LINK             40025
 
 #define IDC_FLT_PROMPT   41100
 #define IDC_FLT_COLUMN   41101

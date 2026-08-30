@@ -85,9 +85,14 @@ The status bar shows `Filtered: N of M voters` while any rule is enabled.
    street name/type, unit, city, state, and ZIP (`BLKNUM`, `STRNAM`,
    `RSCITY`, `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, …). A
    street-line field is combined with city/ZIP unless those values are
-   already at the end of the street line. Mailing columns (`MAIL_*`)
-   are ignored. A 9-digit ZIP is shown only when the extra four digits
-   exist and are not all zeros.
+   already at the end of the street line. A complete-address column
+   (**Residential Address**, **Full Address**, **Complete Address**,
+   **Registered Address**, …) is the normalized street line after ZIP-tail
+   tidy; city/state/ZIP are not duplicated. A trailing ` -` after the ZIP
+   (empty +4) is dropped; `78705 -2119` is shown as `78705-2119`. Unit type
+   **LOT** (and its unit number) is omitted. Mailing columns (`MAIL_*`) are
+   ignored. A 9-digit ZIP is shown only when the extra four digits exist
+   and are not all zeros.
 4. **All original file columns** — in file order, using the source headers.
    Historical Travis-style files with per-election `VOTED` / `PLACE` / `PARTY`
    fields are included (hundreds of columns). The loader accepts up to

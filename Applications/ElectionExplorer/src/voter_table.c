@@ -1048,10 +1048,20 @@ static FieldRole classify_field(const char *norm)
     }
 
     if (strcmp(norm, "ADDRESS") == 0 || strcmp(norm, "FULLADDRESS") == 0 ||
-        strcmp(norm, "RESADDRESS") == 0 || strcmp(norm, "RESADDR") == 0 ||
-        strcmp(norm, "RESADRS") == 0 || strcmp(norm, "RESIDENTADDR") == 0 ||
-        strcmp(norm, "RESIDENTADRS") == 0 || strcmp(norm, "RESIDENTADDRESS") == 0 ||
-        strcmp(norm, "STREETADDRESS") == 0 || strcmp(norm, "RESIDENTIALADDRESS") == 0)
+        strcmp(norm, "FULLADDR") == 0 || strcmp(norm, "RESADDRESS") == 0 ||
+        strcmp(norm, "RESADDR") == 0 || strcmp(norm, "RESADRS") == 0 ||
+        strcmp(norm, "RESIDENTADDR") == 0 || strcmp(norm, "RESIDENTADRS") == 0 ||
+        strcmp(norm, "RESIDENTADDRESS") == 0 || strcmp(norm, "STREETADDRESS") == 0 ||
+        strcmp(norm, "RESIDENTIALADDRESS") == 0 || strcmp(norm, "COMPLETEADDRESS") == 0 ||
+        strcmp(norm, "COMPLETEADDR") == 0 || strcmp(norm, "REGISTEREDADDRESS") == 0 ||
+        strcmp(norm, "REGISTEREDADDR") == 0)
+    {
+        return Role_AddrFull;
+    }
+    if ((header_contains(norm, "ADDRESS") || header_contains(norm, "ADDR")) &&
+        (header_contains(norm, "RESIDENT") || header_contains(norm, "COMPLETE") ||
+         header_contains(norm, "REGISTER") || header_contains(norm, "FULL")) &&
+        !header_contains(norm, "MAIL"))
     {
         return Role_AddrFull;
     }
@@ -1059,7 +1069,8 @@ static FieldRole classify_field(const char *norm)
         strcmp(norm, "HOUSENUM") == 0 || strcmp(norm, "HOUSENUMBER") == 0 ||
         strcmp(norm, "HOUSENO") == 0 || strcmp(norm, "HSENO") == 0 ||
         strcmp(norm, "STREETNUMBER") == 0 || strcmp(norm, "STREETNUM") == 0 ||
-        strcmp(norm, "STREETNO") == 0 || strcmp(norm, "STRNUM") == 0)
+        strcmp(norm, "STREETNO") == 0 || strcmp(norm, "STRNUM") == 0 ||
+        strcmp(norm, "STREETNUMBER1") == 0)
     {
         return Role_AddrNumber;
     }
@@ -1071,7 +1082,7 @@ static FieldRole classify_field(const char *norm)
     }
     if (strcmp(norm, "STRNAM") == 0 || strcmp(norm, "STRNAME") == 0 ||
         strcmp(norm, "STREETNAME") == 0 || strcmp(norm, "STREETNAM") == 0 ||
-        strcmp(norm, "STREET") == 0)
+        strcmp(norm, "STREET") == 0 || strcmp(norm, "STREETNAME1") == 0)
     {
         return Role_AddrStreet;
     }
@@ -1095,8 +1106,8 @@ static FieldRole classify_field(const char *norm)
         return Role_AddrUnitType;
     }
     if (strcmp(norm, "UNITNO") == 0 || strcmp(norm, "UNITNUM") == 0 ||
-        strcmp(norm, "UNITNUMBER") == 0 || strcmp(norm, "APTNO") == 0 ||
-        strcmp(norm, "APTNUM") == 0 || strcmp(norm, "APARTMENT") == 0)
+        strcmp(norm, "UNITNUMBER") == 0 || strcmp(norm, "UNIT") == 0 ||
+        strcmp(norm, "APTNO") == 0 || strcmp(norm, "APTNUM") == 0 || strcmp(norm, "APARTMENT") == 0)
     {
         return Role_AddrUnit;
     }
@@ -1805,6 +1816,128 @@ static BOOL ends_with_zip5(const char *s, size_t slen, const char *zip5, size_t 
     return ends_with_phrase_ci(s, end, z, out_len);
 }
 
+/**
+ * Collapse "78705 -" / "78705 -2119" at the end of a street line to "78705"
+ * or "78705-2119". Empty "+4" after a dash is dropped.
+ */
+static void tidy_zip_tail(char *s)
+{
+    size_t n;
+    size_t i;
+    size_t zip4_len;
+    size_t zip5_end;
+    size_t z5;
+
+    if (s == NULL || s[0] == '\0')
+    {
+        return;
+    }
+    n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t'))
+    {
+        n--;
+    }
+    s[n] = '\0';
+
+    i = n;
+    while (i > 0 && s[i - 1] >= '0' && s[i - 1] <= '9')
+    {
+        i--;
+    }
+    zip4_len = n - i;
+    if (zip4_len > 4)
+    {
+        return;
+    }
+    while (i > 0 && (s[i - 1] == ' ' || s[i - 1] == '\t'))
+    {
+        i--;
+    }
+    if (i == 0 || s[i - 1] != '-')
+    {
+        return;
+    }
+    i--;
+    while (i > 0 && (s[i - 1] == ' ' || s[i - 1] == '\t'))
+    {
+        i--;
+    }
+    zip5_end = i;
+    z5 = 0;
+    while (i > 0 && s[i - 1] >= '0' && s[i - 1] <= '9')
+    {
+        i--;
+        z5++;
+    }
+    if (z5 != 5)
+    {
+        return;
+    }
+    if (i > 0 && !is_addr_sep((unsigned char)s[i - 1]))
+    {
+        return;
+    }
+
+    if (zip4_len == 4 && zip4_is_usable(s + n - 4))
+    {
+        s[zip5_end] = '-';
+        memcpy(s + zip5_end + 1, s + n - 4, 4);
+        s[zip5_end + 5] = '\0';
+    }
+    else
+    {
+        s[zip5_end] = '\0';
+    }
+}
+
+static BOOL unit_type_is_lot(const char *unit_type)
+{
+    const char *p = skip_leading_ws(unit_type);
+    size_t n = trimmed_text_len(p);
+    return n == 3 && ascii_fold((unsigned char)p[0]) == 'L' &&
+           ascii_fold((unsigned char)p[1]) == 'O' && ascii_fold((unsigned char)p[2]) == 'T';
+}
+
+BOOL EeVoterTable_NormalizedMatchesFullAddress(const wchar_t *normalized,
+                                               const wchar_t *full_address)
+{
+    char norm_utf8[512];
+    char full_utf8[512];
+
+    if (normalized == NULL || full_address == NULL)
+    {
+        return FALSE;
+    }
+    if (full_address[0] == L'\0')
+    {
+        return TRUE;
+    }
+    if (WideCharToMultiByte(CP_UTF8,
+                            0,
+                            normalized,
+                            -1,
+                            norm_utf8,
+                            (int)sizeof(norm_utf8),
+                            NULL,
+                            NULL) <= 0)
+    {
+        return FALSE;
+    }
+    if (WideCharToMultiByte(CP_UTF8,
+                            0,
+                            full_address,
+                            -1,
+                            full_utf8,
+                            (int)sizeof(full_utf8),
+                            NULL,
+                            NULL) <= 0)
+    {
+        return FALSE;
+    }
+    tidy_zip_tail(full_utf8);
+    return _stricmp(norm_utf8, full_utf8) == 0;
+}
+
 static BOOL compose_address(const FieldList *fields,
                             int full_idx,
                             int number_idx,
@@ -1825,8 +1958,12 @@ static BOOL compose_address(const FieldList *fields,
     const char *full = field_at(fields, full_idx);
     const char *city = field_at(fields, city_idx);
     const char *state = field_at(fields, state_idx);
+    const char *unit_type = field_at(fields, unit_type_idx);
+    const char *unit = field_at(fields, unit_idx);
     char zip5[8];
     char zip4_use[8];
+    char full_buf[512];
+    BOOL skip_unit = unit_type_is_lot(unit_type);
 
     split_zip(field_at(fields, zip_idx),
               field_at(fields, zip4_idx),
@@ -1838,9 +1975,14 @@ static BOOL compose_address(const FieldList *fields,
     out[0] = '\0';
     if (full[0] != '\0')
     {
-        /* Street-line fields such as RES_ADDR still get city/ZIP appended
-         * unless those tokens are already at the end of the line. */
-        if (!append_name_part(out, out_cap, &len, full))
+        if (FAILED(StringCchCopyA(full_buf, ARRAYSIZE(full_buf), full)))
+        {
+            return FALSE;
+        }
+        tidy_zip_tail(full_buf);
+        /* Complete-address columns are the normalized street line (after ZIP
+         * tidy). City/ZIP are appended only when missing from that line. */
+        if (!append_name_part(out, out_cap, &len, full_buf))
         {
             return FALSE;
         }
@@ -1850,8 +1992,8 @@ static BOOL compose_address(const FieldList *fields,
              !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
              !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
              !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
-             !append_name_part(out, out_cap, &len, field_at(fields, unit_type_idx)) ||
-             !append_name_part(out, out_cap, &len, field_at(fields, unit_idx)))
+             (!skip_unit && !append_name_part(out, out_cap, &len, unit_type)) ||
+             (!skip_unit && !append_name_part(out, out_cap, &len, unit)))
     {
         return FALSE;
     }

@@ -149,6 +149,15 @@ extern "C"
     BOOL EeVoterTable_ParseDateYmdW(const wchar_t *s, uint32_t *out_ymd);
 
     /**
+     * @brief TRUE if @p normalized equals @p full_address after ZIP-tail tidy.
+     *
+     * Used when the file has a complete-address column (Residential Address,
+     * Full Address, Complete Address, Registered Address, …).
+     */
+    BOOL EeVoterTable_NormalizedMatchesFullAddress(const wchar_t *normalized,
+                                                   const wchar_t *full_address);
+
+    /**
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);

@@ -470,6 +470,111 @@ done:
     return rc;
 }
 
+static int test_res_addr_zip_dash_and_unit(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[220];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_res_zipdash.csv")))
+    {
+        wprintf(L"zipdash: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"zipdash: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,NAME,Residential Address,Street Number 1,Street Name 1,Unit,Unit Type,"
+          "City,State,Zip Code 5,Zip Code 4\n",
+          fp);
+    fputs("2163340117,\"MULRY, CAILIN LORAINE\",3001 MEDICAL ARTS ST AUSTIN TX 78705 -,3001,"
+          "MEDICAL ARTS ST,116,APT,AUSTIN,TX,78705,\n",
+          fp);
+    fputs("2149934808,\"NDEDA, SHANE MARCUS AGANYO\",3400 HARMON AVE AUSTIN TX 78705 -2119,3400,"
+          "HARMON AVE,367,APT,AUSTIN,TX,78705,2119\n",
+          fp);
+    fputs("3382566260,\"NEWHOUSE, MARIE ELIZABETH\",3502 RED RIVER ST AUSTIN TX 78705 -,3502,"
+          "RED RIVER ST,,,AUSTIN,TX,78705,\n",
+          fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 3)
+    {
+        wprintf(L"zipdash: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+
+    EeVoterTable_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2163340117") != 0)
+    {
+        wprintf(L"zipdash: VUID mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"MULRY, CAILIN LORAINE") != 0)
+    {
+        wprintf(L"zipdash: NAME mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"3001 MEDICAL ARTS ST AUSTIN TX 78705") != 0)
+    {
+        wprintf(L"zipdash: empty +4 mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"3400 HARMON AVE AUSTIN TX 78705-2119") != 0)
+    {
+        wprintf(L"zipdash: zip+4 mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"3502 RED RIVER ST AUSTIN TX 78705") != 0)
+    {
+        wprintf(L"zipdash: no-unit empty +4 mismatch (%s)\n", buf);
+        goto done;
+    }
+    {
+        uint32_t row;
+        wchar_t norm[220];
+        wchar_t full[220];
+        for (row = 0; row < t.row_count; row++)
+        {
+            EeVoterTable_GetViewCellW(&t, row, 2, norm, ARRAYSIZE(norm));
+            EeVoterTable_GetViewCellW(&t, row, 5, full, ARRAYSIZE(full));
+            if (!EeVoterTable_NormalizedMatchesFullAddress(norm, full))
+            {
+                wprintf(L"zipdash: row %u normalized '%s' != full '%s'\n", row, norm, full);
+                goto done;
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"zipdash ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"zipdash test failed\n");
+    }
+    return rc;
+}
+
 static int find_column(const EeVoterTable *t, const wchar_t *title)
 {
     uint32_t i;
@@ -485,6 +590,68 @@ static int find_column(const EeVoterTable *t, const wchar_t *title)
         }
     }
     return -1;
+}
+
+static int test_lot_unit_ignored(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[160];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_lot_unit.csv")))
+    {
+        wprintf(L"lotunit: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"lotunit: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM,BLKNUM,STRNAM,STRTYP,UNITYP,UNITNO,RSCITY,RZIPCD\n", fp);
+    fputs("1,Smith,John,12,Oak,ST,LOT,4,Austin,78701\n", fp);
+    fputs("2,Jones,Jane,90,Pine,RD,APT,2,Austin,78702\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 2)
+    {
+        wprintf(L"lotunit: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"12 Oak ST, Austin, 78701") != 0)
+    {
+        wprintf(L"lotunit: LOT should be omitted (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"90 Pine RD APT 2, Austin, 78702") != 0)
+    {
+        wprintf(L"lotunit: APT should remain (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"lotunit ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"lotunit test failed\n");
+    }
+    return rc;
 }
 
 static EeFilterRule make_rule(uint32_t column,
@@ -998,6 +1165,8 @@ int wmain(void)
     failed |= test_zip4_omits_zeros();
     failed |= test_res_addr_fields();
     failed |= test_res_addr_no_duplicate_city_state_zip();
+    failed |= test_res_addr_zip_dash_and_unit();
+    failed |= test_lot_unit_ignored();
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();

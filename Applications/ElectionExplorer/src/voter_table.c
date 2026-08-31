@@ -178,6 +178,72 @@ static BOOL utf8_is_valid_ymd(unsigned y, unsigned m, unsigned d)
     return m >= 1 && m <= 12 && d >= 1 && d <= 31;
 }
 
+static BOOL utf8_year_in_range(unsigned y)
+{
+    return y >= 1800u && y <= 2100u;
+}
+
+static BOOL set_year_only_ymd(unsigned y, uint32_t *out_ymd)
+{
+    if (!utf8_year_in_range(y))
+    {
+        return FALSE;
+    }
+    if (out_ymd != NULL)
+    {
+        /* Month/day 0 so year-only values sort before any real date in that year. */
+        *out_ymd = y * 10000u;
+    }
+    return TRUE;
+}
+
+static BOOL parse_masked_month_day_year(const char *p, uint32_t *out_ymd)
+{
+    char sep;
+    unsigned y = 0;
+
+    if (p == NULL || *p != '*')
+    {
+        return FALSE;
+    }
+    while (*p == '*')
+    {
+        p++;
+    }
+    p = skip_ws(p);
+    if (*p != '/' && *p != '-')
+    {
+        return FALSE;
+    }
+    sep = *p++;
+    p = skip_ws(p);
+    if (*p != '*')
+    {
+        return FALSE;
+    }
+    while (*p == '*')
+    {
+        p++;
+    }
+    p = skip_ws(p);
+    if (*p != sep)
+    {
+        return FALSE;
+    }
+    p++;
+    p = skip_ws(p);
+    if (!utf8_read_uint(&p, &y))
+    {
+        return FALSE;
+    }
+    p = skip_ws(p);
+    if (*p != '\0')
+    {
+        return FALSE;
+    }
+    return set_year_only_ymd(y, out_ymd);
+}
+
 static BOOL parse_utf8_ymd(const char *s, uint32_t *out_ymd)
 {
     const char *p;
@@ -188,6 +254,7 @@ static BOOL parse_utf8_ymd(const char *s, uint32_t *out_ymd)
     unsigned m = 0;
     unsigned d = 0;
     size_t n;
+    int i;
 
     p = skip_ws(s);
     if (p == NULL || *p == '\0')
@@ -201,10 +268,35 @@ static BOOL parse_utf8_ymd(const char *s, uint32_t *out_ymd)
         n--;
     }
 
+    /* Privacy-masked month/day: asterisks for month and day, then year. */
+    if (p[0] == '*')
+    {
+        return parse_masked_month_day_year(p, out_ymd);
+    }
+
+    /* Four-digit year only (privacy). */
+    if (n == 4)
+    {
+        BOOL digits = TRUE;
+        for (i = 0; i < 4; i++)
+        {
+            if (p[i] < '0' || p[i] > '9')
+            {
+                digits = FALSE;
+                break;
+            }
+        }
+        if (digits)
+        {
+            y = (unsigned)((p[0] - '0') * 1000 + (p[1] - '0') * 100 + (p[2] - '0') * 10 +
+                           (p[3] - '0'));
+            return set_year_only_ymd(y, out_ymd);
+        }
+    }
+
     /* YYYYMMDD */
     if (n == 8)
     {
-        int i;
         for (i = 0; i < 8; i++)
         {
             if (p[i] < '0' || p[i] > '9')
@@ -467,10 +559,7 @@ static void finalize_column_kinds(EeVoterTable *table)
         if (title_is_date_column(table->column_titles[i]))
         {
             table->column_is_date[i] = 1;
-            if (table->column_value_kind[i] == k_ColKindUnknown)
-            {
-                table->column_value_kind[i] = k_ColKindNumeric;
-            }
+            table->column_value_kind[i] = k_ColKindNumeric;
         }
         else if (table->column_value_kind[i] == k_ColKindUnknown &&
                  title_suggests_numeric_or_date(table->column_titles[i]))

@@ -1223,6 +1223,109 @@ done:
     return rc;
 }
 
+static int test_partial_birthdate(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[64];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeFilterSet set;
+    EeFilterRule r;
+    EeLoadStatus s;
+    DWORD n;
+    int dob;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_dob_partial.csv")))
+    {
+        wprintf(L"dobpart: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"dobpart: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,Birthdate\n", fp);
+    fputs("1,2004\n", fp);
+    fputs("2,*/*/2005\n", fp);
+    fputs("3,**/**/2005\n", fp);
+    fputs("4,6/15/2005\n", fp);
+    fputs("5,2006\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    EeFilter_Init(&set);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 5)
+    {
+        wprintf(L"dobpart: load failed %s\n", err);
+        goto done;
+    }
+    dob = find_column(&t, L"Birthdate");
+    if (dob < 0 || !t.column_is_date[dob] || !EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)dob))
+    {
+        wprintf(L"dobpart: Birthdate should be a date column\n");
+        goto done;
+    }
+    if (!EeVoterTable_ParseDateYmdW(L"2004", NULL) ||
+        !EeVoterTable_ParseDateYmdW(L"*/*/2005", NULL) ||
+        !EeVoterTable_ParseDateYmdW(L"**/**/2005", NULL) ||
+        EeVoterTable_ParseDateYmdW(L"abc", NULL))
+    {
+        wprintf(L"dobpart: year/mask parse mismatch\n");
+        goto done;
+    }
+
+    if (!EeVoterTable_SortByColumn(&t, (uint32_t)dob))
+    {
+        wprintf(L"dobpart: sort failed\n");
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, (uint32_t)dob, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2004") != 0)
+    {
+        wprintf(L"dobpart: expected 2004 first, got %s\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 3, (uint32_t)dob, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"6/15/2005") != 0)
+    {
+        wprintf(L"dobpart: expected 6/15/2005 after year-only 2005, got %s\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 4, (uint32_t)dob, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2006") != 0)
+    {
+        wprintf(L"dobpart: expected 2006 last, got %s\n", buf);
+        goto done;
+    }
+
+    r = make_rule((uint32_t)dob, EeRel_LessThan, EeFilt_Include, L"2006", TRUE);
+    if (!EeFilter_RuleIsValid(&r, &t) || !EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 4)
+    {
+        wprintf(L"dobpart: less than 2006 expected 4 rows\n");
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"dobpart ok\n");
+
+done:
+    EeFilter_Clear(&set);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"dobpart test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -1240,6 +1343,7 @@ int wmain(void)
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();
+    failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();
     return failed == 0 ? 0 : 1;
 }

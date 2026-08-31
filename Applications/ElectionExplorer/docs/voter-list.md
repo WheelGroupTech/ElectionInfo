@@ -25,7 +25,7 @@ display them in a high-performance grid.
 | Frozen columns | **Voter ID** and **Name** stay visible while the rest of the grid scrolls horizontally |
 | Resize frozen pane | Drag the **vertical splitter** between the left and right panes (`↔` cursor) |
 | Voter ID alignment | **Voter ID** header and cell text are **center**-aligned; other columns are left-aligned |
-| Sort | Click a column header to toggle ascending / descending (arrow in header). Columns whose header contains **Date** (as a word), plus **EDR** / **EDRDAT** / **DOB**, sort as calendar dates (`M/D/YYYY`, `YYYY-MM-DD`, `YYYYMMDD`). |
+| Sort | Click a column header to toggle ascending / descending (arrow in header). Columns whose header contains **Date** (as a word), plus **EDR** / **EDRDAT** / **DOB**, sort as calendar dates (`M/D/YYYY`, `YYYY-MM-DD`, `YYYYMMDD`). Privacy-masked birthdates (`2005`, `*/*/2005`, `**/**/2005`) sort by year. |
 | Filter | **Filter → Filter…** (`Ctrl+L`) opens a Process Monitor-style dialog. Rules never delete rows; they only hide them. **Filter → Reset Filter** clears every rule. Right-click a cell for **Include** / **Exclude** of that value. |
 
 Loading runs on a **background thread** so the UI stays responsive. Progress
@@ -57,7 +57,8 @@ DOB, Age, and Precinct, or any field whose loaded values are only numbers
 or dates), **Value** (distinct values from the loaded data, or type your
 own), **Include** / **Exclude**, and **Add**. On date columns, **less than**
 and **more than** compare calendar dates (`M/D/YYYY`, `YYYY-MM-DD`,
-`YYYYMMDD`); a non-date value is not accepted. Each rule can be enabled or
+`YYYYMMDD`, or a 4-digit year / `*/*/2005`); a non-date value is not
+accepted. Each rule can be enabled or
 disabled with its checkbox. **Apply** updates the grid without closing;
 **OK** applies and closes; **Cancel** discards edits.
 

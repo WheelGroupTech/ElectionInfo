@@ -40,7 +40,7 @@ static int load_sample(const wchar_t *path, const wchar_t *label)
         }
         EeVoterTable_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
         wprintf(L"  row0 VoterID=%s\n", buf);
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
         wprintf(L"  row0 Name=%s\n", buf);
     }
     EeVoterTable_Clear(&t);
@@ -101,7 +101,7 @@ static int load_wide_history(void)
         EeVoterTable_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
         if (wcscmp(buf, L"100001") == 0)
         {
-            EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+            EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
             if (wcscmp(buf, L"Smith, John") == 0)
             {
                 rc = 0;
@@ -157,7 +157,8 @@ static int test_copy_format(void)
         wprintf(L"copy: prepend format failed\n");
         goto done;
     }
-    if (strncmp(text, "100001,\"Smith, John A\",\"123 Main ST, Austin, 78701\",100001,", 59) != 0)
+    if (strncmp(text, "100001,101,\"Smith, John A\",\"123 Main ST, Austin, 78701\",100001,", 63) !=
+        0)
     {
         wprintf(L"copy: prepend prefix mismatch\n");
         goto done;
@@ -216,13 +217,13 @@ static int test_copy_format(void)
     }
     {
         wchar_t buf[128];
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
         if (wcscmp(buf, L"Smith, John A") != 0)
         {
             wprintf(L"copy: default surname-first mismatch (%s)\n", buf);
             goto done;
         }
-        EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+        EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
         if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
         {
             wprintf(L"copy: address mismatch (%s)\n", buf);
@@ -233,7 +234,7 @@ static int test_copy_format(void)
             wprintf(L"copy: set given-first failed\n");
             goto done;
         }
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
         if (wcscmp(buf, L"John A Smith") != 0)
         {
             wprintf(L"copy: given-first mismatch (%s)\n", buf);
@@ -244,7 +245,7 @@ static int test_copy_format(void)
             wprintf(L"copy: restore surname-first failed\n");
             goto done;
         }
-        EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+        EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
         if (wcscmp(buf, L"Smith, John A") != 0)
         {
             wprintf(L"copy: restored surname-first mismatch (%s)\n", buf);
@@ -308,37 +309,37 @@ static int test_zip4_omits_zeros(void)
         return 1;
     }
 
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
     {
         wprintf(L"zip4: zero +4 field mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"456 Oak AVE, Austin, 78702-1234") != 0)
     {
         wprintf(L"zip4: real +4 field mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"789 Pine RD, Austin, 78703") != 0)
     {
         wprintf(L"zip4: missing +4 mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 3, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 3, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"10 Elm CT, Austin, 78701") != 0)
     {
         wprintf(L"zip4: combined 0000 mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 4, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 4, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"20 Ash LN, Austin, 78701") != 0)
     {
         wprintf(L"zip4: hyphen 0000 mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 5, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 5, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"30 Bay DR, Austin, 78701-1111") != 0)
     {
         wprintf(L"zip4: combined 1111 mismatch (%s)\n", buf);
@@ -395,7 +396,7 @@ static int test_res_addr_fields(void)
         EeVoterTable_Clear(&t);
         return 1;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"123 Main St, Austin, 78701") != 0)
     {
         wprintf(L"resaddr: mismatch (%s)\n", buf);
@@ -446,13 +447,13 @@ static int test_res_addr_no_duplicate_city_state_zip(void)
         EeVoterTable_Clear(&t);
         return 1;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"1109 N IH 35  NB AUSTIN TX 78702") != 0)
     {
         wprintf(L"resdup: duplicate city/state/zip (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"123 Main St, Austin, TX 78701") != 0)
     {
         wprintf(L"resdup: street-only append mismatch (%s)\n", buf);
@@ -524,25 +525,25 @@ static int test_res_addr_zip_dash_and_unit(void)
         wprintf(L"zipdash: VUID mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"MULRY, CAILIN LORAINE") != 0)
     {
         wprintf(L"zipdash: NAME mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"3001 MEDICAL ARTS ST AUSTIN TX 78705") != 0)
     {
         wprintf(L"zipdash: empty +4 mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"3400 HARMON AVE AUSTIN TX 78705-2119") != 0)
     {
         wprintf(L"zipdash: zip+4 mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"3502 RED RIVER ST AUSTIN TX 78705") != 0)
     {
         wprintf(L"zipdash: no-unit empty +4 mismatch (%s)\n", buf);
@@ -554,8 +555,8 @@ static int test_res_addr_zip_dash_and_unit(void)
         wchar_t full[220];
         for (row = 0; row < t.row_count; row++)
         {
-            EeVoterTable_GetViewCellW(&t, row, 2, norm, ARRAYSIZE(norm));
-            EeVoterTable_GetViewCellW(&t, row, 5, full, ARRAYSIZE(full));
+            EeVoterTable_GetViewCellW(&t, row, EE_COL_ADDRESS, norm, ARRAYSIZE(norm));
+            EeVoterTable_GetViewCellW(&t, row, 6, full, ARRAYSIZE(full));
             if (!EeVoterTable_NormalizedMatchesFullAddress(norm, full))
             {
                 wprintf(L"zipdash: row %u normalized '%s' != full '%s'\n", row, norm, full);
@@ -631,19 +632,19 @@ static int test_house_number_dot_zero(void)
         EeVoterTable_Clear(&t);
         return 1;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"6007 SUN VISTA DR, Austin, 78749") != 0)
     {
         wprintf(L"blkdot: .0 house number mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"12 OAK ST, Austin, 78701") != 0)
     {
         wprintf(L"blkdot: plain house number mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"100.50 PINE RD, Austin, 78702") != 0)
     {
         wprintf(L"blkdot: non-zero fraction should remain (%s)\n", buf);
@@ -699,13 +700,13 @@ static int test_lot_unit_ignored(void)
         EeVoterTable_Clear(&t);
         return 1;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"12 Oak ST, Austin, 78701") != 0)
     {
         wprintf(L"lotunit: LOT should be omitted (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"90 Pine RD APT 2, Austin, 78702") != 0)
     {
         wprintf(L"lotunit: APT should remain (%s)\n", buf);
@@ -861,7 +862,7 @@ static int test_filter_logic(void)
     }
 
     EeFilter_Clear(&set);
-    r = make_rule(2, EeRel_Contains, EeFilt_Include, L"Oak", TRUE);
+    r = make_rule(EE_COL_ADDRESS, EeRel_Contains, EeFilt_Include, L"Oak", TRUE);
     if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
     {
         wprintf(L"filter: contains Oak expected 1 row\n");
@@ -869,7 +870,7 @@ static int test_filter_logic(void)
     }
 
     EeFilter_Clear(&set);
-    r = make_rule(1, EeRel_BeginsWith, EeFilt_Include, L"Smith", TRUE);
+    r = make_rule(EE_COL_NAME, EeRel_BeginsWith, EeFilt_Include, L"Smith", TRUE);
     if (!EeFilter_Add(&set, &r) || count_accepted(&set, &t) != 1)
     {
         wprintf(L"filter: begins with Smith expected 1 row\n");
@@ -949,16 +950,20 @@ static int test_filter_logic(void)
     free(map);
     map = NULL;
 
-    if (!EeVoterTable_ColumnIsNumericOrDate(&t, 0) || EeVoterTable_ColumnIsNumericOrDate(&t, 1) ||
-        EeVoterTable_ColumnIsNumericOrDate(&t, 2) ||
+    if (!EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_VOTER_ID) ||
+        !EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_PRECINCT) ||
+        EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_NAME) ||
+        EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_ADDRESS) ||
         !EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)pct) ||
         EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)city) ||
         EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)gender))
     {
-        wprintf(L"filter: column kind mismatch id=%d name=%d addr=%d pct=%d city=%d gender=%d\n",
-                (int)EeVoterTable_ColumnIsNumericOrDate(&t, 0),
-                (int)EeVoterTable_ColumnIsNumericOrDate(&t, 1),
-                (int)EeVoterTable_ColumnIsNumericOrDate(&t, 2),
+        wprintf(L"filter: column kind mismatch id=%d pct=%d name=%d addr=%d srcpct=%d city=%d "
+                L"gender=%d\n",
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_VOTER_ID),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_PRECINCT),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_NAME),
+                (int)EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_ADDRESS),
                 (int)EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)pct),
                 (int)EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)city),
                 (int)EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)gender));
@@ -1027,7 +1032,8 @@ static int test_empty_numeric_header(void)
     }
     age = find_column(&t, L"AGE");
     if (age < 0 || !EeVoterTable_ColumnIsNumericOrDate(&t, (uint32_t)age) ||
-        !EeVoterTable_ColumnIsNumericOrDate(&t, 0) || EeVoterTable_ColumnIsNumericOrDate(&t, 1))
+        !EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_VOTER_ID) ||
+        EeVoterTable_ColumnIsNumericOrDate(&t, EE_COL_NAME))
     {
         wprintf(L"agehdr: expected empty AGE to be numeric by header\n");
         EeVoterTable_Clear(&t);
@@ -1199,13 +1205,19 @@ static int test_name_last_first_no_address(void)
         wprintf(L"nameparts: VUID mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 1, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_NAME, buf, ARRAYSIZE(buf));
     if (wcscmp(buf, L"Smith, John A Jr") != 0)
     {
         wprintf(L"nameparts: Name mismatch (%s)\n", buf);
         goto done;
     }
-    EeVoterTable_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_PRECINCT, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"101") != 0)
+    {
+        wprintf(L"nameparts: Precinct mismatch (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
     if (buf[0] != L'\0')
     {
         wprintf(L"nameparts: expected empty Address, got (%s)\n", buf);
@@ -1219,6 +1231,94 @@ done:
     if (rc != 0)
     {
         wprintf(L"nameparts test failed\n");
+    }
+    return rc;
+}
+
+static int test_precinct_normalize(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[64];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_precinct.csv")))
+    {
+        wprintf(L"pct: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"pct: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,PCTCOD,PCTSPT,LSTNAM,FSTNAM\n", fp);
+    fputs("1,234,A,Smith,John\n", fp);
+    fputs("2,P 204,B,Jones,Jane\n", fp);
+    fputs("3,425.6,C,Lee,Ann\n", fp);
+    fputs("4,1006.10,D,Ng,Tom\n", fp);
+    fputs("5,2.3,E,Park,Kim\n", fp);
+    fputs("6,234 S,F,Ortiz,Ana\n", fp);
+    fputs("7,S2,G,Brown,Rob\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 7)
+    {
+        wprintf(L"pct: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+
+    {
+        static const wchar_t *expect[] = {L"234", L"204", L"425", L"1006", L"2", L"234", L"2"};
+        uint32_t i;
+        for (i = 0; i < t.row_count; i++)
+        {
+            EeVoterTable_GetViewCellW(&t, i, EE_COL_PRECINCT, buf, ARRAYSIZE(buf));
+            if (wcscmp(buf, expect[i]) != 0)
+            {
+                wprintf(L"pct: row %u expected %s got %s\n", i, expect[i], buf);
+                goto done;
+            }
+        }
+    }
+
+    if (!EeVoterTable_SortByColumn(&t, EE_COL_PRECINCT))
+    {
+        wprintf(L"pct: sort failed\n");
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_PRECINCT, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2") != 0)
+    {
+        wprintf(L"pct: expected 2 first after sort, got %s\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 6, EE_COL_PRECINCT, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"1006") != 0)
+    {
+        wprintf(L"pct: expected 1006 last after sort, got %s\n", buf);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"pct ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"pct test failed\n");
     }
     return rc;
 }
@@ -1343,6 +1443,7 @@ int wmain(void)
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();
+    failed |= test_precinct_normalize();
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();
     return failed == 0 ? 0 : 1;

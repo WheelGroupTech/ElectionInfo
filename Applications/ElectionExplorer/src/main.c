@@ -34,7 +34,7 @@ static const wchar_t k_FilterClassName[] = L"ElectionExplorerFilter";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
-static const int k_DefaultFrozenWidth = 560;
+static const int k_DefaultFrozenWidth = 640;
 static const uint32_t k_NameUpdateProgressMinRows = 25000;
 static const int k_ZoomMin = 50;
 static const int k_ZoomMax = 250;
@@ -1146,6 +1146,7 @@ static void App_FitFrozenColumns(AppState *app)
     RECT rc;
     int inner_w;
     int id_w;
+    int pct_w;
     int name_w;
     int addr_w;
     int gap;
@@ -1170,16 +1171,18 @@ static void App_FitFrozenColumns(AppState *app)
 
     gap = ScaleDisplay(app, 2);
     id_w = ScaleDisplay(app, 110);
+    pct_w = ScaleDisplay(app, 72);
     name_w = ScaleDisplay(app, 180);
-    addr_w = inner_w - id_w - name_w - gap;
-    if (addr_w < ScaleDisplay(app, 200))
+    addr_w = inner_w - id_w - pct_w - name_w - gap;
+    if (addr_w < ScaleDisplay(app, 180))
     {
-        addr_w = ScaleDisplay(app, 200);
+        addr_w = ScaleDisplay(app, 180);
     }
 
-    ListView_SetColumnWidth(app->hwnd_frozen, 0, id_w);
-    ListView_SetColumnWidth(app->hwnd_frozen, 1, name_w);
-    ListView_SetColumnWidth(app->hwnd_frozen, 2, addr_w);
+    ListView_SetColumnWidth(app->hwnd_frozen, EE_COL_VOTER_ID, id_w);
+    ListView_SetColumnWidth(app->hwnd_frozen, EE_COL_PRECINCT, pct_w);
+    ListView_SetColumnWidth(app->hwnd_frozen, EE_COL_NAME, name_w);
+    ListView_SetColumnWidth(app->hwnd_frozen, EE_COL_ADDRESS, addr_w);
 }
 
 static void App_RebuildColumns(AppState *app)
@@ -1199,18 +1202,22 @@ static void App_RebuildColumns(AppState *app)
 
     col_width = ScaleDisplay(app, 120);
 
-    /* Frozen: Voter ID (center) + Name + Address (left) */
+    /* Frozen: Voter ID (center) + Precinct + Name + Address (left) */
     for (i = 0; i < EE_FROZEN_COLUMN_COUNT && i < app->table.column_count; i++)
     {
         ZeroMemory(&col, sizeof(col));
         col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
         /* Column 0 is forced left by ListView for item text; we center-draw it. */
-        col.fmt = (i == 0) ? LVCFMT_CENTER : LVCFMT_LEFT;
-        if (i == 0)
+        col.fmt = (i == EE_COL_VOTER_ID) ? LVCFMT_CENTER : LVCFMT_LEFT;
+        if (i == EE_COL_VOTER_ID)
         {
             col.cx = ScaleDisplay(app, 110);
         }
-        else if (i == 1)
+        else if (i == EE_COL_PRECINCT)
+        {
+            col.cx = ScaleDisplay(app, 72);
+        }
+        else if (i == EE_COL_NAME)
         {
             col.cx = ScaleDisplay(app, 180);
         }
@@ -2625,7 +2632,7 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
                 if (hit_value[0] != L'\0')
                 {
                     have_cell = TRUE;
-                    if (hwnd_list == app->hwnd_frozen && hit_col == 2)
+                    if (hwnd_list == app->hwnd_frozen && hit_col == EE_COL_ADDRESS)
                     {
                         have_address = TRUE;
                     }
@@ -3075,18 +3082,19 @@ static BOOL App_ShowOptions(AppState *app)
     client_w = rc_client.right - rc_client.left;
     client_h = rc_client.bottom - rc_client.top;
 
-    chk_prepend = CreateWindowExW(0,
-                                  L"BUTTON",
-                                  L"Pre-pend normalized data for copies",
-                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
-                                  margin,
-                                  margin,
-                                  client_w - margin * 2,
-                                  Scale(app, 24),
-                                  app->hwnd_options,
-                                  (HMENU)(INT_PTR)IDC_OPT_PREPEND,
-                                  app->instance,
-                                  NULL);
+    chk_prepend =
+        CreateWindowExW(0,
+                        L"BUTTON",
+                        L"Pre-pend normalized data for copies (ID, Precinct, Name, Address)",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                        margin,
+                        margin,
+                        client_w - margin * 2,
+                        Scale(app, 24),
+                        app->hwnd_options,
+                        (HMENU)(INT_PTR)IDC_OPT_PREPEND,
+                        app->instance,
+                        NULL);
     chk_surname = CreateWindowExW(0,
                                   L"BUTTON",
                                   L"Display name in surname-first format",

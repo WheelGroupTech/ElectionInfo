@@ -998,6 +998,7 @@ typedef enum FieldRole
     Role_MiddleName,
     Role_LastName,
     Role_NameSuffix,
+    Role_Precinct,
     Role_AddrFull,
     Role_AddrNumber,
     Role_AddrPredir,
@@ -1129,6 +1130,22 @@ static FieldRole classify_field(const char *norm)
         strcmp(norm, "SUFFIX") == 0 || strcmp(norm, "NSUFFIX") == 0)
     {
         return Role_NameSuffix;
+    }
+
+    if (header_contains(norm, "PCTSPT") || header_contains(norm, "PRECSUB") ||
+        header_contains(norm, "SPLIT") ||
+        (header_contains(norm, "PRECINCT") && header_contains(norm, "SUB")))
+    {
+        /* Precinct subdivisions are not the normalized Precinct column. */
+    }
+    else if (strcmp(norm, "PCT") == 0 || strcmp(norm, "PCTCOD") == 0 ||
+             strcmp(norm, "PCTCODE") == 0 || strcmp(norm, "PCTNBR") == 0 ||
+             strcmp(norm, "PCTNO") == 0 || strcmp(norm, "PRECINCT") == 0 ||
+             strcmp(norm, "PRECINCTNO") == 0 || strcmp(norm, "PRECINCTNBR") == 0 ||
+             strcmp(norm, "PRECINCTCODE") == 0 || strcmp(norm, "REGPRECINCT") == 0 ||
+             strcmp(norm, "VOTERPRECINCT") == 0 || header_contains(norm, "PRECINCT"))
+    {
+        return Role_Precinct;
     }
 
     if (is_mailing_header(norm))
@@ -1656,6 +1673,48 @@ static const char *field_at(const FieldList *fields, int idx)
         return "";
     }
     return fields->items[idx];
+}
+
+/**
+ * Keep the leading integer precinct (skip letters/space, drop .subdivision
+ * and trailing letters). "P 204" / "234.2" / "234 S" / "1006.10" → "204"/"234"/"1006".
+ */
+static void extract_precinct_number(const char *in, char *out, size_t out_cch)
+{
+    const char *p;
+    char digits[16];
+    int n = 0;
+    int i;
+
+    if (out == NULL || out_cch == 0)
+    {
+        return;
+    }
+    out[0] = '\0';
+    if (in == NULL)
+    {
+        return;
+    }
+    p = in;
+    while (*p != '\0' && (*p < '0' || *p > '9'))
+    {
+        p++;
+    }
+    if (*p == '\0')
+    {
+        return;
+    }
+    while (*p >= '0' && *p <= '9' && n < (int)sizeof(digits) - 1)
+    {
+        digits[n++] = *p++;
+    }
+    digits[n] = '\0';
+    i = 0;
+    while (i + 1 < n && digits[i] == '0')
+    {
+        i++;
+    }
+    StringCchCopyA(out, out_cch, digits + i);
 }
 
 static BOOL compose_name(const FieldList *fields,
@@ -2233,7 +2292,45 @@ static int sort_cmp(void *context, const void *a, const void *b)
     const char *sb = EeVoterTable_GetCellUtf8(ctx->table, rb, ctx->column);
     int cmp;
 
-    if (ctx->column < EE_MAX_COLUMNS && ctx->table->column_is_date[ctx->column])
+    if (ctx->column == EE_COL_PRECINCT)
+    {
+        unsigned long na = 0;
+        unsigned long nb = 0;
+        BOOL ga = sa != NULL && sa[0] != '\0';
+        BOOL gb = sb != NULL && sb[0] != '\0';
+        if (ga)
+        {
+            na = strtoul(sa, NULL, 10);
+        }
+        if (gb)
+        {
+            nb = strtoul(sb, NULL, 10);
+        }
+        if (ga && gb)
+        {
+            if (na < nb)
+            {
+                cmp = -1;
+            }
+            else if (na > nb)
+            {
+                cmp = 1;
+            }
+            else
+            {
+                cmp = 0;
+            }
+        }
+        else if (ga != gb)
+        {
+            cmp = ga ? 1 : -1;
+        }
+        else
+        {
+            cmp = 0;
+        }
+    }
+    else if (ctx->column < EE_MAX_COLUMNS && ctx->table->column_is_date[ctx->column])
     {
         uint32_t da = 0;
         uint32_t db = 0;
@@ -2376,7 +2473,7 @@ BOOL EeVoterTable_SetNameSurnameFirst(EeVoterTable *table,
             return FALSE;
         }
         cell = table->cells + (size_t)row * (size_t)table->column_count;
-        cell[1] = ofs;
+        cell[EE_COL_NAME] = ofs;
 
         if (progress_fn != NULL && table->row_count > 0)
         {
@@ -2398,7 +2495,7 @@ BOOL EeVoterTable_SetNameSurnameFirst(EeVoterTable *table,
     }
 
     table->name_surname_first = surname_first;
-    if (table->sort_column == 1)
+    if (table->sort_column == EE_COL_NAME)
     {
         sort_apply(table);
     }
@@ -2484,6 +2581,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
     int state_idx = -1;
     int zip_idx = -1;
     int zip4_idx = -1;
+    int precinct_idx = -1;
     uint32_t src_col_count = 0;
     uint32_t display_cols = 0;
     size_t i;
@@ -2754,6 +2852,12 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                                         last_idx = (int)i;
                                     }
                                     break;
+                                case Role_Precinct:
+                                    if (precinct_idx < 0)
+                                    {
+                                        precinct_idx = (int)i;
+                                    }
+                                    break;
                                 case Role_NameSuffix:
                                     if (suf_idx < 0)
                                     {
@@ -2892,12 +2996,15 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         out_table->addr_zip4_col =
                             (zip4_idx < 0) ? -1 : zip4_idx + (int)EE_FROZEN_COLUMN_COUNT;
 
-                        /* Display columns: Voter ID, Name, Address, then source columns. */
+                        /* Display columns: Voter ID, Precinct, Name, Address, then source. */
                         display_cols = EE_FROZEN_COLUMN_COUNT + src_col_count;
                         out_table->column_count = display_cols;
-                        if (!utf8_to_wide_dup("Voter ID", &out_table->column_titles[0]) ||
-                            !utf8_to_wide_dup("Name", &out_table->column_titles[1]) ||
-                            !utf8_to_wide_dup("Address", &out_table->column_titles[2]))
+                        if (!utf8_to_wide_dup("Voter ID",
+                                              &out_table->column_titles[EE_COL_VOTER_ID]) ||
+                            !utf8_to_wide_dup("Precinct",
+                                              &out_table->column_titles[EE_COL_PRECINCT]) ||
+                            !utf8_to_wide_dup("Name", &out_table->column_titles[EE_COL_NAME]) ||
+                            !utf8_to_wide_dup("Address", &out_table->column_titles[EE_COL_ADDRESS]))
                         {
                             free(read_buf);
                             free(line);
@@ -2980,7 +3087,11 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         {
                             vuid_text = row_fields.items[vuid_idx];
                         }
-                        if (!pool_add_cell(out_table, 0, vuid_text, strlen(vuid_text), &cell[0]))
+                        if (!pool_add_cell(out_table,
+                                           EE_COL_VOTER_ID,
+                                           vuid_text,
+                                           strlen(vuid_text),
+                                           &cell[EE_COL_VOTER_ID]))
                         {
                             free(read_buf);
                             free(line);
@@ -3005,7 +3116,32 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         {
                             name_buf[0] = '\0';
                         }
-                        if (!pool_add_cell(out_table, 1, name_buf, strlen(name_buf), &cell[1]))
+                        {
+                            char pct_buf[16];
+                            const char *pct_src = field_at(&row_fields, precinct_idx);
+                            extract_precinct_number(pct_src, pct_buf, sizeof(pct_buf));
+                            if (!pool_add_cell(out_table,
+                                               EE_COL_PRECINCT,
+                                               pct_buf,
+                                               strlen(pct_buf),
+                                               &cell[EE_COL_PRECINCT]))
+                            {
+                                free(read_buf);
+                                free(line);
+                                field_list_free(&header_fields);
+                                field_list_free(&row_fields);
+                                fclose(fp);
+                                EeVoterTable_Clear(out_table);
+                                set_error(error_message, error_cch, L"Out of memory.");
+                                return EeLoadStatus_Error;
+                            }
+                        }
+
+                        if (!pool_add_cell(out_table,
+                                           EE_COL_NAME,
+                                           name_buf,
+                                           strlen(name_buf),
+                                           &cell[EE_COL_NAME]))
                         {
                             free(read_buf);
                             free(line);
@@ -3037,7 +3173,11 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             {
                                 addr_buf[0] = '\0';
                             }
-                            if (!pool_add_cell(out_table, 2, addr_buf, strlen(addr_buf), &cell[2]))
+                            if (!pool_add_cell(out_table,
+                                               EE_COL_ADDRESS,
+                                               addr_buf,
+                                               strlen(addr_buf),
+                                               &cell[EE_COL_ADDRESS]))
                             {
                                 free(read_buf);
                                 free(line);

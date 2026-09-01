@@ -13,16 +13,16 @@ display them in a high-performance grid.
 | Close a list | **File → Close Voter List** or the title-bar **X** closes that window only. **File → Exit** closes every window. |
 | Formats | `.csv` (comma) or `.txt` (tab); delimiter also sniffed from the header |
 | Progress | Modal progress window with percent complete and **Cancel** |
-| Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane. Selected cells use the system highlight color on **both** panes (Voter ID, Name, and the scrolling columns). |
+| Select | Click, **Ctrl+click**, and **Shift+click** to select one or more rows in either pane. Selected cells use the system highlight color on **both** panes (Voter ID, Precinct, Name, Address, and the scrolling columns). |
 | Copy | **Edit → Copy** (`Ctrl+C`) or right-click the selection; uses the file delimiter |
-| Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID**, **Name**, and **Address** before the original columns |
+| Copy option | **Edit → Options…** — **Pre-pend normalized data for copies** (default on) adds **Voter ID**, **Precinct**, **Name**, and **Address** before the original columns |
 | Name format | **Edit → Options…** — **Display name in surname-first format** (default on) shows the frozen **Name** column as `Last, First Middle`. Uncheck for `First Middle Last`. |
 | Zoom | **Edit → Options…** — **Zoom** (default **100%**, range **50–250%**) scales grid text, row height, column widths, and pane titles. Dialogs stay at system size. |
 | Maps | Right-click a non-empty **Address** cell in the frozen pane and choose **Show in Maps…**. Opens the default browser on the selected engine. **Edit → Options…** — **Map engine** (default **Google Maps**; also Bing Maps, Apple Maps, Open Street Maps). |
 | Links | Right-click a **File Data** cell that contains an `https://` URL and choose **Open link…**. |
 | Grid | Virtual list (owner-data) with **grid lines**, sized for hundreds of thousands to millions of rows |
 | Column headers | **Bold** captions, **light grey** background, **double underline** rule |
-| Frozen columns | **Voter ID** and **Name** stay visible while the rest of the grid scrolls horizontally |
+| Frozen columns | **Voter ID**, **Precinct**, **Name**, and **Address** stay visible while the rest of the grid scrolls horizontally |
 | Resize frozen pane | Drag the **vertical splitter** between the left and right panes (`↔` cursor) |
 | Voter ID alignment | **Voter ID** header and cell text are **center**-aligned; other columns are left-aligned |
 | Sort | Click a column header to toggle ascending / descending (arrow in header). Columns whose header contains **Date** (as a word), plus **EDR** / **EDRDAT** / **DOB**, sort as calendar dates (`M/D/YYYY`, `YYYY-MM-DD`, `YYYYMMDD`). Privacy-masked birthdates (`2005`, `*/*/2005`, `**/**/2005`) sort by year. |
@@ -37,7 +37,7 @@ for input.
 The grid uses two synchronized virtual list views, each with a bold grey
 pane title:
 
-1. **Left (frozen)** — titled **Normalized Data**; Voter ID, Name, and Address  
+1. **Left (frozen)** — titled **Normalized Data**; Voter ID, Precinct, Name, and Address  
 2. **Right (scrollable)** — titled **File Data**; all remaining source columns  
 
 Vertical scroll position and row selection stay in sync. When only one pane
@@ -76,13 +76,17 @@ The status bar shows `Filtered: N of M voters` while any rule is enabled.
 
 1. **Voter ID** — synthesized from the best available ID column (`VUID`,
    `VUIDNO`, `SOS_VoterID`, etc.; falls back to generic `ID` / legacy IDs).
-2. **Name** — from a full-name field when present, otherwise composed from
+2. **Precinct** — integer precinct from `PRECINCT`, `PCTCOD`, `PCT`, or
+   `Reg Precinct`. Leading letters (`P 204`) and trailing letters (`234 S`)
+   are ignored; a dotted subdivision (`234.2`, `1006.10`) is dropped.
+   Split fields (`PCTSPT`, `precsub`) are not used.
+3. **Name** — from a full-name field when present, otherwise composed from
    prefix / first / middle / last / suffix parts (`FSTNAM`, `LSTNAM`,
    `Name_Last`, `Name_First`, `Name_Middle`, `Name_Suffix`, …).
    Default display is surname-first (`Smith, John A`). A full-name source
    field is shown as stored. Changing the option rebuilds the Name column
    (a progress window appears for large lists).
-3. **Address** — residence street composed from house number, direction,
+4. **Address** — residence street composed from house number, direction,
    street name/type, unit, city, state, and ZIP (`BLKNUM`, `STRNAM`,
    `RSCITY`, `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, …). A
    street-line field is combined with city/ZIP unless those values are
@@ -95,7 +99,7 @@ The status bar shows `Filtered: N of M voters` while any rule is enabled.
    `6007.0` is shown as `6007`. Mailing columns (`MAIL_*`) are
    ignored. A 9-digit ZIP is shown only when the extra four digits exist
    and are not all zeros.
-4. **All original file columns** — in file order, using the source headers.
+5. **All original file columns** — in file order, using the source headers.
    Historical Travis-style files with per-election `VOTED` / `PLACE` / `PARTY`
    fields are included (hundreds of columns). The loader accepts up to
    `EE_MAX_COLUMNS` display columns (1024, including Voter ID and Name).

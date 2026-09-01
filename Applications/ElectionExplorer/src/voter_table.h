@@ -16,14 +16,19 @@ extern "C"
 #endif
 
 /**
- * Maximum display columns (synthesized Voter ID and Name plus source fields).
+ * Maximum display columns (synthesized Voter ID, Precinct, Name, Address plus
+ * source fields).
  * Historical county exports can exceed 380 source columns (VOTED/PLACE/PARTY
  * per election).
  */
 #define EE_MAX_COLUMNS 1024
 
-/** Frozen display columns: Voter ID, Name, Address. */
-#define EE_FROZEN_COLUMN_COUNT 3
+/** Frozen display columns: Voter ID, Precinct, Name, Address. */
+#define EE_FROZEN_COLUMN_COUNT 4
+#define EE_COL_VOTER_ID        0
+#define EE_COL_PRECINCT        1
+#define EE_COL_NAME            2
+#define EE_COL_ADDRESS         3
 
     typedef enum EeLoadStatus
     {
@@ -183,7 +188,7 @@ extern "C"
  * @param table               Loaded table.
  * @param view_rows           Visual row indices (sort order).
  * @param n_rows              Number of entries in @p view_rows.
- * @param prepend_normalized  If TRUE, emit Voter ID, Name, and Address before
+ * @param prepend_normalized  If TRUE, emit Voter ID, Precinct, Name, and Address before
  *                            source fields.
  * @param out_text            Receives heap UTF-8 (caller frees). Never NULL on
  *                            success (empty string if @p n_rows is 0).

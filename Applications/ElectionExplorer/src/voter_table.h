@@ -163,6 +163,14 @@ extern "C"
                                                    const wchar_t *full_address);
 
     /**
+     * @brief Distinct normalized Voter ID values that occur on two or more rows.
+     *        Empty IDs are ignored. Caller frees *out_ids and each string.
+     */
+    BOOL EeVoterTable_CollectDuplicateVoterIds(const EeVoterTable *table,
+                                               wchar_t ***out_ids,
+                                               uint32_t *out_count);
+
+    /**
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);

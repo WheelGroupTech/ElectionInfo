@@ -26,7 +26,7 @@ display them in a high-performance grid.
 | Resize frozen pane | Drag the **vertical splitter** between the left and right panes (`↔` cursor) |
 | Voter ID alignment | **Voter ID** header and cell text are **center**-aligned; other columns are left-aligned |
 | Sort | Click a column header to toggle ascending / descending (arrow in header). Columns whose header contains **Date** (as a word), plus **EDR** / **EDRDAT** / **DOB**, sort as calendar dates (`M/D/YYYY`, `YYYY-MM-DD`, `YYYYMMDD`). Privacy-masked birthdates (`2005`, `*/*/2005`, `**/**/2005`) sort by year. |
-| Filter | **Filter → Filter…** (`Ctrl+L`) opens a Process Monitor-style dialog. Rules never delete rows; they only hide them. **Filter → Reset Filter** clears every rule. Right-click a cell for **Include** / **Exclude** of that value. |
+| Filter | **Filter → Filter…** (`Ctrl+L`) opens a Process Monitor-style dialog. Rules never delete rows; they only hide them. **Filter → Reset Filter** clears every rule. **Filter → Show duplicate Voter IDs…** keeps only rows whose Voter ID appears more than once (or reports that none exist). Right-click a cell for **Include** / **Exclude** of that value. |
 
 Loading runs on a **background thread** so the UI stays responsive. Progress
 reaches **100%** only after the grid has been populated and the app is ready

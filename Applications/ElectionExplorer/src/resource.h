@@ -14,6 +14,7 @@
 #define IDM_EDIT_OPTIONS          40011
 #define IDM_FILTER_EDIT           40020
 #define IDM_FILTER_RESET          40021
+#define IDM_FILTER_DUP_VOTER_IDS  40026
 #define IDM_FILTER_INCLUDE        40022
 #define IDM_FILTER_EXCLUDE        40023
 #define IDM_SHOW_IN_MAPS          40024

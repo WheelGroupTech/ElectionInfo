@@ -1323,6 +1323,110 @@ done:
     return rc;
 }
 
+static int test_duplicate_voter_ids(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    wchar_t **ids = NULL;
+    uint32_t n_ids = 0;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_dup_vuid.csv")))
+    {
+        wprintf(L"dupvuid: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"dupvuid: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM\n", fp);
+    fputs("100,Smith,John\n", fp);
+    fputs("200,Jones,Jane\n", fp);
+    fputs("100,Smith,Jon\n", fp);
+    fputs("300,Lee,Ann\n", fp);
+    fputs("200,Jones,Janet\n", fp);
+    fputs("200,Jones,Jan\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 6)
+    {
+        wprintf(L"dupvuid: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    if (!EeVoterTable_CollectDuplicateVoterIds(&t, &ids, &n_ids) || n_ids != 2 || ids == NULL)
+    {
+        wprintf(L"dupvuid: expected 2 duplicate IDs, got %u\n", n_ids);
+        goto done;
+    }
+    if (!((wcscmp(ids[0], L"100") == 0 && wcscmp(ids[1], L"200") == 0) ||
+          (wcscmp(ids[0], L"200") == 0 && wcscmp(ids[1], L"100") == 0)))
+    {
+        wprintf(L"dupvuid: unexpected IDs %s %s\n", ids[0], ids[1]);
+        goto done;
+    }
+    {
+        uint32_t i;
+        for (i = 0; i < n_ids; i++)
+        {
+            free(ids[i]);
+        }
+    }
+    free(ids);
+    ids = NULL;
+
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Init(&t);
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.csv",
+                                  &t,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"dupvuid: sample load failed %s\n", err);
+        goto done;
+    }
+    if (!EeVoterTable_CollectDuplicateVoterIds(&t, &ids, &n_ids) || n_ids != 0)
+    {
+        wprintf(L"dupvuid: sample should have no duplicates, got %u\n", n_ids);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"dupvuid ok\n");
+
+done:
+    if (ids != NULL)
+    {
+        uint32_t i;
+        for (i = 0; i < n_ids; i++)
+        {
+            free(ids[i]);
+        }
+        free(ids);
+    }
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"dupvuid test failed\n");
+    }
+    return rc;
+}
+
 static int test_partial_birthdate(void)
 {
     wchar_t path[MAX_PATH];
@@ -1443,6 +1547,7 @@ int wmain(void)
     failed |= test_filter_logic();
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();
+    failed |= test_duplicate_voter_ids();
     failed |= test_precinct_normalize();
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();

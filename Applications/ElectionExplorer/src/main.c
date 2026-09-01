@@ -2293,6 +2293,7 @@ static HMENU App_CreateMenu(void)
     HMENU filter_menu = CreatePopupMenu();
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…\tCtrl+L");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTER_IDS, L"Show &duplicate Voter IDs…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
@@ -4323,6 +4324,78 @@ static void App_ResetFilter(AppState *app)
     App_ApplyFilter(app);
 }
 
+static void App_ShowDuplicateVoterIds(AppState *app)
+{
+    wchar_t **ids = NULL;
+    uint32_t n = 0;
+    uint32_t i;
+    HCURSOR prev;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    if (app->loading || app->table.row_count == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Load a voter list before checking for duplicate Voter IDs.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!EeVoterTable_CollectDuplicateVoterIds(&app->table, &ids, &n))
+    {
+        SetCursor(prev);
+        MessageBoxW(app->hwnd_main,
+                    L"Could not scan Voter IDs for duplicates.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetCursor(prev);
+
+    if (n == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"No duplicate Voter IDs",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    EeFilter_Clear(&app->filters);
+    for (i = 0; i < n; i++)
+    {
+        EeFilterRule r;
+        ZeroMemory(&r, sizeof(r));
+        r.column = EE_COL_VOTER_ID;
+        r.relation = EeRel_Is;
+        r.action = EeFilt_Include;
+        r.enabled = TRUE;
+        if (ids[i] != NULL)
+        {
+            StringCchCopyW(r.value, ARRAYSIZE(r.value), ids[i]);
+        }
+        if (!EeFilter_Add(&app->filters, &r))
+        {
+            MessageBoxW(app->hwnd_main,
+                        L"Could not build the duplicate Voter ID filter.",
+                        k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+            break;
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        free(ids[i]);
+    }
+    free(ids);
+    App_ClearSelection(app);
+    App_ApplyFilter(app);
+}
+
 static void App_AddQuickFilter(AppState *app,
                                uint32_t column,
                                const wchar_t *value,
@@ -4722,6 +4795,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                            IDM_FILTER_RESET,
                            MF_BYCOMMAND | ((app->filters.count > 0 && !app->loading) ? MF_ENABLED
                                                                                      : MF_GRAYED));
+            EnableMenuItem(
+                (HMENU)wParam,
+                IDM_FILTER_DUP_VOTER_IDS,
+                MF_BYCOMMAND |
+                    ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
             return 0;
 
         case WM_COMMAND:
@@ -4759,6 +4837,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 case IDM_FILTER_RESET:
                     App_ResetFilter(app);
+                    return 0;
+                case IDM_FILTER_DUP_VOTER_IDS:
+                    App_ShowDuplicateVoterIds(app);
                     return 0;
                 default:
                     break;

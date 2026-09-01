@@ -785,6 +785,150 @@ void EeVoterTable_GetViewCellW(const EeVoterTable *table,
     }
 }
 
+static int dup_voter_id_cmp(void *ctx, const void *a, const void *b)
+{
+    const char *sa = *(const char *const *)a;
+    const char *sb = *(const char *const *)b;
+    (void)ctx;
+    if (sa == NULL)
+    {
+        sa = "";
+    }
+    if (sb == NULL)
+    {
+        sb = "";
+    }
+    return strcmp(sa, sb);
+}
+
+BOOL EeVoterTable_CollectDuplicateVoterIds(const EeVoterTable *table,
+                                           wchar_t ***out_ids,
+                                           uint32_t *out_count)
+{
+    const char **ptrs = NULL;
+    wchar_t **vals = NULL;
+    uint32_t i;
+    uint32_t dup_n = 0;
+    uint32_t filled = 0;
+    size_t bytes;
+
+    if (out_ids == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_ids = NULL;
+    *out_count = 0;
+    if (table == NULL || table->row_count == 0)
+    {
+        return TRUE;
+    }
+    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(char *), &bytes)))
+    {
+        return FALSE;
+    }
+    ptrs = (const char **)malloc(bytes);
+    if (ptrs == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < table->row_count; i++)
+    {
+        ptrs[i] = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
+    }
+    qsort_s((void *)ptrs, table->row_count, sizeof(char *), dup_voter_id_cmp, NULL);
+
+    i = 0;
+    while (i < table->row_count)
+    {
+        const char *cur = ptrs[i] ? ptrs[i] : "";
+        uint32_t run = 1;
+        while (i + run < table->row_count)
+        {
+            const char *nxt = ptrs[i + run] ? ptrs[i + run] : "";
+            if (strcmp(cur, nxt) != 0)
+            {
+                break;
+            }
+            run++;
+        }
+        if (cur[0] != '\0' && run >= 2)
+        {
+            dup_n++;
+        }
+        i += run;
+    }
+    if (dup_n == 0)
+    {
+        free(ptrs);
+        return TRUE;
+    }
+
+    vals = (wchar_t **)calloc((size_t)dup_n, sizeof(wchar_t *));
+    if (vals == NULL)
+    {
+        free(ptrs);
+        return FALSE;
+    }
+    i = 0;
+    while (i < table->row_count && filled < dup_n)
+    {
+        const char *cur = ptrs[i] ? ptrs[i] : "";
+        uint32_t run = 1;
+        while (i + run < table->row_count)
+        {
+            const char *nxt = ptrs[i + run] ? ptrs[i + run] : "";
+            if (strcmp(cur, nxt) != 0)
+            {
+                break;
+            }
+            run++;
+        }
+        if (cur[0] != '\0' && run >= 2)
+        {
+            int n;
+            wchar_t *w;
+            n = MultiByteToWideChar(CP_UTF8, 0, cur, -1, NULL, 0);
+            if (n <= 0)
+            {
+                n = MultiByteToWideChar(CP_ACP, 0, cur, -1, NULL, 0);
+            }
+            if (n <= 0)
+            {
+                uint32_t k;
+                for (k = 0; k < filled; k++)
+                {
+                    free(vals[k]);
+                }
+                free(vals);
+                free(ptrs);
+                return FALSE;
+            }
+            w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
+            if (w == NULL)
+            {
+                uint32_t k;
+                for (k = 0; k < filled; k++)
+                {
+                    free(vals[k]);
+                }
+                free(vals);
+                free(ptrs);
+                return FALSE;
+            }
+            if (MultiByteToWideChar(CP_UTF8, 0, cur, -1, w, n) == 0)
+            {
+                MultiByteToWideChar(CP_ACP, 0, cur, -1, w, n);
+            }
+            vals[filled++] = w;
+        }
+        i += run;
+    }
+    free(ptrs);
+    *out_ids = vals;
+    *out_count = filled;
+    return TRUE;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Clipboard / copy text                                                      */
 /* -------------------------------------------------------------------------- */

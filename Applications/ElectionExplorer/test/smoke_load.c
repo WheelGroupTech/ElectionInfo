@@ -1871,6 +1871,107 @@ done:
     return rc;
 }
 
+static int test_value_counts(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    EeValueCount *items = NULL;
+    uint32_t count = 0;
+    uint32_t blank = 0;
+    int col;
+    uint32_t i;
+    uint32_t austin = 0, dallas = 0, houston = 0, other = 0;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_valcounts.csv")))
+    {
+        wprintf(L"valcount: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"valcount: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,City\n", fp);
+    fputs("1,Austin\n", fp);
+    fputs("2,austin\n", fp); /* case-insensitive grouping with row 1 */
+    fputs("3,Dallas\n", fp);
+    fputs("4,Austin\n", fp);
+    fputs("5,Houston\n", fp);
+    fputs("6,\n", fp); /* empty -> ignored */
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 6)
+    {
+        wprintf(L"valcount: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    col = find_column(&t, L"City");
+    if (col < 0)
+    {
+        wprintf(L"valcount: City column not found\n");
+        goto done;
+    }
+    if (!EeVoterTable_CollectValueCounts(&t, (uint32_t)col, &items, &count, &blank) || count != 3 ||
+        blank != 1 || items == NULL)
+    {
+        wprintf(L"valcount: expected 3 distinct cities + 1 blank, got %u / %u\n", count, blank);
+        goto done;
+    }
+    for (i = 0; i < count; i++)
+    {
+        if (_wcsicmp(items[i].value, L"Austin") == 0)
+        {
+            austin = items[i].count;
+        }
+        else if (_wcsicmp(items[i].value, L"Dallas") == 0)
+        {
+            dallas = items[i].count;
+        }
+        else if (_wcsicmp(items[i].value, L"Houston") == 0)
+        {
+            houston = items[i].count;
+        }
+        else
+        {
+            other++;
+        }
+    }
+    if (austin != 3 || dallas != 1 || houston != 1 || other != 0)
+    {
+        wprintf(L"valcount: bad counts austin=%u dallas=%u houston=%u other=%u\n",
+                austin,
+                dallas,
+                houston,
+                other);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"valcount ok\n");
+
+done:
+    EeVoterTable_FreeValueCounts(items, count);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"valcount test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -1891,6 +1992,7 @@ int wmain(void)
     failed |= test_duplicate_voter_ids();
     failed |= test_duplicate_voters();
     failed |= test_mark_duplicates();
+    failed |= test_value_counts();
     failed |= test_precinct_normalize();
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();

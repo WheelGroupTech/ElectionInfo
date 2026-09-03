@@ -1368,6 +1368,175 @@ BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
 }
 
 /* -------------------------------------------------------------------------- */
+/* Value counts (reports)                                                     */
+/* -------------------------------------------------------------------------- */
+
+void EeVoterTable_FreeValueCounts(EeValueCount *items, uint32_t count)
+{
+    uint32_t i;
+    if (items == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(items[i].value);
+    }
+    free(items);
+}
+
+BOOL EeVoterTable_CollectValueCounts(const EeVoterTable *table,
+                                     uint32_t column,
+                                     EeValueCount **out_items,
+                                     uint32_t *out_count,
+                                     uint32_t *out_blank_count)
+{
+    uint32_t *slots = NULL;
+    const char **rep = NULL; /* rep[i]  = UTF-8 of the i-th distinct value  */
+    uint32_t *cnt = NULL;    /* cnt[i]  = number of rows carrying it        */
+    EeValueCount *items = NULL;
+    uint32_t cap;
+    uint32_t mask;
+    uint32_t i;
+    uint32_t nu = 0;
+    uint32_t blank = 0;
+    size_t bytes;
+
+    if (out_blank_count != NULL)
+    {
+        *out_blank_count = 0;
+    }
+    if (out_items == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_items = NULL;
+    *out_count = 0;
+    if (table == NULL || column >= table->column_count || table->row_count == 0)
+    {
+        return TRUE;
+    }
+    if (table->row_count > (UINT32_MAX / 2u))
+    {
+        return FALSE;
+    }
+    cap = next_pow2_ge_u32(table->row_count * 2u);
+    if (cap == 0)
+    {
+        return FALSE;
+    }
+    if (FAILED(SizeTMult((size_t)cap, sizeof(uint32_t), &bytes)))
+    {
+        return FALSE;
+    }
+    slots = (uint32_t *)malloc(bytes);
+    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(char *), &bytes)))
+    {
+        free(slots);
+        return FALSE;
+    }
+    rep = (const char **)malloc(bytes);
+    cnt = (uint32_t *)malloc((size_t)table->row_count * sizeof(uint32_t));
+    if (slots == NULL || rep == NULL || cnt == NULL)
+    {
+        free(slots);
+        free(rep);
+        free(cnt);
+        return FALSE;
+    }
+    for (i = 0; i < cap; i++)
+    {
+        slots[i] = UINT32_MAX;
+    }
+    mask = cap - 1u;
+
+    for (i = 0; i < table->row_count; i++)
+    {
+        const char *cell = EeVoterTable_GetCellUtf8(table, i, column);
+        uint32_t b;
+        if (cell == NULL || cell[0] == '\0')
+        {
+            blank++;
+            continue;
+        }
+        b = hash_ci_fold(2166136261u, cell) & mask;
+        for (;;)
+        {
+            uint32_t idx = slots[b];
+            if (idx == UINT32_MAX)
+            {
+                rep[nu] = cell;
+                cnt[nu] = 1;
+                slots[b] = nu;
+                nu++;
+                break;
+            }
+            if (_stricmp(cell, rep[idx]) == 0)
+            {
+                cnt[idx]++;
+                break;
+            }
+            b = (b + 1u) & mask;
+        }
+    }
+    free(slots);
+    slots = NULL;
+    if (out_blank_count != NULL)
+    {
+        *out_blank_count = blank;
+    }
+    if (nu == 0)
+    {
+        free(rep);
+        free(cnt);
+        return TRUE;
+    }
+
+    items = (EeValueCount *)calloc((size_t)nu, sizeof(EeValueCount));
+    if (items == NULL)
+    {
+        free(rep);
+        free(cnt);
+        return FALSE;
+    }
+    for (i = 0; i < nu; i++)
+    {
+        int cch;
+        const char *cur = rep[i];
+        cch = MultiByteToWideChar(CP_UTF8, 0, cur, -1, NULL, 0);
+        if (cch <= 0)
+        {
+            cch = MultiByteToWideChar(CP_ACP, 0, cur, -1, NULL, 0);
+        }
+        if (cch <= 0)
+        {
+            EeVoterTable_FreeValueCounts(items, i);
+            free(rep);
+            free(cnt);
+            return FALSE;
+        }
+        items[i].value = (wchar_t *)malloc((size_t)cch * sizeof(wchar_t));
+        if (items[i].value == NULL)
+        {
+            EeVoterTable_FreeValueCounts(items, i);
+            free(rep);
+            free(cnt);
+            return FALSE;
+        }
+        if (MultiByteToWideChar(CP_UTF8, 0, cur, -1, items[i].value, cch) == 0)
+        {
+            MultiByteToWideChar(CP_ACP, 0, cur, -1, items[i].value, cch);
+        }
+        items[i].count = cnt[i];
+    }
+    free(rep);
+    free(cnt);
+    *out_items = items;
+    *out_count = nu;
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Clipboard / copy text                                                      */
 /* -------------------------------------------------------------------------- */
 

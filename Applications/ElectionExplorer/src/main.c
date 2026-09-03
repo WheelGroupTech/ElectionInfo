@@ -31,6 +31,7 @@ static const wchar_t k_WindowTitle[] = L"Election Explorer";
 static const wchar_t k_ProgressClassName[] = L"ElectionExplorerLoadProgress";
 static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
 static const wchar_t k_FilterClassName[] = L"ElectionExplorerFilter";
+static const wchar_t k_ReportClassName[] = L"ElectionExplorerReport";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -47,6 +48,15 @@ enum
     EE_SCAN_DUP_VOTER_IDS = 1,
     EE_SCAN_DUP_NAME_DOB = 2
 };
+
+/* Report kinds (Precinct / Address summary windows). */
+enum
+{
+    EE_REPORT_PRECINCT = 1,
+    EE_REPORT_ADDRESS = 2
+};
+
+typedef struct ReportWindow ReportWindow;
 
 static const int k_ZoomMin = 50;
 static const int k_ZoomMax = 250;
@@ -139,6 +149,10 @@ typedef struct AppState
     BOOL scan_ok;
     BOOL scanning;
 
+    /* Modeless Precinct/Address report windows spawned from this viewer. */
+    ReportWindow *report_precinct;
+    ReportWindow *report_address;
+
     struct AppState *next;
 } AppState;
 
@@ -167,6 +181,9 @@ static void App_ApplyFilter(AppState *app);
 static BOOL App_ShowFilter(AppState *app);
 static void App_ResetFilter(AppState *app);
 static void App_ClearMarks(AppState *app);
+static void App_ShowReport(AppState *app, int kind);
+static void App_CloseReports(AppState *app);
+static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_StartDuplicateScan(AppState *app, int kind);
 static void App_OnScanFinished(AppState *app);
 static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind);
@@ -1752,7 +1769,8 @@ static void App_StartLoad(AppState *app, const wchar_t *path)
 
     StringCchCopyW(app->load_path, ARRAYSIZE(app->load_path), path);
     InterlockedExchange(&app->load_cancel, 0);
-    App_ClearMarks(app); /* prior duplicates view indexed the old table */
+    App_ClearMarks(app);   /* prior duplicates view indexed the old table */
+    App_CloseReports(app); /* reports summarize the outgoing table */
     app->loading = TRUE;
     App_SetStatus(app, L"Loading voter list…");
 
@@ -2406,9 +2424,13 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTERS, L"Show Duplicate &Voters…");
     AppendMenuW(filter_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET_VIEW, L"Reset Vie&w…");
+    HMENU reports_menu = CreatePopupMenu();
+    AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_PRECINCT, L"Display &Precinct Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_ADDRESS, L"Display &Address Report…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     return menu;
 }
 
@@ -4799,6 +4821,615 @@ static void App_DestroyFilter(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Reports (modeless Precinct / Address summary windows)                      */
+/* -------------------------------------------------------------------------- */
+
+struct ReportWindow
+{
+    AppState *app;       /* parent viewer (owns the table + filters)     */
+    HWND hwnd;           /* this report's top-level window               */
+    HWND list;           /* owner-data report list view                 */
+    int kind;            /* EE_REPORT_*                                  */
+    uint32_t column;     /* source display column (Precinct / Address)  */
+    EeValueCount *items; /* aggregated value + count, current sort order */
+    uint32_t count;
+    int sort_col;        /* 0 = value, 1 = count                        */
+    BOOL sort_asc;
+};
+
+/* Empty values are shown (and copied) as this label so incomplete records are
+ * visible; the underlying value stays "" so filters match blank cells. */
+static const wchar_t *report_display_value(const wchar_t *v)
+{
+    return (v == NULL || v[0] == L'\0') ? L"(blank)" : v;
+}
+
+typedef struct ReportSortCtx
+{
+    int sort_col;
+    BOOL asc;
+    BOOL numeric_value; /* precinct sorts numerically */
+} ReportSortCtx;
+
+static int report_sort_cmp(void *ctxv, const void *a, const void *b)
+{
+    const ReportSortCtx *ctx = (const ReportSortCtx *)ctxv;
+    const EeValueCount *pa = (const EeValueCount *)a;
+    const EeValueCount *pb = (const EeValueCount *)b;
+    const wchar_t *va = pa->value ? pa->value : L"";
+    const wchar_t *vb = pb->value ? pb->value : L"";
+    int c;
+
+    if (ctx->sort_col == 1)
+    {
+        c = (pa->count < pb->count) ? -1 : (pa->count > pb->count ? 1 : 0);
+        if (c == 0)
+        {
+            c = _wcsicmp(va, vb);
+        }
+    }
+    else if (ctx->numeric_value)
+    {
+        unsigned long na = wcstoul(va, NULL, 10);
+        unsigned long nb = wcstoul(vb, NULL, 10);
+        c = (na < nb) ? -1 : (na > nb ? 1 : 0);
+        if (c == 0)
+        {
+            c = _wcsicmp(va, vb);
+        }
+    }
+    else
+    {
+        c = _wcsicmp(va, vb);
+    }
+    return ctx->asc ? c : -c;
+}
+
+static void Report_Sort(ReportWindow *rw)
+{
+    ReportSortCtx ctx;
+    ctx.sort_col = rw->sort_col;
+    ctx.asc = rw->sort_asc;
+    ctx.numeric_value = (rw->column == EE_COL_PRECINCT);
+    if (rw->items != NULL && rw->count > 1)
+    {
+        qsort_s(rw->items, rw->count, sizeof(EeValueCount), report_sort_cmp, &ctx);
+    }
+    if (rw->list != NULL)
+    {
+        ListView_RedrawItems(rw->list, 0, (int)rw->count);
+        InvalidateRect(rw->list, NULL, FALSE);
+    }
+}
+
+static void Report_CopySelected(ReportWindow *rw)
+{
+    int i;
+    size_t total = 0;
+    wchar_t *buf;
+    wchar_t *p;
+    char *utf8 = NULL;
+    int u8len;
+
+    if (rw->list == NULL)
+    {
+        return;
+    }
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count)
+        {
+            wchar_t num[16];
+            const wchar_t *v = report_display_value(rw->items[i].value);
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", rw->items[i].count);
+            total += wcslen(v) + wcslen(num) + 3; /* tab + CR + LF */
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (total == 0)
+    {
+        return;
+    }
+    buf = (wchar_t *)malloc((total + 1) * sizeof(wchar_t));
+    if (buf == NULL)
+    {
+        return;
+    }
+    p = buf;
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count)
+        {
+            const wchar_t *v = report_display_value(rw->items[i].value);
+            const wchar_t *n;
+            wchar_t num[16];
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", rw->items[i].count);
+            while (*v)
+            {
+                *p++ = *v++;
+            }
+            *p++ = L'\t';
+            for (n = num; *n; n++)
+            {
+                *p++ = *n;
+            }
+            *p++ = L'\r';
+            *p++ = L'\n';
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    *p = L'\0';
+
+    u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+    if (u8len > 0)
+    {
+        utf8 = (char *)malloc((size_t)u8len);
+        if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+        {
+            App_SetClipboardUtf8(rw->hwnd, utf8);
+        }
+    }
+    free(utf8);
+    free(buf);
+}
+
+static void Report_FilterSelected(ReportWindow *rw, EeFilterAction action)
+{
+    int i;
+    BOOL any = FALSE;
+
+    if (rw->app == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        /* Empty value is allowed: an "is (blank)" rule matches incomplete cells. */
+        if ((uint32_t)i < rw->count && rw->items[i].value != NULL)
+        {
+            EeFilterRule r;
+            ZeroMemory(&r, sizeof(r));
+            r.column = rw->column;
+            r.relation = EeRel_Is;
+            r.action = action;
+            r.enabled = TRUE;
+            StringCchCopyW(r.value, ARRAYSIZE(r.value), rw->items[i].value);
+            if (EeFilter_Add(&rw->app->filters, &r))
+            {
+                any = TRUE;
+            }
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (any)
+    {
+        App_ClearSelection(rw->app);
+        App_ApplyFilter(rw->app);
+    }
+}
+
+static void Report_OnContextMenu(ReportWindow *rw, int iItem, int iSubItem, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+
+    if (iItem < 0 || (uint32_t)iItem >= rw->count)
+    {
+        return;
+    }
+    /* Match the main list: right-clicking an unselected row selects just it. */
+    if (!(ListView_GetItemState(rw->list, iItem, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(rw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(rw->list,
+                              iItem,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    if (iSubItem == 0)
+    {
+        wchar_t shown[48];
+        wchar_t inc[96];
+        wchar_t exc[96];
+        BOOL is_blank = (rw->items[iItem].value == NULL || rw->items[iItem].value[0] == L'\0');
+        const wchar_t *val = report_display_value(rw->items[iItem].value);
+        StringCchCopyW(shown, ARRAYSIZE(shown), val);
+        if (wcslen(val) >= 40)
+        {
+            shown[36] = L'.';
+            shown[37] = L'.';
+            shown[38] = L'.';
+            shown[39] = L'\0';
+        }
+        StringCchPrintfW(inc, ARRAYSIZE(inc), L"&Include \"%s\"", shown);
+        StringCchPrintfW(exc, ARRAYSIZE(exc), L"&Exclude \"%s\"", shown);
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, IDM_FILTER_INCLUDE, inc);
+        AppendMenuW(m, MF_STRING, IDM_FILTER_EXCLUDE, exc);
+        if (rw->kind == EE_REPORT_ADDRESS && !is_blank)
+        {
+            AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(m, MF_STRING, IDM_SHOW_IN_MAPS, L"Show in &Maps…");
+        }
+    }
+
+    cmd = (UINT)
+        TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
+    DestroyMenu(m);
+
+    switch (cmd)
+    {
+        case IDM_EDIT_COPY:
+            Report_CopySelected(rw);
+            break;
+        case IDM_FILTER_INCLUDE:
+            Report_FilterSelected(rw, EeFilt_Include);
+            break;
+        case IDM_FILTER_EXCLUDE:
+            Report_FilterSelected(rw, EeFilt_Exclude);
+            break;
+        case IDM_SHOW_IN_MAPS:
+            if (rw->kind == EE_REPORT_ADDRESS)
+            {
+                App_ShowAddressInMaps(rw->app, rw->items[iItem].value);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+static void Report_LayoutList(ReportWindow *rw, int width, int height)
+{
+    int num_w;
+    int val_w;
+
+    if (rw->list == NULL)
+    {
+        return;
+    }
+    MoveWindow(rw->list, 0, 0, width, height, TRUE);
+    num_w = Scale(rw->app, 130);
+    val_w = width - num_w - Scale(rw->app, 24);
+    if (val_w < Scale(rw->app, 120))
+    {
+        val_w = Scale(rw->app, 120);
+    }
+    ListView_SetColumnWidth(rw->list, 0, val_w);
+    ListView_SetColumnWidth(rw->list, 1, num_w);
+}
+
+static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ReportWindow *rw = (ReportWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            LVCOLUMNW col;
+            RECT rc;
+            rw = (ReportWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)rw);
+            rw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            rw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       rw->app->instance,
+                                       NULL);
+            if (rw->list == NULL)
+            {
+                return -1;
+            }
+            ListView_SetExtendedListViewStyle(rw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (rw->app->font_ui)
+            {
+                SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = LVCFMT_LEFT;
+            col.pszText = (rw->kind == EE_REPORT_ADDRESS) ? L"Address" : L"Precinct";
+            col.cx = Scale(rw->app, (rw->kind == EE_REPORT_ADDRESS) ? 320 : 160);
+            ListView_InsertColumn(rw->list, 0, &col);
+            col.fmt = LVCFMT_RIGHT;
+            col.pszText = L"Number of Voters";
+            col.cx = Scale(rw->app, 130);
+            ListView_InsertColumn(rw->list, 1, &col);
+
+            ListView_SetItemCountEx(rw->list, (int)rw->count, LVSICF_NOINVALIDATEALL);
+            Report_Sort(rw); /* initial ascending by value */
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (rw != NULL)
+            {
+                Report_LayoutList(rw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (rw != NULL && rw->list != NULL)
+            {
+                SetFocus(rw->list);
+            }
+            return 0;
+
+        case WM_COMMAND:
+            /* Ctrl+C is routed here by the shared accelerator table. */
+            if (rw != NULL && LOWORD(wParam) == IDM_EDIT_COPY)
+            {
+                Report_CopySelected(rw);
+                return 0;
+            }
+            break;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (rw == NULL || hdr->hwndFrom != rw->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_GETDISPINFOW)
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                int idx = di->item.iItem;
+                if ((di->item.mask & LVIF_TEXT) && idx >= 0 && (uint32_t)idx < rw->count)
+                {
+                    if (di->item.iSubItem == 0)
+                    {
+                        StringCchCopyW(di->item.pszText,
+                                       di->item.cchTextMax,
+                                       report_display_value(rw->items[idx].value));
+                    }
+                    else
+                    {
+                        StringCchPrintfW(di->item.pszText,
+                                         di->item.cchTextMax,
+                                         L"%u",
+                                         rw->items[idx].count);
+                    }
+                }
+                return 0;
+            }
+            if (hdr->code == LVN_COLUMNCLICK)
+            {
+                NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+                if (nlv->iSubItem == rw->sort_col)
+                {
+                    rw->sort_asc = !rw->sort_asc;
+                }
+                else
+                {
+                    rw->sort_col = nlv->iSubItem;
+                    rw->sort_asc = TRUE;
+                }
+                Report_Sort(rw);
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(rw->list, &screen);
+                Report_OnContextMenu(rw, ia->iItem, ia->iSubItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_DESTROY:
+            if (rw != NULL)
+            {
+                if (rw->app != NULL)
+                {
+                    if (rw->app->report_precinct == rw)
+                    {
+                        rw->app->report_precinct = NULL;
+                    }
+                    if (rw->app->report_address == rw)
+                    {
+                        rw->app->report_address = NULL;
+                    }
+                }
+                EeVoterTable_FreeValueCounts(rw->items, rw->count);
+                free(rw);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static const wchar_t *App_PathBaseName(const wchar_t *path)
+{
+    const wchar_t *base;
+    const wchar_t *p;
+    if (path == NULL)
+    {
+        return L"";
+    }
+    base = path;
+    for (p = path; *p != L'\0'; p++)
+    {
+        if (*p == L'\\' || *p == L'/')
+        {
+            base = p + 1;
+        }
+    }
+    return base;
+}
+
+static void App_ShowReport(AppState *app, int kind)
+{
+    ReportWindow **slot;
+    uint32_t column;
+    const wchar_t *none_msg;
+    const wchar_t *label;
+    EeValueCount *items = NULL;
+    uint32_t count = 0;
+    uint32_t blank = 0;
+    ReportWindow *rw;
+    wchar_t title[MAX_PATH + 64];
+    const wchar_t *base;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int w;
+    int h;
+
+    if (app == NULL || app->loading || app->table.row_count == 0)
+    {
+        return;
+    }
+    if (kind == EE_REPORT_ADDRESS)
+    {
+        slot = &app->report_address;
+        column = EE_COL_ADDRESS;
+        none_msg = L"No address information available";
+        label = L"Address";
+    }
+    else
+    {
+        slot = &app->report_precinct;
+        column = EE_COL_PRECINCT;
+        none_msg = L"No precinct information available";
+        label = L"Precinct";
+    }
+
+    if (*slot != NULL)
+    {
+        SetForegroundWindow((*slot)->hwnd);
+        return;
+    }
+
+    if (!EeVoterTable_CollectValueCounts(&app->table, column, &items, &count, &blank) || count == 0)
+    {
+        /* count == 0 means no actual precinct/address values (all blank or none). */
+        EeVoterTable_FreeValueCounts(items, count);
+        MessageBoxW(app->hwnd_main, none_msg, k_WindowTitle, MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    /* Surface incomplete records: append a "(blank)" row for empty-valued cells,
+     * shown only because real values also exist for this column. */
+    if (blank > 0)
+    {
+        EeValueCount *grown =
+            (EeValueCount *)realloc(items, ((size_t)count + 1) * sizeof(EeValueCount));
+        if (grown != NULL)
+        {
+            wchar_t *empty = (wchar_t *)malloc(sizeof(wchar_t));
+            items = grown;
+            if (empty != NULL)
+            {
+                empty[0] = L'\0';
+                items[count].value = empty;
+                items[count].count = blank;
+                count++;
+            }
+        }
+    }
+
+    rw = (ReportWindow *)calloc(1, sizeof(ReportWindow));
+    if (rw == NULL)
+    {
+        EeVoterTable_FreeValueCounts(items, count);
+        return;
+    }
+    rw->app = app;
+    rw->kind = kind;
+    rw->column = column;
+    rw->items = items;
+    rw->count = count;
+    rw->sort_col = 0;
+    rw->sort_asc = TRUE;
+
+    base = App_PathBaseName(app->load_path);
+    if (base[0] == L'\0')
+    {
+        base = L"(voter list)";
+    }
+    StringCchPrintfW(title, ARRAYSIZE(title), L"%s Report - %s", label, base);
+
+    if (GetWindowRect(app->hwnd_main, &pr))
+    {
+        x = pr.left + Scale(app, 48);
+        y = pr.top + Scale(app, 48);
+    }
+    w = Scale(app, (kind == EE_REPORT_ADDRESS) ? 560 : 400);
+    h = Scale(app, 600);
+
+    /* Unowned top-level window so the main voter list can cover it. */
+    rw->hwnd = CreateWindowExW(0,
+                               k_ReportClassName,
+                               title,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                               x,
+                               y,
+                               w,
+                               h,
+                               NULL,
+                               NULL,
+                               app->instance,
+                               rw);
+    if (rw->hwnd == NULL)
+    {
+        EeVoterTable_FreeValueCounts(items, count);
+        free(rw);
+        return;
+    }
+    *slot = rw;
+    ShowWindow(rw->hwnd, SW_SHOW);
+    SetForegroundWindow(rw->hwnd);
+}
+
+static void App_CloseReports(AppState *app)
+{
+    if (app == NULL)
+    {
+        return;
+    }
+    /* DestroyWindow -> WM_DESTROY frees the ReportWindow and clears the slot. */
+    if (app->report_precinct != NULL)
+    {
+        DestroyWindow(app->report_precinct->hwnd);
+    }
+    if (app->report_address != NULL)
+    {
+        DestroyWindow(app->report_address->hwnd);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Window procedure                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -5179,6 +5810,16 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                            IDM_FILTER_RESET_VIEW,
                            MF_BYCOMMAND |
                                ((app->mark_active && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(
+                (HMENU)wParam,
+                IDM_REPORT_PRECINCT,
+                MF_BYCOMMAND |
+                    ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(
+                (HMENU)wParam,
+                IDM_REPORT_ADDRESS,
+                MF_BYCOMMAND |
+                    ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
             return 0;
 
         case WM_COMMAND:
@@ -5226,6 +5867,12 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_FILTER_RESET_VIEW:
                     /* Leave the duplicates view and any filter: show all records. */
                     App_ResetFilter(app);
+                    return 0;
+                case IDM_REPORT_PRECINCT:
+                    App_ShowReport(app, EE_REPORT_PRECINCT);
+                    return 0;
+                case IDM_REPORT_ADDRESS:
+                    App_ShowReport(app, EE_REPORT_ADDRESS);
                     return 0;
                 default:
                     break;
@@ -5330,6 +5977,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_DESTROY:
+            App_CloseReports(app);
             App_DestroyOptions(app);
             App_DestroyProgress(app);
             App_DestroyFilter(app);
@@ -5710,6 +6358,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         fc.hIcon = wc.hIcon;
         fc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&fc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW rc2;
+        ZeroMemory(&rc2, sizeof(rc2));
+        rc2.cbSize = sizeof(rc2);
+        rc2.lpfnWndProc = ReportWndProc;
+        rc2.hInstance = hInstance;
+        rc2.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        rc2.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        rc2.lpszClassName = k_ReportClassName;
+        rc2.hIcon = wc.hIcon;
+        rc2.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&rc2) == 0)
         {
             return 1;
         }

@@ -223,6 +223,34 @@ extern "C"
                                                    EeLoadProgressFn progress_fn,
                                                    void *progress_user);
 
+    /** A distinct display-column value and how many rows carry it. */
+    typedef struct EeValueCount
+    {
+        wchar_t *value; /* heap UTF-16; caller frees (or EeVoterTable_FreeValueCounts). */
+        uint32_t count;
+    } EeValueCount;
+
+    /**
+     * @brief Count rows per distinct (case-insensitive) value in a display column.
+     *
+     * Empty cells are excluded from @p out_items but tallied into @p out_blank_count
+     * so callers can surface incomplete records separately. Returns an unsorted heap
+     * array; the displayed value is the first spelling seen. O(n) hash aggregation.
+     *
+     * @param out_items        Receives the array (NULL when no non-empty values exist).
+     * @param out_count        Receives the number of distinct non-empty values.
+     * @param out_blank_count  Optional; receives the number of rows with an empty cell.
+     * @return FALSE on invalid arguments or out of memory.
+     */
+    BOOL EeVoterTable_CollectValueCounts(const EeVoterTable *table,
+                                         uint32_t column,
+                                         EeValueCount **out_items,
+                                         uint32_t *out_count,
+                                         uint32_t *out_blank_count);
+
+    /** @brief Free an array returned by EeVoterTable_CollectValueCounts. */
+    void EeVoterTable_FreeValueCounts(EeValueCount *items, uint32_t count);
+
     /**
  * @brief Sort by display column; toggles direction if same column.
  */

@@ -35,16 +35,38 @@ display:
 
 ## In progress / open questions
 
-**Duplicates-view follow-ups (uncommitted — this session).**
-- **Sort-on-show.** Showing a duplicates view now sorts ascending by its key so
-  shared values are adjacent: Voter ID for the ID scan, Name for the name+DOB
-  scan. Done in `App_ApplyDuplicateMarks` via a new `App_SortByTableColumnAscending`
-  helper (forces ascending by resetting `sort_column` before `EeVoterTable_SortByColumn`);
-  factored the header-sort UI refresh into `App_RefreshSortUi`, reused by both. Wait
-  cursor wraps the sort for large lists. `main.c` only; Debug + Release build clean.
-- **Reset View** menu item (bottom of Filter menu, enabled only while a duplicates
-  view is active; clears marks + filter to show all records) — already committed by
-  the user.
+**Reports feature (uncommitted — this session).** New "Reports" menu after "Filter"
+with "Display Precinct Report…" and "Display Address Report…". Each opens a modeless,
+**unowned** top-level window (so the main list can cover it; reselect brings it to
+front; one of each kind per viewer). Two-column owner-data list view
+(Precinct/Address + "Number of Voters"), one row per distinct value with its voter
+count, initially sorted ascending by the value column (header-click re-sorts either
+column). No data → info modal ("No precinct/address information available"), window
+not opened. Right-click: Copy (all selected rows, on either column); on the value
+column also Include/Exclude (adds an `is` rule for that column to the **parent**
+window's filter) and, for Address, Show in Maps. Ctrl+C copies. Reports close when
+the parent reloads a file or closes. Decisions: Address = normalized `EE_COL_ADDRESS`;
+data = **all loaded rows** (ignores filters/duplicates view).
+- **Blank rows:** empty precinct/address cells are tallied and shown as a "(blank)"
+  row (underlying value stays "" so Include/Exclude add an "is (blank)" rule that
+  matches incomplete records; Show-in-Maps hidden for it). Shown only when real
+  values also exist — an all-blank/absent column still gives the "No … information
+  available" modal. `EeVoterTable_CollectValueCounts` now returns the blank tally via
+  a new `out_blank_count` param; `App_ShowReport` appends the row.
+- New: `EeVoterTable_CollectValueCounts` / `EeVoterTable_FreeValueCounts`
+  (`voter_table.{c,h}`, O(n) hash aggregation, reuses `hash_ci_fold`); test
+  `test_value_counts`. `ReportWindow` + `ReportWndProc` + `App_ShowReport` /
+  `App_CloseReports` in `main.c`; `k_ReportClassName` registered; `AppState` gained
+  `report_precinct` / `report_address`. Files: `main.c`, `voter_table.{c,h}`,
+  `resource.h`, `test/smoke_load.c`. Debug + Release build clean; smoke tests pass
+  (incl. `valcount`). GUI itself not yet click-tested this session.
+
+**Duplicates-view follow-ups — DONE, committed.**
+- **Sort-on-show** (`b4823ba`): a duplicates view sorts ascending by its key so
+  shared values are adjacent (Voter ID for the ID scan, Name for name+DOB), via
+  `App_SortByTableColumnAscending` + factored `App_RefreshSortUi` in `main.c`.
+- **Reset View** menu item (`c3fbfec`): bottom of Filter menu, enabled only while a
+  duplicates view is active; clears marks + filter to show all records.
 
 **Duplicate-detection speedup — DONE, committed `207da43` and pushed.** Made the
 "duplicate voters (name + DOB)" and "duplicate Voter IDs" features fast and

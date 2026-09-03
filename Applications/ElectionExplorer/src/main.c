@@ -2382,6 +2382,8 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTER_IDS, L"Show &Duplicate Voter IDs…");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTERS, L"Show Duplicate &Voters…");
+    AppendMenuW(filter_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET_VIEW, L"Reset Vie&w…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
@@ -5135,6 +5137,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 IDM_FILTER_DUP_VOTERS,
                 MF_BYCOMMAND |
                     ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem((HMENU)wParam,
+                           IDM_FILTER_RESET_VIEW,
+                           MF_BYCOMMAND |
+                               ((app->mark_active && !app->loading) ? MF_ENABLED : MF_GRAYED));
             return 0;
 
         case WM_COMMAND:
@@ -5178,6 +5184,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 case IDM_FILTER_DUP_VOTERS:
                     App_ShowDuplicateVoters(app);
+                    return 0;
+                case IDM_FILTER_RESET_VIEW:
+                    /* Leave the duplicates view and any filter: show all records. */
+                    App_ResetFilter(app);
                     return 0;
                 default:
                     break;

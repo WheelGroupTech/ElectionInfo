@@ -517,6 +517,32 @@ static BOOL title_is_date_column(const wchar_t *title)
     return FALSE;
 }
 
+static BOOL title_is_birthdate_column(const wchar_t *title)
+{
+    char compact[96];
+
+    if (title == NULL || title[0] == L'\0')
+    {
+        return FALSE;
+    }
+    if (title_has_word_ci(title, L"dob") || title_has_word_ci(title, L"birthdate") ||
+        title_has_word_ci(title, L"birthday") || title_has_word_ci(title, L"birthdt") ||
+        title_has_word_ci(title, L"bdate"))
+    {
+        return TRUE;
+    }
+    if (title_has_word_ci(title, L"birth") && title_has_word_ci(title, L"date"))
+    {
+        return TRUE;
+    }
+    compact_title(title, compact, sizeof(compact));
+    if (strstr(compact, "dateofbirth") != NULL || strcmp(compact, "birthdate") == 0)
+    {
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static BOOL title_suggests_numeric_or_date(const wchar_t *title)
 {
     char compact[96];
@@ -926,6 +952,271 @@ BOOL EeVoterTable_CollectDuplicateVoterIds(const EeVoterTable *table,
     free(ptrs);
     *out_ids = vals;
     *out_count = filled;
+    return TRUE;
+}
+
+int EeVoterTable_FindBirthdateColumn(const EeVoterTable *table)
+{
+    uint32_t i;
+    if (table == NULL)
+    {
+        return -1;
+    }
+    for (i = 0; i < table->column_count; i++)
+    {
+        if (title_is_birthdate_column(table->column_titles[i]))
+        {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+typedef struct DupNameDob
+{
+    const char *name;
+    const char *dob;
+    const char *vid;
+    uint32_t ymd; /* 0 if the DOB cell did not parse as a date */
+} DupNameDob;
+
+static BOOL dup_name_dob_equal(const DupNameDob *a, const DupNameDob *b)
+{
+    const char *na = (a != NULL && a->name != NULL) ? a->name : "";
+    const char *nb = (b != NULL && b->name != NULL) ? b->name : "";
+    const char *da = (a != NULL && a->dob != NULL) ? a->dob : "";
+    const char *db = (b != NULL && b->dob != NULL) ? b->dob : "";
+
+    if (_stricmp(na, nb) != 0)
+    {
+        return FALSE;
+    }
+    if (a != NULL && b != NULL && a->ymd != 0 && b->ymd != 0)
+    {
+        return a->ymd == b->ymd;
+    }
+    return _stricmp(da, db) == 0;
+}
+
+static int dup_name_dob_cmp(void *ctx, const void *a, const void *b)
+{
+    const DupNameDob *pa = (const DupNameDob *)a;
+    const DupNameDob *pb = (const DupNameDob *)b;
+    int c;
+    (void)ctx;
+    c = _stricmp(pa->name ? pa->name : "", pb->name ? pb->name : "");
+    if (c != 0)
+    {
+        return c;
+    }
+    if (pa->ymd != 0 && pb->ymd != 0)
+    {
+        if (pa->ymd < pb->ymd)
+        {
+            return -1;
+        }
+        if (pa->ymd > pb->ymd)
+        {
+            return 1;
+        }
+        return 0;
+    }
+    return _stricmp(pa->dob ? pa->dob : "", pb->dob ? pb->dob : "");
+}
+
+static int dup_vid_ptr_cmp(void *ctx, const void *a, const void *b)
+{
+    const char *sa = *(const char *const *)a;
+    const char *sb = *(const char *const *)b;
+    (void)ctx;
+    if (sa == NULL)
+    {
+        sa = "";
+    }
+    if (sb == NULL)
+    {
+        sb = "";
+    }
+    return strcmp(sa, sb);
+}
+
+static BOOL utf8_ids_to_wide(const char **ids, uint32_t n, wchar_t ***out_ids)
+{
+    wchar_t **vals;
+    uint32_t i;
+    vals = (wchar_t **)calloc((size_t)n, sizeof(wchar_t *));
+    if (vals == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        int cch;
+        wchar_t *w;
+        const char *cur = ids[i] ? ids[i] : "";
+        cch = MultiByteToWideChar(CP_UTF8, 0, cur, -1, NULL, 0);
+        if (cch <= 0)
+        {
+            cch = MultiByteToWideChar(CP_ACP, 0, cur, -1, NULL, 0);
+        }
+        if (cch <= 0)
+        {
+            uint32_t k;
+            for (k = 0; k < i; k++)
+            {
+                free(vals[k]);
+            }
+            free(vals);
+            return FALSE;
+        }
+        w = (wchar_t *)malloc((size_t)cch * sizeof(wchar_t));
+        if (w == NULL)
+        {
+            uint32_t k;
+            for (k = 0; k < i; k++)
+            {
+                free(vals[k]);
+            }
+            free(vals);
+            return FALSE;
+        }
+        if (MultiByteToWideChar(CP_UTF8, 0, cur, -1, w, cch) == 0)
+        {
+            MultiByteToWideChar(CP_ACP, 0, cur, -1, w, cch);
+        }
+        vals[i] = w;
+    }
+    *out_ids = vals;
+    return TRUE;
+}
+
+BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
+                                                  wchar_t ***out_ids,
+                                                  uint32_t *out_count)
+{
+    DupNameDob *rows = NULL;
+    const char **vids = NULL;
+    uint32_t nk = 0;
+    uint32_t nv = 0;
+    uint32_t i;
+    int dob_col;
+    size_t bytes;
+
+    if (out_ids == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_ids = NULL;
+    *out_count = 0;
+    if (table == NULL || table->row_count == 0)
+    {
+        return TRUE;
+    }
+    dob_col = EeVoterTable_FindBirthdateColumn(table);
+    if (dob_col < 0)
+    {
+        return TRUE;
+    }
+    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(DupNameDob), &bytes)))
+    {
+        return FALSE;
+    }
+    rows = (DupNameDob *)malloc(bytes);
+    if (rows == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < table->row_count; i++)
+    {
+        const char *name = EeVoterTable_GetCellUtf8(table, i, EE_COL_NAME);
+        const char *dob = EeVoterTable_GetCellUtf8(table, i, (uint32_t)dob_col);
+        const char *vid = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
+        if (name == NULL)
+        {
+            name = "";
+        }
+        if (dob == NULL)
+        {
+            dob = "";
+        }
+        if (vid == NULL)
+        {
+            vid = "";
+        }
+        if (name[0] == '\0' || dob[0] == '\0')
+        {
+            continue;
+        }
+        rows[nk].name = name;
+        rows[nk].dob = dob;
+        rows[nk].vid = vid;
+        rows[nk].ymd = 0;
+        (void)parse_utf8_ymd(dob, &rows[nk].ymd);
+        nk++;
+    }
+    if (nk < 2)
+    {
+        free(rows);
+        return TRUE;
+    }
+    qsort_s(rows, nk, sizeof(DupNameDob), dup_name_dob_cmp, NULL);
+    if (FAILED(SizeTMult((size_t)nk, sizeof(char *), &bytes)))
+    {
+        free(rows);
+        return FALSE;
+    }
+    vids = (const char **)malloc(bytes);
+    if (vids == NULL)
+    {
+        free(rows);
+        return FALSE;
+    }
+    i = 0;
+    while (i < nk)
+    {
+        uint32_t run = 1;
+        while (i + run < nk && dup_name_dob_equal(&rows[i], &rows[i + run]))
+        {
+            run++;
+        }
+        if (run >= 2)
+        {
+            uint32_t k;
+            for (k = 0; k < run; k++)
+            {
+                if (rows[i + k].vid[0] != '\0')
+                {
+                    vids[nv++] = rows[i + k].vid;
+                }
+            }
+        }
+        i += run;
+    }
+    free(rows);
+    if (nv == 0)
+    {
+        free(vids);
+        return TRUE;
+    }
+    qsort_s((void *)vids, nv, sizeof(char *), dup_vid_ptr_cmp, NULL);
+    {
+        uint32_t unique = 0;
+        for (i = 0; i < nv; i++)
+        {
+            if (i == 0 || strcmp(vids[i], vids[i - 1]) != 0)
+            {
+                vids[unique++] = vids[i];
+            }
+        }
+        nv = unique;
+    }
+    if (!utf8_ids_to_wide(vids, nv, out_ids))
+    {
+        free(vids);
+        return FALSE;
+    }
+    free(vids);
+    *out_count = nv;
     return TRUE;
 }
 

@@ -2293,7 +2293,8 @@ static HMENU App_CreateMenu(void)
     HMENU filter_menu = CreatePopupMenu();
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…\tCtrl+L");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
-    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTER_IDS, L"Show &duplicate Voter IDs…");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTER_IDS, L"Show &Duplicate Voter IDs…");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTERS, L"Show Duplicate &Voters…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
@@ -4396,6 +4397,87 @@ static void App_ShowDuplicateVoterIds(AppState *app)
     App_ApplyFilter(app);
 }
 
+static void App_ShowDuplicateVoters(AppState *app)
+{
+    wchar_t **ids = NULL;
+    uint32_t n = 0;
+    uint32_t i;
+    HCURSOR prev;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    if (app->loading || app->table.row_count == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Load a voter list before checking for duplicate voters.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    if (EeVoterTable_FindBirthdateColumn(&app->table) < 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"No birth date data is available",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!EeVoterTable_CollectDuplicateVotersByNameDob(&app->table, &ids, &n))
+    {
+        SetCursor(prev);
+        MessageBoxW(app->hwnd_main,
+                    L"Could not scan for duplicate voters.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetCursor(prev);
+
+    if (n == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"No duplicate voters",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    EeFilter_Clear(&app->filters);
+    for (i = 0; i < n; i++)
+    {
+        EeFilterRule r;
+        ZeroMemory(&r, sizeof(r));
+        r.column = EE_COL_VOTER_ID;
+        r.relation = EeRel_Is;
+        r.action = EeFilt_Include;
+        r.enabled = TRUE;
+        if (ids[i] != NULL)
+        {
+            StringCchCopyW(r.value, ARRAYSIZE(r.value), ids[i]);
+        }
+        if (!EeFilter_Add(&app->filters, &r))
+        {
+            MessageBoxW(app->hwnd_main,
+                        L"Could not build the duplicate voter filter.",
+                        k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+            break;
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        free(ids[i]);
+    }
+    free(ids);
+    App_ClearSelection(app);
+    App_ApplyFilter(app);
+}
+
 static void App_AddQuickFilter(AppState *app,
                                uint32_t column,
                                const wchar_t *value,
@@ -4800,6 +4882,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 IDM_FILTER_DUP_VOTER_IDS,
                 MF_BYCOMMAND |
                     ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(
+                (HMENU)wParam,
+                IDM_FILTER_DUP_VOTERS,
+                MF_BYCOMMAND |
+                    ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
             return 0;
 
         case WM_COMMAND:
@@ -4840,6 +4927,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 case IDM_FILTER_DUP_VOTER_IDS:
                     App_ShowDuplicateVoterIds(app);
+                    return 0;
+                case IDM_FILTER_DUP_VOTERS:
+                    App_ShowDuplicateVoters(app);
                     return 0;
                 default:
                     break;

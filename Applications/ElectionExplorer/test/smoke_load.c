@@ -1427,6 +1427,224 @@ done:
     return rc;
 }
 
+static void free_wide_ids(wchar_t **ids, uint32_t n)
+{
+    uint32_t i;
+    if (ids == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < n; i++)
+    {
+        free(ids[i]);
+    }
+    free(ids);
+}
+
+static BOOL wide_ids_contain(wchar_t **ids, uint32_t n, const wchar_t *want)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+    {
+        if (ids[i] != NULL && wcscmp(ids[i], want) == 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static int test_duplicate_voters(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    wchar_t **ids = NULL;
+    uint32_t n_ids = 0;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_dup_voters.csv")))
+    {
+        wprintf(L"dupvoter: temp path failed\n");
+        return 1;
+    }
+
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"dupvoter: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM\n", fp);
+    fputs("100,Smith,John\n", fp);
+    fputs("101,Smith,John\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 2)
+    {
+        wprintf(L"dupvoter: no-dob load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&t) != -1)
+    {
+        wprintf(L"dupvoter: expected no birth date column\n");
+        goto done;
+    }
+    if (!EeVoterTable_CollectDuplicateVotersByNameDob(&t, &ids, &n_ids) || n_ids != 0)
+    {
+        wprintf(L"dupvoter: no-dob collect expected 0, got %u\n", n_ids);
+        goto done;
+    }
+    EeVoterTable_Clear(&t);
+
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"dupvoter: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM,Birth Date\n", fp);
+    fputs("100,Smith,John,1/15/1990\n", fp);
+    fputs("200,Jones,Jane,2/20/1985\n", fp);
+    fputs("101,Smith,John,01/15/1990\n", fp);
+    fputs("300,Smith,John,3/1/1991\n", fp);
+    fputs("400,Lee,Ann,1/15/1990\n", fp);
+    fputs("201,Jones,Jane,2/20/1985\n", fp);
+    fputs(",Smith,John,1/15/1990\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 7)
+    {
+        wprintf(L"dupvoter: load failed %s\n", err);
+        goto done;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&t) < 0)
+    {
+        wprintf(L"dupvoter: Birth Date column not found\n");
+        goto done;
+    }
+    if (!EeVoterTable_CollectDuplicateVotersByNameDob(&t, &ids, &n_ids) || n_ids != 4 ||
+        ids == NULL)
+    {
+        wprintf(L"dupvoter: expected 4 duplicate voter IDs, got %u\n", n_ids);
+        goto done;
+    }
+    if (!wide_ids_contain(ids, n_ids, L"100") || !wide_ids_contain(ids, n_ids, L"101") ||
+        !wide_ids_contain(ids, n_ids, L"200") || !wide_ids_contain(ids, n_ids, L"201"))
+    {
+        wprintf(L"dupvoter: unexpected IDs\n");
+        goto done;
+    }
+    if (wide_ids_contain(ids, n_ids, L"300") || wide_ids_contain(ids, n_ids, L"400"))
+    {
+        wprintf(L"dupvoter: unique name/DOB rows were treated as duplicates\n");
+        goto done;
+    }
+    free_wide_ids(ids, n_ids);
+    ids = NULL;
+    n_ids = 0;
+    EeVoterTable_Clear(&t);
+
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"dupvoter: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM,DOB\n", fp);
+    fputs("1,Able,Ann,1/1/2000\n", fp);
+    fputs("2,Baker,Bob,1/1/2000\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok)
+    {
+        wprintf(L"dupvoter: dob-header load failed %s\n", err);
+        goto done;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&t) < 0)
+    {
+        wprintf(L"dupvoter: DOB column not found\n");
+        goto done;
+    }
+    if (!EeVoterTable_CollectDuplicateVotersByNameDob(&t, &ids, &n_ids) || n_ids != 0)
+    {
+        wprintf(L"dupvoter: unique names expected 0, got %u\n", n_ids);
+        goto done;
+    }
+    EeVoterTable_Clear(&t);
+
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"dupvoter: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM,Birth_Day,EDRDAT\n", fp);
+    fputs("1,Smith,John,15,20200115\n", fp);
+    fputs("2,Smith,John,15,20200115\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok)
+    {
+        wprintf(L"dupvoter: birth-day load failed %s\n", err);
+        goto done;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&t) != -1)
+    {
+        wprintf(L"dupvoter: Birth_Day / EDRDAT should not count as DOB\n");
+        goto done;
+    }
+
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Init(&t);
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.csv",
+                                  &t,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"dupvoter: sample load failed %s\n", err);
+        goto done;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&t) != -1)
+    {
+        wprintf(L"dupvoter: sample should have no birth date column\n");
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"dupvoter ok\n");
+
+done:
+    free_wide_ids(ids, n_ids);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"dupvoter test failed\n");
+    }
+    return rc;
+}
+
 static int test_partial_birthdate(void)
 {
     wchar_t path[MAX_PATH];
@@ -1548,6 +1766,7 @@ int wmain(void)
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();
     failed |= test_duplicate_voter_ids();
+    failed |= test_duplicate_voters();
     failed |= test_precinct_normalize();
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();

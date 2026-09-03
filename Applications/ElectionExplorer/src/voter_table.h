@@ -171,6 +171,19 @@ extern "C"
                                                uint32_t *out_count);
 
     /**
+     * @brief Index of a date-of-birth column, or -1 if none (Birth Date, DOB, …).
+     */
+    int EeVoterTable_FindBirthdateColumn(const EeVoterTable *table);
+
+    /**
+     * @brief Voter IDs of rows that share the same normalized name and DOB
+     *        with at least one other row. Caller frees *out_ids and each string.
+     */
+    BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
+                                                      wchar_t ***out_ids,
+                                                      uint32_t *out_count);
+
+    /**
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);

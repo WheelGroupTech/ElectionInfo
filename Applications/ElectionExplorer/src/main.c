@@ -36,6 +36,18 @@ static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
 static const int k_DefaultFrozenWidth = 640;
 static const uint32_t k_NameUpdateProgressMinRows = 25000;
+/* Below this row count a duplicate scan runs synchronously (sub-100 ms); at or
+ * above it we run on a worker thread behind the cancelable progress modal. */
+static const uint32_t k_ScanModalMinRows = 250000;
+
+/* Which duplicate scan produced the current row-mark layer. */
+enum
+{
+    EE_SCAN_NONE = 0,
+    EE_SCAN_DUP_VOTER_IDS = 1,
+    EE_SCAN_DUP_NAME_DOB = 2
+};
+
 static const int k_ZoomMin = 50;
 static const int k_ZoomMax = 250;
 static const int k_ZoomDefault = 100;
@@ -110,6 +122,23 @@ typedef struct AppState
     EeFilterSet filters;
     uint32_t *filter_map;
     uint32_t filter_count;
+
+    /* Duplicate "mark" layer: per physical row, ANDed with the filter view.
+     * Independent per window; indexed by physical row so it survives sorts. */
+    uint8_t *mark_rows;
+    uint32_t mark_count;
+    BOOL mark_active;
+    int mark_kind; /* EE_SCAN_* that produced mark_rows */
+
+    /* Background duplicate scan (mirrors the load-thread machinery). */
+    HANDLE scan_thread;
+    volatile LONG scan_cancel;
+    int scan_kind;
+    uint8_t *scan_marks;
+    uint32_t scan_count;
+    BOOL scan_ok;
+    BOOL scanning;
+
     struct AppState *next;
 } AppState;
 
@@ -137,6 +166,10 @@ static void App_ExitAll(void);
 static void App_ApplyFilter(AppState *app);
 static BOOL App_ShowFilter(AppState *app);
 static void App_ResetFilter(AppState *app);
+static void App_ClearMarks(AppState *app);
+static void App_StartDuplicateScan(AppState *app, int kind);
+static void App_OnScanFinished(AppState *app);
+static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind);
 static void App_AddQuickFilter(AppState *app,
                                uint32_t column,
                                const wchar_t *value,
@@ -1007,13 +1040,37 @@ static void App_SetStatus(AppState *app, const wchar_t *text)
 
 static void App_UpdateRowStatus(AppState *app)
 {
-    wchar_t buf[160];
+    wchar_t buf[192];
     if (app->table.row_count == 0)
     {
         App_SetStatus(app, L"No voter list loaded.");
         return;
     }
-    if (EeFilter_HasEnabled(&app->filters))
+    if (app->mark_active)
+    {
+        const wchar_t *what = (app->mark_kind == EE_SCAN_DUP_NAME_DOB)
+                                  ? L"duplicate voters (name + DOB)"
+                                  : L"duplicate Voter IDs";
+        if (EeFilter_HasEnabled(&app->filters))
+        {
+            StringCchPrintfW(buf,
+                             ARRAYSIZE(buf),
+                             L"%s within filter: %u of %u voters",
+                             what,
+                             app->filter_count,
+                             app->table.row_count);
+        }
+        else
+        {
+            StringCchPrintfW(buf,
+                             ARRAYSIZE(buf),
+                             L"Showing %u %s of %u voters",
+                             app->filter_count,
+                             what,
+                             app->table.row_count);
+        }
+    }
+    else if (EeFilter_HasEnabled(&app->filters))
     {
         StringCchPrintfW(buf,
                          ARRAYSIZE(buf),
@@ -1034,7 +1091,7 @@ static uint32_t App_VisibleCount(const AppState *app)
     {
         return 0;
     }
-    if (EeFilter_HasEnabled(&app->filters))
+    if (app->mark_active || EeFilter_HasEnabled(&app->filters))
     {
         return app->filter_count;
     }
@@ -1068,14 +1125,41 @@ static void App_ApplyFilter(AppState *app)
     app->filter_count = 0;
     if (!EeFilter_BuildMap(&app->filters, &app->table, &map, &count))
     {
-        app->filter_count = app->table.row_count;
+        /* Build failed: fall back to the unfiltered view. */
+        map = NULL;
         count = app->table.row_count;
     }
-    else
+
+    /* Intersect the filter (or identity) view with the marked physical rows so a
+     * duplicates view is ANDed with any active filter. Marks are per physical
+     * row; map entries are view rows, so translate through view_index. */
+    if (app->mark_active && app->mark_rows != NULL && app->table.row_count > 0)
     {
-        app->filter_map = map;
-        app->filter_count = count;
+        uint32_t *isect = (uint32_t *)malloc((size_t)app->table.row_count * sizeof(uint32_t));
+        if (isect != NULL)
+        {
+            uint32_t n = 0;
+            uint32_t k;
+            uint32_t base = (map != NULL) ? count : app->table.row_count;
+            for (k = 0; k < base; k++)
+            {
+                uint32_t view_row = (map != NULL) ? map[k] : k;
+                uint32_t phys =
+                    (app->table.view_index != NULL) ? app->table.view_index[view_row] : view_row;
+                if (phys < app->table.row_count && app->mark_rows[phys])
+                {
+                    isect[n++] = view_row;
+                }
+            }
+            free(map);
+            map = isect;
+            count = n;
+        }
     }
+
+    app->filter_map = map;
+    app->filter_count = count;
+
     if (app->hwnd_frozen)
     {
         ListView_SetItemCountEx(app->hwnd_frozen,
@@ -1416,6 +1500,7 @@ static LRESULT CALLBACK ProgressWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             if (LOWORD(wParam) == IDC_PROGRESS_CANCEL && app != NULL)
             {
                 InterlockedExchange(&app->load_cancel, 1);
+                InterlockedExchange(&app->scan_cancel, 1);
                 if (app->hwnd_progress_status)
                 {
                     SetWindowTextW(app->hwnd_progress_status, L"Cancelling…");
@@ -1425,10 +1510,11 @@ static LRESULT CALLBACK ProgressWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             return 0;
 
         case WM_CLOSE:
-            /* Force cancel rather than destroy mid-load. */
-            if (app != NULL && app->loading)
+            /* Force cancel rather than destroy mid-operation. */
+            if (app != NULL && (app->loading || app->scanning))
             {
                 InterlockedExchange(&app->load_cancel, 1);
+                InterlockedExchange(&app->scan_cancel, 1);
                 return 0;
             }
             break;
@@ -1644,6 +1730,7 @@ static void App_StartLoad(AppState *app, const wchar_t *path)
 
     StringCchCopyW(app->load_path, ARRAYSIZE(app->load_path), path);
     InterlockedExchange(&app->load_cancel, 0);
+    App_ClearMarks(app); /* prior duplicates view indexed the old table */
     app->loading = TRUE;
     App_SetStatus(app, L"Loading voter list…");
 
@@ -4321,22 +4408,272 @@ static void App_ResetFilter(AppState *app)
         return;
     }
     EeFilter_Clear(&app->filters);
+    App_ClearMarks(app);
     App_ClearSelection(app);
     App_ApplyFilter(app);
 }
 
-static void App_ShowDuplicateVoterIds(AppState *app)
-{
-    wchar_t **ids = NULL;
-    uint32_t n = 0;
-    uint32_t i;
-    HCURSOR prev;
+/* -------------------------------------------------------------------------- */
+/* Duplicate scan: mark layer + background thread                             */
+/* -------------------------------------------------------------------------- */
 
+static const wchar_t *App_DupNoneText(int kind)
+{
+    return (kind == EE_SCAN_DUP_NAME_DOB) ? L"No duplicate voters (same name and date of birth)."
+                                          : L"No duplicate Voter IDs.";
+}
+
+static const wchar_t *App_DupErrorText(int kind)
+{
+    return (kind == EE_SCAN_DUP_NAME_DOB) ? L"Could not scan for duplicate voters."
+                                          : L"Could not scan Voter IDs for duplicates.";
+}
+
+static void App_ClearMarks(AppState *app)
+{
     if (app == NULL)
     {
         return;
     }
-    if (app->loading || app->table.row_count == 0)
+    free(app->mark_rows);
+    app->mark_rows = NULL;
+    app->mark_count = 0;
+    app->mark_active = FALSE;
+    app->mark_kind = EE_SCAN_NONE;
+}
+
+/* Takes ownership of @p marks (row_count bytes) and shows it as the active
+ * duplicates view, ANDed with any existing filter. */
+static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind)
+{
+    if (app == NULL)
+    {
+        free(marks);
+        return;
+    }
+    App_ClearMarks(app);
+    app->mark_rows = marks;
+    app->mark_count = count;
+    app->mark_active = TRUE;
+    app->mark_kind = kind;
+    App_ClearSelection(app);
+    App_ApplyFilter(app);
+}
+
+/* Synchronous path for smaller tables (the O(n) scan is sub-100 ms there). */
+static void App_RunDuplicateScanSync(AppState *app, int kind)
+{
+    uint8_t *marks;
+    uint32_t count = 0;
+    BOOL ok;
+    HCURSOR prev;
+
+    marks = (uint8_t *)calloc((size_t)app->table.row_count, sizeof(uint8_t));
+    if (marks == NULL)
+    {
+        MessageBoxW(app->hwnd_main, App_DupErrorText(kind), k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (kind == EE_SCAN_DUP_NAME_DOB)
+    {
+        ok =
+            EeVoterTable_MarkDuplicateVotersByNameDob(&app->table, marks, &count, NULL, NULL, NULL);
+    }
+    else
+    {
+        ok = EeVoterTable_MarkDuplicateVoterIds(&app->table, marks, &count, NULL, NULL, NULL);
+    }
+    SetCursor(prev);
+
+    if (!ok)
+    {
+        free(marks);
+        MessageBoxW(app->hwnd_main, App_DupErrorText(kind), k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    if (count == 0)
+    {
+        free(marks);
+        MessageBoxW(app->hwnd_main,
+                    App_DupNoneText(kind),
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    App_ApplyDuplicateMarks(app, marks, count, kind);
+}
+
+static BOOL CALLBACK ScanProgressThunk(const EeLoadProgress *progress, void *user)
+{
+    AppState *app = (AppState *)user;
+
+    EnterCriticalSection(&app->progress_lock);
+    app->last_progress = *progress;
+    app->progress_dirty = TRUE;
+    LeaveCriticalSection(&app->progress_lock);
+
+    PostMessageW(app->hwnd_main, EEM_SCAN_PROGRESS, 0, 0);
+
+    if (InterlockedCompareExchange(&app->scan_cancel, 0, 0) != 0)
+    {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static DWORD WINAPI ScanThreadProc(void *param)
+{
+    AppState *app = (AppState *)param;
+    uint32_t count = 0;
+    BOOL ok;
+
+    if (app->scan_kind == EE_SCAN_DUP_NAME_DOB)
+    {
+        ok = EeVoterTable_MarkDuplicateVotersByNameDob(&app->table,
+                                                       app->scan_marks,
+                                                       &count,
+                                                       &app->scan_cancel,
+                                                       ScanProgressThunk,
+                                                       app);
+    }
+    else
+    {
+        ok = EeVoterTable_MarkDuplicateVoterIds(&app->table,
+                                                app->scan_marks,
+                                                &count,
+                                                &app->scan_cancel,
+                                                ScanProgressThunk,
+                                                app);
+    }
+    app->scan_ok = ok;
+    app->scan_count = count;
+
+    PostMessageW(app->hwnd_main, EEM_SCAN_FINISHED, 0, 0);
+    return 0;
+}
+
+static void App_StartDuplicateScan(AppState *app, int kind)
+{
+    if (app == NULL || app->scanning || app->loading || app->table.row_count == 0)
+    {
+        return;
+    }
+
+    app->scan_marks = (uint8_t *)calloc((size_t)app->table.row_count, sizeof(uint8_t));
+    if (app->scan_marks == NULL)
+    {
+        MessageBoxW(app->hwnd_main, App_DupErrorText(kind), k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    app->scan_kind = kind;
+    app->scan_ok = FALSE;
+    app->scan_count = 0;
+    InterlockedExchange(&app->scan_cancel, 0);
+    app->scanning = TRUE;
+
+    if (!App_ShowProgress(app))
+    {
+        app->scanning = FALSE;
+        free(app->scan_marks);
+        app->scan_marks = NULL;
+        MessageBoxW(app->hwnd_main,
+                    L"Could not create the progress window.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetWindowTextW(app->hwnd_progress, L"Scanning for duplicates");
+    if (app->hwnd_progress_status)
+    {
+        SetWindowTextW(app->hwnd_progress_status,
+                       (kind == EE_SCAN_DUP_NAME_DOB) ? L"Scanning name + date of birth…"
+                                                      : L"Scanning Voter IDs…");
+    }
+
+    app->scan_thread = CreateThread(NULL, 0, ScanThreadProc, app, 0, NULL);
+    if (app->scan_thread == NULL)
+    {
+        app->scanning = FALSE;
+        EnableWindow(app->hwnd_main, TRUE);
+        App_DestroyProgress(app);
+        free(app->scan_marks);
+        app->scan_marks = NULL;
+        MessageBoxW(app->hwnd_main,
+                    L"Could not start the scan thread.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+    }
+}
+
+static void App_OnScanFinished(AppState *app)
+{
+    BOOL cancelled;
+
+    if (app->scan_thread != NULL)
+    {
+        WaitForSingleObject(app->scan_thread, INFINITE);
+        CloseHandle(app->scan_thread);
+        app->scan_thread = NULL;
+    }
+    app->scanning = FALSE;
+    cancelled = (InterlockedCompareExchange(&app->scan_cancel, 0, 0) != 0);
+
+    EnableWindow(app->hwnd_main, TRUE);
+    App_DestroyProgress(app);
+    SetForegroundWindow(app->hwnd_main);
+
+    if (app->close_pending)
+    {
+        free(app->scan_marks);
+        app->scan_marks = NULL;
+        DestroyWindow(app->hwnd_main);
+        return;
+    }
+    if (!app->scan_ok)
+    {
+        free(app->scan_marks);
+        app->scan_marks = NULL;
+        MessageBoxW(app->hwnd_main,
+                    App_DupErrorText(app->scan_kind),
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    if (cancelled)
+    {
+        free(app->scan_marks);
+        app->scan_marks = NULL;
+        App_SetStatus(app, L"Duplicate scan cancelled.");
+        return;
+    }
+    if (app->scan_count == 0)
+    {
+        free(app->scan_marks);
+        app->scan_marks = NULL;
+        MessageBoxW(app->hwnd_main,
+                    App_DupNoneText(app->scan_kind),
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    {
+        uint8_t *marks = app->scan_marks;
+        uint32_t count = app->scan_count;
+        int kind = app->scan_kind;
+        app->scan_marks = NULL; /* ownership transfers to the mark layer */
+        App_ApplyDuplicateMarks(app, marks, count, kind);
+    }
+}
+
+static void App_ShowDuplicateVoterIds(AppState *app)
+{
+    if (app == NULL)
+    {
+        return;
+    }
+    if (app->loading || app->scanning || app->table.row_count == 0)
     {
         MessageBoxW(app->hwnd_main,
                     L"Load a voter list before checking for duplicate Voter IDs.",
@@ -4345,70 +4682,23 @@ static void App_ShowDuplicateVoterIds(AppState *app)
         return;
     }
 
-    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (!EeVoterTable_CollectDuplicateVoterIds(&app->table, &ids, &n))
+    if (app->table.row_count >= k_ScanModalMinRows)
     {
-        SetCursor(prev);
-        MessageBoxW(app->hwnd_main,
-                    L"Could not scan Voter IDs for duplicates.",
-                    k_WindowTitle,
-                    MB_ICONERROR | MB_OK);
-        return;
+        App_StartDuplicateScan(app, EE_SCAN_DUP_VOTER_IDS);
     }
-    SetCursor(prev);
-
-    if (n == 0)
+    else
     {
-        MessageBoxW(app->hwnd_main,
-                    L"No duplicate Voter IDs",
-                    k_WindowTitle,
-                    MB_ICONINFORMATION | MB_OK);
-        return;
+        App_RunDuplicateScanSync(app, EE_SCAN_DUP_VOTER_IDS);
     }
-
-    EeFilter_Clear(&app->filters);
-    for (i = 0; i < n; i++)
-    {
-        EeFilterRule r;
-        ZeroMemory(&r, sizeof(r));
-        r.column = EE_COL_VOTER_ID;
-        r.relation = EeRel_Is;
-        r.action = EeFilt_Include;
-        r.enabled = TRUE;
-        if (ids[i] != NULL)
-        {
-            StringCchCopyW(r.value, ARRAYSIZE(r.value), ids[i]);
-        }
-        if (!EeFilter_Add(&app->filters, &r))
-        {
-            MessageBoxW(app->hwnd_main,
-                        L"Could not build the duplicate Voter ID filter.",
-                        k_WindowTitle,
-                        MB_ICONERROR | MB_OK);
-            break;
-        }
-    }
-    for (i = 0; i < n; i++)
-    {
-        free(ids[i]);
-    }
-    free(ids);
-    App_ClearSelection(app);
-    App_ApplyFilter(app);
 }
 
 static void App_ShowDuplicateVoters(AppState *app)
 {
-    wchar_t **ids = NULL;
-    uint32_t n = 0;
-    uint32_t i;
-    HCURSOR prev;
-
     if (app == NULL)
     {
         return;
     }
-    if (app->loading || app->table.row_count == 0)
+    if (app->loading || app->scanning || app->table.row_count == 0)
     {
         MessageBoxW(app->hwnd_main,
                     L"Load a voter list before checking for duplicate voters.",
@@ -4426,56 +4716,14 @@ static void App_ShowDuplicateVoters(AppState *app)
         return;
     }
 
-    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (!EeVoterTable_CollectDuplicateVotersByNameDob(&app->table, &ids, &n))
+    if (app->table.row_count >= k_ScanModalMinRows)
     {
-        SetCursor(prev);
-        MessageBoxW(app->hwnd_main,
-                    L"Could not scan for duplicate voters.",
-                    k_WindowTitle,
-                    MB_ICONERROR | MB_OK);
-        return;
+        App_StartDuplicateScan(app, EE_SCAN_DUP_NAME_DOB);
     }
-    SetCursor(prev);
-
-    if (n == 0)
+    else
     {
-        MessageBoxW(app->hwnd_main,
-                    L"No duplicate voters",
-                    k_WindowTitle,
-                    MB_ICONINFORMATION | MB_OK);
-        return;
+        App_RunDuplicateScanSync(app, EE_SCAN_DUP_NAME_DOB);
     }
-
-    EeFilter_Clear(&app->filters);
-    for (i = 0; i < n; i++)
-    {
-        EeFilterRule r;
-        ZeroMemory(&r, sizeof(r));
-        r.column = EE_COL_VOTER_ID;
-        r.relation = EeRel_Is;
-        r.action = EeFilt_Include;
-        r.enabled = TRUE;
-        if (ids[i] != NULL)
-        {
-            StringCchCopyW(r.value, ARRAYSIZE(r.value), ids[i]);
-        }
-        if (!EeFilter_Add(&app->filters, &r))
-        {
-            MessageBoxW(app->hwnd_main,
-                        L"Could not build the duplicate voter filter.",
-                        k_WindowTitle,
-                        MB_ICONERROR | MB_OK);
-            break;
-        }
-    }
-    for (i = 0; i < n; i++)
-    {
-        free(ids[i]);
-    }
-    free(ids);
-    App_ClearSelection(app);
-    App_ApplyFilter(app);
 }
 
 static void App_AddQuickFilter(AppState *app,
@@ -4962,6 +5210,42 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             App_OnLoadFinished(app);
             return 0;
 
+        case EEM_SCAN_PROGRESS:
+        {
+            EeLoadProgress snap = {0};
+            BOOL have = FALSE;
+            EnterCriticalSection(&app->progress_lock);
+            if (app->progress_dirty)
+            {
+                snap = app->last_progress;
+                app->progress_dirty = FALSE;
+                have = TRUE;
+            }
+            LeaveCriticalSection(&app->progress_lock);
+            if (have)
+            {
+                if (app->hwnd_progress_bar)
+                {
+                    SendMessageW(app->hwnd_progress_bar, PBM_SETPOS, snap.percent, 0);
+                }
+                if (app->hwnd_progress_status)
+                {
+                    wchar_t text[160];
+                    StringCchPrintfW(text,
+                                     ARRAYSIZE(text),
+                                     L"Scanned %u rows… %u%%",
+                                     snap.rows_loaded,
+                                     snap.percent);
+                    SetWindowTextW(app->hwnd_progress_status, text);
+                }
+            }
+            return 0;
+        }
+
+        case EEM_SCAN_FINISHED:
+            App_OnScanFinished(app);
+            return 0;
+
         case EEM_SYNC_PANE_SCROLLUI:
             App_SyncPaneScrollChrome(app);
             return 0;
@@ -5001,6 +5285,16 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             App_DestroyOptions(app);
             App_DestroyProgress(app);
             App_DestroyFilter(app);
+            if (app->scan_thread != NULL)
+            {
+                InterlockedExchange(&app->scan_cancel, 1);
+                WaitForSingleObject(app->scan_thread, INFINITE);
+                CloseHandle(app->scan_thread);
+                app->scan_thread = NULL;
+            }
+            free(app->scan_marks);
+            app->scan_marks = NULL;
+            App_ClearMarks(app);
             EeFilter_Clear(&app->filters);
             free(app->filter_map);
             app->filter_map = NULL;
@@ -5177,11 +5471,12 @@ static void App_RequestClose(AppState *app)
     {
         return;
     }
-    if (app->loading)
+    if (app->loading || app->scanning)
     {
         app->close_pending = TRUE;
         InterlockedExchange(&app->load_cancel, 1);
-        App_SetStatus(app, L"Cancelling load…");
+        InterlockedExchange(&app->scan_cancel, 1);
+        App_SetStatus(app, app->scanning ? L"Cancelling scan…" : L"Cancelling load…");
         return;
     }
     DestroyWindow(app->hwnd_main);

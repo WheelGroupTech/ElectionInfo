@@ -51,3 +51,5 @@
 #define EEM_LOAD_FINISHED      (WM_APP + 2)
 #define EEM_SYNC_PANE_SCROLLUI (WM_APP + 3)
 #define EEM_SYNC_SELECTION     (WM_APP + 4)
+#define EEM_SCAN_PROGRESS      (WM_APP + 5)
+#define EEM_SCAN_FINISHED      (WM_APP + 6)

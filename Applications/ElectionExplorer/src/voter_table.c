@@ -811,217 +811,78 @@ void EeVoterTable_GetViewCellW(const EeVoterTable *table,
     }
 }
 
-static int dup_voter_id_cmp(void *ctx, const void *a, const void *b)
+/* -------------------------------------------------------------------------- */
+/* Duplicate detection                                                        */
+/*                                                                            */
+/* O(n) open-addressing hash grouping that fills a caller-provided per-row    */
+/* mark array (1 = the row shares its key with at least one other row). This  */
+/* replaces the old O(n log n) qsort_s + _stricmp comparator scan and lets    */
+/* callers show duplicates by marking physical rows directly instead of       */
+/* building one filter rule per duplicate value.                              */
+/* -------------------------------------------------------------------------- */
+
+/* Case-insensitive (ASCII fold) FNV-1a accumulation over a UTF-8 string. */
+static unsigned hash_ci_fold(unsigned h, const char *s)
 {
-    const char *sa = *(const char *const *)a;
-    const char *sb = *(const char *const *)b;
-    (void)ctx;
-    if (sa == NULL)
+    if (s == NULL)
     {
-        sa = "";
+        return h;
     }
-    if (sb == NULL)
+    while (*s != '\0')
     {
-        sb = "";
+        unsigned char c = (unsigned char)*s++;
+        if (c >= 'A' && c <= 'Z')
+        {
+            c = (unsigned char)(c + ('a' - 'A'));
+        }
+        h ^= c;
+        h *= 16777619u;
     }
-    return strcmp(sa, sb);
+    return h;
 }
 
-BOOL EeVoterTable_CollectDuplicateVoterIds(const EeVoterTable *table,
-                                           wchar_t ***out_ids,
-                                           uint32_t *out_count)
+/* Case-sensitive FNV-1a over a UTF-8 string (Voter IDs compare with strcmp). */
+static unsigned hash_cs_utf8(const char *s)
 {
-    const char **ptrs = NULL;
-    wchar_t **vals = NULL;
-    uint32_t i;
-    uint32_t dup_n = 0;
-    uint32_t filled = 0;
-    size_t bytes;
-
-    if (out_ids == NULL || out_count == NULL)
+    unsigned h = 2166136261u;
+    if (s == NULL)
     {
-        return FALSE;
+        return h;
     }
-    *out_ids = NULL;
-    *out_count = 0;
-    if (table == NULL || table->row_count == 0)
+    while (*s != '\0')
     {
-        return TRUE;
+        h ^= (unsigned char)*s++;
+        h *= 16777619u;
     }
-    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(char *), &bytes)))
-    {
-        return FALSE;
-    }
-    ptrs = (const char **)malloc(bytes);
-    if (ptrs == NULL)
-    {
-        return FALSE;
-    }
-    for (i = 0; i < table->row_count; i++)
-    {
-        ptrs[i] = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
-    }
-    qsort_s((void *)ptrs, table->row_count, sizeof(char *), dup_voter_id_cmp, NULL);
-
-    i = 0;
-    while (i < table->row_count)
-    {
-        const char *cur = ptrs[i] ? ptrs[i] : "";
-        uint32_t run = 1;
-        while (i + run < table->row_count)
-        {
-            const char *nxt = ptrs[i + run] ? ptrs[i + run] : "";
-            if (strcmp(cur, nxt) != 0)
-            {
-                break;
-            }
-            run++;
-        }
-        if (cur[0] != '\0' && run >= 2)
-        {
-            dup_n++;
-        }
-        i += run;
-    }
-    if (dup_n == 0)
-    {
-        free(ptrs);
-        return TRUE;
-    }
-
-    vals = (wchar_t **)calloc((size_t)dup_n, sizeof(wchar_t *));
-    if (vals == NULL)
-    {
-        free(ptrs);
-        return FALSE;
-    }
-    i = 0;
-    while (i < table->row_count && filled < dup_n)
-    {
-        const char *cur = ptrs[i] ? ptrs[i] : "";
-        uint32_t run = 1;
-        while (i + run < table->row_count)
-        {
-            const char *nxt = ptrs[i + run] ? ptrs[i + run] : "";
-            if (strcmp(cur, nxt) != 0)
-            {
-                break;
-            }
-            run++;
-        }
-        if (cur[0] != '\0' && run >= 2)
-        {
-            int n;
-            wchar_t *w;
-            n = MultiByteToWideChar(CP_UTF8, 0, cur, -1, NULL, 0);
-            if (n <= 0)
-            {
-                n = MultiByteToWideChar(CP_ACP, 0, cur, -1, NULL, 0);
-            }
-            if (n <= 0)
-            {
-                uint32_t k;
-                for (k = 0; k < filled; k++)
-                {
-                    free(vals[k]);
-                }
-                free(vals);
-                free(ptrs);
-                return FALSE;
-            }
-            w = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
-            if (w == NULL)
-            {
-                uint32_t k;
-                for (k = 0; k < filled; k++)
-                {
-                    free(vals[k]);
-                }
-                free(vals);
-                free(ptrs);
-                return FALSE;
-            }
-            if (MultiByteToWideChar(CP_UTF8, 0, cur, -1, w, n) == 0)
-            {
-                MultiByteToWideChar(CP_ACP, 0, cur, -1, w, n);
-            }
-            vals[filled++] = w;
-        }
-        i += run;
-    }
-    free(ptrs);
-    *out_ids = vals;
-    *out_count = filled;
-    return TRUE;
+    return h;
 }
 
-int EeVoterTable_FindBirthdateColumn(const EeVoterTable *table)
+/* Fold a 32-bit value into an FNV-1a hash, low byte first. */
+static unsigned hash_mix_u32(unsigned h, uint32_t v)
 {
-    uint32_t i;
-    if (table == NULL)
+    int i;
+    for (i = 0; i < 4; i++)
     {
-        return -1;
+        h ^= (unsigned char)(v & 0xffu);
+        h *= 16777619u;
+        v >>= 8;
     }
-    for (i = 0; i < table->column_count; i++)
-    {
-        if (title_is_birthdate_column(table->column_titles[i]))
-        {
-            return (int)i;
-        }
-    }
-    return -1;
+    return h;
 }
 
-typedef struct DupNameDob
+/* Smallest power of two >= n, clamped to a minimum of 16. 0 on overflow. */
+static uint32_t next_pow2_ge_u32(uint32_t n)
 {
-    const char *name;
-    const char *dob;
-    const char *vid;
-    uint32_t ymd; /* 0 if the DOB cell did not parse as a date */
-} DupNameDob;
-
-static BOOL dup_name_dob_equal(const DupNameDob *a, const DupNameDob *b)
-{
-    const char *na = (a != NULL && a->name != NULL) ? a->name : "";
-    const char *nb = (b != NULL && b->name != NULL) ? b->name : "";
-    const char *da = (a != NULL && a->dob != NULL) ? a->dob : "";
-    const char *db = (b != NULL && b->dob != NULL) ? b->dob : "";
-
-    if (_stricmp(na, nb) != 0)
+    uint32_t p = 16u;
+    while (p < n)
     {
-        return FALSE;
-    }
-    if (a != NULL && b != NULL && a->ymd != 0 && b->ymd != 0)
-    {
-        return a->ymd == b->ymd;
-    }
-    return _stricmp(da, db) == 0;
-}
-
-static int dup_name_dob_cmp(void *ctx, const void *a, const void *b)
-{
-    const DupNameDob *pa = (const DupNameDob *)a;
-    const DupNameDob *pb = (const DupNameDob *)b;
-    int c;
-    (void)ctx;
-    c = _stricmp(pa->name ? pa->name : "", pb->name ? pb->name : "");
-    if (c != 0)
-    {
-        return c;
-    }
-    if (pa->ymd != 0 && pb->ymd != 0)
-    {
-        if (pa->ymd < pb->ymd)
+        if (p > (UINT32_MAX >> 1))
         {
-            return -1;
+            return 0;
         }
-        if (pa->ymd > pb->ymd)
-        {
-            return 1;
-        }
-        return 0;
+        p <<= 1;
     }
-    return _stricmp(pa->dob ? pa->dob : "", pb->dob ? pb->dob : "");
+    return p;
 }
 
 static int dup_vid_ptr_cmp(void *ctx, const void *a, const void *b)
@@ -1090,109 +951,40 @@ static BOOL utf8_ids_to_wide(const char **ids, uint32_t n, wchar_t ***out_ids)
     return TRUE;
 }
 
-BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
-                                                  wchar_t ***out_ids,
-                                                  uint32_t *out_count)
+/* Distinct, non-empty Voter IDs of the marked physical rows (wide, sorted). */
+static BOOL collect_marked_distinct_vids(const EeVoterTable *table,
+                                         const uint8_t *marks,
+                                         wchar_t ***out_ids,
+                                         uint32_t *out_count)
 {
-    DupNameDob *rows = NULL;
     const char **vids = NULL;
-    uint32_t nk = 0;
     uint32_t nv = 0;
     uint32_t i;
-    int dob_col;
     size_t bytes;
+    BOOL ok;
 
-    if (out_ids == NULL || out_count == NULL)
-    {
-        return FALSE;
-    }
     *out_ids = NULL;
     *out_count = 0;
-    if (table == NULL || table->row_count == 0)
+    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(char *), &bytes)))
     {
-        return TRUE;
-    }
-    dob_col = EeVoterTable_FindBirthdateColumn(table);
-    if (dob_col < 0)
-    {
-        return TRUE;
-    }
-    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(DupNameDob), &bytes)))
-    {
-        return FALSE;
-    }
-    rows = (DupNameDob *)malloc(bytes);
-    if (rows == NULL)
-    {
-        return FALSE;
-    }
-    for (i = 0; i < table->row_count; i++)
-    {
-        const char *name = EeVoterTable_GetCellUtf8(table, i, EE_COL_NAME);
-        const char *dob = EeVoterTable_GetCellUtf8(table, i, (uint32_t)dob_col);
-        const char *vid = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
-        if (name == NULL)
-        {
-            name = "";
-        }
-        if (dob == NULL)
-        {
-            dob = "";
-        }
-        if (vid == NULL)
-        {
-            vid = "";
-        }
-        if (name[0] == '\0' || dob[0] == '\0')
-        {
-            continue;
-        }
-        rows[nk].name = name;
-        rows[nk].dob = dob;
-        rows[nk].vid = vid;
-        rows[nk].ymd = 0;
-        (void)parse_utf8_ymd(dob, &rows[nk].ymd);
-        nk++;
-    }
-    if (nk < 2)
-    {
-        free(rows);
-        return TRUE;
-    }
-    qsort_s(rows, nk, sizeof(DupNameDob), dup_name_dob_cmp, NULL);
-    if (FAILED(SizeTMult((size_t)nk, sizeof(char *), &bytes)))
-    {
-        free(rows);
         return FALSE;
     }
     vids = (const char **)malloc(bytes);
     if (vids == NULL)
     {
-        free(rows);
         return FALSE;
     }
-    i = 0;
-    while (i < nk)
+    for (i = 0; i < table->row_count; i++)
     {
-        uint32_t run = 1;
-        while (i + run < nk && dup_name_dob_equal(&rows[i], &rows[i + run]))
+        if (marks[i])
         {
-            run++;
-        }
-        if (run >= 2)
-        {
-            uint32_t k;
-            for (k = 0; k < run; k++)
+            const char *vid = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
+            if (vid != NULL && vid[0] != '\0')
             {
-                if (rows[i + k].vid[0] != '\0')
-                {
-                    vids[nv++] = rows[i + k].vid;
-                }
+                vids[nv++] = vid;
             }
         }
-        i += run;
     }
-    free(rows);
     if (nv == 0)
     {
         free(vids);
@@ -1210,14 +1002,369 @@ BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
         }
         nv = unique;
     }
-    if (!utf8_ids_to_wide(vids, nv, out_ids))
+    ok = utf8_ids_to_wide(vids, nv, out_ids);
+    free(vids);
+    if (ok)
     {
-        free(vids);
+        *out_count = nv;
+    }
+    return ok;
+}
+
+/* Report scan progress and poll the cancel flag; FALSE means "stop now". */
+static BOOL dup_scan_pump(EeLoadProgressFn progress_fn,
+                          void *user,
+                          volatile LONG *cancel_flag,
+                          uint32_t done,
+                          uint32_t total)
+{
+    if (cancel_flag != NULL && InterlockedCompareExchange(cancel_flag, 0, 0) != 0)
+    {
         return FALSE;
     }
-    free(vids);
-    *out_count = nv;
+    if (progress_fn != NULL)
+    {
+        EeLoadProgress p;
+        p.rows_loaded = done;
+        p.bytes_read = done;
+        p.bytes_total = total;
+        p.percent = (total > 0) ? (uint32_t)((uint64_t)done * 100u / total) : 100u;
+        if (!progress_fn(&p, user))
+        {
+            return FALSE;
+        }
+    }
     return TRUE;
+}
+
+BOOL EeVoterTable_MarkDuplicateVoterIds(const EeVoterTable *table,
+                                        uint8_t *marks,
+                                        uint32_t *out_count,
+                                        volatile LONG *cancel_flag,
+                                        EeLoadProgressFn progress_fn,
+                                        void *progress_user)
+{
+    uint32_t *slots = NULL;
+    uint32_t cap;
+    uint32_t mask;
+    uint32_t i;
+    uint32_t marked = 0;
+    size_t bytes;
+
+    if (out_count != NULL)
+    {
+        *out_count = 0;
+    }
+    if (table == NULL || marks == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    if (table->row_count == 0)
+    {
+        return TRUE;
+    }
+    if (table->row_count > (UINT32_MAX / 2u))
+    {
+        return FALSE;
+    }
+    cap = next_pow2_ge_u32(table->row_count * 2u);
+    if (cap == 0)
+    {
+        return FALSE;
+    }
+    if (FAILED(SizeTMult((size_t)cap, sizeof(uint32_t), &bytes)))
+    {
+        return FALSE;
+    }
+    slots = (uint32_t *)malloc(bytes);
+    if (slots == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < cap; i++)
+    {
+        slots[i] = UINT32_MAX;
+    }
+    mask = cap - 1u;
+
+    for (i = 0; i < table->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
+        if (vid != NULL && vid[0] != '\0')
+        {
+            uint32_t b = hash_cs_utf8(vid) & mask;
+            for (;;)
+            {
+                uint32_t rep = slots[b];
+                if (rep == UINT32_MAX)
+                {
+                    slots[b] = i;
+                    break;
+                }
+                if (strcmp(vid, EeVoterTable_GetCellUtf8(table, rep, EE_COL_VOTER_ID)) == 0)
+                {
+                    if (marks[i] == 0)
+                    {
+                        marks[i] = 1;
+                        marked++;
+                    }
+                    if (marks[rep] == 0)
+                    {
+                        marks[rep] = 1;
+                        marked++;
+                    }
+                    break;
+                }
+                b = (b + 1u) & mask;
+            }
+        }
+        if ((i & 0xffffu) == 0xffffu &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, table->row_count))
+        {
+            free(slots);
+            *out_count = marked;
+            return TRUE;
+        }
+    }
+
+    free(slots);
+    *out_count = marked;
+    return TRUE;
+}
+
+BOOL EeVoterTable_CollectDuplicateVoterIds(const EeVoterTable *table,
+                                           wchar_t ***out_ids,
+                                           uint32_t *out_count)
+{
+    uint8_t *marks = NULL;
+    uint32_t marked = 0;
+    BOOL ok;
+
+    if (out_ids == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_ids = NULL;
+    *out_count = 0;
+    if (table == NULL || table->row_count == 0)
+    {
+        return TRUE;
+    }
+    marks = (uint8_t *)calloc((size_t)table->row_count, sizeof(uint8_t));
+    if (marks == NULL)
+    {
+        return FALSE;
+    }
+    if (!EeVoterTable_MarkDuplicateVoterIds(table, marks, &marked, NULL, NULL, NULL))
+    {
+        free(marks);
+        return FALSE;
+    }
+    if (marked == 0)
+    {
+        free(marks);
+        return TRUE;
+    }
+    ok = collect_marked_distinct_vids(table, marks, out_ids, out_count);
+    free(marks);
+    return ok;
+}
+
+int EeVoterTable_FindBirthdateColumn(const EeVoterTable *table)
+{
+    uint32_t i;
+    if (table == NULL)
+    {
+        return -1;
+    }
+    for (i = 0; i < table->column_count; i++)
+    {
+        if (title_is_birthdate_column(table->column_titles[i]))
+        {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* Same match semantics the sorted scan used: names equal case-insensitively,
+ * and DOBs equal by parsed YYYYMMDD when both parse, else by raw text. */
+static BOOL name_dob_equal_cells(const char *na,
+                                 const char *da,
+                                 uint32_t ya,
+                                 const char *nb,
+                                 const char *db,
+                                 uint32_t yb)
+{
+    if (_stricmp(na != NULL ? na : "", nb != NULL ? nb : "") != 0)
+    {
+        return FALSE;
+    }
+    if (ya != 0 && yb != 0)
+    {
+        return ya == yb;
+    }
+    return _stricmp(da != NULL ? da : "", db != NULL ? db : "") == 0;
+}
+
+BOOL EeVoterTable_MarkDuplicateVotersByNameDob(const EeVoterTable *table,
+                                               uint8_t *marks,
+                                               uint32_t *out_count,
+                                               volatile LONG *cancel_flag,
+                                               EeLoadProgressFn progress_fn,
+                                               void *progress_user)
+{
+    uint32_t *slots = NULL;
+    int dob_col;
+    uint32_t cap;
+    uint32_t mask;
+    uint32_t i;
+    uint32_t marked = 0;
+    size_t bytes;
+
+    if (out_count != NULL)
+    {
+        *out_count = 0;
+    }
+    if (table == NULL || marks == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    if (table->row_count == 0)
+    {
+        return TRUE;
+    }
+    dob_col = EeVoterTable_FindBirthdateColumn(table);
+    if (dob_col < 0)
+    {
+        return TRUE;
+    }
+    if (table->row_count > (UINT32_MAX / 2u))
+    {
+        return FALSE;
+    }
+    cap = next_pow2_ge_u32(table->row_count * 2u);
+    if (cap == 0)
+    {
+        return FALSE;
+    }
+    if (FAILED(SizeTMult((size_t)cap, sizeof(uint32_t), &bytes)))
+    {
+        return FALSE;
+    }
+    slots = (uint32_t *)malloc(bytes);
+    if (slots == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < cap; i++)
+    {
+        slots[i] = UINT32_MAX;
+    }
+    mask = cap - 1u;
+
+    for (i = 0; i < table->row_count; i++)
+    {
+        const char *name = EeVoterTable_GetCellUtf8(table, i, EE_COL_NAME);
+        const char *dob = EeVoterTable_GetCellUtf8(table, i, (uint32_t)dob_col);
+        if (name != NULL && name[0] != '\0' && dob != NULL && dob[0] != '\0')
+        {
+            uint32_t ymd = 0;
+            unsigned h;
+            uint32_t b;
+
+            (void)parse_utf8_ymd(dob, &ymd);
+            h = hash_ci_fold(2166136261u, name);
+            if (ymd != 0)
+            {
+                h = hash_mix_u32(h, ymd);
+            }
+            else
+            {
+                h = hash_ci_fold(h, dob);
+            }
+            b = h & mask;
+            for (;;)
+            {
+                uint32_t rep = slots[b];
+                if (rep == UINT32_MAX)
+                {
+                    slots[b] = i;
+                    break;
+                }
+                {
+                    const char *rname = EeVoterTable_GetCellUtf8(table, rep, EE_COL_NAME);
+                    const char *rdob = EeVoterTable_GetCellUtf8(table, rep, (uint32_t)dob_col);
+                    uint32_t rymd = 0;
+                    (void)parse_utf8_ymd(rdob, &rymd);
+                    if (name_dob_equal_cells(name, dob, ymd, rname, rdob, rymd))
+                    {
+                        if (marks[i] == 0)
+                        {
+                            marks[i] = 1;
+                            marked++;
+                        }
+                        if (marks[rep] == 0)
+                        {
+                            marks[rep] = 1;
+                            marked++;
+                        }
+                        break;
+                    }
+                }
+                b = (b + 1u) & mask;
+            }
+        }
+        if ((i & 0xffffu) == 0xffffu &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, table->row_count))
+        {
+            free(slots);
+            *out_count = marked;
+            return TRUE;
+        }
+    }
+
+    free(slots);
+    *out_count = marked;
+    return TRUE;
+}
+
+BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
+                                                  wchar_t ***out_ids,
+                                                  uint32_t *out_count)
+{
+    uint8_t *marks = NULL;
+    uint32_t marked = 0;
+    BOOL ok;
+
+    if (out_ids == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_ids = NULL;
+    *out_count = 0;
+    if (table == NULL || table->row_count == 0)
+    {
+        return TRUE;
+    }
+    marks = (uint8_t *)calloc((size_t)table->row_count, sizeof(uint8_t));
+    if (marks == NULL)
+    {
+        return FALSE;
+    }
+    if (!EeVoterTable_MarkDuplicateVotersByNameDob(table, marks, &marked, NULL, NULL, NULL))
+    {
+        free(marks);
+        return FALSE;
+    }
+    if (marked == 0)
+    {
+        free(marks);
+        return TRUE;
+    }
+    ok = collect_marked_distinct_vids(table, marks, out_ids, out_count);
+    free(marks);
+    return ok;
 }
 
 /* -------------------------------------------------------------------------- */

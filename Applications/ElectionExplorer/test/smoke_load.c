@@ -1748,6 +1748,129 @@ done:
     return rc;
 }
 
+static int test_mark_duplicates(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    uint8_t *marks = NULL;
+    uint32_t count = 0;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_mark_dups.csv")))
+    {
+        wprintf(L"markdup: temp path failed\n");
+        return 1;
+    }
+
+    /* Voter-ID duplicates: 100 x2, 200 x3, 300 x1 -> 5 marked physical rows. */
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"markdup: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM\n", fp);
+    fputs("100,Smith,John\n", fp);
+    fputs("200,Jones,Jane\n", fp);
+    fputs("100,Smith,Jon\n", fp);
+    fputs("300,Lee,Ann\n", fp);
+    fputs("200,Jones,Janet\n", fp);
+    fputs("200,Jones,Jan\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 6)
+    {
+        wprintf(L"markdup: vuid load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    marks = (uint8_t *)calloc(t.row_count, 1);
+    if (marks == NULL)
+    {
+        wprintf(L"markdup: out of memory\n");
+        goto done;
+    }
+    if (!EeVoterTable_MarkDuplicateVoterIds(&t, marks, &count, NULL, NULL, NULL) || count != 5)
+    {
+        wprintf(L"markdup: vuid expected 5 marked, got %u\n", count);
+        goto done;
+    }
+    if (!marks[0] || !marks[1] || !marks[2] || marks[3] || !marks[4] || !marks[5])
+    {
+        wprintf(L"markdup: vuid marked the wrong rows\n");
+        goto done;
+    }
+    free(marks);
+    marks = NULL;
+    count = 0;
+    EeVoterTable_Clear(&t);
+
+    /* Name + DOB duplicates, including an empty-VUID row: rows 0/2/6 share
+     * Smith/John/1990-01-15 and rows 1/5 share Jones/Jane -> 5 marked. */
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"markdup: could not create %s\n", path);
+        return 1;
+    }
+    fputs("VUID,LSTNAM,FSTNAM,Birth Date\n", fp);
+    fputs("100,Smith,John,1/15/1990\n", fp);
+    fputs("200,Jones,Jane,2/20/1985\n", fp);
+    fputs("101,Smith,John,01/15/1990\n", fp);
+    fputs("300,Smith,John,3/1/1991\n", fp);
+    fputs("400,Lee,Ann,1/15/1990\n", fp);
+    fputs("201,Jones,Jane,2/20/1985\n", fp);
+    fputs(",Smith,John,1/15/1990\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 7)
+    {
+        wprintf(L"markdup: namedob load failed %s\n", err);
+        goto done;
+    }
+    marks = (uint8_t *)calloc(t.row_count, 1);
+    if (marks == NULL)
+    {
+        wprintf(L"markdup: out of memory\n");
+        goto done;
+    }
+    if (!EeVoterTable_MarkDuplicateVotersByNameDob(&t, marks, &count, NULL, NULL, NULL) ||
+        count != 5)
+    {
+        wprintf(L"markdup: namedob expected 5 marked, got %u\n", count);
+        goto done;
+    }
+    if (!marks[0] || !marks[1] || !marks[2] || marks[3] || marks[4] || !marks[5] || !marks[6])
+    {
+        wprintf(L"markdup: namedob marked the wrong rows\n");
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"markdup ok\n");
+
+done:
+    free(marks);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"markdup test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -1767,6 +1890,7 @@ int wmain(void)
     failed |= test_date_sort();
     failed |= test_duplicate_voter_ids();
     failed |= test_duplicate_voters();
+    failed |= test_mark_duplicates();
     failed |= test_precinct_normalize();
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();

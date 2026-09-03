@@ -184,6 +184,46 @@ extern "C"
                                                       uint32_t *out_count);
 
     /**
+     * @brief Flag physical rows that share their Voter ID with another row.
+     *
+     * O(n) hash grouping. Empty IDs are ignored. @p marks must point to at least
+     * @p table->row_count bytes; the function sets a byte to 1 for each duplicate
+     * row and leaves the rest untouched (callers normally pass a zeroed buffer).
+     *
+     * @param marks         Per physical row; byte set to 1 when the row is a duplicate.
+     * @param out_count     Receives the number of marked rows (0 if none).
+     * @param cancel_flag   Optional; non-zero requests cancel (checked periodically).
+     * @param progress_fn   Optional; invoked on the calling thread. Return FALSE to cancel.
+     * @param progress_user Passed to @p progress_fn.
+     *
+     * @return FALSE on invalid arguments or out of memory. On cancel it returns
+     *         TRUE with partial marks; distinguish via @p cancel_flag.
+     */
+    BOOL EeVoterTable_MarkDuplicateVoterIds(const EeVoterTable *table,
+                                            uint8_t *marks,
+                                            uint32_t *out_count,
+                                            volatile LONG *cancel_flag,
+                                            EeLoadProgressFn progress_fn,
+                                            void *progress_user);
+
+    /**
+     * @brief Flag physical rows sharing a normalized name and DOB with another row.
+     *
+     * Same match rule as EeVoterTable_CollectDuplicateVotersByNameDob but O(n) and
+     * marks rows directly. Rows with an empty name or DOB are ignored. @p marks
+     * must point to at least @p table->row_count bytes (see MarkDuplicateVoterIds).
+     *
+     * @return FALSE on invalid arguments or out of memory. TRUE (0 marked) when the
+     *         table has no birth-date column. On cancel, TRUE with partial marks.
+     */
+    BOOL EeVoterTable_MarkDuplicateVotersByNameDob(const EeVoterTable *table,
+                                                   uint8_t *marks,
+                                                   uint32_t *out_count,
+                                                   volatile LONG *cancel_flag,
+                                                   EeLoadProgressFn progress_fn,
+                                                   void *progress_user);
+
+    /**
  * @brief Sort by display column; toggles direction if same column.
  */
     BOOL EeVoterTable_SortByColumn(EeVoterTable *table, uint32_t column);

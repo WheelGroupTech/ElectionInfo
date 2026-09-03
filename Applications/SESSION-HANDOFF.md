@@ -5,8 +5,8 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-09-03
-**Branch:** main — uncommitted changes present (see below)
-**Latest commit:** `475fe88 Initial claude files for development`
+**Branch:** main — clean, pushed to origin
+**Latest commit:** `207da43 perf(explorer): O(n) duplicate scans + row-mark view + cancelable modal`
 
 ---
 
@@ -35,7 +35,7 @@ display:
 
 ## In progress / open questions
 
-**Duplicate-detection speedup (uncommitted, ready to review/commit).** Made the
+**Duplicate-detection speedup — DONE, committed `207da43` and pushed.** Made the
 "duplicate voters (name + DOB)" and "duplicate Voter IDs" features fast and
 GUI-responsive. Measured on real data: Dallas County 1.48M rows → name+DOB scan
 **373 ms** (7,113 dup rows), Voter-ID **213 ms**; previously minutes / effectively
@@ -66,8 +66,6 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- User to review + commit the above (agent does not run git). Suggested message:
-  `perf(explorer): O(n) duplicate scans + row-mark view + cancelable modal`.
 - Future (explicitly deferred this round): multi-file compare between open windows
   (the mark layer is the intended primitive for it), and a reaper-thread for
   responsive deletion of large row sets.

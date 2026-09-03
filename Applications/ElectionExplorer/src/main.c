@@ -1415,6 +1415,58 @@ static void App_SyncVerticalScroll(AppState *app, HWND source)
     ListView_Scroll(target, 0, (top_src - top_dst) * row_height);
 }
 
+/* Refresh the filtered view and header sort arrows after a sort. */
+static void App_RefreshSortUi(AppState *app, uint32_t table_column)
+{
+    App_ApplyFilter(app);
+
+    if (table_column < EE_FROZEN_COLUMN_COUNT)
+    {
+        App_SetHeaderSortArrow(app,
+                               app->hwnd_frozen,
+                               (int)table_column,
+                               (int)table_column,
+                               app->table.sort_ascending);
+        App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
+    }
+    else
+    {
+        int local = (int)table_column - EE_FROZEN_COLUMN_COUNT;
+        App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
+        App_SetHeaderSortArrow(app, app->hwnd_scroll, local, local, app->table.sort_ascending);
+    }
+    {
+        HWND hf = ListView_GetHeader(app->hwnd_frozen);
+        HWND hs = ListView_GetHeader(app->hwnd_scroll);
+        if (hf)
+        {
+            InvalidateRect(hf, NULL, TRUE);
+        }
+        if (hs)
+        {
+            InvalidateRect(hs, NULL, TRUE);
+        }
+    }
+    InvalidateRect(app->hwnd_frozen, NULL, TRUE);
+    InvalidateRect(app->hwnd_scroll, NULL, TRUE);
+}
+
+/* Force an ascending sort on a display column, then refresh view and headers.
+ * Used to group a duplicates view by its key so the shared values are adjacent. */
+static void App_SortByTableColumnAscending(AppState *app, uint32_t table_column)
+{
+    if (app == NULL || table_column >= app->table.column_count || app->table.row_count == 0)
+    {
+        return;
+    }
+    /* Reset so SortByColumn takes the ascending branch even if already sorted here. */
+    app->table.sort_column = -1;
+    if (EeVoterTable_SortByColumn(&app->table, table_column))
+    {
+        App_RefreshSortUi(app, table_column);
+    }
+}
+
 static void App_SortFromHeader(AppState *app, HWND hwnd_list, int local_column)
 {
     uint32_t table_column;
@@ -1443,37 +1495,7 @@ static void App_SortFromHeader(AppState *app, HWND hwnd_list, int local_column)
     App_SetStatus(app, L"Sorting…");
     if (EeVoterTable_SortByColumn(&app->table, table_column))
     {
-        App_ApplyFilter(app);
-
-        if (table_column < EE_FROZEN_COLUMN_COUNT)
-        {
-            App_SetHeaderSortArrow(app,
-                                   app->hwnd_frozen,
-                                   (int)table_column,
-                                   (int)table_column,
-                                   app->table.sort_ascending);
-            App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
-        }
-        else
-        {
-            int local = (int)table_column - EE_FROZEN_COLUMN_COUNT;
-            App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
-            App_SetHeaderSortArrow(app, app->hwnd_scroll, local, local, app->table.sort_ascending);
-        }
-        {
-            HWND hf = ListView_GetHeader(app->hwnd_frozen);
-            HWND hs = ListView_GetHeader(app->hwnd_scroll);
-            if (hf)
-            {
-                InvalidateRect(hf, NULL, TRUE);
-            }
-            if (hs)
-            {
-                InvalidateRect(hs, NULL, TRUE);
-            }
-        }
-        InvalidateRect(app->hwnd_frozen, NULL, TRUE);
-        InvalidateRect(app->hwnd_scroll, NULL, TRUE);
+        App_RefreshSortUi(app, table_column);
     }
     SetCursor(prev);
 }
@@ -4459,7 +4481,23 @@ static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t coun
     app->mark_active = TRUE;
     app->mark_kind = kind;
     App_ClearSelection(app);
-    App_ApplyFilter(app);
+
+    /* Group the duplicates by their key so shared values sit next to each other:
+     * Voter ID for the ID scan, Name for the name+DOB scan. The sort refreshes
+     * the (mark-intersected) view; fall back to a plain apply if it cannot run. */
+    {
+        uint32_t sort_col = (kind == EE_SCAN_DUP_NAME_DOB) ? EE_COL_NAME : EE_COL_VOTER_ID;
+        if (sort_col < app->table.column_count && app->table.row_count > 0)
+        {
+            HCURSOR prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+            App_SortByTableColumnAscending(app, sort_col);
+            SetCursor(prev);
+        }
+        else
+        {
+            App_ApplyFilter(app);
+        }
+    }
 }
 
 /* Synchronous path for smaller tables (the O(n) scan is sub-100 ms there). */

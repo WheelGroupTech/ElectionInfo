@@ -35,6 +35,17 @@ display:
 
 ## In progress / open questions
 
+**Duplicates-view follow-ups (uncommitted — this session).**
+- **Sort-on-show.** Showing a duplicates view now sorts ascending by its key so
+  shared values are adjacent: Voter ID for the ID scan, Name for the name+DOB
+  scan. Done in `App_ApplyDuplicateMarks` via a new `App_SortByTableColumnAscending`
+  helper (forces ascending by resetting `sort_column` before `EeVoterTable_SortByColumn`);
+  factored the header-sort UI refresh into `App_RefreshSortUi`, reused by both. Wait
+  cursor wraps the sort for large lists. `main.c` only; Debug + Release build clean.
+- **Reset View** menu item (bottom of Filter menu, enabled only while a duplicates
+  view is active; clears marks + filter to show all records) — already committed by
+  the user.
+
 **Duplicate-detection speedup — DONE, committed `207da43` and pushed.** Made the
 "duplicate voters (name + DOB)" and "duplicate Voter IDs" features fast and
 GUI-responsive. Measured on real data: Dallas County 1.48M rows → name+DOB scan

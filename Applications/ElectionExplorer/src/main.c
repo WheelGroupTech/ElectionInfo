@@ -853,7 +853,7 @@ static void App_ApplyFont(AppState *app)
 /**
  * @brief Custom-draw list header: bold text, light grey fill, double underline.
  */
-static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
+static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd, BOOL center_all)
 {
     NMCUSTOMDRAW *nmcd = cd;
 
@@ -922,8 +922,9 @@ static LRESULT App_HeaderCustomDraw(AppState *app, NMCUSTOMDRAW *cd)
          * the frozen pane's Voter ID header (index 0) as center-aligned always.
          */
             {
-                BOOL force_center = (app->hwnd_frozen != NULL &&
-                                     header == ListView_GetHeader(app->hwnd_frozen) && index == 0);
+                BOOL force_center =
+                    center_all || (app->hwnd_frozen != NULL &&
+                                   header == ListView_GetHeader(app->hwnd_frozen) && index == 0);
                 BOOL is_center = force_center || ((fmt & HDF_CENTER) != 0);
                 BOOL is_right = !is_center && ((fmt & HDF_RIGHT) != 0);
                 UINT dt = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
@@ -4829,19 +4830,168 @@ struct ReportWindow
     AppState *app;       /* parent viewer (owns the table + filters)     */
     HWND hwnd;           /* this report's top-level window               */
     HWND list;           /* owner-data report list view                 */
+    HWND status;         /* bottom status bar                           */
     int kind;            /* EE_REPORT_*                                  */
     uint32_t column;     /* source display column (Precinct / Address)  */
     EeValueCount *items; /* aggregated value + count, current sort order */
     uint32_t count;
+    BOOL has_blank;      /* a "(blank)" row is present in items         */
     int sort_col;        /* 0 = value, 1 = count                        */
     BOOL sort_asc;
 };
+
+static WNDPROC g_old_report_list_proc = NULL;
 
 /* Empty values are shown (and copied) as this label so incomplete records are
  * visible; the underlying value stays "" so filters match blank cells. */
 static const wchar_t *report_display_value(const wchar_t *v)
 {
     return (v == NULL || v[0] == L'\0') ? L"(blank)" : v;
+}
+
+/*
+ * Cell drawing. The list view centers columns >= 1 from LVCFMT_CENTER, but always
+ * left-aligns column 0, so the Precinct report centers its own column 0. The
+ * "Number of Voters" column and the Address column are left to the default draw.
+ */
+static LRESULT Report_ListCustomDraw(ReportWindow *rw, NMLVCUSTOMDRAW *lvcd)
+{
+    HWND hwnd = lvcd->nmcd.hdr.hwndFrom;
+    int item;
+    BOOL selected;
+
+    switch (lvcd->nmcd.dwDrawStage)
+    {
+        case CDDS_PREPAINT:
+            return CDRF_NOTIFYITEMDRAW;
+
+        case CDDS_ITEMPREPAINT:
+            item = (int)lvcd->nmcd.dwItemSpec;
+            selected = (ListView_GetItemState(hwnd, item, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+            if (selected)
+            {
+                lvcd->clrText = GetSysColor(COLOR_HIGHLIGHTTEXT);
+                lvcd->clrTextBk = GetSysColor(COLOR_HIGHLIGHT);
+                lvcd->nmcd.uItemState &= ~(CDIS_SELECTED | CDIS_FOCUS | CDIS_HOT);
+                FillRect(lvcd->nmcd.hdc, &lvcd->nmcd.rc, GetSysColorBrush(COLOR_HIGHLIGHT));
+            }
+            return CDRF_NEWFONT | CDRF_NOTIFYSUBITEMDRAW;
+
+        case CDDS_ITEMPREPAINT | CDDS_SUBITEM:
+            item = (int)lvcd->nmcd.dwItemSpec;
+            selected = (ListView_GetItemState(hwnd, item, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+            if (selected)
+            {
+                lvcd->clrText = GetSysColor(COLOR_HIGHLIGHTTEXT);
+                lvcd->clrTextBk = GetSysColor(COLOR_HIGHLIGHT);
+                lvcd->nmcd.uItemState &= ~(CDIS_SELECTED | CDIS_FOCUS | CDIS_HOT);
+            }
+            if (rw->kind == EE_REPORT_PRECINCT && lvcd->iSubItem == 0 && (uint32_t)item < rw->count)
+            {
+                RECT rc;
+                HDC hdc = lvcd->nmcd.hdc;
+                HFONT old_font;
+                COLORREF old_text;
+                COLORREF old_bk;
+                int old_mode;
+                HBRUSH brush;
+                const wchar_t *text = report_display_value(rw->items[item].value);
+
+                if (!ListView_GetSubItemRect(hwnd, item, 0, LVIR_BOUNDS, &rc))
+                {
+                    return selected ? CDRF_NEWFONT : CDRF_DODEFAULT;
+                }
+                /* LVIR_BOUNDS on subitem 0 spans the whole row; clamp to column 0. */
+                {
+                    RECT rc_label;
+                    if (ListView_GetSubItemRect(hwnd, item, 0, LVIR_LABEL, &rc_label))
+                    {
+                        rc = rc_label;
+                    }
+                    else
+                    {
+                        rc.right = rc.left + ListView_GetColumnWidth(hwnd, 0);
+                    }
+                }
+
+                if (selected)
+                {
+                    brush = GetSysColorBrush(COLOR_HIGHLIGHT);
+                    old_text = SetTextColor(hdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
+                    old_bk = SetBkColor(hdc, GetSysColor(COLOR_HIGHLIGHT));
+                }
+                else
+                {
+                    brush = GetSysColorBrush(COLOR_WINDOW);
+                    old_text = SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+                    old_bk = SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+                }
+                FillRect(hdc, &rc, brush);
+
+                old_font = (HFONT)SelectObject(
+                    hdc,
+                    rw->app->font_ui ? rw->app->font_ui : (HFONT)GetStockObject(DEFAULT_GUI_FONT));
+                old_mode = SetBkMode(hdc, TRANSPARENT);
+                {
+                    RECT rc_text = rc;
+                    rc_text.left += Scale(rw->app, 4);
+                    rc_text.right -= Scale(rw->app, 4);
+                    DrawTextW(hdc,
+                              text,
+                              -1,
+                              &rc_text,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                                  DT_NOPREFIX);
+                }
+                SetBkMode(hdc, old_mode);
+                SelectObject(hdc, old_font);
+                SetTextColor(hdc, old_text);
+                SetBkColor(hdc, old_bk);
+                return CDRF_SKIPDEFAULT;
+            }
+            return selected ? CDRF_NEWFONT : CDRF_DODEFAULT;
+
+        default:
+            return CDRF_DODEFAULT;
+    }
+}
+
+/* Subclass the report list so its header draws bold/centered like the voter list
+ * (header NM_CUSTOMDRAW is delivered to the list view, the header's parent). */
+static LRESULT CALLBACK ReportListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        ReportWindow *rw = (ReportWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (rw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(rw->app, (NMCUSTOMDRAW *)lParam, TRUE);
+        }
+    }
+    return CallWindowProcW(g_old_report_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static void Report_UpdateStatus(ReportWindow *rw)
+{
+    wchar_t buf[128];
+    const wchar_t *noun;
+    if (rw->status == NULL)
+    {
+        return;
+    }
+    noun = (rw->kind == EE_REPORT_ADDRESS) ? L"addresses" : L"precincts";
+    if (rw->has_blank)
+    {
+        StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u unique %s (includes blank)", rw->count, noun);
+    }
+    else
+    {
+        StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u unique %s", rw->count, noun);
+    }
+    SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)buf);
 }
 
 typedef struct ReportSortCtx
@@ -5093,10 +5243,28 @@ static void Report_LayoutList(ReportWindow *rw, int width, int height)
 {
     int num_w;
     int val_w;
+    int sb_h = 0;
 
+    if (rw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(rw->status, WM_SIZE, 0, 0); /* dock to the bottom */
+        if (GetWindowRect(rw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
     if (rw->list == NULL)
     {
         return;
+    }
+    if (height > sb_h)
+    {
+        height -= sb_h;
+    }
+    else
+    {
+        height = 0;
     }
     MoveWindow(rw->list, 0, 0, width, height, TRUE);
     num_w = Scale(rw->app, 130);
@@ -5142,6 +5310,16 @@ static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             {
                 return -1;
             }
+            /* Subclass so the header draws bold/centered like the voter list. */
+            {
+                WNDPROC old = (WNDPROC)SetWindowLongPtrW(rw->list,
+                                                         GWLP_WNDPROC,
+                                                         (LONG_PTR)ReportListSubclass);
+                if (g_old_report_list_proc == NULL)
+                {
+                    g_old_report_list_proc = old;
+                }
+            }
             ListView_SetExtendedListViewStyle(rw->list,
                                               LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
                                                   LVS_EX_GRIDLINES);
@@ -5151,17 +5329,38 @@ static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             }
             ZeroMemory(&col, sizeof(col));
             col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-            col.fmt = LVCFMT_LEFT;
+            /* Headers are centered for both reports; the Precinct data column is
+             * centered by Report_ListCustomDraw, the count column by LVCFMT_CENTER. */
+            col.fmt = LVCFMT_CENTER;
             col.pszText = (rw->kind == EE_REPORT_ADDRESS) ? L"Address" : L"Precinct";
             col.cx = Scale(rw->app, (rw->kind == EE_REPORT_ADDRESS) ? 320 : 160);
             ListView_InsertColumn(rw->list, 0, &col);
-            col.fmt = LVCFMT_RIGHT;
+            col.fmt = LVCFMT_CENTER;
             col.pszText = L"Number of Voters";
             col.cx = Scale(rw->app, 130);
             ListView_InsertColumn(rw->list, 1, &col);
 
+            rw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         rw->app->instance,
+                                         NULL);
+            if (rw->status != NULL && rw->app->font_ui)
+            {
+                SendMessageW(rw->status, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            Report_UpdateStatus(rw);
+
             ListView_SetItemCountEx(rw->list, (int)rw->count, LVSICF_NOINVALIDATEALL);
             Report_Sort(rw); /* initial ascending by value */
+            Report_LayoutList(rw, rc.right, rc.bottom);
             return 0;
         }
 
@@ -5194,6 +5393,10 @@ static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (rw == NULL || hdr->hwndFrom != rw->list)
             {
                 break;
+            }
+            if (hdr->code == NM_CUSTOMDRAW)
+            {
+                return Report_ListCustomDraw(rw, (NMLVCUSTOMDRAW *)lParam);
             }
             if (hdr->code == LVN_GETDISPINFOW)
             {
@@ -5345,17 +5548,22 @@ static void App_ShowReport(AppState *app, int kind)
     {
         EeValueCount *grown =
             (EeValueCount *)realloc(items, ((size_t)count + 1) * sizeof(EeValueCount));
-        if (grown != NULL)
+        wchar_t *empty = (grown != NULL) ? (wchar_t *)malloc(sizeof(wchar_t)) : NULL;
+        if (grown != NULL && empty != NULL)
         {
-            wchar_t *empty = (wchar_t *)malloc(sizeof(wchar_t));
+            empty[0] = L'\0';
+            grown[count].value = empty;
+            grown[count].count = blank;
             items = grown;
-            if (empty != NULL)
+            count++;
+        }
+        else
+        {
+            if (grown != NULL)
             {
-                empty[0] = L'\0';
-                items[count].value = empty;
-                items[count].count = blank;
-                count++;
+                items = grown; /* keep the resized buffer; just no blank row */
             }
+            blank = 0;         /* no blank row was added */
         }
     }
 
@@ -5370,6 +5578,7 @@ static void App_ShowReport(AppState *app, int kind)
     rw->column = column;
     rw->items = items;
     rw->count = count;
+    rw->has_blank = (blank > 0);
     rw->sort_col = 0;
     rw->sort_asc = TRUE;
 
@@ -6136,7 +6345,7 @@ static LRESULT CALLBACK ListSubclassProc(HWND hwnd,
         if (app != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
             nm->code == NM_CUSTOMDRAW)
         {
-            return App_HeaderCustomDraw(app, (NMCUSTOMDRAW *)lParam);
+            return App_HeaderCustomDraw(app, (NMCUSTOMDRAW *)lParam, FALSE);
         }
     }
 

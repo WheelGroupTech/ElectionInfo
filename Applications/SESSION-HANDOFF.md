@@ -35,7 +35,18 @@ display:
 
 ## In progress / open questions
 
-**Reports feature (uncommitted — this session).** New "Reports" menu after "Filter"
+**Report styling (uncommitted — this session, `main.c` only).** Report windows now
+match the voter-list look: column headers bold/centered on the grey `brush_header`
+background — done by subclassing the report list (`ReportListSubclass`) and reusing
+`App_HeaderCustomDraw`, which gained a `center_all` flag. Column data: Precinct report
+centers both columns (col 0 via a new `Report_ListCustomDraw` since list views won't
+center column 0; count via `LVCFMT_CENTER`); Address report centers only the count
+column (Address stays left). Added a bottom **status bar** (`ReportWindow.status`,
+`Report_UpdateStatus`) showing "N unique precincts/addresses" — N includes the
+"(blank)" row when present (` (includes blank)`), tracked by `ReportWindow.has_blank`.
+Debug + Release build clean; **GUI not yet click-tested this session** (visual change).
+
+**Reports feature — DONE, committed.** New "Reports" menu after "Filter"
 with "Display Precinct Report…" and "Display Address Report…". Each opens a modeless,
 **unowned** top-level window (so the main list can cover it; reselect brings it to
 front; one of each kind per viewer). Two-column owner-data list view

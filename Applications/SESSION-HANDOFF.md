@@ -4,9 +4,9 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-03
-**Branch:** main — clean, pushed to origin
-**Latest commit:** `207da43 perf(explorer): O(n) duplicate scans + row-mark view + cancelable modal`
+**Last updated:** 2026-09-04
+**Branch:** main — report styling + Code Analysis warning fixes committed;
+two-file **Compare** feature is new, **uncommitted** work in the tree.
 
 ---
 
@@ -35,16 +35,42 @@ display:
 
 ## In progress / open questions
 
-**Report styling (uncommitted — this session, `main.c` only).** Report windows now
-match the voter-list look: column headers bold/centered on the grey `brush_header`
-background — done by subclassing the report list (`ReportListSubclass`) and reusing
-`App_HeaderCustomDraw`, which gained a `center_all` flag. Column data: Precinct report
-centers both columns (col 0 via a new `Report_ListCustomDraw` since list views won't
-center column 0; count via `LVCFMT_CENTER`); Address report centers only the count
-column (Address stays left). Added a bottom **status bar** (`ReportWindow.status`,
-`Report_UpdateStatus`) showing "N unique precincts/addresses" — N includes the
-"(blank)" row when present (` (includes blank)`), tracked by `ReportWindow.has_blank`.
-Debug + Release build clean; **GUI not yet click-tested this session** (visual change).
+**Two-file Compare by Voter ID (uncommitted — this session).** Compare two voter
+lists open in separate viewer windows. Design decisions (confirmed with the user):
+match on **normalized Voter ID** only; a matched voter is **Changed** when its
+Precinct, Name, or Address differs (case-insensitive), else **Identical**; blank-ID
+rows are **Only here**. Presentation is a modeless **Compare Summary** window
+(counts per category × the two files) whose rows drive the existing per-window
+**mark layer** to highlight the matching rows in each grid.
+
+- **Core (GUI-free):** `EeVoterTable_CompareByVoterId` in `voter_table.{c,h}` +
+  new `EeCompareResult` / `EE_CMP_*`. O(nA+nB) two-map hash join reusing
+  `next_pow2_ge_u32`/`hash_cs_utf8`; progress/cancel via the existing
+  `dup_scan_pump` pattern. Unit test `test_compare` (tag `cmp`) in
+  `test/smoke_load.c` — passes.
+- **GUI (`main.c`):** dynamic **Compare** menu (index `k_CompareMenuPos`=4, rebuilt
+  in `WM_INITMENUPOPUP` via `App_BuildCompareMenu`, one "Compare with <file>" item
+  per other viewer, IDs `IDM_COMPARE_WITH_FIRST..LAST`). `App_StartCompare(a,b)`
+  runs sync (<250k rows) or on the reused scan thread behind the progress modal
+  (`CompareThreadProc`/`App_OnCompareFinished`, posts `EEM_CMP_FINISHED`; both
+  windows disabled during the run). `CompareWndProc` (class `k_CompareClassName`,
+  global singleton `g_compare`) shows the summary; double-click a row (B-count
+  column → B, else A) or right-click → "Show these rows in <file>" applies marks.
+- **Mark plumbing:** factored `App_ApplyDuplicateMarks` into
+  `App_ApplyMarks(app,marks,count,kind,sort_col,label)`; added `AppState.mark_label`
+  so the status bar describes any mark view (dup or compare). New mark kinds
+  `EE_SCAN_CMP_ONLY/CHANGED/IDENTICAL` sort compare views by Voter ID.
+- **Teardown:** `App_CloseCompare(app)` closes the summary if it references a
+  viewer that reloads or closes (called next to `App_CloseReports`); compare class
+  buffers freed in the main `WM_DESTROY`.
+
+Verified: all four configs (x64/ARM64 × Debug/Release) build **0 warnings**;
+Code Analysis (`RunCodeAnalysis`) clean; all smoke tests pass. **GUI not yet
+click-tested** — needs manual two-window verification (see Next steps).
+
+Known v1 limitation: during a large (async) compare both windows are disabled and
+re-enabled via `IsWindow` guards; a comparison uses the first row per duplicate ID
+as the representative for the changed-field check.
 
 **Reports feature — DONE, committed.** New "Reports" menu after "Filter"
 with "Display Precinct Report…" and "Display Address Report…". Each opens a modeless,
@@ -110,8 +136,15 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- Future (explicitly deferred this round): multi-file compare between open windows
-  (the mark layer is the intended primitive for it), and a reaper-thread for
+- **Click-test Compare in the GUI:** open two lists in separate windows (e.g.
+  `sample_voters.csv` and an edited copy: change one address, delete a row, add a
+  row), Compare menu → "Compare with <file>", confirm the summary counts, that
+  "Show these rows" highlights the right rows in each grid, that Reset View clears
+  it, that Cancel works on a large county file, and that closing/reloading either
+  file closes the summary. Then it's ready to commit. Plan file:
+  `~/.claude/plans/unified-prancing-nest.md`.
+- Possible follow-ups: a "changed fields" drill-down (which of Precinct/Name/
+  Address differs), selectable match key (Name+DOB), and a reaper-thread for
   responsive deletion of large row sets.
 
 ## Notes for the next session

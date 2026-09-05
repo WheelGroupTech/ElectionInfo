@@ -32,6 +32,7 @@ static const wchar_t k_ProgressClassName[] = L"ElectionExplorerLoadProgress";
 static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
 static const wchar_t k_FilterClassName[] = L"ElectionExplorerFilter";
 static const wchar_t k_ReportClassName[] = L"ElectionExplorerReport";
+static const wchar_t k_CompareClassName[] = L"ElectionExplorerCompare";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -41,12 +42,15 @@ static const uint32_t k_NameUpdateProgressMinRows = 25000;
  * above it we run on a worker thread behind the cancelable progress modal. */
 static const uint32_t k_ScanModalMinRows = 250000;
 
-/* Which duplicate scan produced the current row-mark layer. */
+/* Which scan / compare produced the current row-mark layer. */
 enum
 {
     EE_SCAN_NONE = 0,
     EE_SCAN_DUP_VOTER_IDS = 1,
-    EE_SCAN_DUP_NAME_DOB = 2
+    EE_SCAN_DUP_NAME_DOB = 2,
+    EE_SCAN_CMP_ONLY = 3,     /* rows only in this file (compare) */
+    EE_SCAN_CMP_CHANGED = 4,  /* matched rows whose fields differ */
+    EE_SCAN_CMP_IDENTICAL = 5 /* matched rows identical in both */
 };
 
 /* Report kinds (Precinct / Address summary windows). */
@@ -138,7 +142,16 @@ typedef struct AppState
     uint8_t *mark_rows;
     uint32_t mark_count;
     BOOL mark_active;
-    int mark_kind; /* EE_SCAN_* that produced mark_rows */
+    int mark_kind;            /* EE_SCAN_* that produced mark_rows */
+    wchar_t mark_label[160];  /* status-bar description of the active mark view */
+
+    /* Two-file compare initiated from this viewer (as file A). Reuses the scan
+     * thread / progress modal (scan_thread, scanning, scan_cancel). */
+    struct AppState *cmp_other; /* the other viewer (file B) */
+    uint8_t *cmp_class_a;     /* a->row_count bytes (EE_CMP_*), transient */
+    uint8_t *cmp_class_b;     /* b->row_count bytes (EE_CMP_*), transient */
+    EeCompareResult cmp_result;
+    BOOL cmp_ok;
 
     /* Background duplicate scan (mirrors the load-thread machinery). */
     HANDLE scan_thread;
@@ -158,6 +171,24 @@ typedef struct AppState
 
 static AppState *g_viewers = NULL;
 static int g_viewer_count = 0;
+
+/* Modeless two-file compare summary window (one at a time). Owns the transient
+ * per-row classification arrays and points at both viewers it summarizes. */
+typedef struct CompareWindow
+{
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    AppState *a;         /* initiating viewer (file A) */
+    AppState *b;         /* other viewer (file B) */
+    EeCompareResult result;
+    uint8_t *class_a;    /* a->row_count bytes, owned */
+    uint8_t *class_b;    /* b->row_count bytes, owned */
+    uint32_t rows_a;     /* a->row_count captured at compute time */
+    uint32_t rows_b;
+} CompareWindow;
+
+static CompareWindow *g_compare = NULL;
 static WNDPROC g_old_frozen_proc = NULL;
 static WNDPROC g_old_scroll_proc = NULL;
 static WNDPROC g_old_title_proc = NULL;
@@ -186,7 +217,22 @@ static void App_CloseReports(AppState *app);
 static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_StartDuplicateScan(AppState *app, int kind);
 static void App_OnScanFinished(AppState *app);
+static void App_ApplyMarks(AppState *app,
+                           uint8_t *marks,
+                           uint32_t count,
+                           int kind,
+                           uint32_t sort_col,
+                           const wchar_t *label);
 static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind);
+static void App_StartCompare(AppState *a, AppState *b);
+static void App_OnCompareFinished(AppState *app);
+static void App_CloseCompare(AppState *app);
+static AppState *App_OtherViewerByIndex(const AppState *app, int index);
+static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+/* Position of the "Compare" popup in the menu bar (File, Edit, Filter, Reports,
+ * Compare); rebuilt on demand in WM_INITMENUPOPUP. */
+#define k_CompareMenuPos 4
 static void App_AddQuickFilter(AppState *app,
                                uint32_t column,
                                const wchar_t *value,
@@ -1066,9 +1112,8 @@ static void App_UpdateRowStatus(AppState *app)
     }
     if (app->mark_active)
     {
-        const wchar_t *what = (app->mark_kind == EE_SCAN_DUP_NAME_DOB)
-                                  ? L"duplicate voters (name + DOB)"
-                                  : L"duplicate Voter IDs";
+        const wchar_t *what =
+            (app->mark_label[0] != L'\0') ? app->mark_label : L"marked rows";
         if (EeFilter_HasEnabled(&app->filters))
         {
             StringCchPrintfW(buf,
@@ -1773,6 +1818,7 @@ static void App_StartLoad(AppState *app, const wchar_t *path)
     InterlockedExchange(&app->load_cancel, 0);
     App_ClearMarks(app);   /* prior duplicates view indexed the old table */
     App_CloseReports(app); /* reports summarize the outgoing table */
+    App_CloseCompare(app); /* a compare of the outgoing table is now stale */
     app->loading = TRUE;
     App_SetStatus(app, L"Loading voter list…");
 
@@ -2429,10 +2475,14 @@ static HMENU App_CreateMenu(void)
     HMENU reports_menu = CreatePopupMenu();
     AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_PRECINCT, L"Display &Precinct Report…");
     AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_ADDRESS, L"Display &Address Report…");
+    /* Compare is populated on demand (WM_INITMENUPOPUP) with the other open files.
+     * It MUST stay at index k_CompareMenuPos in the bar. */
+    HMENU compare_menu = CreatePopupMenu();
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
     return menu;
 }
 
@@ -4491,11 +4541,18 @@ static void App_ClearMarks(AppState *app)
     app->mark_count = 0;
     app->mark_active = FALSE;
     app->mark_kind = EE_SCAN_NONE;
+    app->mark_label[0] = L'\0';
 }
 
-/* Takes ownership of @p marks (row_count bytes) and shows it as the active
- * duplicates view, ANDed with any existing filter. */
-static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind)
+/* Takes ownership of @p marks (row_count bytes) and shows it as the active mark
+ * view, ANDed with any existing filter. Groups rows by @p sort_col so related
+ * rows sit together; @p label describes the view in the status bar. */
+static void App_ApplyMarks(AppState *app,
+                           uint8_t *marks,
+                           uint32_t count,
+                           int kind,
+                           uint32_t sort_col,
+                           const wchar_t *label)
 {
     if (app == NULL)
     {
@@ -4507,24 +4564,34 @@ static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t coun
     app->mark_count = count;
     app->mark_active = TRUE;
     app->mark_kind = kind;
+    if (label != NULL)
+    {
+        StringCchCopyW(app->mark_label, ARRAYSIZE(app->mark_label), label);
+    }
     App_ClearSelection(app);
 
-    /* Group the duplicates by their key so shared values sit next to each other:
-     * Voter ID for the ID scan, Name for the name+DOB scan. The sort refreshes
-     * the (mark-intersected) view; fall back to a plain apply if it cannot run. */
+    /* The sort refreshes the (mark-intersected) view; fall back to a plain apply
+     * if it cannot run. */
+    if (sort_col < app->table.column_count && app->table.row_count > 0)
     {
-        uint32_t sort_col = (kind == EE_SCAN_DUP_NAME_DOB) ? EE_COL_NAME : EE_COL_VOTER_ID;
-        if (sort_col < app->table.column_count && app->table.row_count > 0)
-        {
-            HCURSOR prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-            App_SortByTableColumnAscending(app, sort_col);
-            SetCursor(prev);
-        }
-        else
-        {
-            App_ApplyFilter(app);
-        }
+        HCURSOR prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+        App_SortByTableColumnAscending(app, sort_col);
+        SetCursor(prev);
     }
+    else
+    {
+        App_ApplyFilter(app);
+    }
+}
+
+/* Takes ownership of @p marks and shows a duplicates view, keyed for grouping:
+ * Voter ID for the ID scan, Name for the name+DOB scan. */
+static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind)
+{
+    uint32_t sort_col = (kind == EE_SCAN_DUP_NAME_DOB) ? EE_COL_NAME : EE_COL_VOTER_ID;
+    const wchar_t *label = (kind == EE_SCAN_DUP_NAME_DOB) ? L"duplicate voters (name + DOB)"
+                                                          : L"duplicate Voter IDs";
+    App_ApplyMarks(app, marks, count, kind, sort_col, label);
 }
 
 /* Synchronous path for smaller tables (the O(n) scan is sub-100 ms there). */
@@ -5643,6 +5710,726 @@ static void App_CloseReports(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Two-file compare (by Voter ID)                                             */
+/* -------------------------------------------------------------------------- */
+
+/* The @p index-th other viewer (skipping @p app), or NULL. Matches the order
+ * used to build the dynamic Compare menu. */
+static AppState *App_OtherViewerByIndex(const AppState *app, int index)
+{
+    AppState *p;
+    int i = 0;
+    for (p = g_viewers; p != NULL; p = p->next)
+    {
+        if (p == app)
+        {
+            continue;
+        }
+        if (i == index)
+        {
+            return p;
+        }
+        i++;
+    }
+    return NULL;
+}
+
+/* Rebuild the Compare popup with one item per other open voter list. */
+static void App_BuildCompareMenu(AppState *app, HMENU popup)
+{
+    AppState *p;
+    int idx = 0;
+
+    while (GetMenuItemCount(popup) > 0)
+    {
+        RemoveMenu(popup, 0, MF_BYPOSITION);
+    }
+    for (p = g_viewers; p != NULL; p = p->next)
+    {
+        wchar_t label[MAX_PATH + 32];
+        const wchar_t *base;
+        if (p == app)
+        {
+            continue;
+        }
+        if (IDM_COMPARE_WITH_FIRST + idx > IDM_COMPARE_WITH_LAST)
+        {
+            break;
+        }
+        base = App_PathBaseName(p->load_path);
+        if (base[0] == L'\0')
+        {
+            base = L"(voter list)";
+        }
+        StringCchPrintfW(label, ARRAYSIZE(label), L"Compare with %s", base);
+        AppendMenuW(popup,
+                    (p->table.row_count > 0) ? MF_STRING : (MF_STRING | MF_GRAYED),
+                    (UINT_PTR)(IDM_COMPARE_WITH_FIRST + idx),
+                    label);
+        idx++;
+    }
+    if (idx == 0)
+    {
+        AppendMenuW(popup,
+                    MF_STRING | MF_GRAYED,
+                    (UINT_PTR)IDM_COMPARE_WITH_FIRST,
+                    L"(open another voter list to compare)");
+    }
+}
+
+/* Description shown in a viewer's status bar for a compare mark view. */
+static void App_CompareLabel(int kind, const wchar_t *other_base, wchar_t *out, size_t cch)
+{
+    const wchar_t *what = (kind == EE_SCAN_CMP_CHANGED)     ? L"changed voters vs"
+                          : (kind == EE_SCAN_CMP_IDENTICAL) ? L"identical voters vs"
+                                                            : L"voters only here vs";
+    StringCchPrintfW(out, cch, L"%s %s", what, other_base);
+}
+
+/* Build a fresh mark buffer from @p cls (== @p category) and show it in @p app. */
+static void App_ShowCompareCategory(AppState *app,
+                                    const uint8_t *cls,
+                                    uint32_t rows,
+                                    uint8_t category,
+                                    int kind,
+                                    const wchar_t *other_base)
+{
+    uint8_t *marks;
+    uint32_t i;
+    uint32_t count = 0;
+    wchar_t label[160];
+
+    if (app == NULL || app->hwnd_main == NULL || cls == NULL)
+    {
+        return;
+    }
+    if (rows != app->table.row_count || rows == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"The file changed since the comparison was run. Run Compare again.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    marks = (uint8_t *)calloc((size_t)rows, sizeof(uint8_t));
+    if (marks == NULL)
+    {
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    for (i = 0; i < rows; i++)
+    {
+        if (cls[i] == category)
+        {
+            marks[i] = 1;
+            count++;
+        }
+    }
+    if (count == 0)
+    {
+        free(marks);
+        MessageBoxW(app->hwnd_main,
+                    L"No rows in that category.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    App_CompareLabel(kind, other_base, label, ARRAYSIZE(label));
+    App_ApplyMarks(app, marks, count, kind, EE_COL_VOTER_ID, label);
+    App_ActivateViewer(app);
+}
+
+/* Create (replacing any prior) the modeless Compare Summary window. Takes
+ * ownership of @p class_a / @p class_b. */
+static void App_ShowCompareWindow(AppState *a,
+                                  AppState *b,
+                                  const EeCompareResult *result,
+                                  uint8_t *class_a,
+                                  uint8_t *class_b,
+                                  uint32_t rows_a,
+                                  uint32_t rows_b)
+{
+    CompareWindow *cw;
+    wchar_t title[MAX_PATH * 2];
+    const wchar_t *base_a;
+    const wchar_t *base_b;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int w;
+    int h;
+
+    if (g_compare != NULL)
+    {
+        DestroyWindow(g_compare->hwnd); /* WM_DESTROY frees it and clears g_compare */
+    }
+
+    cw = (CompareWindow *)calloc(1, sizeof(CompareWindow));
+    if (cw == NULL)
+    {
+        free(class_a);
+        free(class_b);
+        return;
+    }
+    cw->a = a;
+    cw->b = b;
+    cw->result = *result;
+    cw->class_a = class_a;
+    cw->class_b = class_b;
+    cw->rows_a = rows_a;
+    cw->rows_b = rows_b;
+
+    base_a = App_PathBaseName(a->load_path);
+    base_b = App_PathBaseName(b->load_path);
+    if (base_a[0] == L'\0')
+    {
+        base_a = L"(A)";
+    }
+    if (base_b[0] == L'\0')
+    {
+        base_b = L"(B)";
+    }
+    StringCchPrintfW(title, ARRAYSIZE(title), L"Compare - %s vs %s", base_a, base_b);
+
+    if (GetWindowRect(a->hwnd_main, &pr))
+    {
+        x = pr.left + Scale(a, 60);
+        y = pr.top + Scale(a, 60);
+    }
+    w = Scale(a, 460);
+    h = Scale(a, 260);
+
+    cw->hwnd = CreateWindowExW(0,
+                               k_CompareClassName,
+                               title,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                               x,
+                               y,
+                               w,
+                               h,
+                               NULL,
+                               NULL,
+                               a->instance,
+                               cw);
+    if (cw->hwnd == NULL)
+    {
+        free(class_a);
+        free(class_b);
+        free(cw);
+        return;
+    }
+    g_compare = cw;
+    ShowWindow(cw->hwnd, SW_SHOW);
+    SetForegroundWindow(cw->hwnd);
+}
+
+/* Run the compare and present it. Takes both class buffers by ownership on the
+ * synchronous path; the async path stores them on @p a first. */
+static void App_RunCompareSync(AppState *a, AppState *b)
+{
+    uint8_t *class_a;
+    uint8_t *class_b;
+    EeCompareResult r;
+    HCURSOR prev;
+    BOOL ok;
+
+    class_a = (uint8_t *)calloc((size_t)a->table.row_count, sizeof(uint8_t));
+    class_b = (uint8_t *)calloc((size_t)b->table.row_count, sizeof(uint8_t));
+    if (class_a == NULL || class_b == NULL)
+    {
+        free(class_a);
+        free(class_b);
+        MessageBoxW(a->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    ok = EeVoterTable_CompareByVoterId(&a->table, &b->table, class_a, class_b, &r, NULL, NULL, NULL);
+    SetCursor(prev);
+    if (!ok)
+    {
+        free(class_a);
+        free(class_b);
+        MessageBoxW(a->hwnd_main,
+                    L"Could not compare the two voter lists.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    App_ShowCompareWindow(a, b, &r, class_a, class_b, a->table.row_count, b->table.row_count);
+}
+
+static DWORD WINAPI CompareThreadProc(void *param)
+{
+    AppState *app = (AppState *)param; /* file A */
+    AppState *b = app->cmp_other;
+    EeCompareResult r;
+
+    app->cmp_ok = EeVoterTable_CompareByVoterId(&app->table,
+                                                &b->table,
+                                                app->cmp_class_a,
+                                                app->cmp_class_b,
+                                                &r,
+                                                &app->scan_cancel,
+                                                ScanProgressThunk,
+                                                app);
+    app->cmp_result = r;
+    PostMessageW(app->hwnd_main, EEM_CMP_FINISHED, 0, 0);
+    return 0;
+}
+
+static void App_StartCompareThread(AppState *a, AppState *b)
+{
+    a->cmp_other = b;
+    a->cmp_class_a = (uint8_t *)calloc((size_t)a->table.row_count, sizeof(uint8_t));
+    a->cmp_class_b = (uint8_t *)calloc((size_t)b->table.row_count, sizeof(uint8_t));
+    if (a->cmp_class_a == NULL || a->cmp_class_b == NULL)
+    {
+        free(a->cmp_class_a);
+        free(a->cmp_class_b);
+        a->cmp_class_a = NULL;
+        a->cmp_class_b = NULL;
+        MessageBoxW(a->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    a->cmp_ok = FALSE;
+    a->scan_kind = EE_SCAN_NONE;
+    InterlockedExchange(&a->scan_cancel, 0);
+    a->scanning = TRUE;
+
+    if (!App_ShowProgress(a))
+    {
+        a->scanning = FALSE;
+        free(a->cmp_class_a);
+        free(a->cmp_class_b);
+        a->cmp_class_a = NULL;
+        a->cmp_class_b = NULL;
+        MessageBoxW(a->hwnd_main,
+                    L"Could not create the progress window.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetWindowTextW(a->hwnd_progress, L"Comparing voter lists");
+    if (a->hwnd_progress_status)
+    {
+        SetWindowTextW(a->hwnd_progress_status, L"Matching by Voter ID…");
+    }
+
+    EnableWindow(a->hwnd_main, FALSE);
+    if (b->hwnd_main != NULL)
+    {
+        EnableWindow(b->hwnd_main, FALSE);
+    }
+
+    a->scan_thread = CreateThread(NULL, 0, CompareThreadProc, a, 0, NULL);
+    if (a->scan_thread == NULL)
+    {
+        a->scanning = FALSE;
+        EnableWindow(a->hwnd_main, TRUE);
+        if (b->hwnd_main != NULL)
+        {
+            EnableWindow(b->hwnd_main, TRUE);
+        }
+        App_DestroyProgress(a);
+        free(a->cmp_class_a);
+        free(a->cmp_class_b);
+        a->cmp_class_a = NULL;
+        a->cmp_class_b = NULL;
+        MessageBoxW(a->hwnd_main,
+                    L"Could not start the compare thread.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+    }
+}
+
+static void App_OnCompareFinished(AppState *app)
+{
+    AppState *b = app->cmp_other;
+    BOOL cancelled;
+
+    if (app->scan_thread != NULL)
+    {
+        WaitForSingleObject(app->scan_thread, INFINITE);
+        CloseHandle(app->scan_thread);
+        app->scan_thread = NULL;
+    }
+    app->scanning = FALSE;
+    cancelled = (InterlockedCompareExchange(&app->scan_cancel, 0, 0) != 0);
+
+    EnableWindow(app->hwnd_main, TRUE);
+    if (b != NULL && b->hwnd_main != NULL && IsWindow(b->hwnd_main))
+    {
+        EnableWindow(b->hwnd_main, TRUE);
+    }
+    App_DestroyProgress(app);
+    SetForegroundWindow(app->hwnd_main);
+
+    if (app->close_pending)
+    {
+        free(app->cmp_class_a);
+        free(app->cmp_class_b);
+        app->cmp_class_a = NULL;
+        app->cmp_class_b = NULL;
+        DestroyWindow(app->hwnd_main);
+        return;
+    }
+    if (!app->cmp_ok || cancelled)
+    {
+        free(app->cmp_class_a);
+        free(app->cmp_class_b);
+        app->cmp_class_a = NULL;
+        app->cmp_class_b = NULL;
+        App_SetStatus(app, cancelled ? L"Compare cancelled." : L"Compare failed.");
+        if (!cancelled)
+        {
+            MessageBoxW(app->hwnd_main,
+                        L"Could not compare the two voter lists.",
+                        k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+        }
+        return;
+    }
+
+    {
+        uint8_t *class_a = app->cmp_class_a;
+        uint8_t *class_b = app->cmp_class_b;
+        uint32_t rows_a = app->table.row_count;
+        uint32_t rows_b = (b != NULL) ? b->table.row_count : 0;
+        app->cmp_class_a = NULL; /* ownership passes to the compare window */
+        app->cmp_class_b = NULL;
+        App_ShowCompareWindow(app, b, &app->cmp_result, class_a, class_b, rows_a, rows_b);
+    }
+}
+
+/* Entry point: validate, then run the compare (sync for small tables). */
+static void App_StartCompare(AppState *a, AppState *b)
+{
+    if (a == NULL || b == NULL || a == b)
+    {
+        return;
+    }
+    if (a->loading || a->scanning || b->loading || b->scanning)
+    {
+        MessageBoxW(a->hwnd_main,
+                    L"Finish loading or scanning both files before comparing.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    if (a->table.row_count == 0 || b->table.row_count == 0)
+    {
+        MessageBoxW(a->hwnd_main,
+                    L"Both windows must have a voter list loaded to compare.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    if (a->table.row_count >= k_ScanModalMinRows || b->table.row_count >= k_ScanModalMinRows)
+    {
+        App_StartCompareThread(a, b);
+    }
+    else
+    {
+        App_RunCompareSync(a, b);
+    }
+}
+
+/* Close the compare window if it summarizes @p app (as either side). */
+static void App_CloseCompare(AppState *app)
+{
+    if (g_compare != NULL && (g_compare->a == app || g_compare->b == app))
+    {
+        DestroyWindow(g_compare->hwnd);
+    }
+}
+
+/* Populate the 3x2 summary list and size the window to fit. */
+static void Compare_Populate(CompareWindow *cw)
+{
+    static const wchar_t *rows[3] = {L"Only here", L"Changed", L"Identical"};
+    const uint32_t a_counts[3] = {cw->result.only_a, cw->result.changed_a, cw->result.identical_a};
+    const uint32_t b_counts[3] = {cw->result.only_b, cw->result.changed_b, cw->result.identical_b};
+    int i;
+
+    for (i = 0; i < 3; i++)
+    {
+        LVITEMW it;
+        wchar_t num[32];
+        ZeroMemory(&it, sizeof(it));
+        it.mask = LVIF_TEXT;
+        it.iItem = i;
+        it.iSubItem = 0;
+        it.pszText = (wchar_t *)rows[i];
+        ListView_InsertItem(cw->list, &it);
+        StringCchPrintfW(num, ARRAYSIZE(num), L"%u", a_counts[i]);
+        ListView_SetItemText(cw->list, i, 1, num);
+        StringCchPrintfW(num, ARRAYSIZE(num), L"%u", b_counts[i]);
+        ListView_SetItemText(cw->list, i, 2, num);
+    }
+}
+
+static void Compare_Layout(CompareWindow *cw, int cx, int cy)
+{
+    int sh = 0;
+    RECT rs;
+    if (cw->status != NULL)
+    {
+        SendMessageW(cw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(cw->status, &rs))
+        {
+            sh = rs.bottom - rs.top;
+        }
+    }
+    if (cw->list != NULL)
+    {
+        MoveWindow(cw->list, 0, 0, cx, (cy > sh) ? (cy - sh) : 0, TRUE);
+    }
+}
+
+/* Apply the row the user acted on to viewer @p to_b ? B : A. */
+static void Compare_ShowRow(CompareWindow *cw, int row, BOOL to_b)
+{
+    static const uint8_t cats[3] = {EE_CMP_ONLY_HERE, EE_CMP_CHANGED, EE_CMP_IDENTICAL};
+    static const int kinds[3] = {EE_SCAN_CMP_ONLY, EE_SCAN_CMP_CHANGED, EE_SCAN_CMP_IDENTICAL};
+    const wchar_t *base_other;
+
+    if (cw == NULL || row < 0 || row > 2)
+    {
+        return;
+    }
+    if (to_b)
+    {
+        base_other = App_PathBaseName(cw->a->load_path);
+        if (base_other[0] == L'\0')
+        {
+            base_other = L"other file";
+        }
+        App_ShowCompareCategory(cw->b, cw->class_b, cw->rows_b, cats[row], kinds[row], base_other);
+    }
+    else
+    {
+        base_other = App_PathBaseName(cw->b->load_path);
+        if (base_other[0] == L'\0')
+        {
+            base_other = L"other file";
+        }
+        App_ShowCompareCategory(cw->a, cw->class_a, cw->rows_a, cats[row], kinds[row], base_other);
+    }
+}
+
+static void Compare_OnContextMenu(CompareWindow *cw, int row, POINT screen)
+{
+    HMENU menu;
+    const wchar_t *base_a;
+    const wchar_t *base_b;
+    wchar_t item_a[MAX_PATH + 32];
+    wchar_t item_b[MAX_PATH + 32];
+    int cmd;
+
+    if (cw == NULL || row < 0 || row > 2)
+    {
+        return;
+    }
+    base_a = App_PathBaseName(cw->a->load_path);
+    base_b = App_PathBaseName(cw->b->load_path);
+    if (base_a[0] == L'\0')
+    {
+        base_a = L"file A";
+    }
+    if (base_b[0] == L'\0')
+    {
+        base_b = L"file B";
+    }
+    StringCchPrintfW(item_a, ARRAYSIZE(item_a), L"Show these rows in %s", base_a);
+    StringCchPrintfW(item_b, ARRAYSIZE(item_b), L"Show these rows in %s", base_b);
+
+    menu = CreatePopupMenu();
+    if (menu == NULL)
+    {
+        return;
+    }
+    AppendMenuW(menu, MF_STRING, IDM_COMPARE_SHOW_A, item_a);
+    AppendMenuW(menu, MF_STRING, IDM_COMPARE_SHOW_B, item_b);
+    cmd = (int)TrackPopupMenu(menu,
+                              TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                              screen.x,
+                              screen.y,
+                              0,
+                              cw->hwnd,
+                              NULL);
+    DestroyMenu(menu);
+    if (cmd == IDM_COMPARE_SHOW_A)
+    {
+        Compare_ShowRow(cw, row, FALSE);
+    }
+    else if (cmd == IDM_COMPARE_SHOW_B)
+    {
+        Compare_ShowRow(cw, row, TRUE);
+    }
+}
+
+static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CompareWindow *cw = (CompareWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            LVCOLUMNW col;
+            RECT rc;
+            const wchar_t *base_a;
+            const wchar_t *base_b;
+            wchar_t hdr_a[MAX_PATH];
+            wchar_t hdr_b[MAX_PATH];
+
+            cw = (CompareWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cw);
+            cw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            cw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL |
+                                           LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       cw->a->instance,
+                                       NULL);
+            if (cw->list == NULL)
+            {
+                return -1;
+            }
+            ListView_SetExtendedListViewStyle(cw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (cw->a->font_ui)
+            {
+                SendMessageW(cw->list, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
+            }
+            base_a = App_PathBaseName(cw->a->load_path);
+            base_b = App_PathBaseName(cw->b->load_path);
+            if (base_a[0] == L'\0')
+            {
+                base_a = L"file A";
+            }
+            if (base_b[0] == L'\0')
+            {
+                base_b = L"file B";
+            }
+            StringCchCopyW(hdr_a, ARRAYSIZE(hdr_a), base_a);
+            StringCchCopyW(hdr_b, ARRAYSIZE(hdr_b), base_b);
+
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = LVCFMT_LEFT;
+            col.pszText = L"Category";
+            col.cx = Scale(cw->a, 130);
+            ListView_InsertColumn(cw->list, 0, &col);
+            col.fmt = LVCFMT_RIGHT;
+            col.pszText = hdr_a;
+            col.cx = Scale(cw->a, 150);
+            ListView_InsertColumn(cw->list, 1, &col);
+            col.pszText = hdr_b;
+            col.cx = Scale(cw->a, 150);
+            ListView_InsertColumn(cw->list, 2, &col);
+
+            cw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         cw->a->instance,
+                                         NULL);
+            if (cw->status != NULL)
+            {
+                if (cw->a->font_ui)
+                {
+                    SendMessageW(cw->status, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
+                }
+                SendMessageW(cw->status,
+                             SB_SETTEXTW,
+                             0,
+                             (LPARAM)L"Matched by Voter ID. Right-click a row to show it in a file.");
+            }
+
+            Compare_Populate(cw);
+            Compare_Layout(cw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (cw != NULL)
+            {
+                Compare_Layout(cw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (cw != NULL && cw->list != NULL)
+            {
+                SetFocus(cw->list);
+            }
+            return 0;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (cw == NULL || hdr->hwndFrom != cw->list)
+            {
+                break;
+            }
+            if (hdr->code == NM_DBLCLK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                /* Double-click the B-count column shows in B, else in A. */
+                Compare_ShowRow(cw, ia->iItem, ia->iSubItem == 2);
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(cw->list, &screen);
+                Compare_OnContextMenu(cw, ia->iItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_DESTROY:
+            if (cw != NULL)
+            {
+                if (g_compare == cw)
+                {
+                    g_compare = NULL;
+                }
+                free(cw->class_a);
+                free(cw->class_b);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                free(cw);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Window procedure                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -6033,6 +6820,13 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 IDM_REPORT_ADDRESS,
                 MF_BYCOMMAND |
                     ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            {
+                HMENU bar = GetMenu(hwnd);
+                if (bar != NULL && (HMENU)wParam == GetSubMenu(bar, k_CompareMenuPos))
+                {
+                    App_BuildCompareMenu(app, (HMENU)wParam);
+                }
+            }
             return 0;
 
         case WM_COMMAND:
@@ -6088,6 +6882,14 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     App_ShowReport(app, EE_REPORT_ADDRESS);
                     return 0;
                 default:
+                    if (LOWORD(wParam) >= IDM_COMPARE_WITH_FIRST &&
+                        LOWORD(wParam) <= IDM_COMPARE_WITH_LAST)
+                    {
+                        AppState *other =
+                            App_OtherViewerByIndex(app, LOWORD(wParam) - IDM_COMPARE_WITH_FIRST);
+                        App_StartCompare(app, other);
+                        return 0;
+                    }
                     break;
             }
             break;
@@ -6154,6 +6956,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             App_OnScanFinished(app);
             return 0;
 
+        case EEM_CMP_FINISHED:
+            App_OnCompareFinished(app);
+            return 0;
+
         case EEM_SYNC_PANE_SCROLLUI:
             App_SyncPaneScrollChrome(app);
             return 0;
@@ -6191,6 +6997,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         case WM_DESTROY:
             App_CloseReports(app);
+            App_CloseCompare(app);
             App_DestroyOptions(app);
             App_DestroyProgress(app);
             App_DestroyFilter(app);
@@ -6203,6 +7010,10 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
             free(app->scan_marks);
             app->scan_marks = NULL;
+            free(app->cmp_class_a);
+            free(app->cmp_class_b);
+            app->cmp_class_a = NULL;
+            app->cmp_class_b = NULL;
             App_ClearMarks(app);
             EeFilter_Clear(&app->filters);
             free(app->filter_map);
@@ -6588,6 +7399,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         rc2.hIcon = wc.hIcon;
         rc2.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&rc2) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW cc;
+        ZeroMemory(&cc, sizeof(cc));
+        cc.cbSize = sizeof(cc);
+        cc.lpfnWndProc = CompareWndProc;
+        cc.hInstance = hInstance;
+        cc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        cc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        cc.lpszClassName = k_CompareClassName;
+        cc.hIcon = wc.hIcon;
+        cc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&cc) == 0)
         {
             return 1;
         }

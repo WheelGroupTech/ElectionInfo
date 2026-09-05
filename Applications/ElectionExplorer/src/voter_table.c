@@ -1372,6 +1372,236 @@ BOOL EeVoterTable_CollectDuplicateVotersByNameDob(const EeVoterTable *table,
 }
 
 /* -------------------------------------------------------------------------- */
+/* Two-file compare (by Voter ID)                                             */
+/* -------------------------------------------------------------------------- */
+
+/* Open-addressing map Voter ID -> first physical row carrying it. Blank IDs are
+ * skipped. Returns cap slots (UINT32_MAX = empty), or NULL on overflow / OOM. */
+static uint32_t *build_vid_map(const EeVoterTable *t, uint32_t *out_cap, uint32_t *out_mask)
+{
+    uint32_t *slots;
+    uint32_t cap;
+    uint32_t mask;
+    uint32_t i;
+    size_t bytes;
+
+    if (t->row_count > (UINT32_MAX / 2u))
+    {
+        return NULL;
+    }
+    cap = next_pow2_ge_u32(t->row_count * 2u);
+    if (cap == 0)
+    {
+        return NULL;
+    }
+    if (FAILED(SizeTMult((size_t)cap, sizeof(uint32_t), &bytes)))
+    {
+        return NULL;
+    }
+    (void)bytes;
+    slots = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    if (slots == NULL)
+    {
+        return NULL;
+    }
+    for (i = 0; i < cap; i++)
+    {
+        slots[i] = UINT32_MAX;
+    }
+    mask = cap - 1u;
+    for (i = 0; i < t->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(t, i, EE_COL_VOTER_ID);
+        uint32_t b;
+        if (vid == NULL || vid[0] == '\0')
+        {
+            continue;
+        }
+        b = hash_cs_utf8(vid) & mask;
+        for (;;)
+        {
+            uint32_t rep = slots[b];
+            if (rep == UINT32_MAX)
+            {
+                slots[b] = i;
+                break;
+            }
+            if (strcmp(vid, EeVoterTable_GetCellUtf8(t, rep, EE_COL_VOTER_ID)) == 0)
+            {
+                break; /* keep the first row seen for this ID */
+            }
+            b = (b + 1u) & mask;
+        }
+    }
+    *out_cap = cap;
+    *out_mask = mask;
+    return slots;
+}
+
+/* Physical row in @p owner holding @p vid, or UINT32_MAX if absent. */
+static uint32_t vid_map_find(const uint32_t *slots,
+                             uint32_t mask,
+                             const EeVoterTable *owner,
+                             const char *vid)
+{
+    uint32_t b = hash_cs_utf8(vid) & mask;
+    for (;;)
+    {
+        uint32_t rep = slots[b];
+        if (rep == UINT32_MAX)
+        {
+            return UINT32_MAX;
+        }
+        if (strcmp(vid, EeVoterTable_GetCellUtf8(owner, rep, EE_COL_VOTER_ID)) == 0)
+        {
+            return rep;
+        }
+        b = (b + 1u) & mask;
+    }
+}
+
+/* TRUE when Precinct, Name, and Address match (case-insensitive) across tables. */
+static BOOL cmp_fields_equal(const EeVoterTable *a,
+                             uint32_t ra,
+                             const EeVoterTable *b,
+                             uint32_t rb)
+{
+    static const uint32_t cols[3] = {EE_COL_PRECINCT, EE_COL_NAME, EE_COL_ADDRESS};
+    int k;
+    for (k = 0; k < 3; k++)
+    {
+        const char *va = EeVoterTable_GetCellUtf8(a, ra, cols[k]);
+        const char *vb = EeVoterTable_GetCellUtf8(b, rb, cols[k]);
+        if (_stricmp(va, vb) != 0)
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
+                                   const EeVoterTable *b,
+                                   uint8_t *class_a,
+                                   uint8_t *class_b,
+                                   EeCompareResult *out,
+                                   volatile LONG *cancel_flag,
+                                   EeLoadProgressFn progress_fn,
+                                   void *progress_user)
+{
+    uint32_t *map_a = NULL;
+    uint32_t *map_b = NULL;
+    uint32_t cap_a, mask_a, cap_b, mask_b;
+    uint32_t i;
+    uint32_t total;
+    EeCompareResult r;
+
+    if (out != NULL)
+    {
+        memset(out, 0, sizeof(*out));
+    }
+    if (a == NULL || b == NULL || class_a == NULL || class_b == NULL || out == NULL)
+    {
+        return FALSE;
+    }
+    memset(&r, 0, sizeof(r));
+
+    map_a = build_vid_map(a, &cap_a, &mask_a);
+    map_b = build_vid_map(b, &cap_b, &mask_b);
+    if (map_a == NULL || map_b == NULL)
+    {
+        free(map_a);
+        free(map_b);
+        return FALSE;
+    }
+    (void)cap_a;
+    (void)cap_b;
+
+    /* Each row_count is <= UINT32_MAX/2 (checked in build_vid_map), so the sum
+     * used only for progress cannot overflow. */
+    total = a->row_count + b->row_count;
+
+    for (i = 0; i < a->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
+        if (vid == NULL || vid[0] == '\0')
+        {
+            class_a[i] = EE_CMP_ONLY_HERE;
+            r.only_a++;
+        }
+        else
+        {
+            uint32_t rb = vid_map_find(map_b, mask_b, b, vid);
+            if (rb == UINT32_MAX)
+            {
+                class_a[i] = EE_CMP_ONLY_HERE;
+                r.only_a++;
+            }
+            else if (cmp_fields_equal(a, i, b, rb))
+            {
+                class_a[i] = EE_CMP_IDENTICAL;
+                r.identical_a++;
+            }
+            else
+            {
+                class_a[i] = EE_CMP_CHANGED;
+                r.changed_a++;
+            }
+        }
+        if ((i & 0xffffu) == 0xffffu &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, total))
+        {
+            free(map_a);
+            free(map_b);
+            *out = r;
+            return TRUE;
+        }
+    }
+
+    for (i = 0; i < b->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(b, i, EE_COL_VOTER_ID);
+        if (vid == NULL || vid[0] == '\0')
+        {
+            class_b[i] = EE_CMP_ONLY_HERE;
+            r.only_b++;
+        }
+        else
+        {
+            uint32_t ra = vid_map_find(map_a, mask_a, a, vid);
+            if (ra == UINT32_MAX)
+            {
+                class_b[i] = EE_CMP_ONLY_HERE;
+                r.only_b++;
+            }
+            else if (cmp_fields_equal(b, i, a, ra))
+            {
+                class_b[i] = EE_CMP_IDENTICAL;
+                r.identical_b++;
+            }
+            else
+            {
+                class_b[i] = EE_CMP_CHANGED;
+                r.changed_b++;
+            }
+        }
+        if ((i & 0xffffu) == 0xffffu &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, a->row_count + i + 1, total))
+        {
+            free(map_a);
+            free(map_b);
+            *out = r;
+            return TRUE;
+        }
+    }
+
+    free(map_a);
+    free(map_b);
+    *out = r;
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Value counts (reports)                                                     */
 /* -------------------------------------------------------------------------- */
 

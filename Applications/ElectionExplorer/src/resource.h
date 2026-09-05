@@ -19,6 +19,11 @@
 #define IDM_FILTER_RESET_VIEW     40028
 #define IDM_REPORT_PRECINCT       40029
 #define IDM_REPORT_ADDRESS        40030
+#define IDM_COMPARE_SHOW_A        40032
+#define IDM_COMPARE_SHOW_B        40033
+/* Dynamic "Compare with <file>" items: one per other open viewer. */
+#define IDM_COMPARE_WITH_FIRST    40040
+#define IDM_COMPARE_WITH_LAST     40071
 #define IDM_FILTER_INCLUDE        40022
 #define IDM_FILTER_EXCLUDE        40023
 #define IDM_SHOW_IN_MAPS          40024
@@ -56,3 +61,4 @@
 #define EEM_SYNC_SELECTION     (WM_APP + 4)
 #define EEM_SCAN_PROGRESS      (WM_APP + 5)
 #define EEM_SCAN_FINISHED      (WM_APP + 6)
+#define EEM_CMP_FINISHED       (WM_APP + 7)

@@ -251,6 +251,54 @@ extern "C"
     /** @brief Free an array returned by EeVoterTable_CollectValueCounts. */
     void EeVoterTable_FreeValueCounts(EeValueCount *items, uint32_t count);
 
+    /* -------------------------------------------------------------------------- */
+    /* Two-file compare (by Voter ID)                                             */
+    /* -------------------------------------------------------------------------- */
+
+    /** Per physical row classification produced by EeVoterTable_CompareByVoterId. */
+    enum
+    {
+        EE_CMP_NONE = 0,      /* untouched */
+        EE_CMP_ONLY_HERE = 1, /* Voter ID absent from the other file (incl. blank ID) */
+        EE_CMP_CHANGED = 2,   /* ID present in both, a normalized field differs */
+        EE_CMP_IDENTICAL = 3  /* ID present in both, Precinct/Name/Address all equal */
+    };
+
+    /** Row-count tallies from a compare (A = first table, B = second). */
+    typedef struct EeCompareResult
+    {
+        uint32_t only_a, changed_a, identical_a;
+        uint32_t only_b, changed_b, identical_b;
+    } EeCompareResult;
+
+    /**
+     * @brief Classify every row of two tables by matching normalized Voter ID.
+     *
+     * Rows with a blank Voter ID are "only here" (unmatchable). Among matched IDs,
+     * a row is "changed" when its Precinct, Name, or Address differs
+     * (case-insensitive) from the other file's first row carrying that ID, else
+     * "identical". O(rows_a + rows_b) open-addressing hash join.
+     *
+     * @param class_a  Receives one EE_CMP_* byte per physical row of @p a
+     *                 (must hold @p a->row_count bytes). Every row is written.
+     * @param class_b  Same for @p b (@p b->row_count bytes).
+     * @param out      Receives the per-side counts.
+     * @param cancel_flag   Optional; non-zero requests cancel (checked periodically).
+     * @param progress_fn   Optional; invoked on the calling thread. Return FALSE to cancel.
+     * @param progress_user Passed to @p progress_fn.
+     *
+     * @return FALSE on invalid arguments or out of memory. On cancel it returns
+     *         TRUE with partial classifications; distinguish via @p cancel_flag.
+     */
+    BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
+                                       const EeVoterTable *b,
+                                       uint8_t *class_a,
+                                       uint8_t *class_b,
+                                       EeCompareResult *out,
+                                       volatile LONG *cancel_flag,
+                                       EeLoadProgressFn progress_fn,
+                                       void *progress_user);
+
     /**
  * @brief Sort by display column; toggles direction if same column.
  */

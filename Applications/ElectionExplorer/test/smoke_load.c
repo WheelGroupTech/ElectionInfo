@@ -1972,6 +1972,143 @@ done:
     return rc;
 }
 
+/* Write @p contents to a temp file named @p leaf; load it into @p t.
+ * Returns TRUE on success (caller clears @p t and deletes nothing else). */
+static BOOL cmp_write_and_load(const wchar_t *leaf, const char *contents, EeVoterTable *t)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    FILE *fp = NULL;
+    DWORD n;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) || FAILED(StringCchCatW(path, ARRAYSIZE(path), leaf)))
+    {
+        return FALSE;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        return FALSE;
+    }
+    fputs(contents, fp);
+    fclose(fp);
+
+    EeVoterTable_Init(t);
+    err[0] = L'\0';
+    if (EeVoterTable_LoadFromFile(path, t, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        DeleteFileW(path);
+        wprintf(L"cmp: load failed %s\n", err);
+        return FALSE;
+    }
+    DeleteFileW(path);
+    return TRUE;
+}
+
+static int test_compare(void)
+{
+    EeVoterTable a;
+    EeVoterTable b;
+    uint8_t *class_a = NULL;
+    uint8_t *class_b = NULL;
+    EeCompareResult r;
+    int rc = 1;
+    BOOL a_ok = FALSE;
+    BOOL b_ok = FALSE;
+
+    /* Header maps to Voter ID / Precinct / Name / Address. Matched rows keep the
+     * same name+precinct; only row 2's address differs (Changed). */
+    a_ok = cmp_write_and_load(L"ee_cmp_a.csv",
+                              "VUID,PCTCOD,NAME,Residential Address\n"
+                              "1,101,Smith John,100 Main St\n"     /* identical */
+                              "2,101,Jones Jane,200 Oak Ave\n"     /* changed (addr) */
+                              "3,102,Lee Ann,300 Pine Rd\n"        /* only in A */
+                              ",103,Blank Voter,400 Elm St\n",     /* blank ID -> only in A */
+                              &a);
+    b_ok = cmp_write_and_load(L"ee_cmp_b.csv",
+                              "VUID,PCTCOD,NAME,Residential Address\n"
+                              "1,101,Smith John,100 Main St\n"     /* identical */
+                              "2,101,Jones Jane,999 New Blvd\n"    /* changed (addr) */
+                              "4,102,New Voter,500 Cedar Ln\n"     /* only in B */
+                              ",104,Other Blank,600 Birch St\n",   /* blank ID -> only in B */
+                              &b);
+    if (!a_ok || !b_ok)
+    {
+        goto done;
+    }
+    if (a.row_count != 4 || b.row_count != 4)
+    {
+        wprintf(L"cmp: expected 4 rows each, got %u / %u\n", a.row_count, b.row_count);
+        goto done;
+    }
+
+    class_a = (uint8_t *)calloc(a.row_count, 1);
+    class_b = (uint8_t *)calloc(b.row_count, 1);
+    if (class_a == NULL || class_b == NULL)
+    {
+        wprintf(L"cmp: out of memory\n");
+        goto done;
+    }
+    if (!EeVoterTable_CompareByVoterId(&a, &b, class_a, class_b, &r, NULL, NULL, NULL))
+    {
+        wprintf(L"cmp: compare failed\n");
+        goto done;
+    }
+
+    if (r.only_a != 2 || r.changed_a != 1 || r.identical_a != 1 || r.only_b != 2 ||
+        r.changed_b != 1 || r.identical_b != 1)
+    {
+        wprintf(L"cmp: bad counts A(only=%u chg=%u id=%u) B(only=%u chg=%u id=%u)\n",
+                r.only_a,
+                r.changed_a,
+                r.identical_a,
+                r.only_b,
+                r.changed_b,
+                r.identical_b);
+        goto done;
+    }
+    if (class_a[0] != EE_CMP_IDENTICAL || class_a[1] != EE_CMP_CHANGED ||
+        class_a[2] != EE_CMP_ONLY_HERE || class_a[3] != EE_CMP_ONLY_HERE)
+    {
+        wprintf(L"cmp: bad class_a %u %u %u %u\n",
+                class_a[0],
+                class_a[1],
+                class_a[2],
+                class_a[3]);
+        goto done;
+    }
+    if (class_b[0] != EE_CMP_IDENTICAL || class_b[1] != EE_CMP_CHANGED ||
+        class_b[2] != EE_CMP_ONLY_HERE || class_b[3] != EE_CMP_ONLY_HERE)
+    {
+        wprintf(L"cmp: bad class_b %u %u %u %u\n",
+                class_b[0],
+                class_b[1],
+                class_b[2],
+                class_b[3]);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"cmp ok\n");
+
+done:
+    free(class_a);
+    free(class_b);
+    if (a_ok)
+    {
+        EeVoterTable_Clear(&a);
+    }
+    if (b_ok)
+    {
+        EeVoterTable_Clear(&b);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"cmp test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -1996,5 +2133,6 @@ int wmain(void)
     failed |= test_precinct_normalize();
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();
+    failed |= test_compare();
     return failed == 0 ? 0 : 1;
 }

@@ -1164,7 +1164,8 @@ static void App_ApplyFilter(AppState *app)
                 uint32_t view_row = (map != NULL) ? map[k] : k;
                 uint32_t phys =
                     (app->table.view_index != NULL) ? app->table.view_index[view_row] : view_row;
-                if (phys < app->table.row_count && app->mark_rows[phys])
+                if (phys < app->table.row_count && app->mark_rows[phys] &&
+                    n < app->table.row_count)
                 {
                     isect[n++] = view_row;
                 }
@@ -3088,7 +3089,7 @@ static LRESULT CALLBACK OptionsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                             zoom =
                                 (UINT)(app->zoom_percent > 0 ? app->zoom_percent : k_ZoomDefault);
                         }
-                        if (map_sel >= 0)
+                        if (cmb_map != NULL && map_sel >= 0)
                         {
                             app->map_engine = App_ClampMapEngine(
                                 (int)SendMessageW(cmb_map, CB_GETITEMDATA, (WPARAM)map_sel, 0));
@@ -3401,7 +3402,10 @@ static BOOL App_ShowOptions(AppState *app)
         SendMessageW(edit_zoom, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(lbl_pct, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(lbl_map, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
-        SendMessageW(cmb_map, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        if (cmb_map != NULL)
+        {
+            SendMessageW(cmb_map, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        }
         SendMessageW(btn_ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
         SendMessageW(btn_cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
     }

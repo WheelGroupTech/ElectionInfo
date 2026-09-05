@@ -969,7 +969,8 @@ static BOOL collect_marked_distinct_vids(const EeVoterTable *table,
     {
         return FALSE;
     }
-    vids = (const char **)malloc(bytes);
+    (void)bytes;
+    vids = (const char **)malloc((size_t)table->row_count * sizeof(char *));
     if (vids == NULL)
     {
         return FALSE;
@@ -979,7 +980,7 @@ static BOOL collect_marked_distinct_vids(const EeVoterTable *table,
         if (marks[i])
         {
             const char *vid = EeVoterTable_GetCellUtf8(table, i, EE_COL_VOTER_ID);
-            if (vid != NULL && vid[0] != '\0')
+            if (vid != NULL && vid[0] != '\0' && nv < table->row_count)
             {
                 vids[nv++] = vid;
             }
@@ -990,6 +991,7 @@ static BOOL collect_marked_distinct_vids(const EeVoterTable *table,
         free(vids);
         return TRUE;
     }
+    _Analysis_assume_(nv <= table->row_count);
     qsort_s((void *)vids, nv, sizeof(char *), dup_vid_ptr_cmp, NULL);
     {
         uint32_t unique = 0;
@@ -1076,7 +1078,8 @@ BOOL EeVoterTable_MarkDuplicateVoterIds(const EeVoterTable *table,
     {
         return FALSE;
     }
-    slots = (uint32_t *)malloc(bytes);
+    (void)bytes;
+    slots = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
     if (slots == NULL)
     {
         return FALSE;
@@ -1252,7 +1255,8 @@ BOOL EeVoterTable_MarkDuplicateVotersByNameDob(const EeVoterTable *table,
     {
         return FALSE;
     }
-    slots = (uint32_t *)malloc(bytes);
+    (void)bytes;
+    slots = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
     if (slots == NULL)
     {
         return FALSE;
@@ -1380,6 +1384,10 @@ void EeVoterTable_FreeValueCounts(EeValueCount *items, uint32_t count)
     }
     for (i = 0; i < count; i++)
     {
+        /* items is calloc'd (value == NULL until set) and callers only pass a
+         * count covering fully-initialized entries; the analyzer cannot see
+         * that invariant across calls. */
+#pragma warning(suppress : 6001)
         free(items[i].value);
     }
     free(items);
@@ -1400,7 +1408,8 @@ BOOL EeVoterTable_CollectValueCounts(const EeVoterTable *table,
     uint32_t i;
     uint32_t nu = 0;
     uint32_t blank = 0;
-    size_t bytes;
+    size_t slot_bytes;
+    size_t rep_bytes;
 
     if (out_blank_count != NULL)
     {
@@ -1425,17 +1434,18 @@ BOOL EeVoterTable_CollectValueCounts(const EeVoterTable *table,
     {
         return FALSE;
     }
-    if (FAILED(SizeTMult((size_t)cap, sizeof(uint32_t), &bytes)))
+    if (FAILED(SizeTMult((size_t)cap, sizeof(uint32_t), &slot_bytes)))
     {
         return FALSE;
     }
-    slots = (uint32_t *)malloc(bytes);
-    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(char *), &bytes)))
+    if (FAILED(SizeTMult((size_t)table->row_count, sizeof(char *), &rep_bytes)))
     {
-        free(slots);
         return FALSE;
     }
-    rep = (const char **)malloc(bytes);
+    (void)slot_bytes;
+    (void)rep_bytes;
+    slots = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+    rep = (const char **)malloc((size_t)table->row_count * sizeof(char *));
     cnt = (uint32_t *)malloc((size_t)table->row_count * sizeof(uint32_t));
     if (slots == NULL || rep == NULL || cnt == NULL)
     {
@@ -1465,10 +1475,13 @@ BOOL EeVoterTable_CollectValueCounts(const EeVoterTable *table,
             uint32_t idx = slots[b];
             if (idx == UINT32_MAX)
             {
-                rep[nu] = cell;
-                cnt[nu] = 1;
-                slots[b] = nu;
-                nu++;
+                if (nu < table->row_count)
+                {
+                    rep[nu] = cell;
+                    cnt[nu] = 1;
+                    slots[b] = nu;
+                    nu++;
+                }
                 break;
             }
             if (_stricmp(cell, rep[idx]) == 0)
@@ -1499,6 +1512,7 @@ BOOL EeVoterTable_CollectValueCounts(const EeVoterTable *table,
         free(cnt);
         return FALSE;
     }
+    _Analysis_assume_(nu <= table->row_count);
     for (i = 0; i < nu; i++)
     {
         int cch;
@@ -1593,7 +1607,7 @@ static BOOL utf8buf_append(Utf8Buf *buf, const char *s, size_t n)
     {
         if (buf->data == NULL)
         {
-            if (!utf8buf_reserve(buf, 0))
+            if (!utf8buf_reserve(buf, 0) || buf->data == NULL)
             {
                 return FALSE;
             }

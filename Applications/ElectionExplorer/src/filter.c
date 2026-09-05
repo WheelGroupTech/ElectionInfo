@@ -507,6 +507,7 @@ BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
     uint32_t mask;
     uint32_t i;
     uint32_t unique = 0;
+    uint32_t val_count;
 
     if (out_values == NULL || out_count == NULL || table == NULL)
     {
@@ -562,14 +563,15 @@ BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
         return TRUE;
     }
 
-    vals = (wchar_t **)calloc((size_t)unique, sizeof(wchar_t *));
+    val_count = unique;
+    vals = (wchar_t **)calloc((size_t)val_count, sizeof(wchar_t *));
     if (vals == NULL)
     {
         free(slots);
         return FALSE;
     }
     unique = 0;
-    for (i = 0; i < cap; i++)
+    for (i = 0; i < cap && unique < val_count; i++)
     {
         wchar_t tmp[EE_FILTER_VALUE_CCH];
         size_t cch;

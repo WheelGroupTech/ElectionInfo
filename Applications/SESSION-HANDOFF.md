@@ -4,9 +4,10 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-04
-**Branch:** main — report styling + Code Analysis warning fixes committed;
-two-file **Compare** feature is new, **uncommitted** work in the tree.
+**Last updated:** 2026-09-05
+**Branch:** main — two-file **Compare** feature committed (`7be360c`, click-tested
+incl. large lists). New **uncommitted** change: loader skips a leading
+banner/preamble row.
 
 ---
 
@@ -35,7 +36,18 @@ display:
 
 ## In progress / open questions
 
-**Two-file Compare by Voter ID (uncommitted — this session).** Compare two voter
+**Loader skips a leading preamble/banner row (uncommitted — this session).** Some
+county-portal exports (e.g. TheElectorList submissions) prepend a one-line banner
+above the real header, padded with empty cells (`TX … Submissions …,,,,`). The
+loader took the first non-empty line as the header, so that banner became a
+garbage header and dropped the normalized Voter ID/Precinct/Name. Added
+`fields_look_like_preamble()` in `voter_table.c` (≥2 fields, ≤1 non-empty → skip
+and fall through to the next line) at the header-parse step in
+`EeVoterTable_LoadFromFile`. Smoke test `test_preamble_skip` (tag `preamble`).
+A genuine one-column header (single field) is not affected. Not covered: a banner
+with no trailing delimiters (parses to one field) — rare; revisit if seen.
+
+**Two-file Compare by Voter ID (committed `7be360c`).** Compare two voter
 lists open in separate viewer windows. Design decisions (confirmed with the user):
 match on **normalized Voter ID** only; a matched voter is **Changed** when its
 Precinct, Name, or Address differs (case-insensitive), else **Identical**; blank-ID
@@ -65,8 +77,8 @@ rows are **Only here**. Presentation is a modeless **Compare Summary** window
   buffers freed in the main `WM_DESTROY`.
 
 Verified: all four configs (x64/ARM64 × Debug/Release) build **0 warnings**;
-Code Analysis (`RunCodeAnalysis`) clean; all smoke tests pass. **GUI not yet
-click-tested** — needs manual two-window verification (see Next steps).
+Code Analysis (`RunCodeAnalysis`) clean; all smoke tests pass. GUI click-tested
+(counts correct; highlighting; large county lists).
 
 Known v1 limitation: during a large (async) compare both windows are disabled and
 re-enabled via `IsWindow` guards; a comparison uses the first row per duplicate ID
@@ -136,16 +148,12 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Click-test Compare in the GUI:** open two lists in separate windows (e.g.
-  `sample_voters.csv` and an edited copy: change one address, delete a row, add a
-  row), Compare menu → "Compare with <file>", confirm the summary counts, that
-  "Show these rows" highlights the right rows in each grid, that Reset View clears
-  it, that Cancel works on a large county file, and that closing/reloading either
-  file closes the summary. Then it's ready to commit. Plan file:
-  `~/.claude/plans/unified-prancing-nest.md`.
-- Possible follow-ups: a "changed fields" drill-down (which of Precinct/Name/
-  Address differs), selectable match key (Name+DOB), and a reaper-thread for
-  responsive deletion of large row sets.
+- **Commit the preamble-skip change** (`voter_table.c` + `test/smoke_load.c`) once
+  happy. A banner-topped test file is in the scratchpad
+  (`deceased_with_preamble.csv`) if you want to click-test the GUI load first.
+- Possible follow-ups: a "changed fields" drill-down for Compare (which of
+  Precinct/Name/Address differs), selectable match key (Name+DOB), and a
+  reaper-thread for responsive deletion of large row sets.
 
 ## Notes for the next session
 

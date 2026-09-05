@@ -3533,6 +3533,39 @@ static BOOL cancelled(volatile LONG *flag)
     return flag != NULL && InterlockedCompareExchange(flag, 0, 0) != 0;
 }
 
+/* TRUE when a parsed first line looks like a banner/preamble rather than a
+ * header: two or more fields but at most one non-empty. County-portal exports
+ * (e.g. TheElectorList submissions) prepend such a line above the real header,
+ * padded with empty cells to the column count. A real header has most cells
+ * filled, and a genuine one-column header parses to a single field (count < 2). */
+static BOOL fields_look_like_preamble(const FieldList *f)
+{
+    size_t i;
+    size_t nonempty = 0;
+
+    if (f->count < 2)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < f->count; i++)
+    {
+        const char *s = f->items[i];
+        while (*s == ' ' || *s == '\t')
+        {
+            s++;
+        }
+        if (*s != '\0')
+        {
+            nonempty++;
+            if (nonempty > 1)
+            {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
 EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                                        EeVoterTable *out_table,
                                        volatile LONG *cancel_flag,
@@ -3782,6 +3815,17 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             fclose(fp);
                             set_error(error_message, error_cch, L"Failed to parse header row.");
                             return EeLoadStatus_Error;
+                        }
+                        /* Skip a leading banner/preamble row (some exports prepend
+                         * one above the real header); fall through to the next line. */
+                        if (fields_look_like_preamble(&header_fields))
+                        {
+                            line_len = 0;
+                            if (done)
+                            {
+                                break;
+                            }
+                            continue;
                         }
                         if (header_fields.count == 0 ||
                             header_fields.count > EE_MAX_COLUMNS - EE_FROZEN_COLUMN_COUNT)

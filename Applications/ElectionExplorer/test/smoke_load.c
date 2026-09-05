@@ -2109,6 +2109,61 @@ done:
     return rc;
 }
 
+static int test_preamble_skip(void)
+{
+    EeVoterTable t;
+    int rc = 1;
+    BOOL loaded;
+
+    /* Line 1 is a portal banner padded with empty cells; the real header is on
+     * line 2 (no address columns). The loader must skip the banner. */
+    loaded = cmp_write_and_load(
+        L"ee_preamble.csv",
+        "TX 20260501 Submissions 07-23-2026_09-21-12,,,,,,,,\n"
+        "ID_County_VR,Reg_Precinct,VID,VUID,Name_Last,Name_First,Name_Middle,Name_Suffix,DOD\n"
+        "Travis,358,TX1002114877,1002114877,HUDSON,BERTHA,DEAN,,2016-11-02\n",
+        &t);
+    if (!loaded)
+    {
+        wprintf(L"preamble: load failed\n");
+        return 1;
+    }
+    if (t.row_count != 1)
+    {
+        wprintf(L"preamble: expected 1 data row, got %u\n", t.row_count);
+        goto done;
+    }
+    if (strcmp(EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID), "1002114877") != 0)
+    {
+        wprintf(L"preamble: Voter ID not normalized (got '%S')\n",
+                EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID));
+        goto done;
+    }
+    if (strcmp(EeVoterTable_GetCellUtf8(&t, 0, EE_COL_PRECINCT), "358") != 0)
+    {
+        wprintf(L"preamble: Precinct wrong (got '%S')\n",
+                EeVoterTable_GetCellUtf8(&t, 0, EE_COL_PRECINCT));
+        goto done;
+    }
+    if (strstr(EeVoterTable_GetCellUtf8(&t, 0, EE_COL_NAME), "HUDSON") == NULL)
+    {
+        wprintf(L"preamble: Name missing (got '%S')\n",
+                EeVoterTable_GetCellUtf8(&t, 0, EE_COL_NAME));
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"preamble ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"preamble test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2134,5 +2189,6 @@ int wmain(void)
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();
     failed |= test_compare();
+    failed |= test_preamble_skip();
     return failed == 0 ? 0 : 1;
 }

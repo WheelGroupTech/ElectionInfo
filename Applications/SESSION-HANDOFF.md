@@ -35,6 +35,11 @@ display:
 
 ## In progress / open questions
 
+**Header alias `ID_VOTER` → Voter ID (uncommitted).** Added `IDVOTER` (normalized
+form of `ID_VOTER`) to the Voter ID group in `classify_field` (`voter_table.c`).
+Smoke test `test_id_voter_header` (tag `idvoter`). Builds clean (4 configs + Code
+Analysis).
+
 **Help menu (uncommitted — this session, click-tested, ready to commit).** New
 top-level **Help** menu after Compare with topic items
 **Options / Filters / Reports / Compare**, a separator, and

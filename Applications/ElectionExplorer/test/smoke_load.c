@@ -2164,6 +2164,44 @@ done:
     return rc;
 }
 
+static int test_id_voter_header(void)
+{
+    EeVoterTable t;
+    int rc = 1;
+
+    /* "ID_VOTER" should map to the normalized Voter ID column. */
+    if (!cmp_write_and_load(L"ee_idvoter.csv",
+                            "ID_VOTER,PCTCOD,LSTNAM,FSTNAM\n"
+                            "1002114877,358,HUDSON,BERTHA\n",
+                            &t))
+    {
+        wprintf(L"idvoter: load failed\n");
+        return 1;
+    }
+    if (t.row_count != 1)
+    {
+        wprintf(L"idvoter: expected 1 row, got %u\n", t.row_count);
+        goto done;
+    }
+    if (strcmp(EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID), "1002114877") != 0)
+    {
+        wprintf(L"idvoter: Voter ID not mapped (got '%S')\n",
+                EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID));
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"idvoter ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"idvoter test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2190,5 +2228,6 @@ int wmain(void)
     failed |= test_name_last_first_no_address();
     failed |= test_compare();
     failed |= test_preamble_skip();
+    failed |= test_id_voter_header();
     return failed == 0 ? 0 : 1;
 }

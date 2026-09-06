@@ -2078,7 +2078,7 @@ static FieldRole classify_field(const char *norm)
     /* Voter ID */
     if (strcmp(norm, "VUID") == 0 || strcmp(norm, "VUIDNO") == 0 ||
         strcmp(norm, "SOSVOTERID") == 0 || strcmp(norm, "BARCODEVUID") == 0 ||
-        strcmp(norm, "SOSVOTERIDNUMBER") == 0)
+        strcmp(norm, "SOSVOTERIDNUMBER") == 0 || strcmp(norm, "IDVOTER") == 0)
     {
         return Role_Vuid;
     }

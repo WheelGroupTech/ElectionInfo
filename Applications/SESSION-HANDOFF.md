@@ -5,9 +5,8 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-09-05
-**Branch:** main — two-file **Compare** feature committed (`7be360c`, click-tested
-incl. large lists). New **uncommitted** change: loader skips a leading
-banner/preamble row.
+**Branch:** main — Compare feature and preamble-skip committed. New
+**uncommitted** change: **Help menu** (topic dialogs + About).
 
 ---
 
@@ -36,16 +35,28 @@ display:
 
 ## In progress / open questions
 
-**Loader skips a leading preamble/banner row (uncommitted — this session).** Some
-county-portal exports (e.g. TheElectorList submissions) prepend a one-line banner
-above the real header, padded with empty cells (`TX … Submissions …,,,,`). The
-loader took the first non-empty line as the header, so that banner became a
-garbage header and dropped the normalized Voter ID/Precinct/Name. Added
-`fields_look_like_preamble()` in `voter_table.c` (≥2 fields, ≤1 non-empty → skip
-and fall through to the next line) at the header-parse step in
-`EeVoterTable_LoadFromFile`. Smoke test `test_preamble_skip` (tag `preamble`).
-A genuine one-column header (single field) is not affected. Not covered: a banner
-with no trailing delimiters (parses to one field) — rare; revisit if seen.
+**Help menu (uncommitted — this session, click-tested, ready to commit).** New
+top-level **Help** menu after Compare with topic items
+**Options / Filters / Reports / Compare**, a separator, and
+**About Election Explorer…**. Each topic opens a modal dialog
+(`App_ShowHelpTopic` → `HelpTextDlgProc`) with a read-only, scrollable text box
+describing the feature; the Filters topic spells out how rules combine (Exclude
+wins; Includes OR within a field, AND across fields). About
+(`App_ShowAbout` → `AboutDlgProc`) shows the large app icon, product name, the
+file **version read at runtime** from the embedded version resource
+(`App_GetVersionString`, needs `version.lib`), a wrapping tagline ("A powerful
+tool to view, compare, and analyze election data."), and a clickable **SysLink**
+showing the full `https://github.com/WheelGroupTech/ElectionInfo` URL (needs
+`ICC_LINK_CLASS`, added to `InitCommonControlsEx`). Dialogs are built with
+`App_RunModalDialog` (in-memory control-less `DLGTEMPLATE` +
+`DialogBoxIndirectParamW`; controls created in `WM_INITDIALOG`, sized via
+`Scale`/`App_CenterModalClient`). Help text lives in `k_Help*` string constants in
+`main.c`. IDs `IDM_HELP_*` / `IDC_HELP_*` / `IDC_ABOUT_*` in `resource.h`.
+Touches `main.c`, `resource.h`, `ElectionExplorer.vcxproj` (+`version.lib`).
+Builds clean (4 configs + Code Analysis); GUI click-tested (topics readable/scroll;
+About icon, version, wrapped tagline, and working repo link).
+Note: the Compare popup is still detected by position `k_CompareMenuPos`=4 — Help
+is index 5, so that constant is unchanged.
 
 **Two-file Compare by Voter ID (committed `7be360c`).** Compare two voter
 lists open in separate viewer windows. Design decisions (confirmed with the user):
@@ -148,9 +159,7 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Commit the preamble-skip change** (`voter_table.c` + `test/smoke_load.c`) once
-  happy. A banner-topped test file is in the scratchpad
-  (`deceased_with_preamble.csv`) if you want to click-test the GUI load first.
+- Commit the Help menu (`main.c`, `resource.h`, `ElectionExplorer.vcxproj`).
 - Possible follow-ups: a "changed fields" drill-down for Compare (which of
   Precinct/Name/Address differs), selectable match key (Name+DOB), and a
   reaper-thread for responsive deletion of large row sets.

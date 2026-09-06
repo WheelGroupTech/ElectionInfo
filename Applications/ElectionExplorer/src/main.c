@@ -16,11 +16,13 @@
 #include <stdlib.h>
 #include <uxtheme.h>
 #include <windowsx.h>
+#include <winver.h>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "version.lib")
 
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
@@ -2478,11 +2480,19 @@ static HMENU App_CreateMenu(void)
     /* Compare is populated on demand (WM_INITMENUPOPUP) with the other open files.
      * It MUST stay at index k_CompareMenuPos in the bar. */
     HMENU compare_menu = CreatePopupMenu();
+    HMENU help_menu = CreatePopupMenu();
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
+    AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
 
@@ -6430,6 +6440,499 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 }
 
 /* -------------------------------------------------------------------------- */
+/* Help / About                                                               */
+/* -------------------------------------------------------------------------- */
+
+static const wchar_t k_HelpOptions[] =
+    L"Options (Edit → Options) control display and copy behavior. Settings "
+    L"apply to the current window and become the defaults for windows opened "
+    L"afterward.\r\n\r\n"
+    L"•  Pre-pend normalized data for copies — when you copy selected "
+    L"rows, the normalized Voter ID, Precinct, Name, and Address are placed "
+    L"before the original source columns.\r\n\r\n"
+    L"•  Display name in surname-first format — shows the normalized "
+    L"Name column as \"Last, First Middle\" instead of \"First Middle Last\".\r\n\r\n"
+    L"•  Zoom — scales the grid text from 50% to 250% (100% is actual "
+    L"size).\r\n\r\n"
+    L"•  Map engine — the mapping service opened by \"Show in Maps\" "
+    L"(Google, Bing, Apple, or OpenStreetMap).";
+
+static const wchar_t k_HelpFilters[] =
+    L"Filters (Filter menu, or Ctrl+L) narrow the visible rows. Each rule targets "
+    L"one column and tests it with a relation — is, is not, begins with, ends "
+    L"with, contains, excludes, and (for date and numeric columns) less than / "
+    L"more than. Every rule is either an Include or an Exclude.\r\n\r\n"
+    L"How multiple rules combine:\r\n\r\n"
+    L"•  Exclude wins. If a row matches ANY enabled Exclude rule it is hidden, "
+    L"regardless of the Include rules.\r\n\r\n"
+    L"•  Includes on the SAME field are OR'd — a row passes that field if "
+    L"it matches at least one of them. Example: two Includes on Voter ID (is 100, "
+    L"is 200) show rows whose Voter ID is 100 OR 200.\r\n\r\n"
+    L"•  Includes on DIFFERENT fields are AND'd — a row must satisfy each "
+    L"field that has Include rules. Example: Include Precinct is 101 together with "
+    L"Include Name contains SMITH shows only voters in precinct 101 whose name "
+    L"contains SMITH.\r\n\r\n"
+    L"•  With no Include rules, every row is shown except those removed by "
+    L"Exclude rules.\r\n\r\n"
+    L"Add rules in the Filter dialog, or right-click a cell and choose "
+    L"Include/Exclude to add a rule for that value. Reset Filter clears all rules; "
+    L"a disabled rule is kept but ignored.";
+
+static const wchar_t k_HelpReports[] =
+    L"Reports (Reports menu) summarize the loaded list by a single column.\r\n\r\n"
+    L"•  Display Precinct Report — one row per distinct Precinct with the "
+    L"number of voters in it.\r\n\r\n"
+    L"•  Display Address Report — one row per distinct normalized Address "
+    L"with its voter count.\r\n\r\n"
+    L"Each report opens in its own window. Empty values are grouped into a "
+    L"\"(blank)\" row so incomplete records stay visible. Reports summarize ALL "
+    L"loaded rows — they ignore the active filter and the duplicates view. "
+    L"Click a column header to sort. Right-click a row to Copy it, to Include or "
+    L"Exclude that value in the main window's filter, or (Address) Show in Maps. A "
+    L"report closes when its list is reloaded or its window is closed.";
+
+static const wchar_t k_HelpCompare[] =
+    L"Compare (Compare menu) compares the voter list in this window against another "
+    L"open list, matching voters by normalized Voter ID.\r\n\r\n"
+    L"Open two lists in separate windows, then choose Compare → \"Compare with "
+    L"<file>\". The Compare Summary window reports, for each file:\r\n\r\n"
+    L"•  Only here — voters whose Voter ID is not in the other file (rows "
+    L"with a blank Voter ID are counted here).\r\n\r\n"
+    L"•  Changed — voters found in both files whose Precinct, Name, or "
+    L"Address differs.\r\n\r\n"
+    L"•  Identical — voters found in both files with matching Precinct, "
+    L"Name, and Address.\r\n\r\n"
+    L"Double-click a row to highlight those voters in the grid (the left count "
+    L"column acts on this file, the right column on the other file), or right-click "
+    L"to choose which file to show them in. Use Filter → Reset View to clear "
+    L"the highlight. Large comparisons show a progress bar and can be canceled.";
+
+static const wchar_t k_RepoUrl[] = L"https://github.com/WheelGroupTech/ElectionInfo";
+
+typedef struct HelpDlgData
+{
+    AppState *app;
+    const wchar_t *body;
+} HelpDlgData;
+
+typedef struct AboutDlgData
+{
+    AppState *app;
+    HICON icon;
+} AboutDlgData;
+
+/* Read the running module's file version ("major.minor.patch.build"). */
+static BOOL App_GetVersionString(wchar_t *out, size_t cch)
+{
+    wchar_t path[MAX_PATH];
+    DWORD handle = 0;
+    DWORD size;
+    void *data;
+    VS_FIXEDFILEINFO *ffi = NULL;
+    UINT ffi_len = 0;
+    BOOL ok = FALSE;
+
+    if (GetModuleFileNameW(NULL, path, ARRAYSIZE(path)) == 0)
+    {
+        return FALSE;
+    }
+    size = GetFileVersionInfoSizeW(path, &handle);
+    if (size == 0)
+    {
+        return FALSE;
+    }
+    data = malloc(size);
+    if (data == NULL)
+    {
+        return FALSE;
+    }
+    if (GetFileVersionInfoW(path, 0, size, data) &&
+        VerQueryValueW(data, L"\\", (void **)&ffi, &ffi_len) && ffi != NULL)
+    {
+        StringCchPrintfW(out,
+                         cch,
+                         L"%u.%u.%u.%u",
+                         HIWORD(ffi->dwFileVersionMS),
+                         LOWORD(ffi->dwFileVersionMS),
+                         HIWORD(ffi->dwFileVersionLS),
+                         LOWORD(ffi->dwFileVersionLS));
+        ok = TRUE;
+    }
+    free(data);
+    return ok;
+}
+
+/* Build a control-less modal dialog template (controls are created in
+ * WM_INITDIALOG) with @p caption and run it modally, owned by the main window. */
+static INT_PTR App_RunModalDialog(AppState *app, const wchar_t *caption, DLGPROC proc, LPARAM param)
+{
+    DWORD buf[128]; /* DWORD-aligned as DLGTEMPLATE requires */
+    DLGTEMPLATE *dt = (DLGTEMPLATE *)buf;
+    BYTE *p;
+    size_t clen = (caption != NULL) ? wcslen(caption) : 0;
+
+    ZeroMemory(buf, sizeof(buf));
+    dt->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME;
+    dt->cx = 220; /* dialog units; the real pixel size is set in WM_INITDIALOG */
+    dt->cy = 160;
+    p = (BYTE *)buf + sizeof(DLGTEMPLATE);
+    *(WORD *)p = 0; /* no menu */
+    p += sizeof(WORD);
+    *(WORD *)p = 0; /* default dialog class */
+    p += sizeof(WORD);
+    if (clen > 100)
+    {
+        clen = 100;
+    }
+    if (clen > 0)
+    {
+        memcpy(p, caption, clen * sizeof(WCHAR));
+    }
+    ((WCHAR *)p)[clen] = L'\0';
+    return DialogBoxIndirectParamW(app->instance, dt, app->hwnd_main, proc, param);
+}
+
+/* Center a modal dialog of the given client size over the main window and return
+ * the resulting client rectangle. */
+static void App_CenterModalClient(HWND dlg, AppState *app, int client_w, int client_h)
+{
+    RECT rc;
+    RECT owner;
+    int outer_w;
+    int outer_h;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+
+    rc.left = 0;
+    rc.top = 0;
+    rc.right = client_w;
+    rc.bottom = client_h;
+    AdjustWindowRectEx(&rc,
+                       (DWORD)GetWindowLongPtrW(dlg, GWL_STYLE),
+                       FALSE,
+                       (DWORD)GetWindowLongPtrW(dlg, GWL_EXSTYLE));
+    outer_w = rc.right - rc.left;
+    outer_h = rc.bottom - rc.top;
+    if (app->hwnd_main != NULL && GetWindowRect(app->hwnd_main, &owner))
+    {
+        x = owner.left + ((owner.right - owner.left) - outer_w) / 2;
+        y = owner.top + ((owner.bottom - owner.top) - outer_h) / 2;
+    }
+    SetWindowPos(dlg, NULL, x, y, outer_w, outer_h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static INT_PTR CALLBACK HelpTextDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    HelpDlgData *d = (HelpDlgData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            int margin;
+            int btn_w;
+            int btn_h;
+            int gap;
+            HWND edit;
+            HWND ok;
+
+            d = (HelpDlgData *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+            app = d->app;
+
+            App_CenterModalClient(dlg, app, Scale(app, 470), Scale(app, 360));
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 12);
+            btn_w = Scale(app, 90);
+            btn_h = Scale(app, 26);
+            gap = Scale(app, 10);
+
+            edit = CreateWindowExW(WS_EX_CLIENTEDGE,
+                                   L"EDIT",
+                                   L"",
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE |
+                                       ES_READONLY | ES_AUTOVSCROLL,
+                                   margin,
+                                   margin,
+                                   rc.right - 2 * margin,
+                                   rc.bottom - 2 * margin - btn_h - gap,
+                                   dlg,
+                                   (HMENU)(INT_PTR)IDC_HELP_TEXT,
+                                   app->instance,
+                                   NULL);
+            ok = CreateWindowExW(0,
+                                 L"BUTTON",
+                                 L"OK",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                 rc.right - margin - btn_w,
+                                 rc.bottom - margin - btn_h,
+                                 btn_w,
+                                 btn_h,
+                                 dlg,
+                                 (HMENU)(INT_PTR)IDOK,
+                                 app->instance,
+                                 NULL);
+            if (app->font_ui != NULL)
+            {
+                if (edit != NULL)
+                {
+                    SendMessageW(edit, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+                if (ok != NULL)
+                {
+                    SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+            }
+            if (edit != NULL)
+            {
+                SetWindowTextW(edit, d->body);
+                /* Keep the caret at the top so long topics start at the beginning. */
+                SendMessageW(edit, EM_SETSEL, 0, 0);
+            }
+            if (ok != NULL)
+            {
+                SetFocus(ok);
+            }
+            return (INT_PTR)FALSE; /* focus set explicitly */
+        }
+
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+            {
+                EndDialog(dlg, 0);
+                return (INT_PTR)TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    AboutDlgData *d = (AboutDlgData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            int margin;
+            int icon_sz;
+            int text_x;
+            int btn_w;
+            int btn_h;
+            int y;
+            int row_bottom;
+            wchar_t ver[64];
+            wchar_t info[96];
+            HWND ico;
+            HWND text;
+            HWND tagline;
+            HWND link;
+            HWND ok;
+            wchar_t link_markup[256];
+
+            d = (AboutDlgData *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+            app = d->app;
+
+            App_CenterModalClient(dlg, app, Scale(app, 380), Scale(app, 240));
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 16);
+            icon_sz = Scale(app, 64);
+            text_x = margin + icon_sz + Scale(app, 16);
+            btn_w = Scale(app, 90);
+            btn_h = Scale(app, 26);
+
+            d->icon = (HICON)LoadImageW(app->instance,
+                                        MAKEINTRESOURCEW(IDI_APPICON),
+                                        IMAGE_ICON,
+                                        icon_sz,
+                                        icon_sz,
+                                        LR_DEFAULTCOLOR);
+            ico = CreateWindowExW(0,
+                                  L"STATIC",
+                                  L"",
+                                  WS_CHILD | WS_VISIBLE | SS_ICON | SS_REALSIZECONTROL,
+                                  margin,
+                                  margin,
+                                  icon_sz,
+                                  icon_sz,
+                                  dlg,
+                                  (HMENU)(INT_PTR)IDC_ABOUT_ICON,
+                                  app->instance,
+                                  NULL);
+            if (ico != NULL && d->icon != NULL)
+            {
+                SendMessageW(ico, STM_SETICON, (WPARAM)d->icon, 0);
+            }
+
+            if (!App_GetVersionString(ver, ARRAYSIZE(ver)))
+            {
+                StringCchCopyW(ver, ARRAYSIZE(ver), L"(unknown)");
+            }
+            StringCchPrintfW(info, ARRAYSIZE(info), L"Election Explorer\r\nVersion %s", ver);
+            text = CreateWindowExW(0,
+                                   L"STATIC",
+                                   info,
+                                   WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                   text_x,
+                                   margin,
+                                   rc.right - text_x - margin,
+                                   icon_sz,
+                                   dlg,
+                                   (HMENU)(INT_PTR)IDC_ABOUT_TEXT,
+                                   app->instance,
+                                   NULL);
+
+            /* Full-width tagline below the icon row so it can wrap. */
+            row_bottom = margin + icon_sz + Scale(app, 12);
+            tagline = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"A powerful tool to view, compare, and analyze election data.",
+                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                margin,
+                row_bottom,
+                rc.right - 2 * margin,
+                Scale(app, 40),
+                dlg,
+                (HMENU)(INT_PTR)-1,
+                app->instance,
+                NULL);
+
+            y = row_bottom + Scale(app, 46);
+            StringCchPrintfW(link_markup,
+                             ARRAYSIZE(link_markup),
+                             L"<a href=\"%s\">%s</a>",
+                             k_RepoUrl,
+                             k_RepoUrl);
+            link = CreateWindowExW(0,
+                                   L"SysLink",
+                                   link_markup,
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                   margin,
+                                   y,
+                                   rc.right - 2 * margin,
+                                   Scale(app, 20),
+                                   dlg,
+                                   (HMENU)(INT_PTR)IDC_ABOUT_LINK,
+                                   app->instance,
+                                   NULL);
+
+            ok = CreateWindowExW(0,
+                                 L"BUTTON",
+                                 L"OK",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                 rc.right - margin - btn_w,
+                                 rc.bottom - margin - btn_h,
+                                 btn_w,
+                                 btn_h,
+                                 dlg,
+                                 (HMENU)(INT_PTR)IDOK,
+                                 app->instance,
+                                 NULL);
+            if (app->font_ui != NULL)
+            {
+                if (text != NULL)
+                {
+                    SendMessageW(text, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+                if (tagline != NULL)
+                {
+                    SendMessageW(tagline, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+                if (link != NULL)
+                {
+                    SendMessageW(link, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+                if (ok != NULL)
+                {
+                    SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+            }
+            if (ok != NULL)
+            {
+                SetFocus(ok);
+            }
+            return (INT_PTR)FALSE;
+        }
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (hdr != NULL && hdr->idFrom == IDC_ABOUT_LINK &&
+                (hdr->code == NM_CLICK || hdr->code == NM_RETURN))
+            {
+                NMLINK *nml = (NMLINK *)lParam;
+                const wchar_t *url = (nml->item.szUrl[0] != L'\0') ? nml->item.szUrl : k_RepoUrl;
+                ShellExecuteW(dlg, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+                return (INT_PTR)TRUE;
+            }
+            break;
+        }
+
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+            {
+                EndDialog(dlg, 0);
+                return (INT_PTR)TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+
+        case WM_DESTROY:
+            if (d != NULL && d->icon != NULL)
+            {
+                DestroyIcon(d->icon);
+                d->icon = NULL;
+            }
+            return (INT_PTR)FALSE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static void App_ShowHelpTopic(AppState *app, const wchar_t *caption, const wchar_t *body)
+{
+    HelpDlgData d;
+    if (app == NULL)
+    {
+        return;
+    }
+    d.app = app;
+    d.body = body;
+    App_RunModalDialog(app, caption, HelpTextDlgProc, (LPARAM)&d);
+}
+
+static void App_ShowAbout(AppState *app)
+{
+    AboutDlgData d;
+    if (app == NULL)
+    {
+        return;
+    }
+    d.app = app;
+    d.icon = NULL;
+    App_RunModalDialog(app, L"About Election Explorer", AboutDlgProc, (LPARAM)&d);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Window procedure                                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -6881,6 +7384,21 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_REPORT_ADDRESS:
                     App_ShowReport(app, EE_REPORT_ADDRESS);
                     return 0;
+                case IDM_HELP_OPTIONS:
+                    App_ShowHelpTopic(app, L"Help — Options", k_HelpOptions);
+                    return 0;
+                case IDM_HELP_FILTERS:
+                    App_ShowHelpTopic(app, L"Help — Filters", k_HelpFilters);
+                    return 0;
+                case IDM_HELP_REPORTS:
+                    App_ShowHelpTopic(app, L"Help — Reports", k_HelpReports);
+                    return 0;
+                case IDM_HELP_COMPARE:
+                    App_ShowHelpTopic(app, L"Help — Compare", k_HelpCompare);
+                    return 0;
+                case IDM_HELP_ABOUT:
+                    App_ShowAbout(app);
+                    return 0;
                 default:
                     if (LOWORD(wParam) >= IDM_COMPARE_WITH_FIRST &&
                         LOWORD(wParam) <= IDM_COMPARE_WITH_LAST)
@@ -7319,7 +7837,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES |
-                ICC_UPDOWN_CLASS;
+                ICC_UPDOWN_CLASS | ICC_LINK_CLASS;
     InitCommonControlsEx(&icc);
 
     ZeroMemory(&wc, sizeof(wc));

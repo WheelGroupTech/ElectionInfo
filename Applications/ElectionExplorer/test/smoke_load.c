@@ -2223,6 +2223,147 @@ done:
     return rc;
 }
 
+static int test_compare_formatting(void)
+{
+    EeVoterTable a;
+    EeVoterTable b;
+    uint8_t *class_a = NULL;
+    uint8_t *class_b = NULL;
+    EeCompareResult r;
+    int rc = 1;
+    BOOL a_ok = FALSE;
+    BOOL b_ok = FALSE;
+
+    /* Same voter/address; the addresses differ only by commas before city/state
+     * (as happens when one file supplies a full address line and the other parts).
+     * The compare must treat them as unchanged. */
+    a_ok = cmp_write_and_load(L"ee_cmpfmt_a.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78701\n",
+                              &a);
+    b_ok = cmp_write_and_load(L"ee_cmpfmt_b.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,\"100 MAIN ST, AUSTIN, TX 78701\"\n",
+                              &b);
+    if (!a_ok || !b_ok)
+    {
+        goto done;
+    }
+    class_a = (uint8_t *)calloc(a.row_count ? a.row_count : 1, 1);
+    class_b = (uint8_t *)calloc(b.row_count ? b.row_count : 1, 1);
+    if (class_a == NULL || class_b == NULL)
+    {
+        wprintf(L"cmpfmt: out of memory\n");
+        goto done;
+    }
+    if (!EeVoterTable_CompareByVoterId(&a, &b, class_a, class_b, &r, NULL, NULL, NULL))
+    {
+        wprintf(L"cmpfmt: compare failed\n");
+        goto done;
+    }
+    if (r.identical_a != 1 || r.addr_minor_a != 0 || r.addr_major_a != 0 || r.name_minor_a != 0 ||
+        r.name_major_a != 0 || r.pct_changed_a != 0 || r.only_a != 0)
+    {
+        wprintf(L"cmpfmt: comma-only address flagged as change "
+                L"(id=%u amin=%u amaj=%u nmin=%u nmaj=%u pct=%u only=%u)\n",
+                r.identical_a,
+                r.addr_minor_a,
+                r.addr_major_a,
+                r.name_minor_a,
+                r.name_major_a,
+                r.pct_changed_a,
+                r.only_a);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"cmpfmt ok\n");
+
+done:
+    free(class_a);
+    free(class_b);
+    if (a_ok)
+    {
+        EeVoterTable_Clear(&a);
+    }
+    if (b_ok)
+    {
+        EeVoterTable_Clear(&b);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"cmpfmt test failed\n");
+    }
+    return rc;
+}
+
+static int test_compare_missing_state(void)
+{
+    EeVoterTable a;
+    EeVoterTable b;
+    uint8_t *class_a = NULL;
+    uint8_t *class_b = NULL;
+    EeCompareResult r;
+    int rc = 1;
+    BOOL a_ok = FALSE;
+    BOOL b_ok = FALSE;
+
+    /* File A has the state token; file B omits it. Same residence -> not a change
+     * (ZIP already encodes the state). */
+    a_ok = cmp_write_and_load(L"ee_cmpstate_a.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78701\n",
+                              &a);
+    b_ok = cmp_write_and_load(L"ee_cmpstate_b.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 MAIN ST AUSTIN 78701\n",
+                              &b);
+    if (!a_ok || !b_ok)
+    {
+        goto done;
+    }
+    class_a = (uint8_t *)calloc(a.row_count ? a.row_count : 1, 1);
+    class_b = (uint8_t *)calloc(b.row_count ? b.row_count : 1, 1);
+    if (class_a == NULL || class_b == NULL)
+    {
+        wprintf(L"cmpstate: out of memory\n");
+        goto done;
+    }
+    if (!EeVoterTable_CompareByVoterId(&a, &b, class_a, class_b, &r, NULL, NULL, NULL))
+    {
+        wprintf(L"cmpstate: compare failed\n");
+        goto done;
+    }
+    if (r.identical_a != 1 || r.addr_minor_a != 0 || r.addr_major_a != 0)
+    {
+        wprintf(L"cmpstate: missing-state address flagged (id=%u amin=%u amaj=%u)\n",
+                r.identical_a,
+                r.addr_minor_a,
+                r.addr_major_a);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"cmpstate ok\n");
+
+done:
+    free(class_a);
+    free(class_b);
+    if (a_ok)
+    {
+        EeVoterTable_Clear(&a);
+    }
+    if (b_ok)
+    {
+        EeVoterTable_Clear(&b);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"cmpstate test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2248,6 +2389,8 @@ int wmain(void)
     failed |= test_partial_birthdate();
     failed |= test_name_last_first_no_address();
     failed |= test_compare();
+    failed |= test_compare_formatting();
+    failed |= test_compare_missing_state();
     failed |= test_preamble_skip();
     failed |= test_id_voter_header();
     return failed == 0 ? 0 : 1;

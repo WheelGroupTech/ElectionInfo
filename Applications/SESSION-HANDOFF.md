@@ -36,6 +36,22 @@ display:
 
 ## In progress / open questions
 
+**Compare ignores formatting-only + state-token field differences (uncommitted).**
+Before grading Name/Address, both values are canonicalized (`ee_canon_for_compare`
+in `voter_table.c`: lowercase, commas/periods → space, whitespace collapsed), so
+comma/spacing/case differences no longer read as changes (root cause:
+`compose_address` emits commas on the parts/append path but not when a full-address
+line already carries the city/state). Additionally, addresses go through
+`ee_canon_address_for_compare`, which drops the **trailing state token** (the
+2-letter state code in the state slot — before a trailing ZIP, else last token;
+`ee_is_state_code`/`token_is_zip`). ZIP already encodes the state and some files
+omit the state field entirely (e.g. `pr26_olvr_primary_runoff_..._merged.csv`),
+which otherwise made every address differ by the "TX" token. Only the structural
+state slot is examined, so a street named after a state is safe. `field_change_bits`
+gained an `is_address` flag. Display values are untouched — comparison-only.
+Regression tests `test_compare_formatting` (tag `cmpfmt`) and
+`test_compare_missing_state` (tag `cmpstate`).
+
 **Compare minor/major classification (uncommitted — this session).** The Compare
 Summary now reports **Name** and **Address** changes separately, each graded
 **minor** vs **major**, plus a binary **Precinct changed**, alongside the existing

@@ -1466,10 +1466,57 @@ static uint32_t vid_map_find(const uint32_t *slots,
 #define EE_CMP_MINOR_MAX_EDITS 4
 #define EE_CMP_MINOR_MAX_PCT   25
 #define EE_CMP_LEV_MAX_LEN     4096 /* cap the DP so a pathological cell can't blow memory */
+#define EE_CMP_CANON_MAX       1024 /* per-field canonical buffer for comparison */
 
 static int ee_lc(unsigned char c)
 {
     return (c >= 'A' && c <= 'Z') ? (c + ('a' - 'A')) : c;
+}
+
+/* Canonical form for comparison: lowercased, commas/periods treated as spaces,
+ * runs of whitespace collapsed to one, trimmed. This removes formatting-only
+ * differences between files — e.g. one file's normalized address puts commas
+ * before the city/state and the other's does not — so they are not reported as
+ * changes. Truncates at EE_CMP_CANON_MAX (fine for a similarity heuristic). */
+static void ee_canon_for_compare(const char *in, char *out, size_t out_cap)
+{
+    size_t o = 0;
+    BOOL pending_space = FALSE;
+
+    if (out == NULL || out_cap == 0)
+    {
+        return;
+    }
+    if (in != NULL)
+    {
+        for (; *in != '\0'; in++)
+        {
+            unsigned char c = (unsigned char)*in;
+            if (c == ',' || c == '.' || c == ' ' || c == '\t')
+            {
+                if (o > 0)
+                {
+                    pending_space = TRUE; /* collapse; leading separators ignored */
+                }
+                continue;
+            }
+            if (pending_space)
+            {
+                if (o + 1 >= out_cap)
+                {
+                    break;
+                }
+                out[o++] = ' ';
+                pending_space = FALSE;
+            }
+            if (o + 1 >= out_cap)
+            {
+                break;
+            }
+            out[o++] = (char)ee_lc(c);
+        }
+    }
+    out[o] = '\0';
 }
 
 /* Case-insensitive Levenshtein edit distance over UTF-8 bytes (ASCII-fold). Two
@@ -1542,22 +1589,160 @@ static int ee_levenshtein_ci(const char *a, const char *b)
     return result;
 }
 
-/* 0 when equal, else @p minor_bit or @p major_bit by normalized edit distance. */
-static uint8_t field_change_bits(const char *a, const char *b, uint8_t minor_bit, uint8_t major_bit)
+/* TRUE if @p t (length @p len) is a US ZIP token: 5+ chars, all digits except an
+ * optional '-', with at least five digits (ZIP5 or ZIP5-4). */
+static BOOL token_is_zip(const char *t, size_t len)
 {
+    size_t i;
+    size_t digits = 0;
+    if (len < 5)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < len; i++)
+    {
+        if (t[i] >= '0' && t[i] <= '9')
+        {
+            digits++;
+        }
+        else if (t[i] != '-')
+        {
+            return FALSE;
+        }
+    }
+    return digits >= 5;
+}
+
+/* TRUE if @p t (length @p len, already lowercased) is a two-letter US state /
+ * DC code. */
+static BOOL ee_is_state_code(const char *t, size_t len)
+{
+    static const char *const k_states[] = {
+        "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il",
+        "in", "ia", "ks", "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt",
+        "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri",
+        "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy", "dc"};
+    size_t i;
+    if (len != 2)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < ARRAYSIZE(k_states); i++)
+    {
+        if (t[0] == k_states[i][0] && t[1] == k_states[i][1])
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Address canonical form for comparison: ee_canon_for_compare, then drop the
+ * trailing state token (the 2-letter code in the state slot — before a trailing
+ * ZIP, else the last token). ZIP already encodes the state, and some files omit
+ * the state field, so ignoring it avoids false "address changed" results. Only
+ * the structural state slot is examined, so a street named after a state is safe. */
+static void ee_canon_address_for_compare(const char *in, char *out, size_t out_cap)
+{
+    char canon[EE_CMP_CANON_MAX];
+    const char *tok[64];
+    size_t toklen[64];
+    size_t ntok = 0;
+    size_t i;
+    size_t o = 0;
+    int state_idx = -1;
+    const char *p;
+
+    ee_canon_for_compare(in, canon, sizeof(canon));
+    p = canon;
+    while (*p != '\0' && ntok < ARRAYSIZE(tok))
+    {
+        const char *s = p;
+        while (*p != '\0' && *p != ' ')
+        {
+            p++;
+        }
+        tok[ntok] = s;
+        toklen[ntok] = (size_t)(p - s);
+        ntok++;
+        if (*p == ' ')
+        {
+            p++;
+        }
+    }
+    if (ntok == 0)
+    {
+        if (out_cap > 0)
+        {
+            out[0] = '\0';
+        }
+        return;
+    }
+    {
+        size_t last = ntok - 1;
+        size_t slot = (token_is_zip(tok[last], toklen[last]) && ntok >= 2) ? last - 1 : last;
+        if (ee_is_state_code(tok[slot], toklen[slot]))
+        {
+            state_idx = (int)slot;
+        }
+    }
+    for (i = 0; i < ntok; i++)
+    {
+        size_t j;
+        if ((int)i == state_idx)
+        {
+            continue;
+        }
+        if (o > 0 && o + 1 < out_cap)
+        {
+            out[o++] = ' ';
+        }
+        for (j = 0; j < toklen[i] && o + 1 < out_cap; j++)
+        {
+            out[o++] = tok[i][j];
+        }
+    }
+    if (out_cap > 0)
+    {
+        out[o] = '\0';
+    }
+}
+
+/* 0 when equal, else @p minor_bit or @p major_bit by normalized edit distance.
+ * Both values are canonicalized first so comma/period/whitespace/case-only
+ * differences do not register as a change; for addresses the trailing state
+ * token is also dropped (see ee_canon_address_for_compare). */
+static uint8_t field_change_bits(const char *a,
+                                 const char *b,
+                                 uint8_t minor_bit,
+                                 uint8_t major_bit,
+                                 BOOL is_address)
+{
+    char ca[EE_CMP_CANON_MAX];
+    char cb[EE_CMP_CANON_MAX];
     size_t la;
     size_t lb;
     size_t maxlen;
     int dist;
     int pct;
 
-    if (_stricmp(a, b) == 0)
+    if (is_address)
+    {
+        ee_canon_address_for_compare(a, ca, sizeof(ca));
+        ee_canon_address_for_compare(b, cb, sizeof(cb));
+    }
+    else
+    {
+        ee_canon_for_compare(a, ca, sizeof(ca));
+        ee_canon_for_compare(b, cb, sizeof(cb));
+    }
+    if (strcmp(ca, cb) == 0)
     {
         return 0;
     }
-    dist = ee_levenshtein_ci(a, b);
-    la = strlen(a);
-    lb = strlen(b);
+    dist = ee_levenshtein_ci(ca, cb);
+    la = strlen(ca);
+    lb = strlen(cb);
     maxlen = (la > lb) ? la : lb;
     if (maxlen == 0)
     {
@@ -1584,11 +1769,13 @@ static uint8_t classify_matched(const EeVoterTable *a,
     bits |= field_change_bits(EeVoterTable_GetCellUtf8(a, ra, EE_COL_NAME),
                               EeVoterTable_GetCellUtf8(b, rb, EE_COL_NAME),
                               EE_CMP_NAME_MINOR,
-                              EE_CMP_NAME_MAJOR);
+                              EE_CMP_NAME_MAJOR,
+                              FALSE);
     addr_bits = field_change_bits(EeVoterTable_GetCellUtf8(a, ra, EE_COL_ADDRESS),
                                   EeVoterTable_GetCellUtf8(b, rb, EE_COL_ADDRESS),
                                   EE_CMP_ADDR_MINOR,
-                                  EE_CMP_ADDR_MAJOR);
+                                  EE_CMP_ADDR_MAJOR,
+                                  TRUE);
     bits |= addr_bits;
     /* A precinct change that comes with an address change is just the move (the
      * address covers it). Only flag precinct when the address is unchanged, which

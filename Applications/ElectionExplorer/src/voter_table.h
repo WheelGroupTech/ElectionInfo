@@ -154,15 +154,6 @@ extern "C"
     BOOL EeVoterTable_ParseDateYmdW(const wchar_t *s, uint32_t *out_ymd);
 
     /**
-     * @brief TRUE if @p normalized equals @p full_address after ZIP-tail tidy.
-     *
-     * Used when the file has a complete-address column (Residential Address,
-     * Full Address, Complete Address, Registered Address, …).
-     */
-    BOOL EeVoterTable_NormalizedMatchesFullAddress(const wchar_t *normalized,
-                                                   const wchar_t *full_address);
-
-    /**
      * @brief Distinct normalized Voter ID values that occur on two or more rows.
      *        Empty IDs are ignored. Caller frees *out_ids and each string.
      */

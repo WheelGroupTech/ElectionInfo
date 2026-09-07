@@ -36,6 +36,30 @@ display:
 
 ## In progress / open questions
 
+**Compare ignores ZIP+4 precision (uncommitted).** `ee_canon_address_for_compare`
+now reduces the trailing ZIP token to its first five digits, so `78702` vs
+`78702-1234` (or two different +4 add-ons on the same ZIP5) compare equal instead
+of showing a false Address (minor) change. Same structural-slot approach as the
+state strip (only the trailing ZIP token is touched). Test `test_compare_zip4`
+(tag `cmpzip`).
+
+**Canonical normalized address (uncommitted).** `compose_address` (`voter_table.c`)
+now emits one consistent style — `street[, unit], City, STATE ZIP[-ZIP4]` — for
+every file, and **prefers the structured street-part columns** when present
+(Street Number/Name/Type/Unit…), so the unit is included even when a full
+"Residential Address" column omits it (as in Travis `2026-07-20`). When only a
+full-address column exists, it's used as the street line with any trailing
+city/state/ZIP stripped (via their columns) and re-emitted in the canonical tail;
+a full-only file with no city/state/zip columns is left as-is. LOT units still
+excluded. This drops the old "normalized == raw Residential Address" invariant;
+`EeVoterTable_NormalizedMatchesFullAddress` (unused elsewhere) was **removed**
+(voter_table.{c,h}). Tests updated: `resdup` row0 now `"…NB, AUSTIN, TX 78702"`,
+`zipdash` now includes unit + commas and drops the old invariant check; `zip4`,
+`resaddr`, `blkdot`, `lotunit` unchanged. Decisions confirmed with the user:
+always reformat; include the unit.
+Note: ARM64 Release wasn't rebuilt here (the user's running ARM64 Release instance
+holds the exe); x64 Debug/Release + ARM64 Debug + Code Analysis all clean.
+
 **Compare ignores formatting-only + state-token field differences (uncommitted).**
 Before grading Name/Address, both values are canonicalized (`ee_canon_for_compare`
 in `voter_table.c`: lowercase, commas/periods → space, whitespace collapsed), so

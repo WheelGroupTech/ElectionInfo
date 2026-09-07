@@ -1637,11 +1637,16 @@ static BOOL ee_is_state_code(const char *t, size_t len)
     return FALSE;
 }
 
-/* Address canonical form for comparison: ee_canon_for_compare, then drop the
- * trailing state token (the 2-letter code in the state slot — before a trailing
- * ZIP, else the last token). ZIP already encodes the state, and some files omit
- * the state field, so ignoring it avoids false "address changed" results. Only
- * the structural state slot is examined, so a street named after a state is safe. */
+/* Address canonical form for comparison: ee_canon_for_compare, then two
+ * structural adjustments so precision/formatting differences between files don't
+ * read as changes:
+ *   - drop the trailing state token (the 2-letter code in the state slot — before
+ *     a trailing ZIP, else the last token); ZIP already encodes the state and some
+ *     files omit it entirely.
+ *   - reduce the trailing ZIP token to its first five digits, so ZIP5 vs ZIP+4
+ *     (or differing +4 add-ons) on the same ZIP compare equal.
+ * Only the structural state / ZIP slots are examined, so a street named after a
+ * state, or a numeric street token, is safe. */
 static void ee_canon_address_for_compare(const char *in, char *out, size_t out_cap)
 {
     char canon[EE_CMP_CANON_MAX];
@@ -1651,6 +1656,7 @@ static void ee_canon_address_for_compare(const char *in, char *out, size_t out_c
     size_t i;
     size_t o = 0;
     int state_idx = -1;
+    int zip_idx = -1;
     const char *p;
 
     ee_canon_for_compare(in, canon, sizeof(canon));
@@ -1680,7 +1686,12 @@ static void ee_canon_address_for_compare(const char *in, char *out, size_t out_c
     }
     {
         size_t last = ntok - 1;
-        size_t slot = (token_is_zip(tok[last], toklen[last]) && ntok >= 2) ? last - 1 : last;
+        BOOL last_is_zip = token_is_zip(tok[last], toklen[last]);
+        size_t slot = (last_is_zip && ntok >= 2) ? last - 1 : last;
+        if (last_is_zip)
+        {
+            zip_idx = (int)last;
+        }
         if (ee_is_state_code(tok[slot], toklen[slot]))
         {
             state_idx = (int)slot;
@@ -1697,9 +1708,26 @@ static void ee_canon_address_for_compare(const char *in, char *out, size_t out_c
         {
             out[o++] = ' ';
         }
-        for (j = 0; j < toklen[i] && o + 1 < out_cap; j++)
+        if ((int)i == zip_idx)
         {
-            out[o++] = tok[i][j];
+            /* Emit only the first five ZIP digits (ignore +4 / extra precision). */
+            size_t d = 0;
+            for (j = 0; j < toklen[i] && d < 5 && o + 1 < out_cap; j++)
+            {
+                char c = tok[i][j];
+                if (c >= '0' && c <= '9')
+                {
+                    out[o++] = c;
+                    d++;
+                }
+            }
+        }
+        else
+        {
+            for (j = 0; j < toklen[i] && o + 1 < out_cap; j++)
+            {
+                out[o++] = tok[i][j];
+            }
         }
     }
     if (out_cap > 0)
@@ -3423,47 +3451,6 @@ static BOOL unit_type_is_lot(const char *unit_type)
            ascii_fold((unsigned char)p[1]) == 'O' && ascii_fold((unsigned char)p[2]) == 'T';
 }
 
-BOOL EeVoterTable_NormalizedMatchesFullAddress(const wchar_t *normalized,
-                                               const wchar_t *full_address)
-{
-    char norm_utf8[512];
-    char full_utf8[512];
-
-    if (normalized == NULL || full_address == NULL)
-    {
-        return FALSE;
-    }
-    if (full_address[0] == L'\0')
-    {
-        return TRUE;
-    }
-    if (WideCharToMultiByte(CP_UTF8,
-                            0,
-                            normalized,
-                            -1,
-                            norm_utf8,
-                            (int)sizeof(norm_utf8),
-                            NULL,
-                            NULL) <= 0)
-    {
-        return FALSE;
-    }
-    if (WideCharToMultiByte(CP_UTF8,
-                            0,
-                            full_address,
-                            -1,
-                            full_utf8,
-                            (int)sizeof(full_utf8),
-                            NULL,
-                            NULL) <= 0)
-    {
-        return FALSE;
-    }
-    tidy_house_number_token(full_utf8);
-    tidy_zip_tail(full_utf8);
-    return _stricmp(norm_utf8, full_utf8) == 0;
-}
-
 static BOOL compose_address(const FieldList *fields,
                             int full_idx,
                             int number_idx,
@@ -3482,15 +3469,19 @@ static BOOL compose_address(const FieldList *fields,
 {
     size_t len = 0;
     const char *full = field_at(fields, full_idx);
+    const char *number = field_at(fields, number_idx);
+    const char *street = field_at(fields, street_idx);
     const char *city = field_at(fields, city_idx);
     const char *state = field_at(fields, state_idx);
     const char *unit_type = field_at(fields, unit_type_idx);
     const char *unit = field_at(fields, unit_idx);
     char zip5[8];
     char zip4_use[8];
-    char full_buf[512];
-    char num_buf[64];
     BOOL skip_unit = unit_type_is_lot(unit_type);
+    /* Structured street parts are authoritative when present: they let us build a
+     * consistent street line (including the unit) regardless of whether a
+     * full-address column carries the unit / city / state / ZIP. */
+    BOOL have_parts = (number[0] != '\0' || street[0] != '\0');
 
     split_zip(field_at(fields, zip_idx),
               field_at(fields, zip4_idx),
@@ -3500,31 +3491,17 @@ static BOOL compose_address(const FieldList *fields,
               sizeof(zip4_use));
 
     out[0] = '\0';
-    if (full[0] != '\0')
+    if (have_parts)
     {
-        if (FAILED(StringCchCopyA(full_buf, ARRAYSIZE(full_buf), full)))
-        {
-            return FALSE;
-        }
-        tidy_house_number_token(full_buf);
-        tidy_zip_tail(full_buf);
-        /* Complete-address columns are the normalized street line (after ZIP
-         * tidy). City/ZIP are appended only when missing from that line. */
-        if (!append_name_part(out, out_cap, &len, full_buf))
-        {
-            return FALSE;
-        }
-    }
-    else
-    {
-        if (FAILED(StringCchCopyA(num_buf, ARRAYSIZE(num_buf), field_at(fields, number_idx))))
+        char num_buf[64];
+        if (FAILED(StringCchCopyA(num_buf, ARRAYSIZE(num_buf), number)))
         {
             return FALSE;
         }
         tidy_house_number_token(num_buf);
         if (!append_name_part(out, out_cap, &len, num_buf) ||
             !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
-            !append_name_part(out, out_cap, &len, field_at(fields, street_idx)) ||
+            !append_name_part(out, out_cap, &len, street) ||
             !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
             !append_name_part(out, out_cap, &len, field_at(fields, postdir_idx)) ||
             (!skip_unit && !append_name_part(out, out_cap, &len, unit_type)) ||
@@ -3533,54 +3510,66 @@ static BOOL compose_address(const FieldList *fields,
             return FALSE;
         }
     }
+    else if (full[0] != '\0')
+    {
+        /* Only a full-address column: use it as the street line, stripping any
+         * trailing city / state / ZIP (from their columns) so the tail below can
+         * re-emit them consistently. When those columns are absent, the line is
+         * left intact. */
+        char full_buf[512];
+        size_t flen;
+        size_t remain = 0;
+        if (FAILED(StringCchCopyA(full_buf, ARRAYSIZE(full_buf), full)))
+        {
+            return FALSE;
+        }
+        tidy_house_number_token(full_buf);
+        tidy_zip_tail(full_buf);
+        flen = strlen(full_buf);
+        if (zip5[0] != '\0' && ends_with_zip5(full_buf, flen, zip5, &remain))
+        {
+            flen = remain;
+        }
+        if (state[0] != '\0' && ends_with_phrase_ci(full_buf, flen, state, &remain))
+        {
+            flen = remain;
+        }
+        if (city[0] != '\0' && ends_with_phrase_ci(full_buf, flen, city, &remain))
+        {
+            flen = remain;
+        }
+        skip_trailing_addr_seps(full_buf, &flen);
+        full_buf[flen] = '\0';
+        if (!append_name_part(out, out_cap, &len, full_buf))
+        {
+            return FALSE;
+        }
+    }
 
     {
-        size_t remain = len;
-        BOOL have_zip = FALSE;
-        BOOL have_state = FALSE;
-        BOOL have_city = FALSE;
-        BOOL need_city;
-        BOOL need_state;
-        BOOL need_zip;
-
-        if (zip5[0] != '\0' && ends_with_zip5(out, remain, zip5, &remain))
-        {
-            have_zip = TRUE;
-        }
-        if (state[0] != '\0' && ends_with_phrase_ci(out, remain, state, &remain))
-        {
-            have_state = TRUE;
-        }
-        if (city[0] != '\0' && ends_with_phrase_ci(out, remain, city, &remain))
-        {
-            have_city = TRUE;
-        }
-
-        need_city = city[0] != '\0' && !have_city;
-        need_state = state[0] != '\0' && !have_state;
-        need_zip = zip5[0] != '\0' && !have_zip;
-
-        if (need_city || need_state || need_zip)
+        /* Consistent tail: "…, City, STATE ZIP[-ZIP4]" from the columns. The
+         * street line above never contains these, so always append them. */
+        if (city[0] != '\0' || state[0] != '\0' || zip5[0] != '\0')
         {
             if (len > 0 && !append_literal(out, out_cap, &len, ","))
             {
                 return FALSE;
             }
-            if (need_city && !append_name_part(out, out_cap, &len, city))
+            if (city[0] != '\0' && !append_name_part(out, out_cap, &len, city))
             {
                 return FALSE;
             }
-            if (need_state || need_zip)
+            if (state[0] != '\0' || zip5[0] != '\0')
             {
-                if (need_city && !append_literal(out, out_cap, &len, ","))
+                if (city[0] != '\0' && !append_literal(out, out_cap, &len, ","))
                 {
                     return FALSE;
                 }
-                if (need_state && !append_name_part(out, out_cap, &len, state))
+                if (state[0] != '\0' && !append_name_part(out, out_cap, &len, state))
                 {
                     return FALSE;
                 }
-                if (need_zip)
+                if (zip5[0] != '\0')
                 {
                     if (!append_name_part(out, out_cap, &len, zip5))
                     {

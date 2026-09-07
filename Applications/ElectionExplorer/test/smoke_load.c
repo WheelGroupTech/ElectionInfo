@@ -448,7 +448,7 @@ static int test_res_addr_no_duplicate_city_state_zip(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"1109 N IH 35  NB AUSTIN TX 78702") != 0)
+    if (wcscmp(buf, L"1109 N IH 35  NB, AUSTIN, TX 78702") != 0)
     {
         wprintf(L"resdup: duplicate city/state/zip (%s)\n", buf);
         goto done;
@@ -531,38 +531,25 @@ static int test_res_addr_zip_dash_and_unit(void)
         wprintf(L"zipdash: NAME mismatch (%s)\n", buf);
         goto done;
     }
+    /* Built from parts now: the unit (from Unit/Unit Type) is included and the
+     * tail is emitted in the consistent "street, city, STATE zip" style. */
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"3001 MEDICAL ARTS ST AUSTIN TX 78705") != 0)
+    if (wcscmp(buf, L"3001 MEDICAL ARTS ST APT 116, AUSTIN, TX 78705") != 0)
     {
         wprintf(L"zipdash: empty +4 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"3400 HARMON AVE AUSTIN TX 78705-2119") != 0)
+    if (wcscmp(buf, L"3400 HARMON AVE APT 367, AUSTIN, TX 78705-2119") != 0)
     {
         wprintf(L"zipdash: zip+4 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"3502 RED RIVER ST AUSTIN TX 78705") != 0)
+    if (wcscmp(buf, L"3502 RED RIVER ST, AUSTIN, TX 78705") != 0)
     {
         wprintf(L"zipdash: no-unit empty +4 mismatch (%s)\n", buf);
         goto done;
-    }
-    {
-        uint32_t row;
-        wchar_t norm[220];
-        wchar_t full[220];
-        for (row = 0; row < t.row_count; row++)
-        {
-            EeVoterTable_GetViewCellW(&t, row, EE_COL_ADDRESS, norm, ARRAYSIZE(norm));
-            EeVoterTable_GetViewCellW(&t, row, 6, full, ARRAYSIZE(full));
-            if (!EeVoterTable_NormalizedMatchesFullAddress(norm, full))
-            {
-                wprintf(L"zipdash: row %u normalized '%s' != full '%s'\n", row, norm, full);
-                goto done;
-            }
-        }
     }
     rc = 0;
     wprintf(L"zipdash ok\n");
@@ -2364,6 +2351,72 @@ done:
     return rc;
 }
 
+static int test_compare_zip4(void)
+{
+    EeVoterTable a;
+    EeVoterTable b;
+    uint8_t *class_a = NULL;
+    uint8_t *class_b = NULL;
+    EeCompareResult r;
+    int rc = 1;
+    BOOL a_ok = FALSE;
+    BOOL b_ok = FALSE;
+
+    /* Same residence; one file has ZIP5, the other ZIP5-4. Not a change. */
+    a_ok = cmp_write_and_load(L"ee_cmpzip_a.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78702\n",
+                              &a);
+    b_ok = cmp_write_and_load(L"ee_cmpzip_b.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78702-1234\n",
+                              &b);
+    if (!a_ok || !b_ok)
+    {
+        goto done;
+    }
+    class_a = (uint8_t *)calloc(a.row_count ? a.row_count : 1, 1);
+    class_b = (uint8_t *)calloc(b.row_count ? b.row_count : 1, 1);
+    if (class_a == NULL || class_b == NULL)
+    {
+        wprintf(L"cmpzip: out of memory\n");
+        goto done;
+    }
+    if (!EeVoterTable_CompareByVoterId(&a, &b, class_a, class_b, &r, NULL, NULL, NULL))
+    {
+        wprintf(L"cmpzip: compare failed\n");
+        goto done;
+    }
+    if (r.identical_a != 1 || r.addr_minor_a != 0 || r.addr_major_a != 0)
+    {
+        wprintf(L"cmpzip: ZIP+4-only difference flagged (id=%u amin=%u amaj=%u)\n",
+                r.identical_a,
+                r.addr_minor_a,
+                r.addr_major_a);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"cmpzip ok\n");
+
+done:
+    free(class_a);
+    free(class_b);
+    if (a_ok)
+    {
+        EeVoterTable_Clear(&a);
+    }
+    if (b_ok)
+    {
+        EeVoterTable_Clear(&b);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"cmpzip test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2391,6 +2444,7 @@ int wmain(void)
     failed |= test_compare();
     failed |= test_compare_formatting();
     failed |= test_compare_missing_state();
+    failed |= test_compare_zip4();
     failed |= test_preamble_skip();
     failed |= test_id_voter_header();
     return failed == 0 ? 0 : 1;

@@ -36,6 +36,18 @@ display:
 
 ## In progress / open questions
 
+**Differences window polish (uncommitted).** The side-by-side Differences window
+now: (1) draws **bold headers on the grey header background** via a list subclass
+(`DiffListSubclass` + `App_HeaderCustomDraw`, left-aligned like the main grid);
+(2) **sorts by any column** on header click (`Diff_Sort`/`diff_sort_cmp`, Voter ID
+numeric-aware, toggling asc/desc with a header sort arrow via
+`Diff_UpdateHeaderArrows`); (3) supports **multi-select + copy** — removed
+`LVS_SINGLESEL`, Ctrl+C (shared accelerator → `IDM_EDIT_COPY`) and a right-click
+**Copy** menu (`Diff_OnContextMenu`) call `Diff_CopySelected`, which puts
+tab-separated `Voter ID / Field / A value / B value` rows on the clipboard via
+`App_SetClipboardUtf8`. `main.c` only; builds clean (4 configs + Code Analysis),
+smoke tests pass. **GUI not yet click-tested** by the user.
+
 **Compare "Show Differences…" side-by-side view (uncommitted).** The Compare
 Summary window gained a **Show Differences…** button that opens a modeless detail
 window (`k_DiffClassName`, singleton `g_diff`) listing every changed voter's

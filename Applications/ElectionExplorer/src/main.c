@@ -212,6 +212,8 @@ typedef struct DiffWindow
     AppState *b;
     DiffRow *rows;      /* one entry per differing (voter, field) */
     uint32_t row_count;
+    int sort_col;       /* -1 = unsorted; else 0..3 */
+    BOOL sort_asc;
 } DiffWindow;
 
 static DiffWindow *g_diff = NULL;
@@ -6725,6 +6727,8 @@ static void App_ShowDifferences(CompareWindow *cw)
     dw->b = cw->b;
     dw->rows = rows;
     dw->row_count = row_count;
+    dw->sort_col = -1;
+    dw->sort_asc = TRUE;
 
     base_a = App_PathBaseName(cw->a->load_path);
     base_b = App_PathBaseName(cw->b->load_path);
@@ -6775,6 +6779,261 @@ static void App_CloseDiff(AppState *app)
     }
 }
 
+/* Subclass so the differences list draws its header bold on the grey header
+ * background, like the voter list (header NM_CUSTOMDRAW is delivered to the list,
+ * the header's parent). */
+static WNDPROC g_old_diff_list_proc = NULL;
+
+static LRESULT CALLBACK DiffListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        DiffWindow *dw = (DiffWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (dw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(dw->a, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_diff_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static const char *Diff_FieldNameUtf8(uint32_t col)
+{
+    return (col == EE_COL_NAME)       ? "Name"
+           : (col == EE_COL_ADDRESS)  ? "Address"
+           : (col == EE_COL_PRECINCT) ? "Precinct"
+                                      : "";
+}
+
+/* Voter IDs compare numerically when both are all digits, else case-insensitive. */
+static int diff_cmp_ids(const char *a, const char *b)
+{
+    if (a[0] != '\0' && b[0] != '\0')
+    {
+        char *ea = NULL;
+        char *eb = NULL;
+        unsigned __int64 na = _strtoui64(a, &ea, 10);
+        unsigned __int64 nb = _strtoui64(b, &eb, 10);
+        if (ea != NULL && *ea == '\0' && eb != NULL && *eb == '\0')
+        {
+            return (na < nb) ? -1 : (na > nb ? 1 : 0);
+        }
+    }
+    return _stricmp(a, b);
+}
+
+typedef struct DiffSortCtx
+{
+    const EeVoterTable *a;
+    const EeVoterTable *b;
+    int col;
+    BOOL asc;
+} DiffSortCtx;
+
+static int diff_sort_cmp(void *ctxv, const void *pa, const void *pb)
+{
+    const DiffSortCtx *ctx = (const DiffSortCtx *)ctxv;
+    const DiffRow *ra = (const DiffRow *)pa;
+    const DiffRow *rb = (const DiffRow *)pb;
+    int c;
+
+    switch (ctx->col)
+    {
+        case 0:
+            c = diff_cmp_ids(EeVoterTable_GetCellUtf8(ctx->a, ra->row_a, EE_COL_VOTER_ID),
+                             EeVoterTable_GetCellUtf8(ctx->a, rb->row_a, EE_COL_VOTER_ID));
+            break;
+        case 1:
+            c = _stricmp(Diff_FieldNameUtf8(ra->col), Diff_FieldNameUtf8(rb->col));
+            break;
+        case 2:
+            c = _stricmp(EeVoterTable_GetCellUtf8(ctx->a, ra->row_a, ra->col),
+                         EeVoterTable_GetCellUtf8(ctx->a, rb->row_a, rb->col));
+            break;
+        default: /* 3 */
+            c = _stricmp(EeVoterTable_GetCellUtf8(ctx->b, ra->row_b, ra->col),
+                         EeVoterTable_GetCellUtf8(ctx->b, rb->row_b, rb->col));
+            break;
+    }
+    if (c == 0)
+    {
+        /* Stable-ish tiebreak so a voter's fields stay together. */
+        c = diff_cmp_ids(EeVoterTable_GetCellUtf8(ctx->a, ra->row_a, EE_COL_VOTER_ID),
+                         EeVoterTable_GetCellUtf8(ctx->a, rb->row_a, EE_COL_VOTER_ID));
+    }
+    return ctx->asc ? c : -c;
+}
+
+/* Show the sort arrow on the active column header. */
+static void Diff_UpdateHeaderArrows(DiffWindow *dw)
+{
+    HWND hdr;
+    int i;
+    int n;
+
+    if (dw->list == NULL)
+    {
+        return;
+    }
+    hdr = ListView_GetHeader(dw->list);
+    if (hdr == NULL)
+    {
+        return;
+    }
+    n = Header_GetItemCount(hdr);
+    for (i = 0; i < n; i++)
+    {
+        HDITEMW it;
+        ZeroMemory(&it, sizeof(it));
+        it.mask = HDI_FORMAT;
+        Header_GetItem(hdr, i, &it);
+        it.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (i == dw->sort_col)
+        {
+            it.fmt |= dw->sort_asc ? HDF_SORTUP : HDF_SORTDOWN;
+        }
+        Header_SetItem(hdr, i, &it);
+    }
+}
+
+static void Diff_Sort(DiffWindow *dw, int col)
+{
+    DiffSortCtx ctx;
+
+    if (dw == NULL || col < 0 || col > 3)
+    {
+        return;
+    }
+    if (dw->sort_col == col)
+    {
+        dw->sort_asc = !dw->sort_asc;
+    }
+    else
+    {
+        dw->sort_col = col;
+        dw->sort_asc = TRUE;
+    }
+    ctx.a = &dw->a->table;
+    ctx.b = &dw->b->table;
+    ctx.col = col;
+    ctx.asc = dw->sort_asc;
+    if (dw->rows != NULL && dw->row_count > 1)
+    {
+        qsort_s(dw->rows, dw->row_count, sizeof(DiffRow), diff_sort_cmp, &ctx);
+    }
+    Diff_UpdateHeaderArrows(dw);
+    if (dw->list != NULL)
+    {
+        ListView_RedrawItems(dw->list, 0, (int)dw->row_count);
+        InvalidateRect(dw->list, NULL, FALSE);
+    }
+}
+
+/* Copy the selected rows as tab-separated UTF-8 (Voter ID, Field, A value, B value). */
+static void Diff_CopySelected(DiffWindow *dw)
+{
+    const EeVoterTable *a;
+    const EeVoterTable *b;
+    int i;
+    size_t total = 0;
+    char *buf;
+    char *p;
+
+    if (dw == NULL || dw->list == NULL)
+    {
+        return;
+    }
+    a = &dw->a->table;
+    b = &dw->b->table;
+
+    i = ListView_GetNextItem(dw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < dw->row_count)
+        {
+            const DiffRow *dr = &dw->rows[i];
+            total += strlen(EeVoterTable_GetCellUtf8(a, dr->row_a, EE_COL_VOTER_ID));
+            total += strlen(Diff_FieldNameUtf8(dr->col));
+            total += strlen(EeVoterTable_GetCellUtf8(a, dr->row_a, dr->col));
+            total += strlen(EeVoterTable_GetCellUtf8(b, dr->row_b, dr->col));
+            total += 5; /* 3 tabs + CR + LF */
+        }
+        i = ListView_GetNextItem(dw->list, i, LVNI_SELECTED);
+    }
+    if (total == 0)
+    {
+        return;
+    }
+    buf = (char *)malloc(total + 1);
+    if (buf == NULL)
+    {
+        return;
+    }
+    p = buf;
+    i = ListView_GetNextItem(dw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < dw->row_count)
+        {
+            const DiffRow *dr = &dw->rows[i];
+            const char *fields[4];
+            int f;
+            fields[0] = EeVoterTable_GetCellUtf8(a, dr->row_a, EE_COL_VOTER_ID);
+            fields[1] = Diff_FieldNameUtf8(dr->col);
+            fields[2] = EeVoterTable_GetCellUtf8(a, dr->row_a, dr->col);
+            fields[3] = EeVoterTable_GetCellUtf8(b, dr->row_b, dr->col);
+            for (f = 0; f < 4; f++)
+            {
+                size_t n = strlen(fields[f]);
+                memcpy(p, fields[f], n);
+                p += n;
+                *p++ = (f < 3) ? '\t' : '\r';
+            }
+            *p++ = '\n';
+        }
+        i = ListView_GetNextItem(dw->list, i, LVNI_SELECTED);
+    }
+    *p = '\0';
+    App_SetClipboardUtf8(dw->hwnd, buf);
+    free(buf);
+}
+
+/* Right-click: select the row if needed, then a Copy menu. */
+static void Diff_OnContextMenu(DiffWindow *dw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+
+    if (dw == NULL || dw->list == NULL)
+    {
+        return;
+    }
+    if (item >= 0 && !(ListView_GetItemState(dw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(dw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(dw->list,
+                              item,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    cmd = (UINT)
+        TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, dw->hwnd, NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_EDIT_COPY)
+    {
+        Diff_CopySelected(dw);
+    }
+}
+
 static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     DiffWindow *dw = (DiffWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -6801,7 +7060,7 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                        WC_LISTVIEWW,
                                        L"",
                                        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
-                                           LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                           LVS_SHOWSELALWAYS,
                                        0,
                                        0,
                                        rc.right,
@@ -6813,6 +7072,16 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (dw->list == NULL)
             {
                 return -1;
+            }
+            /* Subclass for the bold header draw (see DiffListSubclass). */
+            {
+                WNDPROC old = (WNDPROC)SetWindowLongPtrW(dw->list,
+                                                         GWLP_WNDPROC,
+                                                         (LONG_PTR)DiffListSubclass);
+                if (g_old_diff_list_proc == NULL)
+                {
+                    g_old_diff_list_proc = old;
+                }
             }
             ListView_SetExtendedListViewStyle(dw->list,
                                               LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
@@ -6868,7 +7137,10 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 {
                     SendMessageW(dw->status, WM_SETFONT, (WPARAM)dw->a->font_ui, TRUE);
                 }
-                StringCchPrintfW(st, ARRAYSIZE(st), L"%u differing field(s)", dw->row_count);
+                StringCchPrintfW(st,
+                                 ARRAYSIZE(st),
+                                 L"%u differing field(s) — click a header to sort, Ctrl+C to copy",
+                                 dw->row_count);
                 SendMessageW(dw->status, SB_SETTEXTW, 0, (LPARAM)st);
             }
 
@@ -6891,13 +7163,23 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
             return 0;
 
+        case WM_COMMAND:
+            /* Ctrl+C is routed here by the shared accelerator table. */
+            if (dw != NULL && LOWORD(wParam) == IDM_EDIT_COPY)
+            {
+                Diff_CopySelected(dw);
+                return 0;
+            }
+            break;
+
         case WM_NOTIFY:
         {
             NMHDR *hdr = (NMHDR *)lParam;
-            if (dw == NULL || hdr->hwndFrom != dw->list || hdr->code != LVN_GETDISPINFOW)
+            if (dw == NULL || hdr->hwndFrom != dw->list)
             {
                 break;
             }
+            if (hdr->code == LVN_GETDISPINFOW)
             {
                 NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
                 int idx = di->item.iItem;
@@ -6928,6 +7210,21 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 }
                 return 0;
             }
+            if (hdr->code == LVN_COLUMNCLICK)
+            {
+                NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+                Diff_Sort(dw, nlv->iSubItem);
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(dw->list, &screen);
+                Diff_OnContextMenu(dw, ia->iItem, screen);
+                return 0;
+            }
+            break;
         }
 
         case WM_DESTROY:

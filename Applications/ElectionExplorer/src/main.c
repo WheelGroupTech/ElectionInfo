@@ -5787,21 +5787,92 @@ static void App_BuildCompareMenu(AppState *app, HMENU popup)
     }
 }
 
-/* Description shown in a viewer's status bar for a compare mark view. */
-static void App_CompareLabel(int kind, const wchar_t *other_base, wchar_t *out, size_t cch)
+/* Rows of the Compare Summary, in display order. */
+enum
 {
-    const wchar_t *what = (kind == EE_SCAN_CMP_CHANGED)     ? L"changed voters vs"
-                          : (kind == EE_SCAN_CMP_IDENTICAL) ? L"identical voters vs"
-                                                            : L"voters only here vs";
-    StringCchPrintfW(out, cch, L"%s %s", what, other_base);
+    CMP_BUCKET_ONLY = 0,
+    CMP_BUCKET_NAME_MINOR,
+    CMP_BUCKET_NAME_MAJOR,
+    CMP_BUCKET_ADDR_MINOR,
+    CMP_BUCKET_ADDR_MAJOR,
+    CMP_BUCKET_PCT,
+    CMP_BUCKET_IDENTICAL,
+    CMP_BUCKET_COUNT
+};
+
+typedef struct CompareBucket
+{
+    const wchar_t *label;  /* summary-row text */
+    const wchar_t *phrase; /* status-bar phrase for the highlighted view */
+    uint8_t mask;          /* class bit to match; 0 = identical special case */
+} CompareBucket;
+
+static const CompareBucket k_CompareBuckets[CMP_BUCKET_COUNT] = {
+    {L"Only here", L"voters only here vs", EE_CMP_ONLY_HERE},
+    {L"Name (minor)", L"name (minor) changes vs", EE_CMP_NAME_MINOR},
+    {L"Name (major)", L"name (major) changes vs", EE_CMP_NAME_MAJOR},
+    {L"Address (minor)", L"address (minor) changes vs", EE_CMP_ADDR_MINOR},
+    {L"Address (major)", L"address (major) changes vs", EE_CMP_ADDR_MAJOR},
+    {L"Precinct changed", L"precinct changes vs", EE_CMP_PCT_CHANGED},
+    {L"Identical", L"identical voters vs", 0},
+};
+
+static BOOL compare_row_in_bucket(uint8_t cls, int bucket)
+{
+    if (bucket == CMP_BUCKET_IDENTICAL)
+    {
+        return (cls & EE_CMP_MATCHED) != 0 && (cls & EE_CMP_CHANGE_BITS) == 0;
+    }
+    return (cls & k_CompareBuckets[bucket].mask) != 0;
 }
 
-/* Build a fresh mark buffer from @p cls (== @p category) and show it in @p app. */
+static void compare_bucket_counts(const EeCompareResult *r,
+                                  int bucket,
+                                  uint32_t *out_a,
+                                  uint32_t *out_b)
+{
+    switch (bucket)
+    {
+        case CMP_BUCKET_ONLY:
+            *out_a = r->only_a;
+            *out_b = r->only_b;
+            break;
+        case CMP_BUCKET_NAME_MINOR:
+            *out_a = r->name_minor_a;
+            *out_b = r->name_minor_b;
+            break;
+        case CMP_BUCKET_NAME_MAJOR:
+            *out_a = r->name_major_a;
+            *out_b = r->name_major_b;
+            break;
+        case CMP_BUCKET_ADDR_MINOR:
+            *out_a = r->addr_minor_a;
+            *out_b = r->addr_minor_b;
+            break;
+        case CMP_BUCKET_ADDR_MAJOR:
+            *out_a = r->addr_major_a;
+            *out_b = r->addr_major_b;
+            break;
+        case CMP_BUCKET_PCT:
+            *out_a = r->pct_changed_a;
+            *out_b = r->pct_changed_b;
+            break;
+        case CMP_BUCKET_IDENTICAL:
+            *out_a = r->identical_a;
+            *out_b = r->identical_b;
+            break;
+        default:
+            *out_a = 0;
+            *out_b = 0;
+            break;
+    }
+}
+
+/* Build a fresh mark buffer of the rows in @p bucket and show it in @p app. */
 static void App_ShowCompareCategory(AppState *app,
                                     const uint8_t *cls,
                                     uint32_t rows,
-                                    uint8_t category,
-                                    int kind,
+                                    int bucket,
                                     const wchar_t *other_base)
 {
     uint8_t *marks;
@@ -5809,7 +5880,8 @@ static void App_ShowCompareCategory(AppState *app,
     uint32_t count = 0;
     wchar_t label[160];
 
-    if (app == NULL || app->hwnd_main == NULL || cls == NULL)
+    if (app == NULL || app->hwnd_main == NULL || cls == NULL || bucket < 0 ||
+        bucket >= CMP_BUCKET_COUNT)
     {
         return;
     }
@@ -5829,7 +5901,7 @@ static void App_ShowCompareCategory(AppState *app,
     }
     for (i = 0; i < rows; i++)
     {
-        if (cls[i] == category)
+        if (compare_row_in_bucket(cls[i], bucket))
         {
             marks[i] = 1;
             count++;
@@ -5839,13 +5911,17 @@ static void App_ShowCompareCategory(AppState *app,
     {
         free(marks);
         MessageBoxW(app->hwnd_main,
-                    L"No rows in that category.",
+                    L"No voters in that category.",
                     k_WindowTitle,
                     MB_ICONINFORMATION | MB_OK);
         return;
     }
-    App_CompareLabel(kind, other_base, label, ARRAYSIZE(label));
-    App_ApplyMarks(app, marks, count, kind, EE_COL_VOTER_ID, label);
+    StringCchPrintfW(label,
+                     ARRAYSIZE(label),
+                     L"%s %s",
+                     k_CompareBuckets[bucket].phrase,
+                     other_base);
+    App_ApplyMarks(app, marks, count, EE_SCAN_CMP_CHANGED, EE_COL_VOTER_ID, label);
     App_ActivateViewer(app);
 }
 
@@ -5907,7 +5983,7 @@ static void App_ShowCompareWindow(AppState *a,
         y = pr.top + Scale(a, 60);
     }
     w = Scale(a, 460);
-    h = Scale(a, 260);
+    h = Scale(a, 340);
 
     cw->hwnd = CreateWindowExW(0,
                                k_CompareClassName,
@@ -6157,24 +6233,24 @@ static void App_CloseCompare(AppState *app)
 /* Populate the 3x2 summary list and size the window to fit. */
 static void Compare_Populate(CompareWindow *cw)
 {
-    static const wchar_t *rows[3] = {L"Only here", L"Changed", L"Identical"};
-    const uint32_t a_counts[3] = {cw->result.only_a, cw->result.changed_a, cw->result.identical_a};
-    const uint32_t b_counts[3] = {cw->result.only_b, cw->result.changed_b, cw->result.identical_b};
     int i;
 
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < CMP_BUCKET_COUNT; i++)
     {
         LVITEMW it;
         wchar_t num[32];
+        uint32_t ca = 0;
+        uint32_t cb = 0;
         ZeroMemory(&it, sizeof(it));
         it.mask = LVIF_TEXT;
         it.iItem = i;
         it.iSubItem = 0;
-        it.pszText = (wchar_t *)rows[i];
+        it.pszText = (wchar_t *)k_CompareBuckets[i].label;
         ListView_InsertItem(cw->list, &it);
-        StringCchPrintfW(num, ARRAYSIZE(num), L"%u", a_counts[i]);
+        compare_bucket_counts(&cw->result, i, &ca, &cb);
+        StringCchPrintfW(num, ARRAYSIZE(num), L"%u", ca);
         ListView_SetItemText(cw->list, i, 1, num);
-        StringCchPrintfW(num, ARRAYSIZE(num), L"%u", b_counts[i]);
+        StringCchPrintfW(num, ARRAYSIZE(num), L"%u", cb);
         ListView_SetItemText(cw->list, i, 2, num);
     }
 }
@@ -6197,14 +6273,12 @@ static void Compare_Layout(CompareWindow *cw, int cx, int cy)
     }
 }
 
-/* Apply the row the user acted on to viewer @p to_b ? B : A. */
+/* Apply the summary row (bucket) the user acted on to viewer @p to_b ? B : A. */
 static void Compare_ShowRow(CompareWindow *cw, int row, BOOL to_b)
 {
-    static const uint8_t cats[3] = {EE_CMP_ONLY_HERE, EE_CMP_CHANGED, EE_CMP_IDENTICAL};
-    static const int kinds[3] = {EE_SCAN_CMP_ONLY, EE_SCAN_CMP_CHANGED, EE_SCAN_CMP_IDENTICAL};
     const wchar_t *base_other;
 
-    if (cw == NULL || row < 0 || row > 2)
+    if (cw == NULL || row < 0 || row >= CMP_BUCKET_COUNT)
     {
         return;
     }
@@ -6215,7 +6289,7 @@ static void Compare_ShowRow(CompareWindow *cw, int row, BOOL to_b)
         {
             base_other = L"other file";
         }
-        App_ShowCompareCategory(cw->b, cw->class_b, cw->rows_b, cats[row], kinds[row], base_other);
+        App_ShowCompareCategory(cw->b, cw->class_b, cw->rows_b, row, base_other);
     }
     else
     {
@@ -6224,7 +6298,7 @@ static void Compare_ShowRow(CompareWindow *cw, int row, BOOL to_b)
         {
             base_other = L"other file";
         }
-        App_ShowCompareCategory(cw->a, cw->class_a, cw->rows_a, cats[row], kinds[row], base_other);
+        App_ShowCompareCategory(cw->a, cw->class_a, cw->rows_a, row, base_other);
     }
 }
 
@@ -6237,7 +6311,7 @@ static void Compare_OnContextMenu(CompareWindow *cw, int row, POINT screen)
     wchar_t item_b[MAX_PATH + 32];
     int cmd;
 
-    if (cw == NULL || row < 0 || row > 2)
+    if (cw == NULL || row < 0 || row >= CMP_BUCKET_COUNT)
     {
         return;
     }
@@ -6500,6 +6574,9 @@ static const wchar_t k_HelpCompare[] =
     L"with a blank Voter ID are counted here).\r\n\r\n"
     L"•  Changed — voters found in both files whose Precinct, Name, or "
     L"Address differs.\r\n\r\n"
+    L"•  Precinct changed — voters whose precinct differs but whose address "
+    L"is unchanged (re-precincting). A precinct change that comes with an address "
+    L"change is treated as a move and shown under Address, not here.\r\n\r\n"
     L"•  Identical — voters found in both files with matching Precinct, "
     L"Name, and Address.\r\n\r\n"
     L"Double-click a row to highlight those voters in the grid (the left count "

@@ -255,31 +255,52 @@ extern "C"
     /* Two-file compare (by Voter ID)                                             */
     /* -------------------------------------------------------------------------- */
 
-    /** Per physical row classification produced by EeVoterTable_CompareByVoterId. */
+    /**
+     * Per physical row classification produced by EeVoterTable_CompareByVoterId,
+     * as a bit set. EE_CMP_ONLY_HERE is exclusive of the matched bits; a matched
+     * row with none of the change bits set is "identical". Name and Address each
+     * grade to a minor or major change (normalized case-insensitive edit distance);
+     * Precinct is a binary changed flag (a precinct is a code, not free text).
+     */
     enum
     {
-        EE_CMP_NONE = 0,      /* untouched */
-        EE_CMP_ONLY_HERE = 1, /* Voter ID absent from the other file (incl. blank ID) */
-        EE_CMP_CHANGED = 2,   /* ID present in both, a normalized field differs */
-        EE_CMP_IDENTICAL = 3  /* ID present in both, Precinct/Name/Address all equal */
+        EE_CMP_NONE = 0x00,       /* untouched (not part of the compare) */
+        EE_CMP_ONLY_HERE = 0x01,  /* Voter ID absent from the other file (incl. blank ID) */
+        EE_CMP_MATCHED = 0x02,    /* Voter ID present in both files */
+        EE_CMP_NAME_MINOR = 0x04, /* Name differs slightly */
+        EE_CMP_NAME_MAJOR = 0x08, /* Name differs substantially */
+        EE_CMP_ADDR_MINOR = 0x10, /* Address differs slightly */
+        EE_CMP_ADDR_MAJOR = 0x20, /* Address differs substantially */
+        EE_CMP_PCT_CHANGED = 0x40 /* Precinct differs */
     };
+
+    /* All "something changed" bits (matched rows without any of these are identical). */
+#define EE_CMP_CHANGE_BITS                                                                          \
+    (EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR | EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR |                \
+     EE_CMP_PCT_CHANGED)
 
     /** Row-count tallies from a compare (A = first table, B = second). */
     typedef struct EeCompareResult
     {
-        uint32_t only_a, changed_a, identical_a;
-        uint32_t only_b, changed_b, identical_b;
+        uint32_t only_a, identical_a;
+        uint32_t name_minor_a, name_major_a;
+        uint32_t addr_minor_a, addr_major_a;
+        uint32_t pct_changed_a;
+        uint32_t only_b, identical_b;
+        uint32_t name_minor_b, name_major_b;
+        uint32_t addr_minor_b, addr_major_b;
+        uint32_t pct_changed_b;
     } EeCompareResult;
 
     /**
      * @brief Classify every row of two tables by matching normalized Voter ID.
      *
-     * Rows with a blank Voter ID are "only here" (unmatchable). Among matched IDs,
-     * a row is "changed" when its Precinct, Name, or Address differs
-     * (case-insensitive) from the other file's first row carrying that ID, else
-     * "identical". O(rows_a + rows_b) open-addressing hash join.
+     * Rows with a blank Voter ID are "only here" (unmatchable). For a matched row,
+     * Name and Address are each graded unchanged / minor / major by normalized
+     * case-insensitive edit distance, and Precinct is flagged if it differs. A
+     * matched row with no change is "identical". O(rows_a + rows_b) hash join.
      *
-     * @param class_a  Receives one EE_CMP_* byte per physical row of @p a
+     * @param class_a  Receives one EE_CMP_* bit set per physical row of @p a
      *                 (must hold @p a->row_count bytes). Every row is written.
      * @param class_b  Same for @p b (@p b->row_count bytes).
      * @param out      Receives the per-side counts.

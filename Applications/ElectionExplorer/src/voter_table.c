@@ -1460,24 +1460,181 @@ static uint32_t vid_map_find(const uint32_t *slots,
     }
 }
 
-/* TRUE when Precinct, Name, and Address match (case-insensitive) across tables. */
-static BOOL cmp_fields_equal(const EeVoterTable *a,
-                             uint32_t ra,
-                             const EeVoterTable *b,
-                             uint32_t rb)
+/* A field change grades to minor when the normalized edit distance is small in
+ * absolute terms or as a share of the longer value; larger differences are major.
+ * Tune these against real files. */
+#define EE_CMP_MINOR_MAX_EDITS 4
+#define EE_CMP_MINOR_MAX_PCT   25
+#define EE_CMP_LEV_MAX_LEN     4096 /* cap the DP so a pathological cell can't blow memory */
+
+static int ee_lc(unsigned char c)
 {
-    static const uint32_t cols[3] = {EE_COL_PRECINCT, EE_COL_NAME, EE_COL_ADDRESS};
-    int k;
-    for (k = 0; k < 3; k++)
+    return (c >= 'A' && c <= 'Z') ? (c + ('a' - 'A')) : c;
+}
+
+/* Case-insensitive Levenshtein edit distance over UTF-8 bytes (ASCII-fold). Two
+ * rolling rows -> O(min(len)) space. Byte-level is exact for the ASCII text these
+ * voter fields carry and a sensible approximation otherwise. */
+static int ee_levenshtein_ci(const char *a, const char *b)
+{
+    size_t la = strlen(a);
+    size_t lb = strlen(b);
+    size_t i;
+    size_t j;
+    int *prev;
+    int *cur;
+    int result;
+
+    if (la > EE_CMP_LEV_MAX_LEN)
     {
-        const char *va = EeVoterTable_GetCellUtf8(a, ra, cols[k]);
-        const char *vb = EeVoterTable_GetCellUtf8(b, rb, cols[k]);
-        if (_stricmp(va, vb) != 0)
+        la = EE_CMP_LEV_MAX_LEN;
+    }
+    if (lb > EE_CMP_LEV_MAX_LEN)
+    {
+        lb = EE_CMP_LEV_MAX_LEN;
+    }
+    if (la == 0)
+    {
+        return (int)lb;
+    }
+    if (lb == 0)
+    {
+        return (int)la;
+    }
+    prev = (int *)malloc((lb + 1) * sizeof(int));
+    cur = (int *)malloc((lb + 1) * sizeof(int));
+    if (prev == NULL || cur == NULL)
+    {
+        free(prev);
+        free(cur);
+        return (int)((la > lb) ? la : lb); /* fallback: treat as fully different */
+    }
+    for (j = 0; j <= lb; j++)
+    {
+        prev[j] = (int)j;
+    }
+    for (i = 1; i <= la; i++)
+    {
+        int ca = ee_lc((unsigned char)a[i - 1]);
+        cur[0] = (int)i;
+        for (j = 1; j <= lb; j++)
         {
-            return FALSE;
+            int cost = (ca == ee_lc((unsigned char)b[j - 1])) ? 0 : 1;
+            int del = prev[j] + 1;
+            int ins = cur[j - 1] + 1;
+            int sub = prev[j - 1] + cost;
+            int m = (del < ins) ? del : ins;
+            if (sub < m)
+            {
+                m = sub;
+            }
+            cur[j] = m;
+        }
+        {
+            int *tmp = prev;
+            prev = cur;
+            cur = tmp;
         }
     }
-    return TRUE;
+    result = prev[lb];
+    free(prev);
+    free(cur);
+    return result;
+}
+
+/* 0 when equal, else @p minor_bit or @p major_bit by normalized edit distance. */
+static uint8_t field_change_bits(const char *a, const char *b, uint8_t minor_bit, uint8_t major_bit)
+{
+    size_t la;
+    size_t lb;
+    size_t maxlen;
+    int dist;
+    int pct;
+
+    if (_stricmp(a, b) == 0)
+    {
+        return 0;
+    }
+    dist = ee_levenshtein_ci(a, b);
+    la = strlen(a);
+    lb = strlen(b);
+    maxlen = (la > lb) ? la : lb;
+    if (maxlen == 0)
+    {
+        return 0;
+    }
+    pct = (int)(((size_t)dist * 100u) / maxlen);
+    if (dist <= EE_CMP_MINOR_MAX_EDITS || pct <= EE_CMP_MINOR_MAX_PCT)
+    {
+        return minor_bit;
+    }
+    return major_bit;
+}
+
+/* EE_CMP_MATCHED plus any change bits for a matched voter pair. Name and Address
+ * grade minor/major; Precinct is a binary changed flag. */
+static uint8_t classify_matched(const EeVoterTable *a,
+                                uint32_t ra,
+                                const EeVoterTable *b,
+                                uint32_t rb)
+{
+    uint8_t bits = EE_CMP_MATCHED;
+    uint8_t addr_bits;
+
+    bits |= field_change_bits(EeVoterTable_GetCellUtf8(a, ra, EE_COL_NAME),
+                              EeVoterTable_GetCellUtf8(b, rb, EE_COL_NAME),
+                              EE_CMP_NAME_MINOR,
+                              EE_CMP_NAME_MAJOR);
+    addr_bits = field_change_bits(EeVoterTable_GetCellUtf8(a, ra, EE_COL_ADDRESS),
+                                  EeVoterTable_GetCellUtf8(b, rb, EE_COL_ADDRESS),
+                                  EE_CMP_ADDR_MINOR,
+                                  EE_CMP_ADDR_MAJOR);
+    bits |= addr_bits;
+    /* A precinct change that comes with an address change is just the move (the
+     * address covers it). Only flag precinct when the address is unchanged, which
+     * signals re-precincting (e.g. post-census redistricting). */
+    if (addr_bits == 0 && _stricmp(EeVoterTable_GetCellUtf8(a, ra, EE_COL_PRECINCT),
+                                   EeVoterTable_GetCellUtf8(b, rb, EE_COL_PRECINCT)) != 0)
+    {
+        bits |= EE_CMP_PCT_CHANGED;
+    }
+    return bits;
+}
+
+/* Tally one classified row's change bits into a per-side counter block. */
+static void cmp_tally(uint8_t bits,
+                      uint32_t *identical,
+                      uint32_t *name_minor,
+                      uint32_t *name_major,
+                      uint32_t *addr_minor,
+                      uint32_t *addr_major,
+                      uint32_t *pct_changed)
+{
+    if ((bits & EE_CMP_CHANGE_BITS) == 0)
+    {
+        (*identical)++;
+        return;
+    }
+    if (bits & EE_CMP_NAME_MINOR)
+    {
+        (*name_minor)++;
+    }
+    if (bits & EE_CMP_NAME_MAJOR)
+    {
+        (*name_major)++;
+    }
+    if (bits & EE_CMP_ADDR_MINOR)
+    {
+        (*addr_minor)++;
+    }
+    if (bits & EE_CMP_ADDR_MAJOR)
+    {
+        (*addr_major)++;
+    }
+    if (bits & EE_CMP_PCT_CHANGED)
+    {
+        (*pct_changed)++;
+    }
 }
 
 BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
@@ -1524,29 +1681,24 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
     for (i = 0; i < a->row_count; i++)
     {
         const char *vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
-        if (vid == NULL || vid[0] == '\0')
+        uint32_t rb = (vid != NULL && vid[0] != '\0') ? vid_map_find(map_b, mask_b, b, vid)
+                                                       : UINT32_MAX;
+        if (rb == UINT32_MAX)
         {
             class_a[i] = EE_CMP_ONLY_HERE;
             r.only_a++;
         }
         else
         {
-            uint32_t rb = vid_map_find(map_b, mask_b, b, vid);
-            if (rb == UINT32_MAX)
-            {
-                class_a[i] = EE_CMP_ONLY_HERE;
-                r.only_a++;
-            }
-            else if (cmp_fields_equal(a, i, b, rb))
-            {
-                class_a[i] = EE_CMP_IDENTICAL;
-                r.identical_a++;
-            }
-            else
-            {
-                class_a[i] = EE_CMP_CHANGED;
-                r.changed_a++;
-            }
+            uint8_t bits = classify_matched(a, i, b, rb);
+            class_a[i] = bits;
+            cmp_tally(bits,
+                      &r.identical_a,
+                      &r.name_minor_a,
+                      &r.name_major_a,
+                      &r.addr_minor_a,
+                      &r.addr_major_a,
+                      &r.pct_changed_a);
         }
         if ((i & 0xffffu) == 0xffffu &&
             !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, total))
@@ -1561,29 +1713,24 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
     for (i = 0; i < b->row_count; i++)
     {
         const char *vid = EeVoterTable_GetCellUtf8(b, i, EE_COL_VOTER_ID);
-        if (vid == NULL || vid[0] == '\0')
+        uint32_t ra = (vid != NULL && vid[0] != '\0') ? vid_map_find(map_a, mask_a, a, vid)
+                                                       : UINT32_MAX;
+        if (ra == UINT32_MAX)
         {
             class_b[i] = EE_CMP_ONLY_HERE;
             r.only_b++;
         }
         else
         {
-            uint32_t ra = vid_map_find(map_a, mask_a, a, vid);
-            if (ra == UINT32_MAX)
-            {
-                class_b[i] = EE_CMP_ONLY_HERE;
-                r.only_b++;
-            }
-            else if (cmp_fields_equal(b, i, a, ra))
-            {
-                class_b[i] = EE_CMP_IDENTICAL;
-                r.identical_b++;
-            }
-            else
-            {
-                class_b[i] = EE_CMP_CHANGED;
-                r.changed_b++;
-            }
+            uint8_t bits = classify_matched(b, i, a, ra);
+            class_b[i] = bits;
+            cmp_tally(bits,
+                      &r.identical_b,
+                      &r.name_minor_b,
+                      &r.name_major_b,
+                      &r.addr_minor_b,
+                      &r.addr_major_b,
+                      &r.pct_changed_b);
         }
         if ((i & 0xffffu) == 0xffffu &&
             !dup_scan_pump(progress_fn, progress_user, cancel_flag, a->row_count + i + 1, total))

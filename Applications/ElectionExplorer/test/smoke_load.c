@@ -2016,29 +2016,37 @@ static int test_compare(void)
     BOOL a_ok = FALSE;
     BOOL b_ok = FALSE;
 
-    /* Header maps to Voter ID / Precinct / Name / Address. Matched rows keep the
-     * same name+precinct; only row 2's address differs (Changed). */
+    /* Header maps Voter ID / Precinct / Name (Last+First) / Address. Each matched
+     * row exercises one change kind; only the intended field differs per row. */
     a_ok = cmp_write_and_load(L"ee_cmp_a.csv",
-                              "VUID,PCTCOD,NAME,Residential Address\n"
-                              "1,101,Smith John,100 Main St\n"     /* identical */
-                              "2,101,Jones Jane,200 Oak Ave\n"     /* changed (addr) */
-                              "3,102,Lee Ann,300 Pine Rd\n"        /* only in A */
-                              ",103,Blank Voter,400 Elm St\n",     /* blank ID -> only in A */
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 Main St\n"    /* identical */
+                              "2,101,Meyer,Anne,200 Oak Ave\n"    /* name minor (Meyer->Meyers) */
+                              "3,101,Garcia,Carlos,300 Pine Rd\n" /* addr minor (300->301) */
+                              "4,101,Brown,Robert,400 Elm St\n"   /* addr major (moved) */
+                              "5,101,Lee,Ann,500 Cedar Ln\n"      /* precinct changed (101->205) */
+                              "6,102,Davis,Major,600 Birch St\n"  /* name major */
+                              "7,103,Only,Aaa,700 Only Rd\n"      /* only in A */
+                              ",104,Blank,Voter,800 Blank St\n",  /* blank ID -> only in A */
                               &a);
     b_ok = cmp_write_and_load(L"ee_cmp_b.csv",
-                              "VUID,PCTCOD,NAME,Residential Address\n"
-                              "1,101,Smith John,100 Main St\n"     /* identical */
-                              "2,101,Jones Jane,999 New Blvd\n"    /* changed (addr) */
-                              "4,102,New Voter,500 Cedar Ln\n"     /* only in B */
-                              ",104,Other Blank,600 Birch St\n",   /* blank ID -> only in B */
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 Main St\n"       /* identical */
+                              "2,101,Meyers,Anne,200 Oak Ave\n"      /* name minor */
+                              "3,101,Garcia,Carlos,301 Pine Rd\n"    /* addr minor */
+                              "4,210,Brown,Robert,9900 Zephyr Blvd Apt 7\n" /* addr major (+pct: suppressed) */
+                              "5,205,Lee,Ann,500 Cedar Ln\n"              /* precinct changed */
+                              "6,102,Wellington,Bartholomew,600 Birch St\n" /* name major */
+                              "8,103,New,Bbb,900 New Rd\n"           /* only in B */
+                              ",105,Other,Blank,950 Other St\n",     /* blank ID -> only in B */
                               &b);
     if (!a_ok || !b_ok)
     {
         goto done;
     }
-    if (a.row_count != 4 || b.row_count != 4)
+    if (a.row_count != 8 || b.row_count != 8)
     {
-        wprintf(L"cmp: expected 4 rows each, got %u / %u\n", a.row_count, b.row_count);
+        wprintf(L"cmp: expected 8 rows each, got %u / %u\n", a.row_count, b.row_count);
         goto done;
     }
 
@@ -2055,36 +2063,49 @@ static int test_compare(void)
         goto done;
     }
 
-    if (r.only_a != 2 || r.changed_a != 1 || r.identical_a != 1 || r.only_b != 2 ||
-        r.changed_b != 1 || r.identical_b != 1)
+    if (r.only_a != 2 || r.identical_a != 1 || r.name_minor_a != 1 || r.name_major_a != 1 ||
+        r.addr_minor_a != 1 || r.addr_major_a != 1 || r.pct_changed_a != 1)
     {
-        wprintf(L"cmp: bad counts A(only=%u chg=%u id=%u) B(only=%u chg=%u id=%u)\n",
+        wprintf(L"cmp: bad A counts only=%u id=%u nmin=%u nmaj=%u amin=%u amaj=%u pct=%u\n",
                 r.only_a,
-                r.changed_a,
                 r.identical_a,
+                r.name_minor_a,
+                r.name_major_a,
+                r.addr_minor_a,
+                r.addr_major_a,
+                r.pct_changed_a);
+        goto done;
+    }
+    if (r.only_b != 2 || r.identical_b != 1 || r.name_minor_b != 1 || r.name_major_b != 1 ||
+        r.addr_minor_b != 1 || r.addr_major_b != 1 || r.pct_changed_b != 1)
+    {
+        wprintf(L"cmp: bad B counts only=%u id=%u nmin=%u nmaj=%u amin=%u amaj=%u pct=%u\n",
                 r.only_b,
-                r.changed_b,
-                r.identical_b);
+                r.identical_b,
+                r.name_minor_b,
+                r.name_major_b,
+                r.addr_minor_b,
+                r.addr_major_b,
+                r.pct_changed_b);
         goto done;
     }
-    if (class_a[0] != EE_CMP_IDENTICAL || class_a[1] != EE_CMP_CHANGED ||
-        class_a[2] != EE_CMP_ONLY_HERE || class_a[3] != EE_CMP_ONLY_HERE)
+    /* Spot-check a few per-row bit sets on the A side. */
+    if (!(class_a[0] & EE_CMP_MATCHED) || (class_a[0] & EE_CMP_CHANGE_BITS) != 0)
     {
-        wprintf(L"cmp: bad class_a %u %u %u %u\n",
-                class_a[0],
+        wprintf(L"cmp: row0 should be identical, got 0x%02X\n", class_a[0]);
+        goto done;
+    }
+    if (class_a[1] != (uint8_t)(EE_CMP_MATCHED | EE_CMP_NAME_MINOR) ||
+        class_a[3] != (uint8_t)(EE_CMP_MATCHED | EE_CMP_ADDR_MAJOR) ||
+        class_a[4] != (uint8_t)(EE_CMP_MATCHED | EE_CMP_PCT_CHANGED) ||
+        class_a[6] != EE_CMP_ONLY_HERE || class_a[7] != EE_CMP_ONLY_HERE)
+    {
+        wprintf(L"cmp: bad A bits n=0x%02X am=0x%02X pct=0x%02X only=0x%02X blank=0x%02X\n",
                 class_a[1],
-                class_a[2],
-                class_a[3]);
-        goto done;
-    }
-    if (class_b[0] != EE_CMP_IDENTICAL || class_b[1] != EE_CMP_CHANGED ||
-        class_b[2] != EE_CMP_ONLY_HERE || class_b[3] != EE_CMP_ONLY_HERE)
-    {
-        wprintf(L"cmp: bad class_b %u %u %u %u\n",
-                class_b[0],
-                class_b[1],
-                class_b[2],
-                class_b[3]);
+                class_a[3],
+                class_a[4],
+                class_a[6],
+                class_a[7]);
         goto done;
     }
 

@@ -36,6 +36,22 @@ display:
 
 ## In progress / open questions
 
+**Compare "Show Differences…" side-by-side view (uncommitted).** The Compare
+Summary window gained a **Show Differences…** button that opens a modeless detail
+window (`k_DiffClassName`, singleton `g_diff`) listing every changed voter's
+differing fields, one row per field: **Voter ID | Field | <file A> | <file B>**
+(Name / Address / Precinct). Owner-data list view. Pairing comes from new
+`EeVoterTable_CollectDifferences` (`voter_table.{c,h}` → `EeCompareDiff{row_a,
+row_b, bits}`, caller frees with `free()`), which rebuilds B's Voter-ID map and
+reuses `classify_matched`; `main.c` expands each diff into per-field `DiffRow`s.
+Closes when the parent Compare window closes, or when either viewer reloads/closes
+(`App_CloseDiff` next to `App_CloseCompare`). Values shown are the normalized
+Name/Address/Precinct (same canonicalization used for grading is compare-only, so
+the display here is the raw normalized cell — a comma/precision-only diff won't
+appear because such voters aren't classified as changed). Smoke test
+`test_compare_diffs` (tag `cmpdiff`). Builds clean (4 configs + Code Analysis);
+tests pass. **GUI not yet click-tested** by the user.
+
 **Compare ignores ZIP+4 precision (uncommitted).** `ee_canon_address_for_compare`
 now reduces the trailing ZIP token to its first five digits, so `78702` vs
 `78702-1234` (or two different +4 add-ons on the same ZIP5) compare equal instead
@@ -211,9 +227,8 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   precinct-changed, name-major, and only-in-B.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
-- Possible follow-ups: show *which* field text differs (side-by-side), selectable
-  match key (Name+DOB), and a reaper-thread for responsive deletion of large row
-  sets.
+- Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for
+  responsive deletion of large row sets, and Excel (.xlsx) import (postponed).
 
 ## Notes for the next session
 

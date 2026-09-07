@@ -311,6 +311,32 @@ extern "C"
                                        EeLoadProgressFn progress_fn,
                                        void *progress_user);
 
+    /** One matched voter that differs, paired across the two tables. */
+    typedef struct EeCompareDiff
+    {
+        uint32_t row_a; /* physical row in table A */
+        uint32_t row_b; /* physical row in table B */
+        uint8_t bits;   /* EE_CMP_* change bits (Name/Address/Precinct) */
+    } EeCompareDiff;
+
+    /**
+     * @brief List matched voters (by Voter ID) whose Name, Address, or Precinct
+     *        differ, pairing each A row with its B row. Same grading as
+     *        EeVoterTable_CompareByVoterId; identical voters are omitted.
+     *
+     * @param out        Receives a heap array (caller frees with free()); NULL if none.
+     * @param out_count  Receives the number of entries.
+     * @return FALSE on invalid arguments or out of memory. On cancel, TRUE with a
+     *         partial list; distinguish via @p cancel_flag.
+     */
+    BOOL EeVoterTable_CollectDifferences(const EeVoterTable *a,
+                                         const EeVoterTable *b,
+                                         EeCompareDiff **out,
+                                         uint32_t *out_count,
+                                         volatile LONG *cancel_flag,
+                                         EeLoadProgressFn progress_fn,
+                                         void *progress_user);
+
     /**
  * @brief Sort by display column; toggles direction if same column.
  */

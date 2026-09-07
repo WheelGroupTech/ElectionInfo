@@ -2417,6 +2417,72 @@ done:
     return rc;
 }
 
+static int test_compare_diffs(void)
+{
+    EeVoterTable a;
+    EeVoterTable b;
+    EeCompareDiff *diffs = NULL;
+    uint32_t n = 0;
+    int rc = 1;
+    BOOL a_ok = FALSE;
+    BOOL b_ok = FALSE;
+
+    a_ok = cmp_write_and_load(L"ee_cmpdiff_a.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 Main St\n"  /* identical */
+                              "2,101,Jones,Jane,200 Oak Ave\n", /* name minor + addr major */
+                              &a);
+    b_ok = cmp_write_and_load(L"ee_cmpdiff_b.csv",
+                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+                              "1,101,Smith,John,100 Main St\n"
+                              "2,101,Jones,Janet,999 New Blvd\n",
+                              &b);
+    if (!a_ok || !b_ok)
+    {
+        goto done;
+    }
+    if (!EeVoterTable_CollectDifferences(&a, &b, &diffs, &n, NULL, NULL, NULL))
+    {
+        wprintf(L"cmpdiff: collect failed\n");
+        goto done;
+    }
+    if (n != 1 || diffs == NULL)
+    {
+        wprintf(L"cmpdiff: expected 1 diff, got %u\n", n);
+        goto done;
+    }
+    if (diffs[0].row_a != 1 || diffs[0].row_b != 1)
+    {
+        wprintf(L"cmpdiff: bad pairing a=%u b=%u\n", diffs[0].row_a, diffs[0].row_b);
+        goto done;
+    }
+    if (!(diffs[0].bits & EE_CMP_NAME_MINOR) || !(diffs[0].bits & EE_CMP_ADDR_MAJOR) ||
+        (diffs[0].bits & EE_CMP_PCT_CHANGED))
+    {
+        wprintf(L"cmpdiff: bad bits 0x%02X\n", diffs[0].bits);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"cmpdiff ok\n");
+
+done:
+    free(diffs);
+    if (a_ok)
+    {
+        EeVoterTable_Clear(&a);
+    }
+    if (b_ok)
+    {
+        EeVoterTable_Clear(&b);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"cmpdiff test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2445,6 +2511,7 @@ int wmain(void)
     failed |= test_compare_formatting();
     failed |= test_compare_missing_state();
     failed |= test_compare_zip4();
+    failed |= test_compare_diffs();
     failed |= test_preamble_skip();
     failed |= test_id_voter_header();
     return failed == 0 ? 0 : 1;

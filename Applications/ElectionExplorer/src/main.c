@@ -35,6 +35,7 @@ static const wchar_t k_OptionsClassName[] = L"ElectionExplorerOptions";
 static const wchar_t k_FilterClassName[] = L"ElectionExplorerFilter";
 static const wchar_t k_ReportClassName[] = L"ElectionExplorerReport";
 static const wchar_t k_CompareClassName[] = L"ElectionExplorerCompare";
+static const wchar_t k_DiffClassName[] = L"ElectionExplorerDiff";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -181,6 +182,7 @@ typedef struct CompareWindow
     HWND hwnd;
     HWND list;
     HWND status;
+    HWND diff_btn;       /* "Show Differences…" */
     AppState *a;         /* initiating viewer (file A) */
     AppState *b;         /* other viewer (file B) */
     EeCompareResult result;
@@ -191,6 +193,28 @@ typedef struct CompareWindow
 } CompareWindow;
 
 static CompareWindow *g_compare = NULL;
+
+/* One differing field of one matched voter, for the side-by-side detail list. */
+typedef struct DiffRow
+{
+    uint32_t row_a; /* physical row in A */
+    uint32_t row_b; /* physical row in B */
+    uint32_t col;   /* EE_COL_NAME / EE_COL_ADDRESS / EE_COL_PRECINCT */
+} DiffRow;
+
+/* Modeless side-by-side "which field differs" window (one at a time). */
+typedef struct DiffWindow
+{
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    AppState *a;
+    AppState *b;
+    DiffRow *rows;      /* one entry per differing (voter, field) */
+    uint32_t row_count;
+} DiffWindow;
+
+static DiffWindow *g_diff = NULL;
 static WNDPROC g_old_frozen_proc = NULL;
 static WNDPROC g_old_scroll_proc = NULL;
 static WNDPROC g_old_title_proc = NULL;
@@ -229,8 +253,11 @@ static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t coun
 static void App_StartCompare(AppState *a, AppState *b);
 static void App_OnCompareFinished(AppState *app);
 static void App_CloseCompare(AppState *app);
+static void App_CloseDiff(AppState *app);
+static void App_ShowDifferences(CompareWindow *cw);
 static AppState *App_OtherViewerByIndex(const AppState *app, int index);
 static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 /* Position of the "Compare" popup in the menu bar (File, Edit, Filter, Reports,
  * Compare); rebuilt on demand in WM_INITMENUPOPUP. */
@@ -1821,6 +1848,7 @@ static void App_StartLoad(AppState *app, const wchar_t *path)
     App_ClearMarks(app);   /* prior duplicates view indexed the old table */
     App_CloseReports(app); /* reports summarize the outgoing table */
     App_CloseCompare(app); /* a compare of the outgoing table is now stale */
+    App_CloseDiff(app);    /* as is a side-by-side differences view */
     app->loading = TRUE;
     App_SetStatus(app, L"Loading voter list…");
 
@@ -6258,7 +6286,12 @@ static void Compare_Populate(CompareWindow *cw)
 static void Compare_Layout(CompareWindow *cw, int cx, int cy)
 {
     int sh = 0;
+    int bh = Scale(cw->a, 26);
+    int bw = Scale(cw->a, 150);
+    int gap = Scale(cw->a, 8);
+    int list_h;
     RECT rs;
+
     if (cw->status != NULL)
     {
         SendMessageW(cw->status, WM_SIZE, 0, 0);
@@ -6267,9 +6300,18 @@ static void Compare_Layout(CompareWindow *cw, int cx, int cy)
             sh = rs.bottom - rs.top;
         }
     }
+    list_h = cy - sh - bh - gap;
+    if (list_h < 0)
+    {
+        list_h = 0;
+    }
     if (cw->list != NULL)
     {
-        MoveWindow(cw->list, 0, 0, cx, (cy > sh) ? (cy - sh) : 0, TRUE);
+        MoveWindow(cw->list, 0, 0, cx, list_h, TRUE);
+    }
+    if (cw->diff_btn != NULL)
+    {
+        MoveWindow(cw->diff_btn, cx - gap - bw, list_h + gap / 2, bw, bh, TRUE);
     }
 }
 
@@ -6449,10 +6491,35 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                              (LPARAM)L"Matched by Voter ID. Right-click a row to show it in a file.");
             }
 
+            cw->diff_btn = CreateWindowExW(0,
+                                           L"BUTTON",
+                                           L"Show Differences…",
+                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                           0,
+                                           0,
+                                           Scale(cw->a, 150),
+                                           Scale(cw->a, 26),
+                                           hwnd,
+                                           (HMENU)(INT_PTR)IDC_CMP_DIFF,
+                                           cw->a->instance,
+                                           NULL);
+            if (cw->diff_btn != NULL && cw->a->font_ui)
+            {
+                SendMessageW(cw->diff_btn, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
+            }
+
             Compare_Populate(cw);
             Compare_Layout(cw, rc.right, rc.bottom);
             return 0;
         }
+
+        case WM_COMMAND:
+            if (cw != NULL && LOWORD(wParam) == IDC_CMP_DIFF)
+            {
+                App_ShowDifferences(cw);
+                return 0;
+            }
+            break;
 
         case WM_SIZE:
             if (cw != NULL)
@@ -6496,6 +6563,11 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         case WM_DESTROY:
             if (cw != NULL)
             {
+                /* The differences window summarizes this comparison; close it too. */
+                if (g_diff != NULL)
+                {
+                    DestroyWindow(g_diff->hwnd);
+                }
                 if (g_compare == cw)
                 {
                     g_compare = NULL;
@@ -6504,6 +6576,370 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 free(cw->class_b);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 free(cw);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Differences (side-by-side field detail)                                    */
+/* -------------------------------------------------------------------------- */
+
+/* Physical-row cell as wide text into @p out (empty on failure). */
+static void Diff_CellW(const EeVoterTable *t, uint32_t row, uint32_t col, wchar_t *out, int cch)
+{
+    const char *utf8 = EeVoterTable_GetCellUtf8(t, row, col);
+    if (out == NULL || cch <= 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (utf8 != NULL && utf8[0] != '\0')
+    {
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, out, cch);
+    }
+}
+
+static const wchar_t *Diff_FieldName(uint32_t col)
+{
+    return (col == EE_COL_NAME)       ? L"Name"
+           : (col == EE_COL_ADDRESS)  ? L"Address"
+           : (col == EE_COL_PRECINCT) ? L"Precinct"
+                                      : L"";
+}
+
+static void Diff_Layout(DiffWindow *dw, int cx, int cy)
+{
+    int sh = 0;
+    RECT rs;
+    if (dw->status != NULL)
+    {
+        SendMessageW(dw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(dw->status, &rs))
+        {
+            sh = rs.bottom - rs.top;
+        }
+    }
+    if (dw->list != NULL)
+    {
+        MoveWindow(dw->list, 0, 0, cx, (cy > sh) ? (cy - sh) : 0, TRUE);
+    }
+}
+
+/* Build (replacing any prior) the side-by-side differences window for @p cw. */
+static void App_ShowDifferences(CompareWindow *cw)
+{
+    EeCompareDiff *diffs = NULL;
+    uint32_t diff_count = 0;
+    DiffRow *rows = NULL;
+    uint32_t row_count = 0;
+    uint32_t i;
+    DiffWindow *dw;
+    HCURSOR prev;
+    wchar_t title[MAX_PATH * 2];
+    const wchar_t *base_a;
+    const wchar_t *base_b;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+
+    if (cw == NULL || cw->a == NULL || cw->b == NULL)
+    {
+        return;
+    }
+    if (cw->a->table.row_count != cw->rows_a || cw->b->table.row_count != cw->rows_b)
+    {
+        MessageBoxW(cw->hwnd,
+                    L"A file changed since the comparison was run. Run Compare again.",
+                    k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!EeVoterTable_CollectDifferences(&cw->a->table,
+                                         &cw->b->table,
+                                         &diffs,
+                                         &diff_count,
+                                         NULL,
+                                         NULL,
+                                         NULL))
+    {
+        SetCursor(prev);
+        MessageBoxW(cw->hwnd, L"Could not collect the differences.", k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+
+    /* Expand to one display row per differing field. */
+    if (diff_count > 0)
+    {
+        rows = (DiffRow *)malloc((size_t)diff_count * 3u * sizeof(DiffRow));
+    }
+    if (rows != NULL)
+    {
+        for (i = 0; i < diff_count; i++)
+        {
+            static const uint32_t cols[3] = {EE_COL_NAME, EE_COL_ADDRESS, EE_COL_PRECINCT};
+            static const uint8_t masks[3] = {(uint8_t)(EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR),
+                                             (uint8_t)(EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR),
+                                             (uint8_t)EE_CMP_PCT_CHANGED};
+            int k;
+            for (k = 0; k < 3; k++)
+            {
+                if (diffs[i].bits & masks[k])
+                {
+                    rows[row_count].row_a = diffs[i].row_a;
+                    rows[row_count].row_b = diffs[i].row_b;
+                    rows[row_count].col = cols[k];
+                    row_count++;
+                }
+            }
+        }
+    }
+    free(diffs);
+    SetCursor(prev);
+
+    if (rows == NULL)
+    {
+        MessageBoxW(cw->hwnd, L"No differing voters found.", k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    if (g_diff != NULL)
+    {
+        DestroyWindow(g_diff->hwnd);
+    }
+    dw = (DiffWindow *)calloc(1, sizeof(DiffWindow));
+    if (dw == NULL)
+    {
+        free(rows);
+        return;
+    }
+    dw->a = cw->a;
+    dw->b = cw->b;
+    dw->rows = rows;
+    dw->row_count = row_count;
+
+    base_a = App_PathBaseName(cw->a->load_path);
+    base_b = App_PathBaseName(cw->b->load_path);
+    if (base_a[0] == L'\0')
+    {
+        base_a = L"(A)";
+    }
+    if (base_b[0] == L'\0')
+    {
+        base_b = L"(B)";
+    }
+    StringCchPrintfW(title, ARRAYSIZE(title), L"Differences - %s vs %s", base_a, base_b);
+
+    if (GetWindowRect(cw->hwnd, &pr))
+    {
+        x = pr.left + Scale(cw->a, 40);
+        y = pr.top + Scale(cw->a, 40);
+    }
+    dw->hwnd = CreateWindowExW(0,
+                               k_DiffClassName,
+                               title,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                               x,
+                               y,
+                               Scale(cw->a, 720),
+                               Scale(cw->a, 460),
+                               NULL,
+                               NULL,
+                               cw->a->instance,
+                               dw);
+    if (dw->hwnd == NULL)
+    {
+        free(dw->rows);
+        free(dw);
+        return;
+    }
+    g_diff = dw;
+    ShowWindow(dw->hwnd, SW_SHOW);
+    SetForegroundWindow(dw->hwnd);
+}
+
+/* Close the differences window if it summarizes @p app (as either side). */
+static void App_CloseDiff(AppState *app)
+{
+    if (g_diff != NULL && (g_diff->a == app || g_diff->b == app))
+    {
+        DestroyWindow(g_diff->hwnd);
+    }
+}
+
+static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    DiffWindow *dw = (DiffWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            LVCOLUMNW col;
+            RECT rc;
+            const wchar_t *base_a;
+            const wchar_t *base_b;
+            wchar_t hdr_a[MAX_PATH];
+            wchar_t hdr_b[MAX_PATH];
+            wchar_t st[128];
+
+            dw = (DiffWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)dw);
+            dw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            dw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       dw->a->instance,
+                                       NULL);
+            if (dw->list == NULL)
+            {
+                return -1;
+            }
+            ListView_SetExtendedListViewStyle(dw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (dw->a->font_ui)
+            {
+                SendMessageW(dw->list, WM_SETFONT, (WPARAM)dw->a->font_ui, TRUE);
+            }
+            base_a = App_PathBaseName(dw->a->load_path);
+            base_b = App_PathBaseName(dw->b->load_path);
+            if (base_a[0] == L'\0')
+            {
+                base_a = L"file A";
+            }
+            if (base_b[0] == L'\0')
+            {
+                base_b = L"file B";
+            }
+            StringCchCopyW(hdr_a, ARRAYSIZE(hdr_a), base_a);
+            StringCchCopyW(hdr_b, ARRAYSIZE(hdr_b), base_b);
+
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = LVCFMT_LEFT;
+            col.pszText = L"Voter ID";
+            col.cx = Scale(dw->a, 120);
+            ListView_InsertColumn(dw->list, 0, &col);
+            col.pszText = L"Field";
+            col.cx = Scale(dw->a, 80);
+            ListView_InsertColumn(dw->list, 1, &col);
+            col.pszText = hdr_a;
+            col.cx = Scale(dw->a, 230);
+            ListView_InsertColumn(dw->list, 2, &col);
+            col.pszText = hdr_b;
+            col.cx = Scale(dw->a, 230);
+            ListView_InsertColumn(dw->list, 3, &col);
+
+            dw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         dw->a->instance,
+                                         NULL);
+            if (dw->status != NULL)
+            {
+                if (dw->a->font_ui)
+                {
+                    SendMessageW(dw->status, WM_SETFONT, (WPARAM)dw->a->font_ui, TRUE);
+                }
+                StringCchPrintfW(st, ARRAYSIZE(st), L"%u differing field(s)", dw->row_count);
+                SendMessageW(dw->status, SB_SETTEXTW, 0, (LPARAM)st);
+            }
+
+            ListView_SetItemCountEx(dw->list, (int)dw->row_count, LVSICF_NOINVALIDATEALL);
+            Diff_Layout(dw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (dw != NULL)
+            {
+                Diff_Layout(dw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (dw != NULL && dw->list != NULL)
+            {
+                SetFocus(dw->list);
+            }
+            return 0;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (dw == NULL || hdr->hwndFrom != dw->list || hdr->code != LVN_GETDISPINFOW)
+            {
+                break;
+            }
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                int idx = di->item.iItem;
+                if ((di->item.mask & LVIF_TEXT) && idx >= 0 && (uint32_t)idx < dw->row_count)
+                {
+                    const DiffRow *dr = &dw->rows[idx];
+                    switch (di->item.iSubItem)
+                    {
+                        case 0:
+                            Diff_CellW(&dw->a->table, dr->row_a, EE_COL_VOTER_ID, di->item.pszText,
+                                       di->item.cchTextMax);
+                            break;
+                        case 1:
+                            StringCchCopyW(di->item.pszText, di->item.cchTextMax,
+                                           Diff_FieldName(dr->col));
+                            break;
+                        case 2:
+                            Diff_CellW(&dw->a->table, dr->row_a, dr->col, di->item.pszText,
+                                       di->item.cchTextMax);
+                            break;
+                        case 3:
+                            Diff_CellW(&dw->b->table, dr->row_b, dr->col, di->item.pszText,
+                                       di->item.cchTextMax);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                return 0;
+            }
+        }
+
+        case WM_DESTROY:
+            if (dw != NULL)
+            {
+                if (g_diff == dw)
+                {
+                    g_diff = NULL;
+                }
+                free(dw->rows);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                free(dw);
             }
             return 0;
 
@@ -6582,7 +7018,10 @@ static const wchar_t k_HelpCompare[] =
     L"Double-click a row to highlight those voters in the grid (the left count "
     L"column acts on this file, the right column on the other file), or right-click "
     L"to choose which file to show them in. Use Filter → Reset View to clear "
-    L"the highlight. Large comparisons show a progress bar and can be canceled.";
+    L"the highlight. Large comparisons show a progress bar and can be canceled.\r\n\r\n"
+    L"Show Differences… opens a side-by-side list of every changed voter's "
+    L"differing fields — Voter ID, the field (Name / Address / Precinct), and its "
+    L"value in each file.";
 
 static const wchar_t k_RepoUrl[] = L"https://github.com/WheelGroupTech/ElectionInfo";
 
@@ -7593,6 +8032,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_DESTROY:
             App_CloseReports(app);
             App_CloseCompare(app);
+            App_CloseDiff(app);
             App_DestroyOptions(app);
             App_DestroyProgress(app);
             App_DestroyFilter(app);
@@ -8011,6 +8451,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         cc.hIcon = wc.hIcon;
         cc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&cc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW dc;
+        ZeroMemory(&dc, sizeof(dc));
+        dc.cbSize = sizeof(dc);
+        dc.lpfnWndProc = DiffWndProc;
+        dc.hInstance = hInstance;
+        dc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        dc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        dc.lpszClassName = k_DiffClassName;
+        dc.hIcon = wc.hIcon;
+        dc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&dc) == 0)
         {
             return 1;
         }

@@ -1963,6 +1963,94 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
     return TRUE;
 }
 
+BOOL EeVoterTable_CollectDifferences(const EeVoterTable *a,
+                                     const EeVoterTable *b,
+                                     EeCompareDiff **out,
+                                     uint32_t *out_count,
+                                     volatile LONG *cancel_flag,
+                                     EeLoadProgressFn progress_fn,
+                                     void *progress_user)
+{
+    uint32_t *map_b = NULL;
+    uint32_t cap_b, mask_b;
+    EeCompareDiff *list = NULL;
+    uint32_t n = 0;
+    uint32_t cap = 0;
+    uint32_t i;
+
+    if (out != NULL)
+    {
+        *out = NULL;
+    }
+    if (out_count != NULL)
+    {
+        *out_count = 0;
+    }
+    if (a == NULL || b == NULL || out == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+
+    map_b = build_vid_map(b, &cap_b, &mask_b);
+    if (map_b == NULL)
+    {
+        return FALSE;
+    }
+    (void)cap_b;
+
+    for (i = 0; i < a->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
+        uint32_t rb;
+        uint8_t bits;
+
+        if (vid == NULL || vid[0] == '\0')
+        {
+            goto pump;
+        }
+        rb = vid_map_find(map_b, mask_b, b, vid);
+        if (rb == UINT32_MAX)
+        {
+            goto pump;
+        }
+        bits = classify_matched(a, i, b, rb);
+        if ((bits & EE_CMP_CHANGE_BITS) == 0)
+        {
+            goto pump;
+        }
+        if (n == cap)
+        {
+            uint32_t new_cap = (cap == 0) ? 256u : cap * 2u;
+            EeCompareDiff *grown =
+                (EeCompareDiff *)realloc(list, (size_t)new_cap * sizeof(EeCompareDiff));
+            if (grown == NULL)
+            {
+                free(list);
+                free(map_b);
+                return FALSE;
+            }
+            list = grown;
+            cap = new_cap;
+        }
+        list[n].row_a = i;
+        list[n].row_b = rb;
+        list[n].bits = bits;
+        n++;
+
+    pump:
+        if ((i & 0xffffu) == 0xffffu &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, a->row_count))
+        {
+            break;
+        }
+    }
+
+    free(map_b);
+    *out = list;
+    *out_count = n;
+    return TRUE;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Value counts (reports)                                                     */
 /* -------------------------------------------------------------------------- */

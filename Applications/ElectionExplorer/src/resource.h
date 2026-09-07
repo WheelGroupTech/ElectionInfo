@@ -40,6 +40,9 @@
 #define IDC_ABOUT_TEXT  41202
 #define IDC_ABOUT_LINK  41203
 
+/* Compare / Differences window child controls. */
+#define IDC_CMP_DIFF    41210
+
 #define IDC_FLT_PROMPT   41100
 #define IDC_FLT_COLUMN   41101
 #define IDC_FLT_RELATION 41102

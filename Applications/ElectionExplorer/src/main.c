@@ -7551,6 +7551,7 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
             HWND ico;
             HWND text;
             HWND tagline;
+            HWND oss_label;
             HWND link;
             HWND ok;
             wchar_t link_markup[256];
@@ -7625,6 +7626,20 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
                 NULL);
 
             y = row_bottom + Scale(app, 46);
+            oss_label = CreateWindowExW(0,
+                                        L"STATIC",
+                                        L"Election Explorer is Open Source:",
+                                        WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                        margin,
+                                        y,
+                                        rc.right - 2 * margin,
+                                        Scale(app, 20),
+                                        dlg,
+                                        (HMENU)(INT_PTR)-1,
+                                        app->instance,
+                                        NULL);
+
+            y += Scale(app, 22);
             StringCchPrintfW(link_markup,
                              ARRAYSIZE(link_markup),
                              L"<a href=\"%s\">%s</a>",
@@ -7664,6 +7679,10 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
                 if (tagline != NULL)
                 {
                     SendMessageW(tagline, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+                if (oss_label != NULL)
+                {
+                    SendMessageW(oss_label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
                 }
                 if (link != NULL)
                 {

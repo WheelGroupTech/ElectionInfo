@@ -192,3 +192,6 @@ ipch/
 *.VC.db-shm
 *.VC.db-wal
 
+# Voter registration lists — raw county exports, too large to push to GitHub
+Voter_Lists/
+

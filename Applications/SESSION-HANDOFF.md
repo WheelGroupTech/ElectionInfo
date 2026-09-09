@@ -4,10 +4,11 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-06
-**Branch:** main — Compare, preamble-skip, `ID_VOTER` alias, and Help menu
-committed. New **uncommitted** change: **Compare minor/major** classification
-(separate Name/Address, edit-distance graded).
+**Last updated:** 2026-09-08
+**Branch:** main — all Compare work (minor/major grading, side-by-side
+Differences view, canonical address, ZIP+4 handling) is now **committed**, along
+with this session's **version bump to 1.0.1.0** and the About-dialog "Open
+Source" line, plus a `.gitignore` entry for `Voter_Lists/`.
 
 ---
 
@@ -34,103 +35,50 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## In progress / open questions
+## This session (2026-09-08) — committed
 
-**Differences window polish (uncommitted).** The side-by-side Differences window
-now: (1) draws **bold headers on the grey header background** via a list subclass
-(`DiffListSubclass` + `App_HeaderCustomDraw`, left-aligned like the main grid);
-(2) **sorts by any column** on header click (`Diff_Sort`/`diff_sort_cmp`, Voter ID
-numeric-aware, toggling asc/desc with a header sort arrow via
-`Diff_UpdateHeaderArrows`); (3) supports **multi-select + copy** — removed
-`LVS_SINGLESEL`, Ctrl+C (shared accelerator → `IDM_EDIT_COPY`) and a right-click
-**Copy** menu (`Diff_OnContextMenu`) call `Diff_CopySelected`, which puts
-tab-separated `Voter ID / Field / A value / B value` rows on the clipboard via
-`App_SetClipboardUtf8`. `main.c` only; builds clean (4 configs + Code Analysis),
-smoke tests pass. **GUI not yet click-tested** by the user.
+**Version 1.0.1.0 + About "Open Source" line.** Bumped the app version from
+`0.1.0.0` to `1.0.1.0` in `res/ElectionExplorer.rc` (`FILEVERSION` /
+`PRODUCTVERSION` and the `FileVersion` / `ProductVersion` strings) and in
+`res/app.manifest` (`assemblyIdentity version`). The About dialog reads the
+version from the compiled binary at runtime (`App_GetVersionString`), so no code
+change was needed for the number to update. In the About dialog (`main.c`, in the
+`AboutDlgProc` `WM_INITDIALOG`) added a static label **"Election Explorer is Open
+Source:"** directly above the GitHub `SysLink` (`k_RepoUrl`), with the standard UI
+font and a 22 px gap. Debug x64 builds clean.
 
-**Compare "Show Differences…" side-by-side view (uncommitted).** The Compare
-Summary window gained a **Show Differences…** button that opens a modeless detail
-window (`k_DiffClassName`, singleton `g_diff`) listing every changed voter's
-differing fields, one row per field: **Voter ID | Field | <file A> | <file B>**
-(Name / Address / Precinct). Owner-data list view. Pairing comes from new
-`EeVoterTable_CollectDifferences` (`voter_table.{c,h}` → `EeCompareDiff{row_a,
-row_b, bits}`, caller frees with `free()`), which rebuilds B's Voter-ID map and
-reuses `classify_matched`; `main.c` expands each diff into per-field `DiffRow`s.
-Closes when the parent Compare window closes, or when either viewer reloads/closes
-(`App_CloseDiff` next to `App_CloseCompare`). Values shown are the normalized
-Name/Address/Precinct (same canonicalization used for grading is compare-only, so
-the display here is the raw normalized cell — a comma/precision-only diff won't
-appear because such voters aren't classified as changed). Smoke test
-`test_compare_diffs` (tag `cmpdiff`). Builds clean (4 configs + Code Analysis);
-tests pass. **GUI not yet click-tested** by the user.
+**Ignore `Voter_Lists/`.** Added `Voter_Lists/` to the repo-root `.gitignore`
+(the raw county voter-registration exports are too large to push to GitHub).
+Nothing under it was ever tracked, so no `git rm --cached` was needed;
+`git check-ignore` confirms it is now ignored.
 
-**Compare ignores ZIP+4 precision (uncommitted).** `ee_canon_address_for_compare`
-now reduces the trailing ZIP token to its first five digits, so `78702` vs
-`78702-1234` (or two different +4 add-ons on the same ZIP5) compare equal instead
-of showing a false Address (minor) change. Same structural-slot approach as the
-state strip (only the trailing ZIP token is touched). Test `test_compare_zip4`
-(tag `cmpzip`).
+## Recently committed (Compare feature family — now all in `main`)
 
-**Canonical normalized address (uncommitted).** `compose_address` (`voter_table.c`)
-now emits one consistent style — `street[, unit], City, STATE ZIP[-ZIP4]` — for
-every file, and **prefers the structured street-part columns** when present
-(Street Number/Name/Type/Unit…), so the unit is included even when a full
-"Residential Address" column omits it (as in Travis `2026-07-20`). When only a
-full-address column exists, it's used as the street line with any trailing
-city/state/ZIP stripped (via their columns) and re-emitted in the canonical tail;
-a full-only file with no city/state/zip columns is left as-is. LOT units still
-excluded. This drops the old "normalized == raw Residential Address" invariant;
-`EeVoterTable_NormalizedMatchesFullAddress` (unused elsewhere) was **removed**
-(voter_table.{c,h}). Tests updated: `resdup` row0 now `"…NB, AUSTIN, TX 78702"`,
-`zipdash` now includes unit + commas and drops the old invariant check; `zip4`,
-`resaddr`, `blkdot`, `lotunit` unchanged. Decisions confirmed with the user:
-always reformat; include the unit.
-Note: ARM64 Release wasn't rebuilt here (the user's running ARM64 Release instance
-holds the exe); x64 Debug/Release + ARM64 Debug + Code Analysis all clean.
+The Compare work previously tracked here as "uncommitted" is committed (see git
+log, newest first: `5ea9bd5` sortable/copyable Differences view, `e613c4b`
+side-by-side Differences, `74871da` canonical normalized address + ZIP+4 handling,
+`cb21055` address-comparison fixes, `8741f69` minor/major grading). In brief:
 
-**Compare ignores formatting-only + state-token field differences (uncommitted).**
-Before grading Name/Address, both values are canonicalized (`ee_canon_for_compare`
-in `voter_table.c`: lowercase, commas/periods → space, whitespace collapsed), so
-comma/spacing/case differences no longer read as changes (root cause:
-`compose_address` emits commas on the parts/append path but not when a full-address
-line already carries the city/state). Additionally, addresses go through
-`ee_canon_address_for_compare`, which drops the **trailing state token** (the
-2-letter state code in the state slot — before a trailing ZIP, else last token;
-`ee_is_state_code`/`token_is_zip`). ZIP already encodes the state and some files
-omit the state field entirely (e.g. `pr26_olvr_primary_runoff_..._merged.csv`),
-which otherwise made every address differ by the "TX" token. Only the structural
-state slot is examined, so a street named after a state is safe. `field_change_bits`
-gained an `is_address` flag. Display values are untouched — comparison-only.
-Regression tests `test_compare_formatting` (tag `cmpfmt`) and
-`test_compare_missing_state` (tag `cmpstate`).
+- **Compare by Voter ID** — two open lists, matched on normalized Voter ID;
+  modeless Compare Summary window driving the per-window mark layer.
+- **Minor/major grading** — Name and Address graded minor vs major via
+  case-insensitive Levenshtein (`ee_levenshtein_ci`, thresholds
+  `EE_CMP_MINOR_MAX_EDITS`=4 / `EE_CMP_MINOR_MAX_PCT`=25%); binary Precinct-changed
+  gated on unchanged address (re-precincting). `EE_CMP_*` is a bit set per row.
+- **Canonical normalized address** — `compose_address` emits one consistent
+  `street[, unit], City, STATE ZIP[-ZIP4]` style, preferring structured street
+  columns. Compare canonicalization (`ee_canon_for_compare` /
+  `ee_canon_address_for_compare`) ignores formatting, the trailing state token, and
+  ZIP+4 precision so those don't read as false changes.
+- **Show Differences…** — modeless side-by-side window (`k_DiffClassName`) listing
+  each changed voter's differing fields (Voter ID | Field | file A | file B), from
+  `EeVoterTable_CollectDifferences`; sortable headers, multi-select + Ctrl+C / copy.
 
-**Compare minor/major classification (uncommitted — this session).** The Compare
-Summary now reports **Name** and **Address** changes separately, each graded
-**minor** vs **major**, plus a binary **Precinct changed**, alongside the existing
-Only-here / Identical. Grading uses case-insensitive **Levenshtein edit distance**
-on the normalized field (`ee_levenshtein_ci` in `voter_table.c`): minor when
-`edits ≤ EE_CMP_MINOR_MAX_EDITS (4)` or `≤ EE_CMP_MINOR_MAX_PCT (25%)` of the
-longer value; else major. Precinct is a code so it's binary, not %-graded — and
-is flagged **only when the address is unchanged** (re-precincting); a precinct
-change alongside an address change is the move and shows under Address only
-(`classify_matched` gates the PCT bit on `addr_bits == 0`).
-- `EE_CMP_*` is now a **bit set** per row (`EE_CMP_MATCHED` + `NAME_MINOR/MAJOR`,
-  `ADDR_MINOR/MAJOR`, `PCT_CHANGED`; `ONLY_HERE`; identical = matched with no
-  change bits). `EeCompareResult` expanded to per-side counts for each bucket.
-  A voter can be in several buckets at once (e.g. name-minor + address-major).
-- Summary window has 7 rows (`k_CompareBuckets` / `CMP_BUCKET_*` in `main.c`);
-  double-click or right-click a bucket highlights those rows via the mark layer
-  as before. Window grew to fit; `compare_row_in_bucket` / `compare_bucket_counts`
-  drive display and marks.
-- Tunable thresholds are the two `EE_CMP_MINOR_MAX_*` constants. Known caveat: a
-  single house-number change ("123→125 Main St") scores as **minor** (1 edit)
-  though it's a move; abbreviation diffs depend on how far address normalization
-  already canonicalized them. Byte-level edit distance (exact for the ASCII these
-  fields carry). Smoke test `test_compare` rewritten to exercise every bucket.
-- Files: `voter_table.{c,h}`, `main.c`, `test/smoke_load.c`. Builds clean (4
-  configs + Code Analysis); tests pass. GUI click-tested on real Travis lists
-  (8/24 vs 9/1): precinct-changed correctly dropped to 0 once gated on unchanged
-  address. Ready to commit.
+Tunable knobs live in the two `EE_CMP_MINOR_MAX_*` constants in `voter_table.c`.
+Known caveat: a single house-number change ("123→125 Main St") scores as minor.
+
+<details>
+<summary>Older committed history (Reports, duplicate detection) — retained below</summary>
 
 **Two-file Compare by Voter ID (committed `7be360c`; extended above).** Compare two voter
 lists open in separate viewer windows. Design decisions (confirmed with the user):
@@ -231,12 +179,11 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 (`dupvuid`, `dupvoter`, new `markdup`, plus the rest). Plan file:
 `~/.claude/plans/quiet-enchanting-lovelace.md`.
 
+</details>
+
 ## Next steps
 
-- **Click-test Compare minor/major**, then commit (`voter_table.{c,h}`, `main.c`,
-  `test/smoke_load.c`). Demo pair in the scratchpad: `sample_voters.csv` (repo)
-  vs `sample_voters_edited.csv` — exercises name-minor, address-minor/major,
-  precinct-changed, name-major, and only-in-B.
+- No work in progress — the tree is clean. Pick up the next feature request.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
 - Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for

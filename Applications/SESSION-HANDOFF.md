@@ -4,12 +4,14 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-10
-**Branch:** main — option persistence and the clang-format cleanup are
-**committed** (option persistence GUI-tested by the user). **Uncommitted:** a new
-**MSIX packaging project** (`ElectionExplorer.Package/`) that builds an x64+ARM64
-Store upload bundle — see "MSIX packaging" below. The app is being published via
-the **Microsoft Store**.
+**Last updated:** 2026-09-11
+**Branch:** main — option persistence, clang-format cleanup, the **MSIX packaging
+project**, the transparent logo, and the **privacy policy** are all **committed**.
+Store identity in `Package.appxmanifest` is set (Name `WheelGroupTech.ElectionExplorer`,
+Publisher `CN=19C9DED9-…980D6`, PublisherDisplayName `WheelGroupTech`).
+**Uncommitted (Store-listing prep):** `TRADEMARKS.md`, brand-string fix in the
+`.rc`, and a Privacy Policy link in the About dialog — see "Store listing prep"
+below. The app is being published via the **Microsoft Store**.
 
 ---
 
@@ -36,9 +38,30 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-10)
+## This session (2026-09-11) — Store listing prep (uncommitted)
 
-**MSIX packaging for the Microsoft Store (uncommitted).** New
+- **Privacy policy** committed at `ElectionExplorer/PRIVACY.md` (no data
+  collection; local-only; discloses that "Show in Maps" opens the chosen provider
+  in the browser). Store privacy URL (GitHub Pages):
+  `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`
+- **About dialog** now shows a **Privacy Policy** link under the GitHub link
+  (`k_PrivacyUrl`, `IDC_ABOUT_PRIVACY` in `main.c`/`resource.h`); dialog grew to
+  300px tall to fit. Builds clean, clang-clean. **Uncommitted.** Not click-tested.
+- **`TRADEMARKS.md`** added at `ElectionExplorer/` — code is MIT, names/logos are
+  WheelGroupTech trademarks (not licensed by MIT). **Uncommitted.**
+- **Brand strings** in `res/ElectionExplorer.rc` fixed to `WheelGroupTech`
+  (CompanyName + LegalCopyright, added 2024–2026) to match the MIT/Store identity.
+  **Uncommitted — changes the binary's version resource, so rebuild the MSIX
+  bundle before the next Store upload.**
+- License stays **MIT** (repo-root `LICENSE`, © 2024–2026 WheelGroupTech). For the
+  Partner Center "License terms" field, accept Microsoft's Standard Application
+  License Terms (fine for a free MIT app).
+- Store submission note: the `runFullTrust` capability triggers a Partner Center
+  approval prompt (a warning, not a blocker) — expected for a packaged Win32 app.
+
+## MSIX packaging for the Microsoft Store (committed)
+
+**MSIX packaging project.** New
 `ElectionExplorer.Package/` — a Windows Application Packaging Project (`.wapproj`)
 that wraps `ElectionExplorer.exe` as MSIX and builds a single **x64 + ARM64**
 `.msixupload` for the Store. Verified end to end: the bundle builds to
@@ -60,16 +83,16 @@ that wraps `ElectionExplorer.exe` as MSIX and builds a single **x64 + ARM64**
   splash; kept white per the user's choice). User was shown the transparent tiles.
 - Build command (also VS → Publish → Create App Packages):
   `msbuild ElectionExplorer.Package\ElectionExplorer.Package.wapproj /p:Configuration=Release /p:Platform=x64 /p:AppxBundle=Always /p:AppxBundlePlatforms="x64|arm64" /p:UapAppxPackageBuildMode=StoreUpload`
-- **BEFORE first Store upload:** replace the three `TODO-STORE` identity tokens in
-  `Package.appxmanifest` (Name, Publisher `CN=…`, PublisherDisplayName) with the
-  values Partner Center assigns after reserving the app name. See the project
-  `README.md` for full submission + local-sideload-signing steps.
+- First Store upload was rejected once because a **stale bundle** (built before
+  the PublisherDisplayName fix) was uploaded; a clean rebuild fixed it. Always
+  rebuild + re-grab the `.msixupload` from `Build/msix/` after any manifest/`.rc`
+  change. See the project `README.md` for full submission + sideload-signing steps.
 - Gotchas found & fixed (documented in the README): renamed the `AppConfig`
   property in `Directory.Build.props` (it collided with MSBuild's reserved
   `AppConfig` and broke `.wapproj`); assets must be `<Content>`+`<Link>` (not
-  `<Image>`) to be harvested; dropped the 256px small-logo targetsizes (upscaled
-  from the 64px icon, exceeded the 200 KB asset cap). Icon source is only 64×64,
-  so tiles are soft — supply a 256px+ PNG to `generate-assets.ps1` for crisp art.
+  `<Image>`) to be harvested; dropped the 256px small-logo targetsizes (they can
+  exceed the 200 KB asset cap). Logo source is now the transparent 1152px PNG, so
+  tiles are crisp.
 
 **Registry-backed option persistence (committed this session).** User options
 now survive between runs,
@@ -253,15 +276,20 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Commit the packaging project** (`ElectionExplorer.Package/`, `Applications.sln`,
-  `Directory.Build.props`, root `.gitignore`). Suggested:
-  `build: add MSIX packaging project for the Microsoft Store (x64+ARM64)`.
-- **Submit:** the `.msixupload` in `Build/msix/` is built with the real Store
-  identity — upload it in Partner Center (see the project `README.md`). No code
-  or manifest changes needed first.
-- Optional polish: `BackgroundColor` is currently `#FFFFFF` (shows behind the
-  transparent logo on plated tiles/splash) — switch to a brand color if desired.
-  Consider persisting **window size/position** alongside the other options.
+- **Commit the Store-listing prep** (uncommitted): `ElectionExplorer/TRADEMARKS.md`,
+  `res/ElectionExplorer.rc` (brand strings), `src/main.c` + `src/resource.h`
+  (About-dialog Privacy Policy link). Suggested:
+  `docs: add trademarks + About privacy link; fix brand strings`.
+- **Rebuild the MSIX bundle before the next upload** — the `.rc` brand-string
+  change alters the binary's version resource, so the currently built
+  `.msixupload` is stale. Rebuild, then submit in Partner Center.
+- Enable **GitHub Pages** so the privacy URL resolves:
+  `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`
+  (used by the Store listing and the new About-dialog link).
+- Click-test the About dialog (privacy link opens; layout at 300px looks right).
+- Optional polish: `BackgroundColor` is `#FFFFFF` (behind the transparent logo on
+  plated tiles/splash) — switch to a brand color if desired; consider persisting
+  **window size/position** alongside the other options.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
 - Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for

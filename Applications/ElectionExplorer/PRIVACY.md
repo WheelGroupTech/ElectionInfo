@@ -1,3 +1,8 @@
+---
+title: Election Explorer Privacy Policy
+permalink: /Applications/ElectionExplorer/PRIVACY
+---
+
 # Election Explorer — Privacy Policy
 
 _Last updated: September 11, 2026_

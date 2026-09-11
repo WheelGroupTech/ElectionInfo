@@ -7347,6 +7347,8 @@ static const wchar_t k_HelpCompare[] =
     L"value in each file.";
 
 static const wchar_t k_RepoUrl[] = L"https://github.com/WheelGroupTech/ElectionInfo";
+static const wchar_t k_PrivacyUrl[] =
+    L"https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY";
 
 typedef struct HelpDlgData
 {
@@ -7579,14 +7581,17 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
             HWND tagline;
             HWND oss_label;
             HWND link;
+            HWND privacy_label;
+            HWND privacy_link;
             HWND ok;
             wchar_t link_markup[256];
+            wchar_t privacy_markup[320];
 
             d = (AboutDlgData *)lParam;
             SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
             app = d->app;
 
-            App_CenterModalClient(dlg, app, Scale(app, 380), Scale(app, 240));
+            App_CenterModalClient(dlg, app, Scale(app, 380), Scale(app, 320));
             GetClientRect(dlg, &rc);
             margin = Scale(app, 16);
             icon_sz = Scale(app, 64);
@@ -7684,6 +7689,40 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
                                    app->instance,
                                    NULL);
 
+            y += Scale(app, 30);
+            privacy_label = CreateWindowExW(0,
+                                            L"STATIC",
+                                            L"Privacy Policy:",
+                                            WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                            margin,
+                                            y,
+                                            rc.right - 2 * margin,
+                                            Scale(app, 20),
+                                            dlg,
+                                            (HMENU)(INT_PTR)-1,
+                                            app->instance,
+                                            NULL);
+
+            y += Scale(app, 22);
+            StringCchPrintfW(privacy_markup,
+                             ARRAYSIZE(privacy_markup),
+                             L"<a href=\"%s\">%s</a>",
+                             k_PrivacyUrl,
+                             k_PrivacyUrl);
+            /* Taller than one line: this URL wraps to two lines at dialog width. */
+            privacy_link = CreateWindowExW(0,
+                                           L"SysLink",
+                                           privacy_markup,
+                                           WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                           margin,
+                                           y,
+                                           rc.right - 2 * margin,
+                                           Scale(app, 36),
+                                           dlg,
+                                           (HMENU)(INT_PTR)IDC_ABOUT_PRIVACY,
+                                           app->instance,
+                                           NULL);
+
             ok = CreateWindowExW(0,
                                  L"BUTTON",
                                  L"OK",
@@ -7714,6 +7753,14 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
                 {
                     SendMessageW(link, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
                 }
+                if (privacy_label != NULL)
+                {
+                    SendMessageW(privacy_label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
+                if (privacy_link != NULL)
+                {
+                    SendMessageW(privacy_link, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                }
                 if (ok != NULL)
                 {
                     SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
@@ -7729,11 +7776,14 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
         case WM_NOTIFY:
         {
             NMHDR *hdr = (NMHDR *)lParam;
-            if (hdr != NULL && hdr->idFrom == IDC_ABOUT_LINK &&
+            if (hdr != NULL &&
+                (hdr->idFrom == IDC_ABOUT_LINK || hdr->idFrom == IDC_ABOUT_PRIVACY) &&
                 (hdr->code == NM_CLICK || hdr->code == NM_RETURN))
             {
                 NMLINK *nml = (NMLINK *)lParam;
-                const wchar_t *url = (nml->item.szUrl[0] != L'\0') ? nml->item.szUrl : k_RepoUrl;
+                const wchar_t *fallback =
+                    (hdr->idFrom == IDC_ABOUT_PRIVACY) ? k_PrivacyUrl : k_RepoUrl;
+                const wchar_t *url = (nml->item.szUrl[0] != L'\0') ? nml->item.szUrl : fallback;
                 ShellExecuteW(dlg, L"open", url, NULL, NULL, SW_SHOWNORMAL);
                 return (INT_PTR)TRUE;
             }

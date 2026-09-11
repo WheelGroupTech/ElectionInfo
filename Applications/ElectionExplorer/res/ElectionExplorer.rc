@@ -21,11 +21,11 @@ BEGIN
     BEGIN
         BLOCK "040904b0"
         BEGIN
-            VALUE "CompanyName", "Wheel Group Tech"
+            VALUE "CompanyName", "WheelGroupTech"
             VALUE "FileDescription", "Election Explorer"
             VALUE "FileVersion", "1.0.1.0"
             VALUE "InternalName", "ElectionExplorer"
-            VALUE "LegalCopyright", "Copyright (C) Wheel Group Tech"
+            VALUE "LegalCopyright", "Copyright (C) 2024-2026 WheelGroupTech"
             VALUE "OriginalFilename", "ElectionExplorer.exe"
             VALUE "ProductName", "Election Explorer"
             VALUE "ProductVersion", "1.0.1.0"

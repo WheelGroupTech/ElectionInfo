@@ -35,10 +35,11 @@
 #define IDM_HELP_ABOUT         40094
 
 /* Help / About dialog child controls. */
-#define IDC_HELP_TEXT  41200
-#define IDC_ABOUT_ICON 41201
-#define IDC_ABOUT_TEXT 41202
-#define IDC_ABOUT_LINK 41203
+#define IDC_HELP_TEXT     41200
+#define IDC_ABOUT_ICON    41201
+#define IDC_ABOUT_TEXT    41202
+#define IDC_ABOUT_LINK    41203
+#define IDC_ABOUT_PRIVACY 41204
 
 /* Compare / Differences window child controls. */
 #define IDC_CMP_DIFF 41210

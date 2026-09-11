@@ -1983,7 +1983,8 @@ static BOOL cmp_write_and_load(const wchar_t *leaf, const char *contents, EeVote
 
     EeVoterTable_Init(t);
     err[0] = L'\0';
-    if (EeVoterTable_LoadFromFile(path, t, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    if (EeVoterTable_LoadFromFile(path, t, NULL, NULL, NULL, err, ARRAYSIZE(err)) !=
+        EeLoadStatus_Ok)
     {
         DeleteFileW(path);
         wprintf(L"cmp: load failed %s\n", err);
@@ -2017,17 +2018,18 @@ static int test_compare(void)
                               "7,103,Only,Aaa,700 Only Rd\n"      /* only in A */
                               ",104,Blank,Voter,800 Blank St\n",  /* blank ID -> only in A */
                               &a);
-    b_ok = cmp_write_and_load(L"ee_cmp_b.csv",
-                              "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
-                              "1,101,Smith,John,100 Main St\n"       /* identical */
-                              "2,101,Meyers,Anne,200 Oak Ave\n"      /* name minor */
-                              "3,101,Garcia,Carlos,301 Pine Rd\n"    /* addr minor */
-                              "4,210,Brown,Robert,9900 Zephyr Blvd Apt 7\n" /* addr major (+pct: suppressed) */
-                              "5,205,Lee,Ann,500 Cedar Ln\n"              /* precinct changed */
-                              "6,102,Wellington,Bartholomew,600 Birch St\n" /* name major */
-                              "8,103,New,Bbb,900 New Rd\n"           /* only in B */
-                              ",105,Other,Blank,950 Other St\n",     /* blank ID -> only in B */
-                              &b);
+    b_ok = cmp_write_and_load(
+        L"ee_cmp_b.csv",
+        "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
+        "1,101,Smith,John,100 Main St\n"              /* identical */
+        "2,101,Meyers,Anne,200 Oak Ave\n"             /* name minor */
+        "3,101,Garcia,Carlos,301 Pine Rd\n"           /* addr minor */
+        "4,210,Brown,Robert,9900 Zephyr Blvd Apt 7\n" /* addr major (+pct: suppressed) */
+        "5,205,Lee,Ann,500 Cedar Ln\n"                /* precinct changed */
+        "6,102,Wellington,Bartholomew,600 Birch St\n" /* name major */
+        "8,103,New,Bbb,900 New Rd\n"                  /* only in B */
+        ",105,Other,Blank,950 Other St\n",            /* blank ID -> only in B */
+        &b);
     if (!a_ok || !b_ok)
     {
         goto done;

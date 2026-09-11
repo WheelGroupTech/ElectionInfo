@@ -22,26 +22,26 @@
 #define IDM_COMPARE_SHOW_A        40032
 #define IDM_COMPARE_SHOW_B        40033
 /* Dynamic "Compare with <file>" items: one per other open viewer. */
-#define IDM_COMPARE_WITH_FIRST    40040
-#define IDM_COMPARE_WITH_LAST     40071
-#define IDM_FILTER_INCLUDE        40022
-#define IDM_FILTER_EXCLUDE        40023
-#define IDM_SHOW_IN_MAPS          40024
-#define IDM_OPEN_LINK             40025
-#define IDM_HELP_OPTIONS          40090
-#define IDM_HELP_FILTERS          40091
-#define IDM_HELP_REPORTS          40092
-#define IDM_HELP_COMPARE          40093
-#define IDM_HELP_ABOUT            40094
+#define IDM_COMPARE_WITH_FIRST 40040
+#define IDM_COMPARE_WITH_LAST  40071
+#define IDM_FILTER_INCLUDE     40022
+#define IDM_FILTER_EXCLUDE     40023
+#define IDM_SHOW_IN_MAPS       40024
+#define IDM_OPEN_LINK          40025
+#define IDM_HELP_OPTIONS       40090
+#define IDM_HELP_FILTERS       40091
+#define IDM_HELP_REPORTS       40092
+#define IDM_HELP_COMPARE       40093
+#define IDM_HELP_ABOUT         40094
 
 /* Help / About dialog child controls. */
-#define IDC_HELP_TEXT   41200
-#define IDC_ABOUT_ICON  41201
-#define IDC_ABOUT_TEXT  41202
-#define IDC_ABOUT_LINK  41203
+#define IDC_HELP_TEXT  41200
+#define IDC_ABOUT_ICON 41201
+#define IDC_ABOUT_TEXT 41202
+#define IDC_ABOUT_LINK 41203
 
 /* Compare / Differences window child controls. */
-#define IDC_CMP_DIFF    41210
+#define IDC_CMP_DIFF 41210
 
 #define IDC_FLT_PROMPT   41100
 #define IDC_FLT_COLUMN   41101

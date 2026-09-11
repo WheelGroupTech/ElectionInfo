@@ -146,14 +146,14 @@ typedef struct AppState
     uint8_t *mark_rows;
     uint32_t mark_count;
     BOOL mark_active;
-    int mark_kind;            /* EE_SCAN_* that produced mark_rows */
-    wchar_t mark_label[160];  /* status-bar description of the active mark view */
+    int mark_kind;           /* EE_SCAN_* that produced mark_rows */
+    wchar_t mark_label[160]; /* status-bar description of the active mark view */
 
     /* Two-file compare initiated from this viewer (as file A). Reuses the scan
      * thread / progress modal (scan_thread, scanning, scan_cancel). */
     struct AppState *cmp_other; /* the other viewer (file B) */
-    uint8_t *cmp_class_a;     /* a->row_count bytes (EE_CMP_*), transient */
-    uint8_t *cmp_class_b;     /* b->row_count bytes (EE_CMP_*), transient */
+    uint8_t *cmp_class_a;       /* a->row_count bytes (EE_CMP_*), transient */
+    uint8_t *cmp_class_b;       /* b->row_count bytes (EE_CMP_*), transient */
     EeCompareResult cmp_result;
     BOOL cmp_ok;
 
@@ -187,13 +187,13 @@ typedef struct CompareWindow
     HWND hwnd;
     HWND list;
     HWND status;
-    HWND diff_btn;       /* "Show Differences…" */
-    AppState *a;         /* initiating viewer (file A) */
-    AppState *b;         /* other viewer (file B) */
+    HWND diff_btn;    /* "Show Differences…" */
+    AppState *a;      /* initiating viewer (file A) */
+    AppState *b;      /* other viewer (file B) */
     EeCompareResult result;
-    uint8_t *class_a;    /* a->row_count bytes, owned */
-    uint8_t *class_b;    /* b->row_count bytes, owned */
-    uint32_t rows_a;     /* a->row_count captured at compute time */
+    uint8_t *class_a; /* a->row_count bytes, owned */
+    uint8_t *class_b; /* b->row_count bytes, owned */
+    uint32_t rows_a;  /* a->row_count captured at compute time */
     uint32_t rows_b;
 } CompareWindow;
 
@@ -215,9 +215,9 @@ typedef struct DiffWindow
     HWND status;
     AppState *a;
     AppState *b;
-    DiffRow *rows;      /* one entry per differing (voter, field) */
+    DiffRow *rows; /* one entry per differing (voter, field) */
     uint32_t row_count;
-    int sort_col;       /* -1 = unsorted; else 0..3 */
+    int sort_col;  /* -1 = unsorted; else 0..3 */
     BOOL sort_asc;
 } DiffWindow;
 
@@ -1149,8 +1149,7 @@ static void App_UpdateRowStatus(AppState *app)
     }
     if (app->mark_active)
     {
-        const wchar_t *what =
-            (app->mark_label[0] != L'\0') ? app->mark_label : L"marked rows";
+        const wchar_t *what = (app->mark_label[0] != L'\0') ? app->mark_label : L"marked rows";
         if (EeFilter_HasEnabled(&app->filters))
         {
             StringCchPrintfW(buf,
@@ -1246,8 +1245,7 @@ static void App_ApplyFilter(AppState *app)
                 uint32_t view_row = (map != NULL) ? map[k] : k;
                 uint32_t phys =
                     (app->table.view_index != NULL) ? app->table.view_index[view_row] : view_row;
-                if (phys < app->table.row_count && app->mark_rows[phys] &&
-                    n < app->table.row_count)
+                if (phys < app->table.row_count && app->mark_rows[phys] && n < app->table.row_count)
                 {
                     isect[n++] = view_row;
                 }
@@ -4642,8 +4640,8 @@ static void App_ApplyMarks(AppState *app,
 static void App_ApplyDuplicateMarks(AppState *app, uint8_t *marks, uint32_t count, int kind)
 {
     uint32_t sort_col = (kind == EE_SCAN_DUP_NAME_DOB) ? EE_COL_NAME : EE_COL_VOTER_ID;
-    const wchar_t *label = (kind == EE_SCAN_DUP_NAME_DOB) ? L"duplicate voters (name + DOB)"
-                                                          : L"duplicate Voter IDs";
+    const wchar_t *label =
+        (kind == EE_SCAN_DUP_NAME_DOB) ? L"duplicate voters (name + DOB)" : L"duplicate Voter IDs";
     App_ApplyMarks(app, marks, count, kind, sort_col, label);
 }
 
@@ -6072,7 +6070,8 @@ static void App_RunCompareSync(AppState *a, AppState *b)
         return;
     }
     prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    ok = EeVoterTable_CompareByVoterId(&a->table, &b->table, class_a, class_b, &r, NULL, NULL, NULL);
+    ok =
+        EeVoterTable_CompareByVoterId(&a->table, &b->table, class_a, class_b, &r, NULL, NULL, NULL);
     SetCursor(prev);
     if (!ok)
     {
@@ -6500,10 +6499,11 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 {
                     SendMessageW(cw->status, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
                 }
-                SendMessageW(cw->status,
-                             SB_SETTEXTW,
-                             0,
-                             (LPARAM)L"Matched by Voter ID. Right-click a row to show it in a file.");
+                SendMessageW(
+                    cw->status,
+                    SB_SETTEXTW,
+                    0,
+                    (LPARAM)L"Matched by Voter ID. Right-click a row to show it in a file.");
             }
 
             cw->diff_btn = CreateWindowExW(0,
@@ -6685,7 +6685,9 @@ static void App_ShowDifferences(CompareWindow *cw)
                                          NULL))
     {
         SetCursor(prev);
-        MessageBoxW(cw->hwnd, L"Could not collect the differences.", k_WindowTitle,
+        MessageBoxW(cw->hwnd,
+                    L"Could not collect the differences.",
+                    k_WindowTitle,
                     MB_ICONERROR | MB_OK);
         return;
     }
@@ -6721,7 +6723,9 @@ static void App_ShowDifferences(CompareWindow *cw)
 
     if (rows == NULL)
     {
-        MessageBoxW(cw->hwnd, L"No differing voters found.", k_WindowTitle,
+        MessageBoxW(cw->hwnd,
+                    L"No differing voters found.",
+                    k_WindowTitle,
                     MB_ICONINFORMATION | MB_OK);
         return;
     }
@@ -7088,9 +7092,8 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
             /* Subclass for the bold header draw (see DiffListSubclass). */
             {
-                WNDPROC old = (WNDPROC)SetWindowLongPtrW(dw->list,
-                                                         GWLP_WNDPROC,
-                                                         (LONG_PTR)DiffListSubclass);
+                WNDPROC old =
+                    (WNDPROC)SetWindowLongPtrW(dw->list, GWLP_WNDPROC, (LONG_PTR)DiffListSubclass);
                 if (g_old_diff_list_proc == NULL)
                 {
                     g_old_diff_list_proc = old;
@@ -7202,19 +7205,29 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     switch (di->item.iSubItem)
                     {
                         case 0:
-                            Diff_CellW(&dw->a->table, dr->row_a, EE_COL_VOTER_ID, di->item.pszText,
+                            Diff_CellW(&dw->a->table,
+                                       dr->row_a,
+                                       EE_COL_VOTER_ID,
+                                       di->item.pszText,
                                        di->item.cchTextMax);
                             break;
                         case 1:
-                            StringCchCopyW(di->item.pszText, di->item.cchTextMax,
+                            StringCchCopyW(di->item.pszText,
+                                           di->item.cchTextMax,
                                            Diff_FieldName(dr->col));
                             break;
                         case 2:
-                            Diff_CellW(&dw->a->table, dr->row_a, dr->col, di->item.pszText,
+                            Diff_CellW(&dw->a->table,
+                                       dr->row_a,
+                                       dr->col,
+                                       di->item.pszText,
                                        di->item.cchTextMax);
                             break;
                         case 3:
-                            Diff_CellW(&dw->b->table, dr->row_b, dr->col, di->item.pszText,
+                            Diff_CellW(&dw->b->table,
+                                       dr->row_b,
+                                       dr->col,
+                                       di->item.pszText,
                                        di->item.cchTextMax);
                             break;
                         default:
@@ -7624,19 +7637,19 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
 
             /* Full-width tagline below the icon row so it can wrap. */
             row_bottom = margin + icon_sz + Scale(app, 12);
-            tagline = CreateWindowExW(
-                0,
-                L"STATIC",
-                L"A powerful tool to view, compare, and analyze election data.",
-                WS_CHILD | WS_VISIBLE | SS_LEFT,
-                margin,
-                row_bottom,
-                rc.right - 2 * margin,
-                Scale(app, 40),
-                dlg,
-                (HMENU)(INT_PTR)-1,
-                app->instance,
-                NULL);
+            tagline =
+                CreateWindowExW(0,
+                                L"STATIC",
+                                L"A powerful tool to view, compare, and analyze election data.",
+                                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                margin,
+                                row_bottom,
+                                rc.right - 2 * margin,
+                                Scale(app, 40),
+                                dlg,
+                                (HMENU)(INT_PTR)-1,
+                                app->instance,
+                                NULL);
 
             y = row_bottom + Scale(app, 46);
             oss_label = CreateWindowExW(0,

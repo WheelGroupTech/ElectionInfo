@@ -5,11 +5,12 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-09-10
-**Branch:** main — **uncommitted** this session: **registry-backed persistence
-of user options** (zoom, map engine, copy/name formatting) via a new
-`settings.{c,h}` module. Prior session's version bump to 1.0.1.0, About "Open
-Source" line, and `.gitignore` entry for `Voter_Lists/` are committed.
-Heads-up for release: the app is being published via the **Microsoft Store**.
+**Branch:** main — **registry-backed option persistence** (`settings.{c,h}`) is
+now **committed**. **Uncommitted:** a separate formatting-only cleanup running
+`clang-format` over the pre-existing sources (see below). Prior session's version
+bump to 1.0.1.0, About "Open Source" line, and `.gitignore` for `Voter_Lists/`
+are committed. Heads-up for release: the app is being published via the
+**Microsoft Store**.
 
 ---
 
@@ -36,9 +37,18 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-10) — uncommitted (ready to commit)
+## This session (2026-09-10)
 
-**Registry-backed option persistence.** User options now survive between runs,
+**Formatting-only cleanup (uncommitted — keep as its own commit).** Ran
+`C:\Program Files\LLVM\bin\clang-format.exe` (22.1.8) over the sources that had
+pre-existing violations: `src/main.c`, `src/voter_table.c`, `src/voter_table.h`,
+`src/resource.h`, `test/smoke_load.c`. No behavior change; all sources now report
+0 violations. x64 Debug + Release build clean, full smoke suite passes. Commit
+these five files on their own (suggested: `style: clang-format existing sources`),
+separate from any functional change.
+
+**Registry-backed option persistence (committed this session).** User options
+now survive between runs,
 stored per user in the registry under
 `HKEY_CURRENT_USER\Software\WheelGroupTech\ElectionExplorer`, following
 Microsoft's guidance for
@@ -64,10 +74,12 @@ Persisted: `ZoomPercent`, `MapEngine`, `CopyPrependNormalized`,
 - Verified: x64 Debug **and** Release build clean; full smoke suite passes
   (26 tests incl. `settings roundtrip: ok`). **GUI not yet click-tested** — i.e.
   change options, reopen the app, confirm they stuck.
-- Note on tooling: `clang-format` on this machine (LLVM 20) reformats
-  comment-alignment on lines it shouldn't, so the two edited existing files
-  (`main.c`, `test/smoke_load.c`) were hand-edited to keep the diff minimal
-  rather than run whole-file formatting.
+- Note on tooling: use `C:\Program Files\LLVM\bin\clang-format.exe` (22.1.8).
+  The committed C baseline isn't uniformly clang-clean under it (`main.c`,
+  `voter_table.c` have pre-existing comment-alignment violations), so a
+  whole-file `-i` run churns unrelated lines. The new `settings.{c,h}` are
+  formatted; edits to `main.c` / `test/smoke_load.c` were hand-written in style
+  and verified clean with `clang-format --dry-run` on the added lines.
 
 ## Prior session (2026-09-08) — committed
 

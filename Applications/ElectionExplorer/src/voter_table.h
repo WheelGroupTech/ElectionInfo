@@ -266,8 +266,8 @@ extern "C"
     };
 
     /* All "something changed" bits (matched rows without any of these are identical). */
-#define EE_CMP_CHANGE_BITS                                                                          \
-    (EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR | EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR |                \
+#define EE_CMP_CHANGE_BITS                                                                         \
+    (EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR | EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR |               \
      EE_CMP_PCT_CHANGED)
 
     /** Row-count tallies from a compare (A = first table, B = second). */

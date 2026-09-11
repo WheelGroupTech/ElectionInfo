@@ -1896,8 +1896,8 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
     for (i = 0; i < a->row_count; i++)
     {
         const char *vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
-        uint32_t rb = (vid != NULL && vid[0] != '\0') ? vid_map_find(map_b, mask_b, b, vid)
-                                                       : UINT32_MAX;
+        uint32_t rb =
+            (vid != NULL && vid[0] != '\0') ? vid_map_find(map_b, mask_b, b, vid) : UINT32_MAX;
         if (rb == UINT32_MAX)
         {
             class_a[i] = EE_CMP_ONLY_HERE;
@@ -1928,8 +1928,8 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
     for (i = 0; i < b->row_count; i++)
     {
         const char *vid = EeVoterTable_GetCellUtf8(b, i, EE_COL_VOTER_ID);
-        uint32_t ra = (vid != NULL && vid[0] != '\0') ? vid_map_find(map_a, mask_a, a, vid)
-                                                       : UINT32_MAX;
+        uint32_t ra =
+            (vid != NULL && vid[0] != '\0') ? vid_map_find(map_a, mask_a, a, vid) : UINT32_MAX;
         if (ra == UINT32_MAX)
         {
             class_b[i] = EE_CMP_ONLY_HERE;

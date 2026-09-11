@@ -1,0 +1,1501 @@
+VUIDNO,PCTCOD,PCTSPT,EDRDAT,GENDER,LSTNAM,FSTNAM,MIDNAM,BLKNUM,STRPRE,STRNAM,STRTYP,UNITYP,UNITNO,RSCITY,RZIPCD,SUSIND,G20VOTED,P22VOTED,G22VOTED,P24VOTED,P24PARTY,G24VOTED,P26VOTED,P26PARTY
+1075016156,101,,20161025,M,Brooks,Paul,Grace,4534,,Parmer,WAY,STE,D6,Leander,78645,,Y,Y,,Y,,,Y,Dem
+1008378731,101,D,20230710,M,Chen,Samuel,Paul,2319,E,Speedway,AVE,,,Buda,78610,,,,,Y,Dem,Y,,
+1080902909,101,B,20211005,F,Peterson,Margaret,Ann,9809,E,McNeil,CIR,,,Pflugerville,78660,,Y,Y,Y,Y,Rep,,Y,Rep
+1007107568,101,,20221027,F,Taylor,Margaret,R,6900,,Creekside,ST,,,Pflugerville,78660,,Y,,Y,Y,Lib,Y,,
+1058475118,101,B,20240317,F,Torres,Hannah,Marie,7600,N,Barton Springs,PKWY,,,Leander,78645,,Y,,,,,Y,Y,
+1012935643,101,C,20211124,M,Young,Aaron,Ray,9000,S,Slaughter,AVE,,,Cedar Park,78613,,,,,,,,Y,
+1007823782,102,A,20151209,F,Cox,Priya,A,6407,S,University,TRL,,,Leander,78645,,Y,,Y,Y,,Y,,
+1011561080,102,B,20080216,F,Jones,Laura,Rose,3100,,Howard,CIR,,,Buda,78610,,,,,Y,Dem,Y,,
+1025903916,102,C,20171010,M,Murphy,Juan,R,6236,N,Parmer,CT,,,Leander,78645,,Y,,Y,Y,Lib,,,
+1011678190,102,,20250409,F,Watson,Betty,Rose,9200,,Burnet,ST,,,Leander,78641,,,Y,Y,Y,Rep,Y,Y,Dem
+1086394805,102,C,20120203,M,Young,Jose,Rose,8800,N,Cedar,ST,,,Buda,78610,,,,Y,Y,Rep,Y,Y,Rep
+1093333875,103,D,20130608,M,Bailey,Mark,L,4500,,Cedar,AVE,,,Buda,78610,S,,,,Y,Dem,Y,Y,Rep
+1098477443,103,C,20151212,F,Baker,Amanda,E,8500,S,Burnet,BLVD,,,Pflugerville,78660,,,Y,Y,,,,,
+1031774862,103,C,20230903,M,Barnes,Carlos,,5464,S,Elm,WAY,UNIT,A1,Manor,78653,,Y,Y,Y,Y,Dem,,Y,Dem
+1044336528,103,C,20190313,M,Bennett,John,E,9700,N,William Cannon,TRL,,,Leander,78645,,Y,Y,Y,Y,Dem,Y,,
+1000531957,103,D,20180714,M,Gomez,David,Kay,500,S,Far West,ST,UNIT,4A,Leander,78641,,,Y,Y,Y,Lib,,Y,Dem
+1050211475,103,B,20241205,F,Howard,Sofia,Jean,9600,,Ben White,CIR,,,Del Valle,78617,,,,,,,Y,,
+1022623505,103,,20181002,F,Price,Kathleen,J,3000,S,Guadalupe,TRL,,,Del Valle,78617,,Y,,Y,Y,Dem,,Y,Rep
+1049278036,104,C,20200919,M,Johnson,Eric,L,7900,W,Dessau,CIR,APT,371,Del Valle,78617,,Y,,Y,Y,Rep,,Y,Lib
+1016889002,104,A,20140724,M,Miller,Eric,Ann,9100,,Koenig,LN,,,Pflugerville,78660,,,,,,,,Y,Dem
+1061844354,104,A,20240905,F,Nguyen,Grace,Jean,446,E,Metric,AVE,,,Pflugerville,78660,,Y,Y,,,,Y,Y,Dem
+1035439053,104,C,20150520,F,Williams,Rebecca,Ray,5839,W,Hillside,DR,,,Round Rock,78681,,Y,,Y,Y,,Y,Y,Dem
+1070185934,105,D,20190804,M,Campbell,David,J,5444,,Gattis School,CT,APT,358,Pflugerville,78660,,,,Y,Y,Rep,Y,Y,Dem
+1009259253,105,,20101207,F,Torres,Kathleen,Kay,4500,,Cedar,CIR,STE,B6,Cedar Park,78613,,Y,,,Y,Dem,Y,Y,Rep
+1029721259,106,A,20120706,F,Campbell,Grace,Marie,4000,,Lakeview,AVE,,,Del Valle,78617,,,Y,,,,,,
+1023226981,106,A,20250404,M,Griffin,Christopher,M,9895,W,Menchaca,LN,UNIT,43,Del Valle,78617,,,Y,Y,Y,Dem,,Y,
+1055033295,106,B,20220601,F,Thompson,Cynthia,Paul,657,,Slaughter,CIR,,,Buda,78610,,Y,,Y,Y,Dem,Y,Y,Dem
+1055963354,106,C,20080227,F,Young,Olivia,Rose,7900,,Sunset Valley,ST,,,Cedar Park,78613,,,Y,,Y,Dem,,Y,Rep
+1035313134,107,C,20080609,M,Hayes,Sean,Jean,7400,,Live Oak,BLVD,,,Austin,78704,,Y,Y,Y,Y,Rep,Y,Y,Rep
+1027172506,107,A,20130609,M,Jackson,Christopher,Jean,9674,,Escarpment,ST,,,Manor,78653,,,,,Y,Dem,Y,Y,Dem
+1068822280,107,D,20140723,M,Murphy,Omar,Ray,7166,W,Lamar,ST,,,Round Rock,78681,,Y,Y,Y,Y,Lib,,,
+1074057278,107,C,20211223,F,Nguyen,Rosa,Ray,6678,,Parmer,CIR,,,Cedar Park,78613,,Y,,Y,,,,Y,Lib
+1052082271,108,D,20150721,F,Adams,Sandra,Grace,7900,,Meadow,CT,,,Buda,78610,,,,Y,Y,Dem,Y,,
+1066047149,108,A,20221120,F,Gomez,Emily,Rose,9800,,Sunset Valley,CT,,,Leander,78641,,Y,,Y,Y,Rep,,Y,Dem
+1069889327,108,C,20181015,M,Hughes,Jose,,6550,,Pecan,ST,,,Austin,78703,,Y,,Y,Y,Rep,,Y,Lib
+1063737050,108,,20111016,M,Nelson,Samuel,Marie,2326,E,Koenig,BLVD,,,Leander,78641,,Y,Y,Y,,,,Y,Lib
+1000347993,108,D,20130513,F,Nelson,Sandra,J,600,,University,ST,,,Round Rock,78665,,Y,,Y,Y,Rep,,Y,Rep
+1058515157,109,D,20181010,F,Brooks,Nancy,A,3000,,Braker,BLVD,UNIT,8B,Del Valle,78617,,,Y,,,,Y,Y,Dem
+1087537383,109,D,20250315,F,Clark,Melissa,Paul,6200,E,Airport,RD,,,Leander,78645,,,Y,Y,Y,Lib,,,
+1067884221,109,B,20130914,F,Foster,Betty,Ann,334,,Palmer,BLVD,,,Del Valle,78617,,Y,,Y,,,Y,Y,Rep
+1000153910,109,B,20210126,M,Jones,Daniel,,2600,,Convict Hill,PKWY,,,Pflugerville,78660,,Y,,Y,,,Y,,
+1015961473,109,D,20190311,F,Rivera,Deborah,A,6961,S,Nueces,WAY,,,Manor,78653,,Y,Y,Y,Y,Dem,,Y,Dem
+1080087142,109,C,20081115,F,Wood,Isabella,J,4500,,Magnolia,WAY,,,Cedar Park,78613,,Y,,,,,,,
+1007375064,110,B,20260522,M,Ellison,Morgan,A,3690,,Riverside,RD,,,Round Rock,78664,,,,,,,,,
+1012025347,110,D,20150304,F,Johnson,Stephanie,Lee,3100,N,Escarpment,BLVD,STE,9B,Manor,78653,,,,Y,,,Y,,
+1030186786,111,D,20230720,M,Bennett,Omar,M,5674,N,Barton Springs,AVE,UNIT,38B,Leander,78645,,Y,Y,Y,,,,,
+1041010023,111,A,20131022,F,Chen,Mei,,5421,W,Pinewood,PL,,,Del Valle,78617,,Y,,Y,Y,Rep,,Y,Lib
+1052169535,111,C,20080321,M,Diaz,Charles,Paul,9900,,Lamar,LN,,,Austin,78704,,Y,Y,,,,Y,,
+1042567448,111,B,20201009,M,Gomez,Henry,Kay,860,E,Jollyville,TRL,,,Round Rock,78681,,,Y,Y,Y,Rep,,Y,
+1038318203,111,,20091108,M,Gomez,Nathan,,3900,N,Congress,TRL,STE,389,Round Rock,78664,,,Y,Y,,,,,
+1083578736,111,B,20190106,M,Mitchell,Charles,A,800,N,Ridgeline,CIR,,,Cedar Park,78613,S,,Y,,Y,Dem,,,
+1050550988,111,,20140605,M,Reyes,William,Kay,2600,,Elm,BLVD,,,Leander,78641,,,Y,Y,Y,Dem,Y,,
+1046400809,111,A,20150614,M,Rodriguez,Luis,Ann,6154,N,Koenig,CT,,,Austin,78722,,Y,,,,,,Y,Rep
+1064393796,111,D,20170612,F,Russell,Grace,L,6800,,Anderson,ST,STE,9A,Pflugerville,78660,,,,,Y,Dem,Y,Y,Rep
+1089410667,112,A,20210913,F,Foster,Sarah,M,2377,E,Pinewood,PKWY,#,B8,Round Rock,78665,,,Y,,Y,Dem,Y,,
+1087506364,112,,20190125,F,Moore,Nancy,Kay,4401,,Menchaca,LN,,,Cedar Park,78613,,,,,,,,Y,
+1006951421,112,A,20221125,F,Russell,Sandra,Kay,100,E,Ben White,PL,#,6B,Manor,78653,,Y,,Y,Y,,Y,Y,Dem
+1019992204,112,D,20220520,M,Young,Omar,Kay,8486,E,Guadalupe,CIR,,,Leander,78645,,,Y,Y,,,Y,Y,
+1009718379,113,,20100103,F,Bennett,Jessica,Ann,3700,,Escarpment,PL,STE,E4,Buda,78610,,Y,Y,,Y,Dem,Y,Y,Dem
+1008539544,113,,20150222,F,Hill,Sandra,Rose,1000,W,Hillside,PKWY,UNIT,23A,Cedar Park,78613,,Y,Y,Y,Y,,Y,,
+1039746168,113,D,20220928,F,Kim,Lisa,Jean,8900,N,Red River,PL,,,Del Valle,78617,,,Y,,,,,,
+1006258782,113,A,20131214,M,Thompson,Raymond,Kay,7400,E,Far West,CIR,,,Buda,78610,,Y,Y,Y,Y,,,,
+1001537824,113,B,20231210,M,Torres,Ethan,E,7000,,Jollyville,BLVD,,,Pflugerville,78660,,,,,Y,Rep,Y,Y,Rep
+1072306438,114,,20250319,F,Cooper,Barbara,,2500,W,Lakeview,PKWY,,,Austin,78756,,Y,Y,,Y,Dem,Y,Y,Rep
+1036045892,114,B,20131112,F,Lewis,Betty,Dean,1300,E,Sycamore,PKWY,STE,40,Pflugerville,78660,,,Y,,Y,Dem,Y,,
+1024483413,114,B,20170108,F,Long,Grace,Ray,3323,W,Bee Cave,PKWY,,,Cedar Park,78613,,Y,,,,,Y,Y,
+1000488547,115,,20080505,M,Smith,Steven,Marie,8940,,Palmer,CT,,,Pflugerville,78660,,Y,Y,,,,Y,Y,Dem
+1075309217,116,A,20240823,F,Peterson,Jessica,Kay,3600,,Lamar,PL,,,Manor,78653,,Y,,,,,,,
+1092951167,117,C,20160819,M,Anderson,Nathan,Rose,7200,,Koenig,TRL,STE,55,Buda,78610,,Y,Y,,Y,Lib,Y,Y,Lib
+1027602060,117,C,20240720,M,Brown,Joshua,Marie,1400,S,Rio Grande,DR,,,Round Rock,78664,,Y,,Y,Y,Dem,Y,Y,Rep
+1008783338,117,C,20191119,M,Bryant,Kevin,Ray,6300,,Creekside,PKWY,,,Leander,78645,,,Y,,,,,,
+1057216032,117,,20200601,M,Chen,Wei,Dean,4400,S,Airport,TRL,,,Buda,78610,,,,Y,Y,Rep,,Y,
+1059906961,117,,20221219,M,Foster,Joseph,L,6825,,Burnet,AVE,,,Austin,78731,,Y,Y,,Y,Dem,,,
+1062893225,118,B,20191115,M,Ross,Nathan,Marie,8800,,Ben White,ST,STE,B1,Del Valle,78617,,,,Y,Y,Dem,Y,Y,Dem
+1075484932,118,,20221123,F,Thompson,Ashley,Ann,7200,,Congress,PL,,,Cedar Park,78613,,,Y,Y,Y,Rep,,,
+1063676930,119,C,20110614,F,Chen,Cynthia,Jean,5263,,Ridgeline,BLVD,APT,C8,Buda,78610,,Y,Y,,Y,Rep,Y,,
+1068608051,119,A,20140708,F,Clark,Lisa,J,5600,S,Hillside,BLVD,,,Austin,78741,,Y,Y,,Y,Dem,Y,Y,Rep
+1069978300,119,,20170906,M,Garcia,Sean,Jean,6500,,William Cannon,CT,#,33B,Buda,78610,,,Y,Y,,,,,
+1039333111,119,B,20250721,F,Reyes,Jessica,Lee,2167,W,Creekside,RD,,,Del Valle,78617,,Y,Y,,Y,Lib,Y,,
+1003447062,119,D,20190824,M,Washington,Kevin,Jean,9328,S,Parmer,DR,,,Pflugerville,78660,,Y,Y,Y,,,,Y,Lib
+1037760004,120,B,20120913,M,Anderson,Charles,E,9593,,Sunset Valley,PL,APT,277,Cedar Park,78613,,,,Y,,,Y,,
+1088598327,120,B,20170101,M,Long,Donald,,8700,S,Airport,LN,,,Round Rock,78681,,,Y,,Y,Rep,Y,Y,Rep
+1087434307,120,B,20130223,F,Ross,Michelle,Ann,8200,S,Parmer,AVE,,,Austin,78717,,,,Y,,,Y,,
+1036807658,120,,20140417,F,Russell,Amy,A,291,W,Steck,BLVD,,,Manor,78653,,Y,Y,Y,,,,,
+1054759719,121,D,20090327,F,Anderson,Sofia,R,974,N,Pecan,ST,,,Del Valle,78617,,,Y,Y,,,Y,,
+1027853343,121,C,20080725,M,Roberts,Brian,Kay,9000,N,Sunset Valley,CT,#,4B,Pflugerville,78660,,,Y,Y,,,Y,Y,Rep
+1016797591,121,,20241114,F,Tran,Emily,,5088,,Nueces,PKWY,#,35,Manor,78653,,,Y,Y,,,Y,,
+1049353593,121,D,20101014,F,Williams,Angela,M,900,S,Elm,TRL,,,Leander,78641,,Y,Y,,Y,Dem,,Y,Dem
+1010878702,122,,20190710,F,Adams,Fatima,M,3300,E,Rio Grande,DR,,,Manor,78653,,Y,Y,Y,Y,Rep,Y,Y,
+1057035957,122,B,20110914,M,Hayes,James,Rose,430,S,Guadalupe,LN,APT,398,Buda,78610,,Y,Y,Y,,,Y,,
+1070971376,122,B,20091123,F,Hill,Amanda,Ray,7525,,Sycamore,WAY,,,Austin,78756,,,Y,,,,,Y,Rep
+1027229083,122,D,20210406,F,Perez,Ana,,4100,E,Lakeview,LN,STE,70,Pflugerville,78660,S,,,,,,,Y,Dem
+1030593016,122,B,20140912,F,Ward,Lina,Lee,7386,S,Gattis School,BLVD,STE,310,Del Valle,78617,,,,Y,Y,Dem,Y,Y,
+1069093680,123,A,20120121,M,Cox,Aaron,,3000,,Riverside,BLVD,,,Manor,78653,,Y,,,Y,,,Y,
+1059071956,123,B,20221008,M,Martinez,Eric,Lee,8400,,University,TRL,,,Cedar Park,78613,,,Y,Y,,,,,
+1067711815,123,,20230507,F,Sanders,Cynthia,Paul,7900,W,Ridgeline,PL,,,Manor,78653,,,,Y,Y,Rep,Y,Y,
+1071849644,124,C,20180613,M,Barnes,Samuel,Ann,7239,N,Manor,RD,STE,A3,Del Valle,78617,,Y,Y,,Y,,Y,Y,Dem
+1030499670,124,D,20230211,M,Hayes,Raymond,Dean,8500,,Burnet,ST,STE,9,Pflugerville,78660,,Y,,,,,Y,Y,Dem
+1031258618,124,B,20151006,F,Rivera,Deborah,M,6300,,Pinewood,WAY,,,Manor,78653,,,Y,Y,,,Y,Y,Rep
+1006466727,125,,20251204,M,Adams,Samuel,L,6400,E,Escarpment,LN,UNIT,20A,Buda,78610,,Y,,Y,Y,Rep,Y,Y,Rep
+1025559891,125,C,20241101,M,Bennett,Donald,Ann,6946,W,Manor,ST,,,Cedar Park,78613,,,Y,Y,Y,Rep,,Y,Dem
+1011413800,125,D,20080327,F,Cruz,Ashley,Lee,600,S,Slaughter,PL,,,Cedar Park,78613,,,,Y,Y,,,,
+1056799961,125,A,20111116,M,Nelson,Paul,,2020,S,Guadalupe,PKWY,,,Leander,78645,,Y,Y,,Y,,Y,,
+1058021198,125,A,20120703,F,Peterson,Isabella,M,1900,W,Airport,PKWY,,,Leander,78641,,Y,Y,Y,,,,Y,Rep
+1011193225,125,D,20250802,F,Powell,Amanda,Grace,1500,,Live Oak,CIR,,,Round Rock,78681,,,,,,,,,
+1068135895,125,B,20110413,M,Sanchez,Robert,Ray,800,,Elm,PL,#,22B,Leander,78645,,,Y,,Y,Rep,Y,,
+1075501035,125,A,20200609,M,Wilson,Kevin,Grace,638,E,Duval,WAY,,,Round Rock,78664,,Y,Y,Y,,,Y,Y,Rep
+1087376379,126,C,20210725,M,Hill,Eric,Jean,1100,,Spicewood Springs,PKWY,,,Del Valle,78617,,,Y,Y,Y,,,Y,Rep
+1090297228,126,,20130310,F,Jenkins,Mary,Marie,381,,Palmer,DR,#,226,Del Valle,78617,,,Y,,Y,Rep,,,
+1045585213,126,C,20120310,F,Long,Emily,Marie,5543,E,Anderson,AVE,,,Cedar Park,78613,,Y,,Y,Y,Rep,,Y,Rep
+1036918053,126,A,20141120,F,Martinez,Elizabeth,Grace,9253,,Nueces,CT,,,Round Rock,78681,,Y,,,Y,,,Y,Dem
+1074858500,126,A,20210801,M,Miller,Jacob,Lee,1100,,Elm,PKWY,,,Pflugerville,78660,,,Y,Y,,,Y,Y,Dem
+1003435492,126,A,20150104,M,Walker,Nathan,,6057,W,Riverside,AVE,,,Buda,78610,,Y,,Y,Y,Dem,Y,,
+1028798438,127,,20250621,M,Bryant,Omar,Ray,9772,,Speedway,CIR,STE,429,Round Rock,78681,,Y,,Y,Y,Dem,,,
+1069408102,127,A,20220309,F,Harris,Margaret,Kay,3404,N,Pinewood,PL,,,Austin,78704,,,Y,Y,Y,Dem,,Y,Lib
+1009235698,127,,20191014,F,Hughes,Sandra,L,7586,E,Anderson,ST,,,Del Valle,78617,,,,,Y,,Y,,
+1053875564,127,B,20250819,F,OBrien,Cynthia,Kay,1900,S,Duval,AVE,,,Manor,78653,,Y,,Y,,,Y,Y,Rep
+1074376711,128,A,20191013,F,Foster,Amanda,Ann,5262,N,Magnolia,RD,STE,E7,Cedar Park,78613,,Y,Y,,,,Y,Y,Lib
+1083848703,128,C,20140326,F,Scott,Carmen,Paul,5229,,Far West,PL,,,Leander,78645,,,Y,,Y,Lib,,Y,Dem
+1009112377,129,A,20110609,F,Abbott,Karen,Grace,2738,,Convict Hill,RD,,,Cedar Park,78613,,,Y,,Y,Rep,,,
+1068334005,129,A,20110803,F,Campbell,Rosa,L,9900,W,Magnolia,TRL,,,Pflugerville,78660,,Y,Y,Y,Y,Rep,,,
+1029599081,129,,20180122,F,Davis,Rosa,E,7300,S,Jollyville,DR,,,Austin,78705,,Y,Y,,,,,,
+1004855336,129,A,20220414,F,Griffin,Jennifer,Paul,6375,E,Magnolia,ST,,,Austin,78723,,,,Y,Y,Rep,,Y,Lib
+1071341119,129,B,20110223,F,Lewis,Nancy,Grace,8200,N,Wells Branch,AVE,,,Pflugerville,78660,,Y,Y,Y,,,Y,,
+1091980720,129,D,20251115,M,Tran,Anthony,Ray,9113,,Cedar,CT,STE,29B,Pflugerville,78660,,Y,,,,,Y,Y,Lib
+1090407744,130,C,20250212,F,Hill,Rosa,Jean,3000,S,Parmer,CIR,,,Manor,78653,S,,,Y,Y,Lib,,,
+1025302380,130,D,20190620,M,Kim,Charles,A,8700,,William Cannon,LN,,,Leander,78645,,Y,,Y,Y,Dem,Y,,
+1003367863,130,C,20181019,F,Lewis,Linda,Dean,7200,,Pinewood,ST,STE,168,Buda,78610,,Y,Y,Y,Y,,,,
+1005552344,131,C,20170608,M,Abbott,Jose,Rose,3300,,Sunset Valley,PL,,,Round Rock,78665,,Y,Y,Y,,,Y,,
+1088547081,131,,20181012,M,Brown,Jose,M,5530,,Congress,PKWY,,,Austin,78701,,Y,Y,,,,Y,Y,
+1055005564,131,,20090724,F,Green,Mei,Kay,4900,,Hillside,AVE,,,Buda,78610,,Y,Y,Y,Y,Dem,Y,,
+1094257310,131,B,20220716,M,Simmons,Donald,Marie,5566,W,Koenig,LN,,,Round Rock,78664,,Y,Y,Y,Y,Rep,,,
+1010373130,132,,20160523,F,Green,Olivia,,1037,W,Wells Branch,BLVD,STE,395,Cedar Park,78613,,Y,Y,,Y,Rep,Y,Y,Rep
+1079641393,132,,20090301,F,Henderson,Susan,,7800,,Magnolia,PL,,,Austin,78751,,Y,Y,,Y,Rep,,,
+1072543988,132,B,20141208,M,Hughes,Charles,A,1524,,William Cannon,RD,,,Austin,78749,,,,,,,Y,Y,Dem
+1041078961,132,,20220118,F,Young,Rosa,Rose,8600,N,Live Oak,LN,,,Austin,78717,,Y,Y,,Y,Dem,,Y,Rep
+1027787800,133,D,20200812,M,Bennett,Henry,L,5758,,Creekside,WAY,#,239,Del Valle,78617,,,,Y,,,Y,,
+1092819186,133,C,20160628,F,Hill,Sandra,Ann,3800,E,Sunset Valley,PKWY,,,Pflugerville,78660,S,Y,,,,,Y,Y,Dem
+1086634921,134,B,20230923,F,Kim,Melissa,,1900,,Steck,WAY,,,Manor,78653,,,Y,Y,Y,Rep,,Y,
+1026945782,134,C,20150520,F,King,Laura,Ann,2987,,Bee Cave,WAY,,,Austin,78748,,,,,,,,Y,Lib
+1004140582,134,,20130114,M,White,Nathan,Grace,200,S,Slaughter,BLVD,UNIT,22B,Leander,78641,,Y,Y,Y,Y,Lib,,Y,Rep
+1047217143,135,A,20240126,M,Abbott,Wei,,5100,,Burnet,PL,,,Leander,78645,,,,,Y,Dem,Y,,
+1019816800,135,C,20251117,F,Moore,Fatima,L,2725,,Bee Cave,ST,,,Leander,78641,,,Y,,,,Y,Y,Dem
+1017261465,135,D,20220626,F,Rivera,Laura,J,5800,S,Burnet,DR,,,Austin,78703,,,,,Y,Lib,Y,,
+1006429398,135,,20230202,F,White,Sofia,Dean,4728,,Palmer,LN,,,Austin,78701,S,Y,,Y,Y,,Y,Y,
+1090786998,136,D,20181224,F,Sanders,Nancy,Kay,2900,,Balcones,BLVD,,,Austin,78745,,,Y,,,,Y,,
+1019584271,137,,20251224,F,Flores,Jennifer,L,6925,S,Palmer,RD,,,Manor,78653,,,,,Y,Dem,,,
+1077209565,137,C,20200720,F,Foster,Betty,M,8700,W,Riverside,CIR,,,Cedar Park,78613,,Y,Y,Y,Y,Rep,Y,Y,Dem
+1020942305,137,C,20220514,F,Jackson,Angela,M,9600,,Davis,PL,,,Pflugerville,78660,,,,Y,,,Y,Y,Rep
+1069991685,137,C,20141117,M,Mitchell,Raymond,E,1500,,Howard,TRL,,,Manor,78653,,Y,,Y,,,Y,Y,
+1045332756,137,D,20150728,M,Okafor,Charles,Dean,1568,W,Creekside,DR,#,30A,Manor,78653,,,Y,,,,,,
+1014287975,137,A,20190812,F,Sanchez,Grace,M,6000,,Cesar Chavez,CIR,,,Austin,78721,,Y,,,Y,Lib,Y,Y,Rep
+1079078456,137,D,20110927,F,Tran,Melissa,J,285,,Wells Branch,DR,,,Austin,78751,,Y,Y,,,,,,
+1038450448,137,C,20160105,M,Williams,Robert,Jean,8847,W,Spicewood Springs,PKWY,#,C1,Round Rock,78681,,Y,Y,,Y,Lib,Y,Y,
+1004650446,138,D,20221007,F,Abbott,Karen,,6749,S,Ben White,RD,,,Manor,78653,,Y,,,Y,Lib,Y,Y,Rep
+1026615637,138,A,20150904,M,Brown,Anthony,,7545,W,Ben White,BLVD,,,Cedar Park,78613,,,Y,,Y,Rep,Y,,
+1082097619,138,B,20150621,F,Cox,Michelle,A,2442,W,Burnet,TRL,,,Buda,78610,,,,Y,,,,,
+1061279999,138,D,20090219,M,Foster,Wei,Rose,3200,W,Far West,PL,,,Manor,78653,,,Y,Y,Y,,Y,,
+1078567792,138,A,20081004,M,Martinez,Matthew,R,700,,Parmer,PL,,,Leander,78641,,,Y,Y,,,,,
+1004839553,138,D,20250115,M,Okafor,John,,1700,,Jollyville,CIR,,,Round Rock,78664,,Y,,,Y,Rep,,Y,
+1003609725,138,,20160209,F,Taylor,Maria,Paul,4500,,Howard,CT,,,Round Rock,78664,,Y,,Y,,,Y,,
+1092885745,139,D,20230326,M,Kelly,Jose,A,3104,S,Rio Grande,AVE,#,431,Leander,78641,,Y,Y,Y,Y,,Y,,
+1092875674,139,C,20200927,F,Murphy,Stephanie,Rose,9048,,San Jacinto,AVE,,,Manor,78653,,Y,Y,,Y,Lib,,Y,Dem
+1035678305,139,C,20081105,M,Ramos,Kevin,Ann,4111,E,Creekside,PKWY,,,Leander,78645,,,,Y,,,,,
+1029872190,139,,20100908,M,Torres,Mark,,4500,W,San Jacinto,DR,,,Leander,78641,,Y,Y,Y,Y,Lib,,,
+1017818574,139,B,20080821,M,Young,Omar,E,9400,E,Airport,PKWY,,,Leander,78641,,,,,Y,Rep,,Y,Lib
+1012459403,140,D,20110606,M,Mitchell,William,Rose,8300,,Speedway,PKWY,,,Del Valle,78617,,Y,,Y,Y,Dem,Y,Y,Lib
+1097570269,140,A,20091202,M,Price,Juan,J,3459,,Sycamore,LN,,,Del Valle,78617,,,,,,,Y,,
+1017416631,140,D,20170914,F,Torres,Linda,M,1300,,Braker,CT,,,Pflugerville,78660,,,,Y,,,,,
+1052868626,140,D,20110626,F,Wood,Jessica,J,5300,N,Pecan,LN,,,Buda,78610,,,,,,,,Y,Dem
+1070710016,141,,20091108,M,Perez,Michael,L,4600,,Pinewood,CT,,,Leander,78645,,Y,Y,Y,,,,Y,Rep
+1027256534,142,C,20240823,F,Lewis,Ashley,Ray,6500,,Congress,BLVD,,,Del Valle,78617,,,,,,,Y,,
+1044745928,143,C,20170113,F,Adams,Nancy,,6200,,Burnet,LN,,,Buda,78610,,,Y,,Y,Rep,Y,Y,Lib
+1041449753,143,,20150506,M,Carter,Ethan,M,5510,N,Slaughter,DR,,,Cedar Park,78613,,Y,Y,,Y,Rep,,Y,Dem
+1058835062,143,D,20190507,M,Chen,Michael,,4274,N,Guadalupe,WAY,,,Manor,78653,,Y,Y,,Y,Rep,Y,Y,Dem
+1093001766,143,C,20120205,F,Cruz,Elizabeth,,6083,E,Convict Hill,WAY,,,Round Rock,78664,,Y,,,,,Y,,
+1006296353,143,D,20241118,M,Howard,Wei,J,7737,,San Jacinto,CIR,STE,A4,Pflugerville,78660,,Y,Y,,,,Y,Y,Dem
+1093302441,143,B,20121027,F,Johnson,Sandra,R,1500,,Meadow,BLVD,,,Pflugerville,78660,,,,Y,Y,Rep,Y,,
+1079819407,144,B,20171108,F,Flores,Patricia,,9200,E,Elm,CT,,,Cedar Park,78613,,Y,,,Y,Rep,Y,Y,
+1071970492,144,C,20240412,M,Hughes,Ethan,M,2600,E,Nueces,LN,,,Leander,78645,,Y,,,Y,Rep,Y,,
+1012666623,145,A,20230612,F,Bailey,Linda,Rose,7100,E,Steck,ST,,,Cedar Park,78613,,,,,Y,,Y,,
+1047774116,145,B,20181216,F,Brooks,Jennifer,Ray,8040,W,Metric,LN,,,Del Valle,78617,,Y,Y,,Y,,,,
+1094455784,145,D,20080106,F,Hill,Betty,Rose,2400,W,Escarpment,BLVD,,,Del Valle,78617,,Y,Y,Y,Y,Rep,,,
+1099182221,145,,20251205,M,Hill,Matthew,Ann,4060,,Slaughter,AVE,,,Manor,78653,,,Y,,,,,,
+1012718505,145,C,20140121,M,Wright,Charles,Ann,1299,S,Howard,PKWY,,,Del Valle,78617,,Y,Y,Y,Y,Lib,Y,,
+1013157862,146,B,20120819,F,Baker,Mary,Lee,8594,,Wells Branch,DR,,,Leander,78641,,,Y,Y,Y,Rep,,Y,Dem
+1063446520,146,C,20120613,F,King,Emily,Ann,6323,,Braker,AVE,UNIT,13B,Leander,78645,,Y,Y,Y,Y,Lib,Y,,
+1030371946,146,C,20200524,M,Wilson,Samuel,Kay,8300,S,Anderson,WAY,,,Austin,78756,,,,,Y,Dem,,,
+1033950090,147,C,20210413,F,Griffin,Olivia,E,8000,S,Guadalupe,RD,,,Round Rock,78665,,Y,Y,,Y,Rep,,Y,
+1038962620,147,C,20240217,M,Sanders,Paul,Lee,3902,S,Burnet,DR,,,Pflugerville,78660,,Y,Y,Y,Y,,Y,,
+1057308960,147,C,20230110,F,Smith,Grace,Ray,1500,,Congress,ST,,,Round Rock,78665,,,,Y,,,Y,Y,Lib
+1000846722,148,D,20240721,M,Barnes,Paul,Rose,6763,,Maple,BLVD,,,Del Valle,78617,,,,Y,,,Y,Y,Rep
+1097645458,148,D,20211120,M,Gray,Mark,Ann,800,,Creekside,BLVD,#,23A,Del Valle,78617,,Y,Y,,,,Y,,
+1096084052,148,B,20190712,F,Perez,Michelle,Ann,4902,E,Lakeview,ST,,,Buda,78610,,,Y,Y,,,Y,,
+1049149412,149,D,20081117,F,Alexander,Susan,E,8396,,Duval,WAY,,,Del Valle,78617,,Y,Y,,Y,,Y,,
+1027946825,149,,20110804,M,Lee,David,Jean,9700,,Red River,RD,,,Manor,78653,,Y,Y,Y,Y,Lib,Y,,
+1080690062,150,A,20221016,F,Gonzalez,Sarah,Marie,6384,W,Barton Springs,BLVD,UNIT,296,Pflugerville,78660,,Y,,Y,,,Y,Y,
+1033030431,150,A,20200214,F,Lewis,Ashley,E,9234,,San Jacinto,LN,,,Round Rock,78665,,Y,,,Y,Dem,Y,Y,Rep
+1040015736,150,A,20110110,F,Lopez,Betty,,934,N,Guadalupe,LN,#,C9,Cedar Park,78613,,Y,Y,Y,,,,Y,Dem
+1082534494,150,C,20210325,F,Simmons,Amanda,,7278,S,Brodie,RD,,,Round Rock,78681,,,Y,,Y,Dem,,Y,Dem
+1026346483,151,C,20190522,M,Walker,Omar,,7022,,Escarpment,LN,APT,229,Manor,78653,,Y,,Y,,,Y,,
+1074819716,152,,20111222,F,Sanders,Sofia,M,6000,N,Jollyville,CT,STE,A1,Round Rock,78665,,,Y,Y,Y,Rep,Y,,
+1087608484,152,D,20190610,M,Young,Christopher,J,9693,E,Congress,RD,,,Manor,78653,,Y,,Y,Y,Rep,,Y,Lib
+1048537858,153,C,20161101,M,Gray,Eric,L,3141,N,Maple,DR,,,Leander,78645,,Y,Y,Y,,,Y,Y,Dem
+1059162367,153,B,20240622,F,Washington,Michelle,Marie,6100,,Magnolia,RD,,,Leander,78645,,,Y,Y,,,Y,Y,Lib
+1089782361,153,B,20080301,M,Wood,Michael,R,3623,E,Slaughter,PKWY,,,Pflugerville,78660,,Y,Y,,Y,,,,
+1020199055,154,B,20220710,M,Alexander,Richard,Jean,9300,S,Nueces,RD,,,Manor,78653,,,,Y,,,,,
+1086381441,154,,20111219,F,Allen,Barbara,L,5100,,Brodie,BLVD,,,Leander,78645,,,Y,,Y,Rep,Y,,
+1052703017,154,A,20180220,M,Green,Andrew,,1084,W,Menchaca,PKWY,STE,9B,Cedar Park,78613,S,Y,Y,Y,,,Y,Y,Rep
+1005999612,154,D,20110626,F,Green,Susan,,7933,W,Ridgeline,CIR,,,Austin,78756,,Y,,Y,,,Y,,
+1007918106,154,D,20100308,F,Hill,Carmen,Kay,126,W,Dessau,CIR,,,Leander,78645,,,Y,,,,Y,,
+1044124957,154,,20081124,F,Lopez,Patricia,R,3700,E,Pinewood,PL,,,Pflugerville,78660,,,Y,,Y,Lib,,,
+1007317958,154,,20191225,M,Nelson,Steven,Ann,7500,S,Convict Hill,ST,STE,151,Del Valle,78617,,Y,,,Y,Lib,Y,,
+1038499075,154,D,20170225,M,Peterson,Adam,R,8100,E,Cesar Chavez,ST,,,Del Valle,78617,,,,,,,Y,Y,Lib
+1012898921,154,A,20230319,F,Scott,Nancy,A,1800,,Barton Springs,CT,UNIT,282,Leander,78641,,,,Y,Y,Rep,Y,,
+1082353973,155,C,20140805,F,Alexander,Melissa,Marie,3600,N,Cameron,WAY,,,Cedar Park,78613,,,,Y,,,,,
+1040593805,155,B,20120625,F,Allen,Amanda,Lee,3500,N,Escarpment,CIR,STE,151,Buda,78610,,,Y,Y,,,,,
+1042870386,155,C,20180403,M,Campbell,Kevin,Marie,3500,,Congress,AVE,,,Leander,78645,,,,Y,,,,Y,Dem
+1027741613,155,B,20240319,F,Chen,Mary,,7313,W,Hillside,PKWY,,,Manor,78653,,,Y,Y,Y,Dem,Y,,
+1087771470,155,D,20240215,M,Foster,Paul,E,4541,,Cameron,TRL,STE,401,Round Rock,78665,,,Y,Y,,,,Y,Lib
+1022316691,155,A,20140818,M,Okafor,Matthew,Marie,1400,S,Menchaca,WAY,,,Pflugerville,78660,,,,,Y,Dem,Y,Y,Rep
+1044951573,156,,20090615,F,Gonzalez,Olivia,Lee,4158,E,Braker,ST,STE,12B,Round Rock,78681,,,Y,,Y,Rep,,Y,Rep
+1028786532,156,,20250618,F,Kim,Angela,Rose,8154,N,Gattis School,TRL,,,Cedar Park,78613,,Y,Y,Y,Y,Lib,Y,Y,Lib
+1035080724,156,,20160317,F,Nguyen,Lisa,Grace,900,W,Spicewood Springs,PKWY,,,Manor,78653,,,Y,,Y,Lib,,,
+1036481133,156,D,20170701,F,Reyes,Laura,,8255,W,Sycamore,PKWY,STE,D12,Pflugerville,78660,,Y,,,Y,Rep,,Y,Lib
+1083731348,156,A,20140917,F,Taylor,Jessica,Lee,6200,,Airport,LN,,,Pflugerville,78660,,Y,,,Y,Rep,Y,,
+1040412991,157,C,20200712,F,Brown,Angela,Rose,2300,N,Braker,LN,,,Cedar Park,78613,,,Y,Y,,,Y,,
+1034566894,157,B,20230924,F,Clark,Angela,Rose,7447,,Bee Cave,DR,,,Austin,78731,,Y,Y,Y,Y,Lib,Y,,
+1063478327,157,,20080307,M,Cox,Sean,M,9200,W,Dessau,RD,,,Cedar Park,78613,,Y,Y,Y,Y,Rep,,,
+1049600620,157,A,20080225,M,Kim,Michael,E,8100,,Lakeview,PL,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1021653074,157,C,20230206,M,Young,Omar,Dean,900,W,Escarpment,LN,,,Cedar Park,78613,,Y,Y,Y,Y,Dem,,Y,Dem
+1026847777,158,D,20190508,M,Garcia,Daniel,Dean,5800,S,Riverside,ST,,,Buda,78610,,Y,Y,Y,,,Y,Y,Lib
+1053719807,158,B,20220202,M,Perez,Henry,R,3300,,Convict Hill,RD,APT,A5,Leander,78645,,Y,,,,,Y,Y,Rep
+1080906003,158,,20181007,F,Torres,Amanda,R,700,W,Pecan,CIR,,,Del Valle,78617,,,,,Y,Dem,Y,Y,Dem
+1015701314,159,D,20120614,F,Hughes,Linda,Jean,5800,N,Dessau,ST,,,Austin,78705,,Y,Y,,Y,Lib,,Y,Rep
+1002476520,159,B,20111008,F,Reyes,Elizabeth,Grace,4002,,William Cannon,AVE,,,Pflugerville,78660,,Y,Y,Y,Y,,,Y,Dem
+1062706025,160,B,20091019,F,Bailey,Jennifer,Paul,4029,N,Sunset Valley,AVE,,,Manor,78653,,,,,,,Y,,
+1020731067,160,,20200915,F,Kelly,Mary,Jean,584,,Lakeview,CIR,APT,E6,Buda,78610,,,Y,,Y,Rep,Y,Y,Dem
+1074351910,160,D,20150605,F,Mitchell,Patricia,Rose,6900,S,Gattis School,BLVD,UNIT,450,Buda,78610,,Y,Y,,,,,Y,Dem
+1022747438,160,B,20080826,M,Okafor,Omar,,9387,W,McNeil,BLVD,UNIT,E9,Leander,78645,,,Y,,,,Y,Y,Lib
+1024579049,161,,20160301,F,Green,Maria,Dean,5611,,Spicewood Springs,RD,,,Leander,78641,,,Y,,,,,Y,Dem
+1091203469,161,D,20180219,M,Martin,Aaron,M,7720,W,Oltorf,WAY,,,Austin,78748,,Y,,,,,Y,Y,Rep
+1086968293,161,,20130419,F,Martinez,Michelle,,5923,S,Menchaca,PKWY,,,Buda,78610,,,Y,Y,Y,Rep,Y,,
+1077768341,161,,20080227,F,Watson,Nancy,J,6368,E,Guadalupe,BLVD,,,Buda,78610,,Y,Y,,Y,Lib,Y,Y,Dem
+1079194771,162,B,20110725,M,Adams,Donald,Grace,100,E,Manor,DR,,,Del Valle,78617,,Y,Y,Y,,,Y,Y,Dem
+1001255964,162,A,20180705,M,Bailey,Carlos,,9400,E,Davis,LN,,,Cedar Park,78613,,Y,Y,,Y,Rep,,Y,Rep
+1075403511,162,D,20211114,M,Martin,James,,2497,E,Lakeview,AVE,,,Buda,78610,,,,Y,Y,Dem,,,
+1072378901,162,D,20210917,F,Mitchell,Rebecca,,2081,E,Menchaca,LN,,,Round Rock,78665,,Y,,Y,,,Y,Y,Lib
+1008748782,162,D,20250715,M,Nelson,Adam,E,7704,,Manor,BLVD,,,Leander,78641,,Y,Y,Y,,,Y,Y,Lib
+1021298976,162,D,20090518,F,Price,Priya,Kay,2000,,McNeil,DR,,,Pflugerville,78660,,Y,Y,,,,Y,Y,Dem
+1078155683,162,A,20120402,F,Wood,Isabella,Dean,5510,E,Oltorf,PKWY,,,Austin,78731,,Y,,Y,Y,,Y,,
+1021685296,163,,20251207,F,Barnes,Isabella,Dean,7842,W,Balcones,PKWY,,,Manor,78653,,Y,Y,Y,Y,Dem,,Y,Rep
+1053584389,163,,20161212,M,Diaz,Nathan,Grace,3229,,Magnolia,BLVD,,,Del Valle,78617,,,,Y,,,,,
+1033337138,163,C,20230514,F,Jackson,Linda,Rose,9700,E,Gattis School,DR,,,Round Rock,78681,,Y,Y,Y,Y,,,,
+1010104026,164,A,20181028,F,Brown,Patricia,A,433,,Cedar,TRL,APT,E10,Leander,78645,,Y,Y,,,,Y,Y,Dem
+1004737675,164,B,20180401,F,Perez,Margaret,Rose,9878,S,Parmer,WAY,,,Round Rock,78665,,Y,Y,Y,Y,Lib,Y,,
+1086922460,164,D,20250501,M,Robinson,Paul,Kay,8100,,Parmer,LN,APT,446,Round Rock,78665,,Y,Y,,Y,Dem,Y,Y,Dem
+1053762246,164,A,20140822,F,Watson,Carmen,A,6280,E,Spicewood Springs,RD,APT,40B,Pflugerville,78660,,,,Y,Y,Dem,,,
+1053312281,165,B,20170919,M,Butler,Sean,J,1335,,Cesar Chavez,LN,,,Pflugerville,78660,,,,Y,,,Y,Y,Dem
+1048473643,165,A,20130204,F,Howard,Rebecca,J,1200,E,Palmer,ST,STE,37A,Pflugerville,78660,,,Y,Y,Y,Rep,Y,Y,Dem
+1071766543,165,B,20251217,F,Miller,Hannah,Rose,7848,E,McNeil,ST,,,Buda,78610,,,Y,Y,Y,Rep,Y,Y,Lib
+1044837343,165,C,20200608,F,Russell,Cynthia,M,2200,N,Menchaca,PKWY,,,Austin,78759,,,Y,,Y,Lib,Y,Y,
+1042910658,165,D,20230825,M,Simmons,David,A,400,S,Cameron,PKWY,APT,311,Round Rock,78665,,Y,Y,,Y,Lib,Y,,
+1099195872,165,D,20240819,F,Walker,Fatima,Dean,6500,,Cedar,BLVD,APT,39B,Buda,78610,,Y,,,,,Y,,
+1019585320,166,A,20140808,M,Hall,Richard,E,8602,W,Cameron,WAY,,,Cedar Park,78613,,Y,,Y,Y,Rep,Y,Y,Rep
+1039952470,166,B,20160305,M,Kim,Donald,Dean,5800,S,Cesar Chavez,BLVD,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1067887207,166,D,20220316,M,King,Henry,Paul,2700,N,Burnet,DR,,,Manor,78653,,Y,Y,,Y,Rep,Y,Y,Dem
+1029738780,166,B,20220720,F,King,Jennifer,Dean,4224,E,Duval,LN,STE,114,Austin,78723,,Y,Y,Y,Y,Rep,Y,Y,Rep
+1033873826,166,,20090421,F,Lewis,Sarah,L,8462,N,Bee Cave,TRL,,,Leander,78645,,,,,Y,Dem,,Y,
+1041983096,166,B,20140522,F,Robinson,Lisa,,8088,,Brodie,CT,,,Pflugerville,78660,,Y,Y,Y,,,,Y,
+1086571212,167,C,20130104,M,Clark,Juan,Paul,200,,Menchaca,LN,,,Pflugerville,78660,,,,Y,,,Y,,
+1014229873,167,,20220206,M,Green,Steven,,8300,,Brodie,RD,,,Buda,78610,,,,,Y,Dem,,Y,Dem
+1051079368,167,,20171127,M,Jenkins,Donald,Jean,6300,W,Cedar,CIR,STE,32,Round Rock,78664,,,Y,Y,Y,Dem,,Y,
+1088595321,167,D,20110814,F,Rivera,Amanda,Ray,500,S,McNeil,DR,STE,C9,Cedar Park,78613,,,Y,Y,Y,Rep,,Y,Dem
+1078999919,167,D,20120518,F,Torres,Fatima,,2300,S,Meadow,LN,STE,26A,Buda,78610,,,Y,Y,,,,Y,Dem
+1043524552,167,D,20150307,F,Ward,Nancy,Marie,8286,,Braker,LN,,,Austin,78701,,,,,Y,Rep,,Y,Lib
+1080098839,168,B,20220808,M,Anderson,Wei,M,100,E,Anderson,PL,,,Cedar Park,78613,,Y,Y,,Y,Dem,Y,Y,Rep
+1041142706,168,C,20110211,F,Johnson,Michelle,J,8900,,McNeil,CIR,,,Manor,78653,,Y,Y,Y,,,Y,Y,
+1010680869,168,C,20250822,M,Long,Henry,,2357,N,Oak,CIR,,,Leander,78641,,Y,,Y,,,,Y,Rep
+1083353998,168,B,20250402,M,Patel,Nathan,,9500,W,Palmer,ST,#,B6,Leander,78641,,,,Y,Y,Rep,Y,,
+1055572539,168,A,20120728,F,Sanchez,Olivia,Ann,6710,E,McNeil,CIR,STE,13A,Pflugerville,78660,,Y,Y,Y,,,Y,Y,Dem
+1081600374,168,,20081004,F,Torres,Jessica,,3545,,Lamar,CIR,,,Round Rock,78664,,Y,Y,Y,,,Y,,
+1073801473,169,B,20140113,M,Adams,John,Ann,9344,,Nueces,LN,#,35,Leander,78641,,,,Y,Y,Dem,Y,,
+1025951793,169,A,20190509,F,Adams,Mei,Lee,6289,,Spicewood Springs,BLVD,,,Leander,78641,,,Y,,Y,Dem,Y,Y,Dem
+1056574928,169,C,20220811,M,Bennett,Miguel,Lee,9382,,Airport,ST,,,Round Rock,78665,,,,,,,Y,,
+1097321803,169,,20210503,M,Campbell,Omar,Rose,5528,,Sunset Valley,ST,UNIT,A8,Buda,78610,,Y,Y,Y,Y,Rep,,Y,Rep
+1093139875,169,C,20191208,F,Gonzalez,Fatima,Ray,7300,,Rio Grande,TRL,,,Austin,78703,,Y,Y,,Y,Lib,,Y,Dem
+1047548977,169,B,20200508,M,Green,Eric,Jean,9100,,Cedar,CIR,,,Cedar Park,78613,,,Y,Y,Y,Dem,,,
+1097306562,169,C,20151015,M,Walker,Eric,A,5800,N,Slaughter,CIR,,,Austin,78749,,Y,,Y,,,,Y,Rep
+1057860570,170,B,20260228,M,Contreras,Riley,,4536,,Ridgeline,RD,,,Leander,78641,,,,,,,,,
+1077714606,170,,20130105,M,Perez,Charles,,3200,W,Gattis School,WAY,,,Austin,78753,,,,,Y,,Y,,
+1040017366,170,A,20101202,F,Powell,Mei,J,7292,,Congress,CIR,,,Buda,78610,,,Y,Y,Y,Dem,,,
+1013765743,170,D,20090206,M,Taylor,Wei,Grace,6669,N,Anderson,AVE,STE,32B,Buda,78610,,,,Y,Y,Dem,,,
+1074403692,171,C,20220223,F,Alexander,Ana,Dean,1401,N,Magnolia,LN,,,Del Valle,78617,,,,,,,Y,,
+1013680956,171,B,20150422,F,Brooks,Susan,E,6781,E,Sunset Valley,CIR,,,Cedar Park,78613,,Y,Y,Y,Y,Rep,Y,Y,
+1058984708,171,C,20140819,M,Hernandez,Nathan,Kay,8800,E,Far West,CIR,,,Austin,78723,,,Y,Y,,,Y,,
+1043641735,171,A,20100110,M,Ramos,Jose,Dean,3800,E,Oak,ST,UNIT,452,Cedar Park,78613,,Y,Y,,Y,Lib,Y,,
+1092826439,171,C,20251128,F,Simmons,Betty,Jean,9799,,Steck,LN,#,10A,Austin,78749,,Y,,Y,Y,Dem,,,
+1033665027,172,,20210126,F,Kim,Maria,Marie,5200,,Lakeview,ST,#,264,Round Rock,78681,,,Y,,Y,Dem,,,
+1014533514,172,C,20121110,F,Nguyen,Michelle,E,9500,,Cameron,CT,,,Buda,78610,,,,Y,Y,Dem,Y,,
+1058686620,172,D,20221014,F,Smith,Susan,,1600,N,William Cannon,CIR,UNIT,467,Buda,78610,,Y,Y,Y,Y,Rep,,,
+1031281065,173,C,20090402,M,Bryant,Adam,,8312,W,Nueces,LN,STE,9A,Del Valle,78617,,,,,Y,Dem,,Y,Dem
+1042938488,173,B,20130721,M,Howard,Donald,Paul,5522,W,Red River,PKWY,,,Round Rock,78665,,,Y,Y,,,Y,,
+1031490823,173,D,20250604,M,Long,Andrew,Grace,8775,,Lakeview,TRL,,,Manor,78653,,,Y,Y,Y,Dem,,Y,Lib
+1033585446,173,D,20210226,M,Long,Steven,,2200,W,Pinewood,RD,,,Round Rock,78665,,,Y,Y,,,Y,Y,Dem
+1036029115,173,D,20160222,F,Peterson,Amanda,Ray,7400,E,Howard,BLVD,APT,315,Leander,78645,,Y,Y,,,,Y,,
+1022033493,173,B,20170225,M,Russell,Luis,Dean,7900,,Creekside,RD,,,Leander,78641,,Y,Y,Y,,,Y,Y,Dem
+1000084471,174,D,20170220,F,Butler,Deborah,E,5300,S,Howard,BLVD,,,Pflugerville,78660,,Y,,,Y,Dem,,,
+1083018692,174,C,20190506,M,Campbell,Carlos,Paul,7166,S,Sycamore,RD,STE,222,Cedar Park,78613,,,,Y,Y,Lib,Y,Y,Dem
+1088335577,174,C,20160505,F,Gray,Karen,Lee,7400,S,Cameron,TRL,,,Leander,78641,,Y,,Y,,,Y,Y,Rep
+1094338443,174,,20231013,M,Peterson,John,,100,N,Red River,LN,,,Leander,78645,,Y,Y,Y,,,,Y,Dem
+1057617603,174,C,20170115,M,Thompson,Andrew,Grace,4553,,Cesar Chavez,AVE,,,Round Rock,78664,,Y,Y,Y,Y,Dem,,Y,Lib
+1080589210,174,D,20190103,F,White,Maria,Dean,1400,,Steck,PL,,,Leander,78645,,,,Y,Y,,,Y,Rep
+1052997496,175,A,20120917,F,Hall,Ana,Marie,3229,W,Anderson,CT,,,Pflugerville,78660,,Y,,,,,,Y,Dem
+1028025415,175,B,20131026,F,Johnson,Isabella,Grace,700,E,Howard,CT,,,Pflugerville,78660,,Y,,,Y,Rep,Y,Y,Rep
+1013764331,175,,20230127,F,Richardson,Olivia,,4820,N,Dessau,TRL,#,32B,Round Rock,78664,,Y,Y,Y,Y,Dem,,,
+1077790556,175,C,20081108,M,Young,Matthew,Ann,3510,,Dessau,PKWY,,,Del Valle,78617,,Y,,,Y,Dem,,Y,Rep
+1071000219,176,D,20131106,F,Bryant,Isabella,E,6730,,Burnet,WAY,,,Manor,78653,,Y,Y,,,,Y,Y,
+1005051497,176,C,20190215,F,Sanders,Susan,Marie,5498,S,Ridgeline,AVE,,,Del Valle,78617,,,,,Y,Dem,,Y,Lib
+1017890893,177,B,20200922,M,Hernandez,Anthony,M,4900,S,Ben White,CT,,,Manor,78653,,Y,Y,Y,,,Y,Y,Rep
+1068520096,178,,20090407,F,Flores,Karen,Grace,8167,,Nueces,ST,,,Del Valle,78617,,Y,,Y,Y,Rep,Y,Y,Rep
+1082030679,178,,20180910,F,Lewis,Melissa,,3600,,Elm,PL,,,Del Valle,78617,,Y,Y,,Y,Dem,,Y,Rep
+1092210435,178,D,20080820,M,Nguyen,Matthew,A,1100,E,Creekside,CIR,,,Buda,78610,,,,Y,Y,Dem,Y,,
+1055188175,178,D,20180722,M,Ramirez,Wei,,2700,,Far West,AVE,APT,142,Manor,78653,,Y,Y,Y,,,Y,Y,Rep
+1078742263,178,D,20200405,F,Williams,Angela,Marie,9550,E,Sycamore,BLVD,APT,296,Del Valle,78617,,Y,,,,,Y,,
+1081356836,178,C,20150416,M,Wright,Anthony,Jean,4510,,Burnet,DR,,,Manor,78653,S,Y,Y,Y,Y,Rep,Y,Y,Rep
+1051154336,179,B,20120120,F,Bennett,Margaret,Paul,7054,,Ben White,CT,STE,144,Del Valle,78617,,,Y,,,,,Y,Rep
+1078442205,179,A,20200714,F,Patterson,Betty,,518,,Palmer,BLVD,,,Leander,78645,,Y,Y,Y,,,Y,Y,Dem
+1068753151,180,A,20090905,F,Alexander,Sarah,,6912,,Bee Cave,BLVD,,,Manor,78653,,Y,,,Y,Dem,Y,,
+1086772959,181,D,20180816,F,Simmons,Amy,R,1200,S,Spicewood Springs,BLVD,#,28A,Pflugerville,78660,,Y,,,,,,,
+1086249428,181,C,20150521,M,Torres,David,Rose,3800,N,Live Oak,TRL,,,Cedar Park,78613,,,Y,,,,Y,,
+1056318625,182,B,20250827,F,Abbott,Maria,Paul,9200,,Spicewood Springs,LN,,,Manor,78653,,Y,Y,Y,Y,Rep,Y,Y,Lib
+1071056370,182,,20230606,F,Bennett,Cynthia,Paul,2400,N,Ridgeline,CT,APT,C5,Pflugerville,78660,,Y,,Y,,,Y,Y,Rep
+1069331932,182,,20211209,M,Davis,Daniel,,1054,,Nueces,CT,,,Leander,78641,,,,,Y,Lib,Y,,
+1097082807,182,A,20250526,F,King,Cynthia,Marie,6378,,Palmer,BLVD,,,Round Rock,78664,,Y,Y,Y,,,,,
+1099379524,183,,20240709,F,Gray,Karen,Jean,2345,W,Spicewood Springs,PKWY,,,Austin,78759,,Y,Y,Y,Y,Dem,,Y,Rep
+1088964597,183,D,20140218,F,Young,Carmen,,2582,N,Spicewood Springs,RD,,,Round Rock,78665,,Y,,,,,Y,,
+1052771946,184,,20251127,M,Bryant,Aaron,M,7729,,Howard,PL,,,Buda,78610,,,Y,,,,Y,,
+1074760235,184,C,20200314,F,Clark,Rebecca,A,5000,,Pinewood,WAY,UNIT,4B,Cedar Park,78613,,Y,,Y,,,Y,,
+1041173226,184,D,20171116,F,Coleman,Ana,M,4300,,Jollyville,ST,,,Round Rock,78665,,Y,,Y,,,Y,,
+1070781835,184,,20150520,F,Garcia,Barbara,Marie,9768,,Wells Branch,DR,,,Austin,78758,,,,,,,Y,Y,Dem
+1013916150,184,B,20240124,M,Moore,David,Ann,4200,E,Palmer,CIR,,,Pflugerville,78660,,,Y,Y,,,Y,Y,Rep
+1086457076,185,,20160322,M,Jones,Mark,Kay,4700,,Lakeview,AVE,,,Buda,78610,S,,Y,,,,,Y,Lib
+1037236737,185,A,20200125,M,Wright,Joshua,Dean,9400,W,Cedar,PKWY,UNIT,D7,Pflugerville,78660,,Y,,Y,Y,Rep,,Y,Dem
+1090607703,186,B,20251209,M,Butler,Saquel,Grace,6711,,Pinewood,PKWY,,,Pflugerville,78660,,Y,Y,,,,Y,Y,Dem
+1031695714,186,,20181210,F,Scott,Nancy,,8459,E,Rio Grande,WAY,APT,201,Pflugerville,78660,,Y,,,,,Y,,
+1072016456,187,C,20240112,F,Lee,Elizabeth,J,6105,N,Bee Cave,RD,,,Cedar Park,78613,S,,,Y,Y,Rep,,Y,Rep
+1059449907,187,D,20160115,F,Murphy,Stephanie,,9400,S,Davis,PL,,,Cedar Park,78613,,Y,Y,,,,Y,Y,Rep
+1076083353,187,C,20080406,M,Nelson,Kevin,Paul,1893,W,Rio Grande,AVE,,,Del Valle,78617,,,,,Y,,,Y,
+1008981950,187,D,20170207,M,Smith,Sean,Lee,1748,,Red River,DR,,,Del Valle,78617,,Y,,Y,Y,Dem,,Y,
+1051617665,188,C,20170526,M,Adams,Ethan,Grace,1138,N,Wells Branch,AVE,#,B11,Leander,78645,,Y,Y,Y,Y,Rep,,Y,Dem
+1049820900,188,C,20130420,M,Baker,Sean,Dean,5200,,Gattis School,PKWY,,,Leander,78645,,Y,Y,Y,Y,Rep,Y,Y,Rep
+1090928008,188,C,20200620,F,Coleman,Amy,J,2800,N,Koenig,BLVD,,,Round Rock,78664,,Y,,Y,Y,Dem,,Y,Lib
+1049704913,188,,20150725,F,Coleman,Rosa,E,9500,,Airport,ST,,,Manor,78653,,,Y,,Y,Rep,Y,,
+1053448885,188,D,20170905,M,Hernandez,Paul,Kay,6590,W,Howard,PKWY,#,21B,Pflugerville,78660,,,,Y,,,,Y,Dem
+1006453277,188,,20080321,M,Patel,Joshua,Grace,7900,,Cameron,ST,,,Leander,78641,,Y,,,,,Y,Y,Rep
+1074487880,188,B,20190313,M,Reyes,Miguel,Dean,8816,,University,RD,UNIT,A2,Leander,78645,,,Y,Y,Y,Rep,,Y,Rep
+1047117270,188,,20180427,M,Wilson,William,Ann,5750,,Speedway,TRL,APT,54,Manor,78653,,,,,Y,Dem,Y,,
+1094811416,189,C,20220109,F,Davis,Jessica,Lee,4300,E,Elm,CIR,,,Pflugerville,78660,,,Y,Y,Y,Dem,,Y,
+1071488498,189,A,20080601,F,Patel,Olivia,Dean,1570,,Menchaca,ST,,,Buda,78610,,Y,Y,,,,Y,,
+1071013345,189,C,20220813,F,Robinson,Angela,M,7351,S,Anderson,RD,,,Austin,78731,,,,Y,Y,Rep,Y,,
+1006714926,189,D,20111223,M,Robinson,David,Marie,5146,,Speedway,PL,,,Leander,78645,,,Y,Y,Y,Rep,Y,Y,Lib
+1084091264,190,,20150925,M,Alexander,Charles,Rose,5304,W,Howard,BLVD,,,Manor,78653,,,,Y,Y,Rep,,Y,Rep
+1074459560,190,,20230811,M,Brown,Kevin,Jean,9824,,Congress,LN,#,34B,Round Rock,78681,,Y,Y,Y,,,Y,,
+1011615278,190,B,20210125,F,Garcia,Deborah,Paul,4021,E,Jollyville,AVE,,,Cedar Park,78613,,Y,,Y,,,,,
+1087441192,190,B,20130116,F,Mitchell,Rebecca,J,2053,W,Meadow,LN,UNIT,253,Pflugerville,78660,,,,,Y,Dem,,Y,Dem
+1023697581,190,D,20180827,M,Moore,Buian,Grace,6672,S,Braker,PL,,,Cedar Park,78613,,,Y,Y,Y,Dem,Y,Y,Rep
+1042664622,190,A,20130125,M,Sanchez,Michael,,2300,,Guadalupe,PL,,,Round Rock,78681,,,,Y,Y,Rep,,,
+1082041476,190,D,20250511,M,Scott,Carlos,Paul,5378,,Pecan,CT,,,Buda,78610,,Y,,,Y,Lib,Y,Y,Dem
+1031956732,191,B,20241209,M,Adams,Steven,Grace,9804,,Maple,PKWY,UNIT,24A,Leander,78641,,,Y,Y,Y,Lib,,,
+1014514492,191,C,20140508,F,Okafor,Karen,Paul,4138,S,Speedway,PKWY,,,Pflugerville,78660,,Y,Y,Y,,,Y,Y,Rep
+1098440309,191,A,20180608,F,Simmons,Laura,Lee,9400,,Manor,PKWY,STE,7B,Pflugerville,78660,,,,Y,,,Y,Y,
+1005856010,192,C,20080712,F,Jackson,Linda,,7062,,Ben White,ST,,,Buda,78610,,Y,,Y,Y,Lib,,,
+1072565327,192,,20190301,F,Johnson,Emily,Dean,6022,,San Jacinto,AVE,,,Austin,78717,,Y,,Y,,,,,
+1041594792,192,B,20110217,F,Jones,Jessica,Kay,7500,,Balcones,DR,,,Del Valle,78617,,,Y,Y,,,,Y,Lib
+1006769749,192,C,20190818,F,Martin,Amy,,3793,S,Cameron,PKWY,,,Austin,78717,,,,,Y,Rep,Y,,
+1092363834,192,D,20210209,F,Martin,Carmen,E,4500,,Duval,TRL,STE,217,Buda,78610,,Y,Y,,,,Y,Y,Lib
+1061170078,192,C,20170708,M,Murphy,Andrew,L,9550,,Manor,PL,,,Cedar Park,78613,,Y,,,,,Y,,
+1008146094,192,D,20090828,F,Russell,Fatima,J,4400,N,Elm,RD,,,Cedar Park,78613,,Y,Y,Y,,,Y,Y,Rep
+1040250396,193,C,20130620,F,Cooper,Carmen,J,6470,,Live Oak,CIR,,,Buda,78610,,Y,Y,,,,,,
+1082202013,193,C,20141012,M,Hayes,Richard,M,3400,E,Creekside,TRL,,,Del Valle,78617,,,Y,,,,Y,,
+1027736220,194,D,20170314,F,Hayes,Betty,Jean,2356,E,Red River,PKWY,#,261,Cedar Park,78613,S,Y,,,Y,Dem,,Y,Dem
+1087687760,194,B,20180524,F,Patel,Michelle,,4400,E,Bee Cave,CT,,,Austin,78723,,Y,,Y,,,Y,Y,Rep
+1091475876,194,D,20090625,M,Rivera,Carlos,A,8399,,Live Oak,TRL,,,Austin,78741,,,,,,,Y,,
+1027205050,194,D,20230719,M,Watson,Richard,A,7500,,Hillside,PKWY,UNIT,E4,Round Rock,78681,,,,Y,,,,Y,Rep
+1005837543,196,C,20120916,F,Alexander,Mei,L,5500,W,Oltorf,AVE,,,Manor,78653,,,Y,,,,Y,Y,Rep
+1072827257,196,,20120224,F,Green,Michelle,Kay,300,S,Koenig,ST,STE,31A,Leander,78645,,Y,Y,Y,,,,Y,
+1028405512,196,A,20180708,M,Green,Richard,M,6600,W,Jollyville,RD,,,Manor,78653,,,Y,Y,Y,Rep,Y,,
+1040127283,196,D,20120927,M,Patel,Steven,Lee,8300,,Braker,LN,#,183,Del Valle,78617,,,,Y,,,,,
+1035489156,196,D,20220902,M,Powell,Luis,A,900,,Steck,WAY,,,Cedar Park,78613,,Y,Y,Y,,,Y,,
+1091408992,196,A,20201112,M,Scott,David,Marie,1341,E,Airport,CIR,,,Austin,78741,,,Y,Y,,,Y,,
+1017428394,197,D,20131112,M,Foster,David,Rose,1500,S,Airport,PL,,,Manor,78653,,Y,,Y,Y,Rep,Y,,
+1099714514,197,B,20090123,M,Griffin,John,E,6900,,Maple,ST,,,Manor,78653,,Y,Y,,,,,Y,
+1065457281,198,B,20170912,F,Baker,Michelle,Dean,694,,Congress,LN,,,Pflugerville,78660,,,,Y,,,Y,Y,Rep
+1051884168,198,C,20220310,F,Cooper,Elizabeth,Paul,1628,E,Bee Cave,BLVD,,,Cedar Park,78613,,Y,,Y,Y,Lib,Y,Y,Rep
+1030405021,198,C,20170114,F,Johnson,Isabella,Rose,7603,,Burnet,TRL,STE,344,Del Valle,78617,,Y,,Y,Y,Rep,Y,Y,Dem
+1001497989,198,A,20210516,M,Mitchell,Patrick,M,7047,,Meadow,TRL,,,Cedar Park,78613,,,Y,,,,,,
+1025374079,198,C,20250407,F,Tran,Ashley,Jean,8651,N,Duval,DR,,,Austin,78758,,Y,Y,,,,,Y,Dem
+1088343585,198,B,20150316,M,Ward,Juan,E,3300,,Maple,TRL,,,Buda,78610,,Y,Y,Y,,,Y,,
+1037252673,198,,20161214,M,Williams,Carlos,,9717,N,Gattis School,PKWY,,,Del Valle,78617,,,,,,,Y,Y,
+1054714986,199,,20260711,F,Salazar,Taylor,J,138,,Metric,WAY,,,Cedar Park,78613,,,,,,,,,
+1080057405,200,,20251115,F,Abbott,Deborah,Marie,1800,,Maple,BLVD,,,Buda,78610,,,,,Y,Rep,Y,Y,Dem
+1057442875,200,D,20110202,F,Davis,Deborah,Kay,3500,E,Maple,CT,UNIT,A12,Leander,78641,,Y,Y,,Y,Rep,,,
+1088863107,200,C,20130519,M,Martin,Jacob,A,4815,N,Congress,BLVD,,,Cedar Park,78613,,Y,Y,Y,Y,Rep,Y,,
+1059596458,200,A,20100923,M,Thompson,William,R,7295,S,Hillside,CT,STE,E10,Cedar Park,78613,,Y,,Y,Y,Rep,,Y,Rep
+1031683518,200,A,20160218,F,Tran,Mei,E,4500,W,Davis,DR,,,Leander,78641,,Y,,Y,,,Y,,
+1095719468,201,B,20091102,M,Hayes,Kevin,Grace,8823,,Palmer,LN,,,Cedar Park,78613,,,Y,Y,,,,Y,Lib
+1077882396,201,C,20141213,M,Price,Donald,Marie,8542,S,Pinewood,PKWY,#,27B,Austin,78751,,,,Y,Y,Rep,Y,,
+1077347231,202,,20200207,M,Allen,Nathan,E,416,,Creekside,CT,,,Cedar Park,78613,,,Y,Y,Y,Rep,Y,,
+1016128930,202,A,20150325,F,Bryant,Emily,Rose,8832,E,Speedway,WAY,,,Round Rock,78681,,,Y,Y,,,Y,Y,
+1020413579,202,D,20110406,M,Nguyen,Steven,Dean,8569,,Ridgeline,DR,#,26A,Cedar Park,78613,,Y,Y,Y,,,,,
+1038838659,202,B,20140412,F,Ramirez,Susan,A,1960,E,Davis,LN,,,Buda,78610,,,,,Y,,Y,Y,
+1017472992,202,,20100703,F,Rivera,Jennifer,Jean,9000,,Howard,CT,,,Del Valle,78617,,,Y,,,,Y,Y,Rep
+1000930736,202,B,20130301,F,Ross,Cynthia,L,3976,S,Maple,DR,UNIT,430,Austin,78753,,,Y,Y,Y,Rep,,,
+1025506317,202,,20080116,M,Ward,Matthew,,7300,N,Duval,RD,,,Pflugerville,78660,,Y,,Y,Y,Lib,,,
+1058410605,203,D,20150401,M,Adams,Michael,E,2549,W,Sunset Valley,RD,,,Manor,78653,,Y,,,,,Y,,
+1067246991,203,A,20090421,F,Barnes,Mei,,5994,,Spicewood Springs,AVE,,,Leander,78645,,Y,Y,,,,,Y,Dem
+1031726309,203,D,20230521,F,Bryant,Lisa,Jean,6200,S,Oak,DR,,,Manor,78653,,,,Y,Y,,Y,Y,Rep
+1047258396,203,D,20140507,F,Chen,Laura,Paul,600,N,Cesar Chavez,LN,UNIT,B11,Pflugerville,78660,,Y,Y,Y,,,,,
+1062499634,203,A,20171224,F,Clark,Ashley,A,6300,,Cesar Chavez,CIR,,,Leander,78645,,Y,,,Y,,,Y,Lib
+1049726018,203,C,20091018,M,Cooper,Steven,,2500,E,Lakeview,BLVD,,,Del Valle,78617,,,,Y,Y,Lib,,,
+1008998905,203,D,20100617,M,Green,James,Marie,9122,W,Menchaca,WAY,#,178,Austin,78756,,,Y,Y,Y,Rep,,,
+1072964826,203,C,20240401,M,Long,Mark,Ann,1300,,Steck,BLVD,,,Del Valle,78617,,,Y,Y,Y,Rep,Y,Y,Lib
+1085624824,203,,20130505,M,Nguyen,Mark,Ann,7600,E,Ridgeline,CIR,UNIT,35A,Buda,78610,,Y,Y,,,,,Y,Dem
+1031724761,203,,20250407,M,Scott,Mark,Lee,9900,,Palmer,CT,,,Round Rock,78665,,,Y,Y,Y,Dem,,,
+1000819286,203,D,20230321,F,Williams,Isabella,Ann,2800,E,Cesar Chavez,LN,,,Austin,78721,,Y,,Y,,,,,
+1081842708,204,C,20150317,M,Anderson,David,L,4800,S,Brodie,PL,,,Buda,78610,,Y,Y,Y,,,,,
+1059655404,204,C,20170425,F,Long,Margaret,M,2381,,San Jacinto,WAY,,,Pflugerville,78660,,Y,,,,,Y,Y,Rep
+1055463370,204,D,20141112,F,Martin,Grace,Kay,8068,,Red River,CIR,UNIT,16B,Del Valle,78617,,Y,Y,Y,Y,Rep,,,
+1069814218,204,B,20120121,F,Moore,Rosa,Marie,1662,,Steck,LN,,,Pflugerville,78660,,,,Y,Y,Dem,,Y,Rep
+1017130928,204,B,20150212,F,Smith,Rosa,Dean,1234,,McNeil,LN,#,B12,Pflugerville,78660,,,Y,,Y,Dem,Y,Y,Lib
+1045639851,204,D,20231209,F,Wood,Kathleen,Paul,4900,,Creekside,BLVD,,,Manor,78653,,,,,Y,Lib,Y,,
+1031915600,205,B,20171008,F,Brooks,Rebecca,Ann,4900,,University,BLVD,,,Round Rock,78665,,,Y,Y,,,Y,,
+1075386229,205,A,20190611,F,Bryant,Laura,,7609,E,Manor,CIR,APT,74,Del Valle,78617,,Y,Y,Y,Y,Lib,,Y,Dem
+1063667907,205,D,20200918,M,Carter,Robert,,1557,,Magnolia,AVE,,,Pflugerville,78660,,Y,Y,Y,Y,Dem,,Y,Dem
+1012856197,205,C,20250221,M,Miller,Carlos,M,2297,,Speedway,WAY,UNIT,36B,Buda,78610,,,Y,Y,,,Y,Y,Lib
+1012641071,205,A,20090122,M,Nguyen,Brian,Ray,6900,W,Riverside,CIR,,,Buda,78610,,Y,,Y,Y,Rep,,Y,Lib
+1056771871,205,,20090226,M,Perez,Jose,Dean,7800,N,Balcones,PL,,,Cedar Park,78613,,,Y,Y,Y,Lib,,,
+1087322743,205,C,20181001,M,Powell,Andrew,,3384,N,Cesar Chavez,TRL,#,4,Leander,78645,,,Y,,Y,Rep,Y,,
+1082527143,205,A,20231206,F,Young,Cynthia,E,7600,,Cesar Chavez,WAY,,,Leander,78641,,Y,Y,,Y,Rep,Y,,
+1023882848,206,,20191026,M,Ramirez,Charles,Marie,3488,,Duval,WAY,UNIT,B12,Austin,78704,,Y,,Y,,,,Y,Rep
+1013658560,206,C,20250612,F,Sanders,Carmen,Lee,2302,S,Slaughter,WAY,,,Pflugerville,78660,,,,Y,Y,Lib,Y,,
+1036068838,207,A,20180325,M,Abbott,Robert,M,8903,,Cesar Chavez,TRL,,,Buda,78610,,Y,,Y,Y,Rep,Y,Y,Dem
+1049954404,207,D,20130506,F,Bryant,Amy,Jean,449,,Oltorf,TRL,,,Round Rock,78665,,,,Y,Y,,,Y,Dem
+1029700998,207,,20230418,M,Flores,Henry,Grace,2200,S,Magnolia,AVE,,,Leander,78641,,Y,,Y,Y,Lib,Y,Y,Dem
+1016135944,207,D,20090417,M,Johnson,Ethan,Dean,9400,W,Cesar Chavez,WAY,,,Round Rock,78681,,Y,Y,Y,Y,Rep,Y,Y,
+1076949471,207,D,20240617,M,Peterson,James,J,2600,,Brodie,CIR,,,Austin,78727,S,Y,Y,,Y,Rep,Y,Y,Dem
+1021788921,207,,20110720,M,Ramos,Christopher,R,9162,N,Pecan,BLVD,,,Austin,78753,,Y,Y,Y,Y,Rep,,,
+1081846259,207,A,20241002,M,Roberts,Juan,Paul,4391,,Sunset Valley,LN,,,Pflugerville,78660,,Y,,,Y,Dem,Y,,
+1004032081,207,C,20210505,F,Rodriguez,Rebecca,M,6100,W,McNeil,RD,,,Pflugerville,78660,,Y,Y,Y,,,Y,,
+1003641039,208,B,20161210,F,Brooks,Patricia,Rose,8700,,Slaughter,CT,,,Del Valle,78617,,Y,Y,Y,,,Y,Y,Rep
+1006810373,208,B,20100713,M,Hayes,Raymond,E,800,,Metric,ST,APT,A5,Cedar Park,78613,,,Y,,,,Y,Y,Lib
+1089505469,208,,20240124,M,Kelly,Luis,Lee,9779,,Maple,PKWY,UNIT,5A,Leander,78641,,Y,Y,,Y,Rep,Y,,
+1017436628,208,D,20210726,F,Washington,Rebecca,Jean,3300,N,Brodie,ST,#,26A,Manor,78653,,Y,Y,Y,Y,,,Y,
+1039934824,209,D,20080504,M,Adams,Steven,,8100,W,William Cannon,PKWY,UNIT,C7,Manor,78653,,Y,,Y,,,,Y,Rep
+1022209583,209,D,20191021,F,Bennett,Carmen,M,900,,Speedway,BLVD,,,Manor,78653,,,Y,,Y,,Y,Y,
+1006041556,209,A,20200819,M,Nguyen,Christopher,Paul,5200,W,Congress,WAY,APT,C4,Round Rock,78665,,Y,Y,Y,Y,Rep,,Y,
+1055599087,209,,20230703,M,Thompson,Nathan,E,2100,,Red River,CIR,UNIT,25,Buda,78610,,,,Y,Y,Rep,,,
+1088362053,211,B,20140209,F,Foster,Mary,Kay,3500,,Cesar Chavez,LN,#,C8,Buda,78610,,Y,Y,Y,Y,Rep,Y,Y,
+1099346916,211,,20201216,F,Miller,Sofia,Rose,4100,,Nueces,RD,,,Pflugerville,78660,,,,Y,,,Y,Y,Dem
+1015320591,212,B,20220919,M,Diaz,Luis,Paul,5300,,Convict Hill,AVE,,,Austin,78758,,,Y,,Y,Lib,,,
+1057283140,212,C,20150206,F,Perez,Elizabeth,,8314,,Jollyville,PKWY,,,Cedar Park,78613,,,,Y,,,,Y,Rep
+1089677015,213,A,20110723,F,Sanchez,Sandra,,4386,,Ben White,LN,,,Austin,78703,,,,,Y,Lib,Y,,
+1050800495,214,C,20170301,M,Allen,Miguel,M,6062,,Escarpment,WAY,,,Round Rock,78665,,,Y,,Y,Rep,,,
+1057560205,214,D,20180405,F,Bailey,Lisa,M,4100,N,Sunset Valley,PKWY,#,14B,Pflugerville,78660,,Y,,,,,,Y,Lib
+1044325227,214,,20101206,M,Miller,David,M,5500,W,Creekside,CIR,#,29B,Leander,78641,,,Y,,Y,,Y,Y,Rep
+1022141858,214,B,20151024,F,Murphy,Margaret,Grace,8121,,Convict Hill,TRL,,,Austin,78745,,,,,Y,Dem,,Y,
+1017785958,214,A,20250710,M,Roberts,Paul,Kay,5500,,Escarpment,BLVD,,,Austin,78753,,Y,,Y,Y,Lib,Y,,
+1053633569,214,C,20190223,M,Sanders,William,Grace,6700,,Gattis School,BLVD,,,Cedar Park,78613,,Y,Y,Y,,,Y,Y,Lib
+1044093481,214,,20170524,F,Simmons,Mary,Dean,1439,,Oltorf,LN,,,Round Rock,78665,,Y,,Y,,,,Y,Rep
+1086444611,214,C,20131223,M,Thompson,Raymond,Paul,6900,,Lakeview,RD,UNIT,32A,Round Rock,78681,,Y,Y,,Y,Dem,Y,,
+1018032783,215,,20120627,F,Allen,Olivia,Paul,1200,,Creekside,CIR,#,351,Austin,78701,,,Y,Y,Y,Rep,Y,Y,
+1001896171,215,C,20190711,M,Cooper,Carlos,,8392,E,Elm,PL,,,Leander,78645,,,,,Y,Dem,,Y,Rep
+1054642903,215,C,20230725,F,Cox,Amy,M,6081,S,Live Oak,ST,,,Buda,78610,,Y,,,,,,Y,
+1093033216,215,,20241110,M,Martin,Andrew,Jean,6306,,Howard,LN,,,Pflugerville,78660,,Y,,,,,Y,Y,Lib
+1017270048,215,,20230504,M,Martin,Eric,Kay,6118,,Pecan,DR,,,Cedar Park,78613,,,Y,Y,,,,,
+1089501842,215,B,20131021,F,Rivera,Amanda,Grace,8100,,William Cannon,TRL,#,168,Buda,78610,,,,Y,Y,Rep,,,
+1073697575,216,C,20160911,M,Campbell,Mark,,800,S,Cesar Chavez,CT,,,Leander,78641,,,Y,,Y,Lib,Y,,
+1080363694,216,A,20190320,F,Patel,Ashley,A,3400,,Cesar Chavez,CT,,,Leander,78645,,Y,Y,Y,,,,Y,
+1027065316,216,A,20241125,M,Thompson,Eric,Dean,6230,E,Oak,ST,#,324,Manor,78653,,,,Y,Y,Dem,Y,Y,Rep
+1078792024,216,C,20191008,F,Williams,Jennifer,Dean,7500,,Slaughter,PKWY,,,Leander,78645,S,,,,Y,Lib,,Y,Rep
+1065770707,216,C,20080624,F,Wright,Amanda,Paul,5100,S,Braker,LN,,,Manor,78653,,Y,Y,,Y,Dem,Y,Y,Rep
+1094989887,217,A,20091103,F,Cooper,Margaret,Marie,1921,,Jollyville,DR,,,Del Valle,78617,,Y,,Y,,,,,
+1072724467,217,B,20140105,F,Rivera,Margaret,Ray,1300,,Creekside,TRL,,,Buda,78610,,Y,Y,Y,Y,Rep,Y,Y,Rep
+1011644011,217,C,20090504,F,Russell,Emily,Jean,9600,,Far West,CIR,,,Buda,78610,S,Y,Y,Y,,,Y,Y,Rep
+1096806279,218,,20130219,M,Barnes,Jacob,Lee,5718,W,Bee Cave,PKWY,,,Leander,78645,,Y,,Y,,,,Y,Lib
+1011641234,218,,20140218,M,Rodriguez,Mark,Rose,711,,Oak,PL,UNIT,C4,Manor,78653,,Y,Y,,,,,,
+1009994979,219,B,20230622,M,Bailey,James,A,7600,S,Rio Grande,CT,,,Del Valle,78617,,,,,Y,Rep,Y,,
+1007277680,219,,20130321,F,Hayes,Betty,Ann,1900,,Cesar Chavez,RD,#,29A,Leander,78645,S,,Y,,Y,Rep,Y,Y,Dem
+1065389181,219,D,20190325,M,Hernandez,Samuel,J,9700,,Balcones,TRL,,,Buda,78610,,Y,Y,,,,,Y,Lib
+1057866409,219,C,20090119,M,Kim,Andrew,,6600,,Riverside,AVE,,,Del Valle,78617,,Y,Y,Y,,,Y,Y,Rep
+1037118141,219,C,20121023,F,Robinson,Stephanie,L,7322,,Wells Branch,AVE,,,Round Rock,78665,,Y,Y,Y,,,,Y,Rep
+1005810716,219,A,20140623,F,Wood,Sarah,Dean,9900,,Steck,CT,,,Pflugerville,78660,,Y,Y,Y,Y,Rep,,,
+1084538824,220,C,20190315,F,Carter,Fatima,Ann,7400,E,Dessau,LN,,,Buda,78610,,,Y,,Y,,Y,,
+1006830849,220,D,20251018,F,Coleman,Priya,,6201,,Congress,AVE,#,D3,Del Valle,78617,,Y,,Y,Y,,Y,,
+1079325572,220,A,20250710,M,Lee,Thomas,Dean,8986,S,Cedar,CIR,,,Austin,78722,,Y,Y,,Y,Rep,,Y,
+1078899223,220,A,20110222,M,Thomas,Miouel,L,1510,S,Menchaca,CT,UNIT,28B,Pflugerville,78660,,,Y,Y,,,,,
+1094896592,220,A,20250816,F,Ward,Sofia,R,800,E,Howard,LN,,,Round Rock,78665,,Y,Y,Y,,,Y,Y,Dem
+1064342627,221,D,20191128,F,Harris,Ana,,7200,,Bee Cave,RD,,,Del Valle,78617,,,,Y,Y,Rep,Y,,
+1023375019,221,B,20220710,M,Miller,Nathan,E,8200,N,Elm,LN,,,Austin,78751,,Y,Y,Y,,,Y,Y,Rep
+1070021962,221,B,20100924,M,Price,Charles,E,8271,N,Slaughter,AVE,,,Cedar Park,78613,,,Y,Y,,,Y,Y,Dem
+1025147163,221,,20170914,F,Smith,Deborah,Kay,5000,,Red River,RD,,,Cedar Park,78613,,,Y,Y,Y,Rep,,Y,Rep
+1058173204,221,D,20100901,M,Thompson,Carlos,L,9800,,Metric,CT,STE,7A,Manor,78653,,,Y,Y,Y,Rep,,Y,Rep
+1006728806,221,D,20090804,M,Tran,Ethan,Ray,6660,E,Oltorf,TRL,,,Del Valle,78617,,,Y,Y,Y,Lib,Y,Y,Lib
+1099916872,222,D,20151201,F,Allen,Cynthia,R,5105,N,Speedway,RD,APT,224,Buda,78610,,Y,Y,Y,Y,,,,
+1024473924,222,,20150515,M,Diaz,Jacob,Ray,4000,,Live Oak,PL,#,298,Buda,78610,,Y,Y,Y,Y,,Y,Y,Lib
+1032210904,223,B,20150325,F,Gonzalez,Ashley,R,6200,,San Jacinto,LN,,,Round Rock,78681,,Y,Y,,,,,,
+1081042558,223,D,20131218,F,Jones,Lisa,Rose,2800,N,Escarpment,CIR,APT,B10,Leander,78641,,,Y,,Y,Rep,Y,,
+1041777339,223,,20220615,F,Peterson,Amy,Dean,1300,,Palmer,PL,,,Cedar Park,78613,,,,,Y,,,Y,Dem
+1005970340,223,,20110916,F,Torres,Isabella,J,2800,W,Palmer,CIR,APT,223,Manor,78653,,Y,,,Y,Lib,,Y,Rep
+1003542387,223,B,20250312,M,Young,Paul,Kay,1173,,Red River,TRL,STE,D9,Buda,78610,,Y,Y,Y,Y,Lib,Y,Y,Lib
+1009837673,224,,20110914,F,Coleman,Mary,Grace,3517,S,Guadalupe,PL,,,Austin,78745,,,,,,,,,
+1046552225,225,B,20101005,F,Abbott,Rebecca,Ann,3800,,Ben White,CT,,,Cedar Park,78613,,Y,,Y,,,Y,Y,Rep
+1059113800,225,D,20080317,F,King,Amanda,,8100,N,Jollyville,CIR,,,Manor,78653,,Y,Y,Y,Y,Rep,,,
+1090970106,225,B,20180107,F,Lopez,Isabella,R,1853,,Elm,CT,,,Leander,78645,,Y,,Y,,,,Y,Rep
+1053440356,226,,20170804,M,Coleman,Paul,Jean,8700,,Anderson,CIR,,,Leander,78641,,Y,Y,,,,Y,,
+1080288238,226,C,20230710,M,King,Miguel,Rose,3869,E,Oak,ST,,,Del Valle,78617,,Y,,,,,Y,,
+1010566872,226,,20120227,M,Murphy,Carlos,Jean,7511,,Dessau,CT,,,Cedar Park,78613,,Y,,Y,,,Y,,
+1097583801,226,A,20100716,F,Perez,Sarah,L,4300,,Wells Branch,AVE,,,Pflugerville,78660,,,,,,,,Y,Dem
+1019771461,226,A,20180416,F,Roberts,Susan,Jean,9689,W,Manor,BLVD,,,Buda,78610,,Y,Y,,,,,,
+1043476458,226,A,20170602,F,Simmons,Kathleen,Ann,3400,,Congress,ST,APT,192,Leander,78641,,Y,Y,Y,,,Y,,
+1034959437,226,C,20160903,F,Young,Deborah,M,4600,S,Ben White,CIR,,,Cedar Park,78613,,Y,Y,,,,Y,,
+1025936761,227,,20130527,F,Murphy,Nancy,,700,,Red River,DR,STE,424,Round Rock,78664,,,,,,,Y,,
+1013923954,227,B,20130818,F,Patterson,Betty,A,969,,Dessau,PKWY,STE,D5,Austin,78722,,Y,,Y,Y,Rep,,Y,Dem
+1020728513,227,B,20240501,F,Rodriguez,Fatima,E,8272,N,Pecan,ST,,,Austin,78701,,Y,Y,,Y,Rep,,,
+1063356781,228,C,20131103,M,Barnes,Jacob,,3415,,McNeil,PKWY,,,Manor,78653,,,,,Y,Rep,Y,Y,Dem
+1007225569,228,,20080220,F,Green,Patricia,Kay,6242,S,Braker,DR,STE,34A,Cedar Park,78613,,,Y,Y,Y,Rep,Y,,
+1033712852,228,,20110715,F,Hill,Amanda,Rose,2854,,Lakeview,PKWY,,,Austin,78727,,Y,,Y,,,Y,Y,Lib
+1026371837,228,C,20211220,F,Martin,Cynthia,A,141,S,University,CIR,,,Leander,78641,,,,,Y,Dem,,Y,Dem
+1055279461,229,,20220112,M,Carter,Jacob,R,1800,W,Pecan,LN,#,10A,Manor,78653,,,,Y,,,,Y,Rep
+1025364901,229,A,20210428,M,Martin,Anthony,A,600,W,Riverside,CIR,,,Round Rock,78681,,Y,Y,Y,Y,Rep,Y,,
+1083367199,229,D,20130519,M,Murphy,Anthony,R,970,,Parmer,CIR,APT,C2,Round Rock,78664,,Y,Y,Y,Y,Dem,,Y,
+1056514368,229,D,20080822,M,Perez,Sean,,9897,W,Cedar,TRL,,,Del Valle,78617,,,,Y,Y,Rep,,,
+1061555694,229,C,20200904,F,Rodriguez,Kathleen,,6800,,Parmer,TRL,,,Pflugerville,78660,,,Y,Y,Y,Rep,Y,Y,Dem
+1078261906,229,C,20240813,M,Smith,Juan,Rose,6093,,Duval,ST,STE,153,Manor,78653,,Y,Y,Y,,,Y,Y,
+1018440844,231,,20220509,F,Cox,Karen,Dean,157,,Braker,LN,,,Cedar Park,78613,,Y,,,Y,Rep,Y,,
+1012281879,231,D,20110116,F,Jones,Sandra,Rose,2952,,William Cannon,PL,,,Manor,78653,,,Y,,Y,Rep,,,
+1034748436,231,C,20090425,M,Lewis,Patrick,Ray,2229,S,Ridgeline,PKWY,,,Cedar Park,78613,,Y,Y,,Y,Lib,Y,Y,Lib
+1084852496,231,A,20120106,F,Nguyen,Grace,,1513,E,Slaughter,PL,,,Manor,78653,,,Y,Y,,,Y,Y,Lib
+1058005467,231,,20101211,F,Ramirez,Barbara,Kay,3474,N,McNeil,CIR,,,Austin,78756,,,,Y,,,Y,Y,Rep
+1030204962,232,C,20101225,F,Abbott,Laura,Dean,5800,E,Spicewood Springs,DR,,,Leander,78645,,Y,,Y,Y,Lib,Y,,
+1075919072,232,A,20150714,F,Hughes,Angela,Rose,4100,N,Jollyville,LN,UNIT,23A,Leander,78641,,,Y,,,,Y,Y,Rep
+1027435383,232,D,20101228,M,Jackson,Charles,Kay,1400,E,Sycamore,CIR,STE,C7,Leander,78641,,Y,Y,Y,Y,,Y,Y,Dem
+1099484312,232,,20141208,F,Johnson,Fatima,Marie,5400,E,Spicewood Springs,TRL,,,Del Valle,78617,,Y,,,,,,Y,Rep
+1096130720,232,C,20240423,M,Roberts,Andrew,Rose,2100,S,Steck,RD,,,Cedar Park,78613,,Y,Y,Y,Y,Dem,Y,Y,
+1043361472,233,A,20100611,M,Abbott,Christopher,Marie,5823,,Sunset Valley,AVE,,,Cedar Park,78613,,Y,Y,Y,,,,,
+1095563889,233,B,20190208,M,Harris,Jacob,E,7468,,Howard,PKWY,,,Round Rock,78665,,,,Y,,,Y,Y,Rep
+1096081926,233,B,20160702,F,Hernandez,Karen,M,3500,N,Rio Grande,ST,UNIT,B8,Cedar Park,78613,,,,Y,,,,Y,
+1031927375,233,,20160928,M,Peterson,Jacob,,328,,Cameron,PL,,,Del Valle,78617,,Y,,,,,Y,Y,Rep
+1031707037,234,B,20180525,F,Clark,Elizabeth,,6685,,Lamar,PL,APT,29,Austin,78759,,,,,,,Y,,
+1018706904,234,,20091121,F,Garcia,Linda,M,4900,,Sunset Valley,RD,#,16B,Pflugerville,78660,,,Y,Y,Y,,,,
+1085400336,234,B,20081224,M,Hill,Carlos,Jean,9991,,Cameron,DR,,,Del Valle,78617,,,,Y,Y,Dem,Y,Y,Rep
+1080069104,234,,20201217,F,Hill,Hannah,,2600,W,Duval,PKWY,,,Pflugerville,78660,,,Y,Y,Y,Rep,Y,,
+1033095537,234,B,20220117,F,Thomas,Sandra,Lee,1400,W,William Cannon,LN,,,Pflugerville,78660,,,Y,Y,Y,Dem,Y,Y,Lib
+1006665433,234,D,20080715,M,White,Juan,Jean,1200,,Pinewood,DR,,,Buda,78610,,Y,Y,Y,Y,,Y,,
+1091377850,235,,20110404,F,Alexander,Grace,,600,,Metric,AVE,,,Austin,78731,,Y,Y,,Y,Dem,,Y,Dem
+1025175462,235,C,20090925,M,Bailey,Eric,Marie,6500,,William Cannon,TRL,,,Leander,78641,,Y,Y,,,,Y,,
+1039195178,235,,20080420,M,Peterson,Matthew,Marie,3158,E,Congress,PL,,,Del Valle,78617,,,Y,Y,Y,Rep,,Y,Dem
+1092890238,236,B,20140604,M,Cox,James,Marie,8900,N,Riverside,PKWY,,,Pflugerville,78660,,,Y,Y,,,Y,Y,
+1049605282,236,A,20250717,F,Miller,Jennifer,,8000,,Jollyville,TRL,,,Del Valle,78617,,Y,Y,Y,,,Y,Y,Rep
+1046026476,236,C,20190123,F,Patel,Barbara,Rose,8485,,Red River,AVE,UNIT,25B,Del Valle,78617,,Y,Y,Y,Y,,Y,,
+1037237815,236,D,20150215,F,Robinson,Rosa,Lee,9700,S,Magnolia,PKWY,,,Leander,78645,,Y,,,Y,,,Y,
+1065823537,236,D,20250716,F,Scott,Mary,L,5648,,Jollyville,WAY,,,Del Valle,78617,,,Y,,,,,Y,
+1040758187,237,C,20250117,M,Bennett,Andrew,Paul,8000,E,McNeil,WAY,#,A4,Buda,78610,,,Y,Y,Y,Rep,,,
+1095135622,237,B,20250523,F,Campbell,Melissa,Ray,8000,,Parmer,WAY,,,Austin,78745,,Y,Y,,Y,Rep,Y,Y,
+1043464187,237,D,20160924,F,Moore,Ana,E,5000,S,Braker,RD,,,Manor,78653,,Y,,,,,,Y,Rep
+1023025346,237,,20140719,M,Ross,Patrick,M,1384,,Howard,WAY,,,Del Valle,78617,,Y,Y,,,,,,
+1011633643,237,D,20170313,F,Scott,Lisa,Ann,9500,,Lakeview,PL,,,Buda,78610,,,Y,,Y,Rep,Y,Y,Lib
+1076169078,238,B,20090513,M,Gomez,Steven,Grace,4900,,Anderson,ST,STE,6B,Austin,78721,,,Y,,,,,Y,Rep
+1083621127,238,B,20190112,F,Ramos,Sandra,,7600,S,Red River,LN,,,Pflugerville,78660,,Y,,Y,,,,Y,Dem
+1025645111,238,,20090628,M,Robinson,Brian,Grace,9900,,Davis,PL,,,Leander,78641,,,,Y,,,Y,,
+1064013258,238,,20230920,F,Wright,Sandra,Jean,5501,,Lamar,RD,,,Manor,78653,,Y,,Y,,,Y,,
+1096415013,239,C,20160515,M,Murphy,Paul,Kay,5900,,Hillside,AVE,,,Leander,78641,,,,Y,,,,,
+1015276795,240,A,20141104,M,Jenkins,Donald,J,8700,,Jollyville,LN,UNIT,6A,Cedar Park,78613,,,,,Y,,Y,,
+1035282288,240,A,20080604,F,Nelson,Hannah,Rose,4500,S,Pinewood,RD,,,Buda,78610,,Y,,,Y,Lib,Y,Y,Rep
+1005316410,240,C,20101215,M,Nguyen,Jacob,Marie,3476,,Cesar Chavez,CT,,,Del Valle,78617,,,,,,,Y,,
+1025743735,240,A,20250404,F,Robinson,Barbara,Dean,3364,,Pecan,LN,,,Buda,78610,,,,,,,,,
+1057289564,240,A,20151204,M,Tran,Donald,Ray,5300,,Parmer,AVE,#,36A,Round Rock,78665,,Y,Y,,Y,Dem,Y,Y,Rep
+1031632720,240,D,20221024,F,Walker,Ashley,L,7600,E,Oak,PL,,,Round Rock,78681,,,Y,,Y,Rep,,Y,Rep
+1088437767,241,C,20120612,M,Allen,Thomas,Grace,7305,,Parmer,LN,,,Buda,78610,,Y,Y,,Y,,,,
+1048597853,241,,20090524,M,Hughes,Raymond,M,7693,,Riverside,CT,,,Austin,78704,,,Y,,,,Y,,
+1064978067,242,B,20240319,M,Allen,Joseph,Kay,9600,S,Balcones,BLVD,#,133,Manor,78653,,Y,Y,,,,Y,Y,Rep
+1021449994,242,D,20240610,F,Hughes,Elizabeth,J,6816,,Lamar,WAY,,,Del Valle,78617,,Y,Y,,Y,Rep,Y,Y,Lib
+1086616258,242,B,20221225,M,Kelly,Jacob,E,9100,E,University,CIR,,,Round Rock,78665,,Y,,,Y,Dem,Y,Y,Lib
+1025985291,242,C,20201212,F,Wilson,Lisa,E,6676,S,Hillside,PL,,,Del Valle,78617,,Y,Y,Y,Y,Rep,,,
+1008975857,242,D,20101004,M,Wright,Samuel,E,313,S,Steck,AVE,STE,5A,Del Valle,78617,,,Y,,,,,,
+1064547528,243,B,20230915,M,Garcia,Jacob,Dean,2510,,Braker,PKWY,,,Leander,78641,,Y,Y,,,,Y,Y,Dem
+1042997852,243,C,20260607,F,Hollis,Sage,L,823,,Elm,AVE,,,Pflugerville,78660,,,,,,,,,
+1031522513,244,C,20240806,M,Kim,David,L,1500,E,Anderson,AVE,,,Cedar Park,78613,,Y,,Y,,,Y,Y,Dem
+1020489087,244,B,20170325,F,Powell,Elizabeth,Lee,7000,,Cedar,WAY,APT,22B,Round Rock,78665,,Y,Y,Y,,,Y,,
+1004795393,244,A,20090209,F,Powell,Olivia,L,2900,,Koenig,RD,,,Austin,78723,,Y,Y,Y,,,Y,Y,Lib
+1007267374,244,A,20110724,M,Ramos,Adam,L,6100,,Pecan,TRL,,,Leander,78641,,,Y,Y,Y,Lib,Y,,
+1018665245,244,,20200922,F,Simmons,Jessica,M,900,N,Guadalupe,CT,APT,6A,Manor,78653,,Y,,,Y,Dem,Y,Y,Rep
+1003343322,244,,20250425,M,Williams,Daniel,Lee,1147,W,Anderson,TRL,,,Buda,78610,,Y,,,,,Y,Y,Dem
+1005899193,245,C,20100318,F,Flores,Fatima,Jean,5329,,Elm,BLVD,,,Pflugerville,78660,,Y,,Y,Y,Dem,Y,,
+1007415184,245,D,20230509,M,Johnson,Eric,Grace,5929,,Howard,LN,,,Austin,78753,,Y,,Y,,,Y,,
+1051444177,245,,20221212,F,King,Isabella,E,1621,W,Red River,CIR,,,Austin,78749,,Y,Y,,Y,,,Y,Dem
+1096942277,245,B,20110516,M,Washington,Matthew,A,4300,E,San Jacinto,PL,APT,29B,Pflugerville,78660,,,Y,,Y,Rep,Y,Y,Dem
+1022709511,246,A,20090527,F,Bailey,Priya,A,8500,S,Nueces,TRL,UNIT,440,Cedar Park,78613,,Y,Y,Y,,,Y,,
+1095215894,246,A,20190427,F,Ramirez,Michelle,,7888,,Elm,CIR,,,Austin,78705,,Y,Y,,,,Y,,
+1069542913,247,D,20190325,F,Campbell,Amy,J,9879,,Cameron,WAY,,,Leander,78645,,,Y,,,,Y,Y,Lib
+1021884580,247,A,20110111,M,Johnson,Omar,R,6800,E,Metric,CIR,#,B2,Leander,78645,,Y,Y,,,,,,
+1020680833,247,D,20190507,F,Ward,Fatima,A,3082,,Duval,ST,,,Pflugerville,78660,,,Y,Y,,,,,
+1097574922,248,,20231116,M,Anderson,Raymond,L,4644,W,Palmer,WAY,,,Cedar Park,78613,,,Y,,,,,Y,Dem
+1009092246,248,B,20161218,F,Butler,Barbara,Rose,200,,Duval,LN,APT,21B,Del Valle,78617,,,Y,,Y,Dem,,,
+1084803010,248,C,20240819,M,Patterson,David,A,3200,N,Sycamore,WAY,#,71,Austin,78759,,Y,,,Y,Rep,Y,Y,Dem
+1016488543,248,,20210420,M,Rivera,Christopher,Paul,4207,E,Oak,WAY,STE,D6,Del Valle,78617,,Y,,Y,,,Y,Y,Dem
+1098852770,248,,20090828,F,Thompson,Mary,Ann,9300,N,Airport,WAY,APT,180,Del Valle,78617,,Y,,,Y,Rep,,Y,Dem
+1085898027,248,D,20161202,M,Wood,Patrick,,9173,E,Pecan,TRL,,,Pflugerville,78660,,,Y,,,,,,
+1022957756,250,A,20131018,M,Brooks,Kevin,,2199,S,Convict Hill,BLVD,,,Buda,78610,,,,,,,Y,,
+1023066034,250,C,20080506,F,Jenkins,Rebecca,E,9295,,Brodie,AVE,,,Manor,78653,,Y,Y,,,,,Y,Rep
+1008344331,251,,20190804,M,Okafor,Robert,,6026,E,Pinewood,CT,,,Manor,78653,,,,Y,,,,Y,Dem
+1015496251,252,B,20210516,M,Ramirez,Omar,A,1600,,Dessau,RD,,,Round Rock,78665,S,Y,,Y,,,,Y,Lib
+1048529403,253,D,20180526,F,Abbott,Sofia,R,7347,,Elm,DR,,,Del Valle,78617,,,Y,Y,Y,Lib,,Y,Dem
+1027991413,253,B,20140413,M,Alexander,Matthew,Ann,4700,,McNeil,RD,,,Cedar Park,78613,,Y,Y,,Y,Dem,Y,,
+1086063275,253,D,20150610,F,Kim,Memissa,Ann,6191,,Elm,PL,,,Del Valle,78617,,,,Y,,,Y,Y,Dem
+1063343566,253,C,20250303,M,Lee,James,L,400,,Magnolia,DR,STE,E12,Round Rock,78665,,Y,Y,,Y,Rep,Y,,
+1010223969,253,A,20241101,M,Mitchell,Adam,Paul,8000,E,Steck,DR,UNIT,159,Round Rock,78664,,Y,Y,Y,,,,Y,Rep
+1025946375,254,B,20170815,F,Adams,Lisa,Dean,6300,W,Nueces,PL,,,Del Valle,78617,,,Y,Y,,,Y,Y,
+1059457997,254,A,20121013,F,Bailey,Jessica,Marie,9719,W,Dessau,CIR,,,Round Rock,78664,S,,,Y,Y,Dem,Y,Y,
+1097213966,254,A,20201103,F,Campbell,Margaret,Grace,9355,W,Sycamore,PKWY,STE,3B,Del Valle,78617,,Y,Y,,,,,Y,Dem
+1057015993,254,A,20100424,M,Young,Jacob,Paul,1700,E,Parmer,BLVD,,,Round Rock,78681,,,,,,,,Y,Rep
+1055649549,255,A,20090318,M,Cooper,Eric,Grace,3800,W,Oak,CIR,#,D7,Del Valle,78617,,,,Y,,,,Y,Dem
+1071808462,255,D,20130722,F,Cooper,Sarah,,8700,,Cedar,AVE,,,Del Valle,78617,,,Y,Y,Y,Dem,,,
+1015915152,255,D,20110608,F,Gomez,Barbara,Paul,9203,S,Oltorf,WAY,#,A10,Austin,78722,,Y,,Y,,,Y,,
+1046460778,255,D,20131221,F,Gonzalez,Rebecca,M,8096,S,Magnolia,TRL,,,Buda,78610,,Y,Y,Y,,,Y,,
+1051715551,255,,20170823,F,Hayes,Grace,Kay,3679,N,Barton Springs,PL,APT,29B,Buda,78610,,Y,Y,Y,,,Y,Y,Rep
+1035694213,255,A,20130225,F,Peterson,Kathleen,M,9436,E,William Cannon,TRL,APT,14,Cedar Park,78613,,,,Y,Y,Dem,,Y,Dem
+1090580518,255,D,20250515,M,White,William,Marie,4000,,Ben White,DR,,,Del Valle,78617,,,Y,Y,Y,Dem,Y,,
+1005263452,256,,20140507,F,Clark,Sandra,Lee,2435,,Koenig,LN,,,Del Valle,78617,S,Y,,,,,Y,Y,Rep
+1049775883,257,B,20200923,M,Moore,Mark,Kay,4777,,Guadalupe,WAY,APT,38A,Del Valle,78617,,,Y,,Y,Lib,Y,Y,Rep
+1002622568,257,,20160501,F,Okafor,Ana,,200,,Sycamore,BLVD,,,Del Valle,78617,,Y,,Y,Y,Dem,Y,,
+1012957603,258,D,20200903,F,Cox,Amanda,Marie,700,E,Sycamore,AVE,,,Round Rock,78664,,Y,,Y,Y,Dem,Y,Y,Dem
+1083310954,258,,20160621,M,King,Juan,R,4100,,San Jacinto,RD,,,Austin,78727,,Y,Y,,Y,Rep,,,
+1004302563,258,C,20130925,M,Walker,James,Paul,5129,N,Gattis School,TRL,,,Del Valle,78617,,,Y,Y,,,Y,Y,Rep
+1067755699,258,C,20141104,F,Young,Nanfy,Lee,7479,,Live Oak,PKWY,,,Manor,78653,,,Y,Y,,,,Y,Rep
+1075899749,259,C,20171216,M,Patterson,Raymond,Paul,7308,,Oak,CT,,,Manor,78653,,Y,,Y,Y,Rep,Y,Y,
+1024894115,259,,20230509,M,Peterson,Richard,Jean,8210,,Convict Hill,PKWY,STE,B11,Buda,78610,,,,,Y,Dem,Y,,
+1023805748,260,,20191009,F,Green,Priya,Dean,5800,,Riverside,CIR,,,Pflugerville,78660,,Y,,Y,Y,Dem,Y,Y,
+1074626715,260,A,20150824,M,Rivera,Patrick,,3700,S,Steck,PKWY,,,Buda,78610,,,,,Y,Lib,,Y,Dem
+1035817695,260,B,20200327,M,Walker,Wei,,5306,,Braker,WAY,,,Round Rock,78664,,Y,Y,Y,Y,,Y,Y,Rep
+1019746961,261,C,20190423,F,Barnes,Sarah,Jean,8619,,Lakeview,RD,,,Leander,78645,,,Y,Y,Y,Rep,Y,,
+1003280910,261,B,20250411,F,Murphy,Sarah,Paul,3940,S,University,RD,APT,11A,Round Rock,78664,,,Y,,,,Y,Y,Lib
+1070782868,261,A,20231220,F,Okafor,Jessica,A,4757,S,Parmer,LN,,,Pflugerville,78660,,Y,,Y,Y,Dem,,Y,Dem
+1048920554,261,A,20190727,F,Robinson,Cynthia,,2728,,Metric,ST,,,Austin,78749,,,,,Y,,Y,,
+1027313699,261,A,20191102,M,Young,Patrick,Marie,8466,N,McNeil,RD,,,Austin,78748,,Y,Y,,Y,Dem,Y,,
+1051375617,262,B,20130423,F,Bailey,Fatima,Ray,2921,,Red River,PKWY,,,Austin,78751,,,Y,Y,Y,,Y,Y,Lib
+1023517590,262,A,20260617,F,Calloway,Morgan,J,4024,,Sycamore,CT,,,Austin,78704,,,,,,,,,
+1083227711,262,C,20080502,F,Carter,Carmen,R,6561,,Anderson,ST,,,Buda,78610,,Y,Y,Y,,,Y,Y,
+1056166661,262,A,20190426,M,Diaz,Aaron,Lee,1900,,Braker,TRL,,,Cedar Park,78613,,,,,,,,Y,
+1010185340,262,A,20140520,M,Powell,Sean,Lee,9000,N,Slaughter,CT,,,Cedar Park,78613,,Y,,Y,,,,Y,
+1045282203,262,A,20150520,F,Ramos,Amanda,Dean,4300,,Speedway,CIR,#,300,Del Valle,78617,,Y,Y,,Y,Dem,Y,,
+1082368673,262,A,20200319,F,Robinson,Angela,,1200,E,Hillside,WAY,,,Manor,78653,,Y,Y,Y,,,Y,Y,Lib
+1038252259,263,A,20170921,F,Anderson,Nancy,Kay,8821,N,Convict Hill,BLVD,,,Round Rock,78681,,Y,Y,,Y,Dem,Y,Y,Dem
+1051130503,263,,20241114,M,Bennett,Michael,M,6100,,Congress,CT,,,Leander,78641,,,,,Y,Rep,,,
+1060061832,263,B,20130718,M,Tran,Juan,Kay,8500,E,Bee Cave,TRL,,,Austin,78705,,Y,,,Y,Dem,,Y,Dem
+1093175723,264,,20130116,F,Campbell,Rosa,,2700,,Elm,ST,STE,40A,Cedar Park,78613,,Y,,Y,,,,,
+1023964040,264,A,20140617,M,Richardson,Patrick,E,2542,,Oltorf,PL,,,Leander,78641,,Y,Y,Y,Y,Dem,Y,Y,Dem
+1010423482,265,C,20180526,F,Hernandez,Deborah,,2600,,Congress,TRL,,,Pflugerville,78660,,Y,,Y,Y,Rep,Y,,
+1077812925,265,D,20131217,F,Perez,Priya,Lee,2300,E,Convict Hill,LN,STE,40B,Pflugerville,78660,,Y,Y,Y,Y,Rep,,Y,Rep
+1050406503,265,A,20150308,F,Ramos,Betty,Dean,5114,,Pinewood,RD,,,Austin,78731,,,,Y,Y,Rep,Y,,
+1061840167,265,C,20210118,M,Tran,Carlos,R,2500,,Parmer,PKWY,,,Pflugerville,78660,,Y,,,,,,,
+1090632348,265,A,20081002,M,Wright,Joseph,Paul,6200,S,Congress,AVE,,,Manor,78653,,,Y,Y,Y,,,,
+1076775849,266,B,20150128,F,Kim,Lisa,Kay,8900,E,Pinewood,BLVD,,,Del Valle,78617,,,,Y,Y,Dem,,,
+1001554052,266,C,20120801,F,Reyes,Betty,Rose,2400,N,Jollyville,CT,#,D8,Buda,78610,,,Y,,Y,,,Y,Dem
+1035282691,266,A,20080507,M,Torres,Sean,,1275,,Duval,CT,,,Leander,78645,,,Y,Y,Y,,,,
+1090786409,267,B,20120205,F,Adams,Isabella,Ann,9206,,Live Oak,AVE,,,Austin,78727,,Y,Y,,Y,Dem,Y,,
+1042343886,267,D,20110610,F,Coleman,Patricia,,683,,Brodie,RD,UNIT,E1,Manor,78653,,Y,Y,,,,,,
+1054133963,267,D,20241103,F,Lee,Patricia,L,9031,,Manor,BLVD,,,Buda,78610,,Y,,Y,Y,Rep,,Y,
+1094877218,268,B,20130413,F,Abbott,Susan,Ann,100,,Ridgeline,PL,,,Pflugerville,78660,,,Y,Y,,,Y,,
+1045436834,268,,20130626,M,Hayes,Ethan,Grace,5200,,Cameron,CT,,,Del Valle,78617,,Y,Y,Y,Y,Rep,,,
+1055097959,268,,20250712,M,Smith,Henry,Ray,2827,N,Dessau,CIR,,,Manor,78653,,Y,Y,,,,,,
+1092156584,269,D,20080228,M,Watson,Daniel,Ann,8100,S,Maple,CT,UNIT,16A,Del Valle,78617,,Y,Y,,,,Y,,
+1071157243,270,D,20230423,M,Bennett,Brian,Lee,1400,,Metric,TRL,,,Austin,78749,,,Y,,Y,Lib,,Y,
+1041815023,270,D,20150618,F,Bryant,Amanda,Paul,9161,,Convict Hill,RD,#,11B,Round Rock,78664,,Y,,,Y,Dem,Y,,
+1017771449,270,D,20090220,F,Cooper,Jennifer,,6700,E,University,CT,,,Round Rock,78681,,Y,Y,,,,Y,,
+1007962780,270,C,20180712,F,Mitchell,Michelle,Dean,4300,,Sunset Valley,WAY,,,Buda,78610,,,,,Y,Rep,,Y,Lib
+1098115260,270,A,20211213,M,Sanchez,Jose,A,861,,Creekside,RD,,,Pflugerville,78660,,Y,Y,,,,Y,,
+1031057493,271,D,20190223,M,Moore,Donald,,7141,,Wells Branch,WAY,,,Pflugerville,78660,,,,Y,Y,Dem,Y,,
+1049247767,271,B,20201003,M,Perez,Wei,,7637,E,Rio Grande,AVE,STE,475,Cedar Park,78613,,Y,Y,,Y,Rep,Y,Y,Rep
+1028921619,272,C,20131222,M,Gray,Michael,Jean,100,,Oak,RD,#,24A,Manor,78653,,Y,Y,,,,Y,,
+1012800190,272,C,20160622,M,Wood,James,E,900,W,Ben White,PKWY,UNIT,E8,Austin,78727,,Y,,,Y,Dem,,Y,
+1070955478,272,,20170213,M,Young,Paul,Lee,1290,,Rio Grande,CIR,UNIT,D7,Cedar Park,78613,,,Y,,Y,Rep,,Y,Dem
+1099939789,273,D,20241119,F,Lopez,Linda,Paul,6300,,Howard,PL,,,Manor,78653,,,Y,,Y,Dem,Y,,
+1005553334,273,,20170727,M,Rivera,Andrew,,644,,Sunset Valley,CIR,UNIT,A6,Cedar Park,78613,,Y,,Y,Y,Lib,Y,,
+1094094756,273,,20160305,M,Torres,Henry,Ray,1717,N,Hillside,PKWY,,,Round Rock,78665,,Y,Y,,,,Y,,
+1068703836,274,D,20250614,M,Clark,David,E,6282,N,McNeil,TRL,APT,A11,Leander,78641,,,,Y,Y,Dem,Y,Y,Rep
+1083471326,274,D,20120926,F,Hernandez,Rebecca,Dean,610,,Ridgeline,PKWY,,,Pflugerville,78660,,,Y,Y,Y,Rep,Y,,
+1017974578,274,A,20140324,F,Hill,Laura,Lee,5600,W,Maple,PKWY,STE,E2,Del Valle,78617,,Y,,,,,,,
+1088192876,274,A,20080314,F,King,Angela,Marie,7218,W,Steck,AVE,,,Del Valle,78617,,Y,Y,,,,,Y,Dem
+1086553382,274,C,20161225,M,Lewis,James,Kay,400,W,Airport,WAY,,,Pflugerville,78660,,,,,,,,,
+1041614620,274,,20240319,F,Long,Linda,,9385,,Menchaca,AVE,#,19A,Round Rock,78681,,Y,,,,,Y,,
+1048166706,274,A,20100905,M,Long,Omar,E,3139,S,Lamar,CIR,,,Cedar Park,78613,,Y,Y,,Y,Rep,,Y,Dem
+1094329648,274,D,20211026,F,Murphy,Isabella,Kay,8129,W,Braker,BLVD,,,Cedar Park,78613,,,Y,Y,Y,Dem,Y,,
+1000068944,274,,20120423,M,Washington,Adam,Grace,3100,,Brodie,BLVD,UNIT,81,Round Rock,78665,,Y,Y,Y,Y,Dem,Y,Y,Rep
+1059185984,274,C,20221214,F,Young,Hannah,Ray,710,S,Koenig,RD,,,Buda,78610,,Y,,,Y,Dem,,Y,Dem
+1086482342,275,,20120905,M,King,Carlos,,703,,Riverside,LN,,,Round Rock,78664,,Y,,Y,Y,,Y,,
+1003627943,275,A,20101021,F,Price,Deborah,,3436,,Brodie,WAY,UNIT,D10,Manor,78653,,Y,,Y,Y,Lib,,,
+1025999764,275,B,20210303,F,Torres,Isabella,J,6900,,Lamar,CT,,,Austin,78705,,Y,Y,Y,,,Y,Y,Dem
+1094156356,276,C,20170517,M,Gomez,Samuel,M,7980,,Live Oak,DR,,,Round Rock,78681,,,,Y,,,Y,,
+1003432360,276,A,20110609,F,Gonzalez,Kathleen,L,400,E,Far West,ST,,,Round Rock,78665,,Y,,,Y,Rep,,,
+1052646105,276,B,20110611,M,Harris,Nathan,Marie,1700,,Rio Grande,PKWY,,,Manor,78653,,Y,,,,,Y,Y,Rep
+1003987416,276,,20240428,F,Jones,Isabella,,3800,,Duval,CIR,,,Manor,78653,,,Y,Y,Y,Dem,Y,Y,
+1086819465,276,,20170128,M,Peterson,Daniel,Grace,3909,E,Ridgeline,TRL,,,Manor,78653,,Y,,,,,Y,,
+1097349642,276,A,20180807,M,Ward,Carlos,R,3300,,Nueces,DR,,,Buda,78610,,,,Y,,,,Y,
+1033366693,276,,20190215,F,Wood,Priya,M,1870,,Ben White,TRL,UNIT,28B,Pflugerville,78660,,Y,Y,Y,,,,Y,Dem
+1082346456,277,,20170405,F,Bennett,Amy,Kay,4034,N,Parmer,PL,,,Round Rock,78664,,Y,Y,,,,Y,,
+1079195680,277,,20111018,M,Hernandez,Anthony,J,4493,E,Oltorf,PKWY,,,Cedar Park,78613,,,,,Y,Rep,,,
+1025012276,277,D,20180618,F,Martinez,Kathleen,E,9030,E,Speedway,CIR,,,Leander,78641,,,Y,Y,Y,Dem,Y,Y,Rep
+1067550761,277,C,20161227,M,Okafor,Jose,Ann,2100,S,Cameron,WAY,#,A6,Manor,78653,,Y,,,Y,,Y,,
+1016204124,277,D,20160121,F,Ramirez,Mei,Ann,2887,N,McNeil,PL,UNIT,461,Leander,78645,S,Y,Y,,Y,Rep,Y,,
+1012437770,277,,20200719,M,Washington,Joseph,L,3800,,Far West,TRL,UNIT,B4,Buda,78610,,Y,,,,,Y,,
+1016801271,278,,20140325,F,Adams,Jessica,R,4494,,Oak,WAY,STE,23A,Pflugerville,78660,,,,Y,,,,Y,Dem
+1076758150,278,D,20131118,F,Cruz,Fatima,Ray,5100,N,McNeil,CIR,,,Austin,78749,,Y,,Y,,,Y,,
+1067276779,278,B,20221128,M,Lee,Steven,Rose,9700,S,Lamar,ST,APT,442,Leander,78641,,,Y,Y,,,Y,Y,Dem
+1015766467,278,A,20220623,M,Nelson,David,,6744,N,Nueces,TRL,,,Manor,78653,,Y,Y,,,,,Y,Lib
+1018890008,279,,20230718,F,Baker,Grace,M,9600,E,Lakeview,PL,UNIT,B5,Del Valle,78617,,,,,Y,,,Y,
+1041523625,279,,20160806,F,Price,Ashley,Ann,7000,N,Lamar,LN,,,Leander,78641,,,Y,,,,Y,Y,Lib
+1098187313,279,A,20230110,F,Rivera,Emily,Kay,4376,,Sycamore,WAY,APT,8A,Buda,78610,,Y,,Y,,,,,
+1093330684,279,B,20150506,M,Watson,David,Kay,600,,Wells Branch,CT,,,Leander,78641,,,,Y,,,,,
+1089719016,279,,20140928,F,Wright,Patricia,Ann,6600,,San Jacinto,TRL,,,Pflugerville,78660,,,,Y,,,,Y,Rep
+1078842466,280,B,20160704,M,Bryant,William,R,8001,E,Parmer,CT,,,Buda,78610,,,,Y,Y,Rep,Y,Y,
+1099012517,280,B,20190117,F,Cooper,Fatima,Jean,3110,S,Guadalupe,ST,,,Leander,78641,,Y,,Y,,,Y,Y,Rep
+1002886981,280,B,20240824,M,Griffin,Carlos,J,3400,,Slaughter,DR,,,Manor,78653,,,Y,Y,,,,Y,Rep
+1033237969,281,,20200620,F,Carter,Karen,A,9171,,Menchaca,RD,,,Manor,78653,,,Y,,Y,,Y,Y,
+1044055718,281,B,20250819,F,Hayes,Linda,Lee,8477,,Ridgeline,CIR,,,Manor,78653,,Y,,Y,,,Y,,
+1097937602,281,C,20180924,F,Jenkins,Rebecca,Paul,9400,,Elm,BLVD,,,Del Valle,78617,,Y,,,Y,Dem,,,
+1071109387,281,B,20150325,M,Sanchez,Joshua,,1431,,Brodie,WAY,UNIT,37A,Cedar Park,78613,,Y,,Y,,,Y,Y,Rep
+1038966699,281,C,20251127,F,Wilson,Margaret,Jean,1898,N,Sycamore,PL,,,Del Valle,78617,,,Y,Y,Y,Rep,Y,,
+1086977172,282,A,20200714,M,Bryant,Joshua,Jean,3800,W,McNeil,DR,APT,B12,Pflugerville,78660,,Y,,Y,Y,Rep,,,
+1070658979,282,D,20150614,M,Foster,Joseph,Kay,6653,N,Convict Hill,WAY,UNIT,36A,Leander,78645,,,Y,Y,,,Y,,
+1080223829,282,A,20230720,M,Kelly,Patrick,A,612,,William Cannon,LN,,,Austin,78717,,,Y,,,,,Y,Dem
+1054861795,282,D,20080227,M,Lee,Thomas,Paul,9984,S,Jollyville,TRL,,,Cedar Park,78613,,Y,Y,Y,,,,Y,
+1088239282,282,C,20151109,F,Rivera,Amy,Jean,5700,E,William Cannon,CIR,,,Manor,78653,,,,Y,Y,Dem,,Y,Lib
+1088893773,283,D,20130123,M,Barnes,Jose,L,8148,,Speedway,PKWY,STE,B9,Round Rock,78664,,,,,,,,Y,Dem
+1034184978,283,D,20190507,M,Coleman,Donald,A,4642,,Wells Branch,CIR,#,D1,Cedar Park,78613,,,Y,Y,Y,,Y,Y,Rep
+1040924067,283,D,20190519,F,Murphy,Emgly,Dean,9727,,Menchaca,PL,,,Buda,78610,,Y,Y,Y,Y,Rep,Y,Y,
+1002508536,283,D,20150627,F,Murphy,Karen,,7100,N,Palmer,WAY,,,Buda,78610,,Y,Y,,Y,,Y,,
+1078975495,283,B,20090727,M,Ramirez,Robert,A,8200,,Jollyville,WAY,STE,126,Pflugerville,78660,,Y,Y,Y,,,,Y,Rep
+1080150037,284,D,20221018,F,Clark,Patricia,Ray,7572,E,Braker,DR,,,Pflugerville,78660,,,,Y,Y,Dem,Y,,
+1012385382,284,B,20230910,M,Hayes,Patrick,Marie,3489,N,Sunset Valley,ST,,,Leander,78641,,,,,,,Y,Y,
+1046515612,284,A,20131222,M,Hill,Eric,Ann,300,,Speedway,DR,,,Round Rock,78664,,,Y,,,,,,
+1046082511,284,,20111017,F,Powell,Carmen,L,710,N,Rio Grande,CIR,,,Round Rock,78664,,,Y,,Y,Rep,Y,,
+1047814841,285,C,20150314,F,Carter,Stephanie,,8400,N,Sycamore,ST,,,Manor,78653,,,Y,Y,,,Y,Y,Lib
+1067691875,285,C,20160805,M,Kim,James,J,3568,,San Jacinto,WAY,,,Round Rock,78681,S,Y,Y,,,,Y,Y,Rep
+1091180223,285,B,20250603,M,Lewis,Adam,Rose,700,,Anderson,AVE,,,Del Valle,78617,,,Y,Y,,,,,
+1053726315,285,A,20090623,M,Murphy,Kevin,E,1004,,Wells Branch,BLVD,,,Buda,78610,,Y,Y,Y,Y,Lib,,Y,Lib
+1081946864,285,D,20240916,M,Peterson,Daniel,Marie,3100,N,Meadow,TRL,APT,E10,Buda,78610,,Y,,Y,Y,Rep,Y,,
+1087317262,285,A,20221225,F,Sanchez,Fatima,Lee,1138,W,Koenig,DR,,,Del Valle,78617,,Y,,,Y,Dem,Y,Y,
+1061613508,285,D,20151226,M,Scott,Raymond,Grace,8600,S,Red River,ST,,,Cedar Park,78613,,,Y,Y,Y,Rep,Y,Y,Dem
+1026195485,285,,20210615,F,Tran,Mei,Ann,5800,S,Oltorf,DR,APT,E4,Cedar Park,78613,,Y,Y,Y,,,Y,,
+1037359599,286,D,20150213,F,Carter,Isabella,Ann,9600,S,Menchaca,CIR,,,Buda,78610,,,Y,Y,Y,Dem,Y,,
+1081008056,286,,20220222,M,Cruz,Henry,Ann,8111,N,Cedar,TRL,#,E9,Del Valle,78617,,Y,,,Y,Dem,,,
+1032126449,286,A,20181211,M,Griffin,Aaron,Dean,4990,,Howard,WAY,APT,39B,Del Valle,78617,,,Y,,,,Y,,
+1072378459,286,,20230826,M,Moore,William,Ann,6500,E,Ben White,TRL,,,Manor,78653,,,Y,Y,,,,,
+1028768050,286,D,20121011,M,Rodriguez,John,Ann,2262,,Guadalupe,TRL,,,Austin,78753,,Y,Y,Y,Y,Rep,Y,Y,Dem
+1078233112,286,C,20190415,M,Russell,Christopher,Lee,7600,S,Gattis School,AVE,,,Round Rock,78665,,Y,,,Y,,,,
+1093472907,287,C,20190622,M,King,Christopher,,7456,W,Ben White,TRL,,,Del Valle,78617,,Y,Y,,,,,Y,Dem
+1033075294,287,D,20140827,F,Moore,Isabella,A,6816,N,Pecan,CIR,,,Del Valle,78617,,,,,,,Y,Y,Lib
+1053438687,288,A,20130111,M,Bryant,Raymond,Kay,7600,N,Guadalupe,DR,STE,A3,Round Rock,78681,,Y,,Y,Y,Rep,Y,Y,Dem
+1077775909,288,,20120210,M,Jackson,Joseph,J,8800,W,Elm,BLVD,,,Buda,78610,,Y,,,Y,Rep,,,
+1062565485,288,C,20190805,F,Kelly,Stephanie,Rose,3337,E,Oltorf,CT,,,Buda,78610,,Y,,,Y,Rep,Y,Y,Lib
+1074703146,288,D,20181227,M,Miller,Thomas,Kay,3600,E,Parmer,CT,,,Leander,78641,S,,Y,,,,Y,,
+1033634286,288,C,20180115,M,Perez,James,Ann,9291,W,Rio Grande,ST,,,Leander,78641,,,Y,Y,Y,Rep,Y,Y,Rep
+1052682376,288,D,20191112,M,Williams,Ethan,J,3700,,Creekside,AVE,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1058376717,289,C,20150116,F,Coleman,Jessica,A,2116,E,Meadow,ST,,,Leander,78645,,Y,Y,Y,Y,Rep,,Y,Dem
+1022228885,289,D,20110320,M,Henderson,Charles,J,5353,S,Parmer,CT,,,Pflugerville,78660,,Y,,Y,Y,Rep,,,
+1070349370,289,C,20201003,M,Hughes,Joseph,,4847,,Hillside,BLVD,APT,86,Pflugerville,78660,,,Y,Y,,,Y,,
+1060440033,289,,20180801,F,Rodriguez,Emily,,8500,N,Magnolia,LN,,,Austin,78723,,,Y,,Y,,Y,Y,Rep
+1045706766,290,D,20190109,M,Barnes,Robert,Ann,4500,N,Escarpment,WAY,,,Leander,78641,,Y,Y,Y,,,,,
+1062793085,290,,20170307,F,Flores,Laura,,4300,S,Rio Grande,BLVD,APT,470,Cedar Park,78613,,,Y,,,,Y,Y,
+1075945521,290,C,20090905,M,Hall,Kevin,Marie,7657,,McNeil,AVE,#,D1,Leander,78645,,Y,,Y,Y,Lib,Y,,
+1057475124,290,C,20240208,M,Murphy,Donald,Ray,6000,,Lakeview,ST,UNIT,94,Round Rock,78664,,Y,,,Y,Rep,Y,Y,
+1047116466,290,B,20130926,M,Young,Henry,Ann,7017,,Howard,AVE,,,Del Valle,78617,,Y,,Y,,,Y,,
+1046540471,290,,20140402,F,Young,Mei,,4354,,Lakeview,WAY,,,Pflugerville,78660,,,Y,Y,Y,Dem,,,
+1048228509,291,A,20201026,F,Bailey,Michelle,Paul,9174,E,Pecan,ST,,,Pflugerville,78660,,,,Y,Y,Rep,,,
+1019023961,291,C,20240611,M,Cooper,Christopher,Jean,3168,,Escarpment,TRL,,,Buda,78610,,,Y,Y,Y,Dem,Y,Y,Dem
+1015210798,291,C,20140114,M,Davis,Miguel,E,3800,,Oltorf,WAY,,,Cedar Park,78613,,Y,,,Y,Rep,,Y,Dem
+1012412571,291,A,20100323,F,Diaz,Grace,L,4461,,Gattis School,CT,UNIT,333,Manor,78653,,Y,Y,,,,Y,,
+1039001296,291,A,20250409,M,Gray,Michael,J,3300,N,Pecan,PL,,,Austin,78705,,,Y,,,,,,
+1094307587,291,,20250420,M,Ross,Donald,Kay,3000,W,Guadalupe,CIR,,,Del Valle,78617,,Y,,Y,,,,Y,Rep
+1064451798,291,,20230808,M,Taylor,Paul,,2214,E,Balcones,LN,,,Leander,78645,,,,Y,Y,,,,
+1042044087,291,B,20221227,M,Torres,David,Ann,1700,,Meadow,WAY,STE,18B,Buda,78610,,Y,,Y,Y,Dem,,,
+1095390354,292,B,20170920,M,Cooper,Kevin,Grace,5934,E,Rio Grande,AVE,,,Cedar Park,78613,,Y,,Y,Y,Lib,,,
+1048745580,292,A,20260428,F,Frost,Morgan,J,4054,,Burnet,WAY,,,Cedar Park,78613,,,,,,,,,
+1023472058,292,D,20110224,M,Hill,Omar,J,3200,,Parmer,PL,,,Buda,78610,,Y,,,Y,Rep,Y,,
+1023760737,292,C,20230528,F,Richardson,Elizabeth,Jean,6900,W,Barton Springs,LN,#,431,Leander,78645,,,Y,Y,,,Y,,
+1047134810,293,D,20240209,F,Wilson,Sandra,,7400,,Red River,TRL,,,Pflugerville,78660,,Y,Y,,,,,Y,Lib
+1095111356,294,A,20110723,M,Adams,Raymond,M,8700,S,Elm,TRL,,,Cedar Park,78613,,Y,Y,Y,,,Y,,
+1083944768,294,C,20260626,F,Calloway,Avery,A,2153,,Escarpment,ST,,,Cedar Park,78613,,,,,,,,,
+1049625990,294,C,20130903,M,Diaz,Andrew,Kay,6073,,Cedar,CIR,,,Del Valle,78617,,Y,,Y,Y,Dem,Y,,
+1044620365,294,B,20141123,M,Powell,Matthew,Ann,5400,,Davis,ST,UNIT,192,Manor,78653,,Y,,,,,,Y,Dem
+1023378362,294,C,20110618,F,Thomas,Priya,J,2930,W,Speedway,AVE,,,Cedar Park,78613,,,Y,Y,,,,,
+1020238143,294,D,20250624,F,Ward,Isabella,E,9738,,Maple,TRL,,,Round Rock,78665,,Y,,Y,,,Y,,
+1027552496,295,B,20200122,M,Alexander,Raymond,Grace,2843,E,Cameron,DR,STE,D12,Manor,78653,,Y,Y,,Y,Dem,,,
+1084970886,295,B,20231014,M,Hargrove,Jose,Kay,7300,E,Pecan,DR,,,Manor,78653,,Y,,Y,Y,Dem,,,
+1099156893,295,A,20150201,F,Harris,Lisa,E,8975,S,Sycamore,PKWY,APT,400,Round Rock,78664,,Y,Y,Y,,,Y,Y,Dem
+1099648950,295,D,20201203,M,Okafor,Donald,L,6529,E,Convict Hill,RD,UNIT,470,Cedar Park,78613,,,Y,Y,Y,Rep,,,
+1041361186,295,B,20160324,M,Wilson,Charles,Marie,6049,,Balcones,BLVD,UNIT,C2,Manor,78653,,Y,,,Y,Dem,Y,Y,Rep
+1033648215,296,C,20120705,M,Clark,Jacob,Jean,4942,N,Bee Cave,PKWY,,,Del Valle,78617,,,,,Y,,,Y,Rep
+1047994857,296,B,20081105,F,Hernandez,Hannah,Grace,5305,,Lakeview,PKWY,,,Round Rock,78681,,Y,,Y,Y,Rep,Y,,
+1054457156,296,A,20190126,M,Long,Wei,Lee,1918,E,Sunset Valley,PL,,,Round Rock,78664,,Y,Y,,Y,Dem,,,
+1044291856,296,A,20200706,F,Robinson,Fatima,,3077,W,Maple,PL,,,Leander,78641,,,Y,Y,Y,,,,
+1065353303,297,B,20130115,M,Green,Miguel,E,6400,S,Elm,CT,,,Leander,78645,,,Y,Y,Y,Lib,Y,,
+1080575137,297,A,20180519,F,Harris,Nancy,Marie,300,,Slaughter,RD,APT,D5,Cedar Park,78613,,,Y,Y,,,,Y,Lib
+1043729010,297,C,20081127,F,Lee,Nancy,,9110,N,Speedway,PL,,,Buda,78610,,Y,,,,,Y,,
+1096468467,297,B,20120807,F,Martinez,Amanda,Dean,7887,S,Duval,CT,,,Del Valle,78617,,,Y,,,,Y,,
+1034763089,297,,20190528,M,Reyes,Daniel,Jean,3093,,Barton Springs,PKWY,,,Round Rock,78681,,Y,,Y,Y,Dem,,Y,Dem
+1035011231,297,A,20210605,F,Smith,Patricia,Marie,4600,,Cedar,TRL,,,Round Rock,78664,,,,,Y,,Y,Y,Rep
+1002852703,298,B,20100308,M,Carter,Michael,Grace,2300,,University,CT,,,Buda,78610,,,,Y,Y,,,Y,Lib
+1031242339,298,,20210301,M,Cruz,Brian,Ann,300,S,Dessau,TRL,,,Round Rock,78664,,Y,,,Y,,Y,,
+1076990604,298,D,20220123,M,Young,Charles,Lee,5565,E,Manor,DR,,,Pflugerville,78660,,,Y,Y,,,Y,,
+1017842506,299,C,20200413,F,Adams,Sarah,Rose,7800,,Menchaca,CIR,,,Buda,78610,,Y,Y,Y,Y,Dem,Y,Y,Dem
+1009722443,299,C,20140711,M,Bailey,Eric,L,6450,,Parmer,TRL,,,Austin,78727,S,,,,,,,,
+1040541900,299,D,20100405,F,Butler,Sarah,Grace,5091,,Palmer,CT,,,Manor,78653,,Y,,Y,Y,,,Y,Dem
+1015295247,299,D,20100924,M,Cox,Andrew,,4202,S,Far West,DR,,,Cedar Park,78613,,,Y,Y,Y,Dem,Y,Y,Dem
+1033869238,299,B,20230203,M,Nguyen,Wei,Dean,4800,N,Creekside,CT,,,Austin,78745,,,,Y,,,Y,Y,Rep
+1078995150,299,B,20150925,M,Okafor,Paul,Dean,4500,,Cesar Chavez,TRL,,,Round Rock,78664,,,,,,,Y,,
+1014304649,299,C,20240224,F,Patel,Susan,Paul,8736,N,Congress,PL,STE,13A,Round Rock,78664,,,Y,,Y,Dem,,Y,Lib
+1015359833,300,C,20200813,M,Jenkins,Michael,L,1700,W,Magnolia,PL,,,Del Valle,78617,,,,Y,Y,,,Y,Rep
+1024848881,300,A,20220113,F,Murphy,Jessica,R,7785,E,Congress,RD,,,Round Rock,78665,,Y,,Y,,,Y,,
+1063020076,300,B,20220619,F,Ramirez,Amy,,7200,,Congress,CIR,,,Round Rock,78665,,,,Y,Y,Rep,,,
+1020024664,300,,20130423,M,Ramos,Miguel,Kay,7460,S,Palmer,AVE,,,Buda,78610,,,,Y,Y,,,Y,
+1027957141,301,,20110314,F,Cruz,Ana,A,2100,,Dessau,CT,,,Round Rock,78665,,Y,Y,Y,Y,Lib,,,
+1056000902,301,B,20201209,M,Gomez,Richard,R,4575,S,Ridgeline,PL,#,8B,Cedar Park,78613,,Y,,,,,,,
+1014615835,301,D,20200227,M,Hernandez,Juan,R,2600,,Sunset Valley,DR,,,Manor,78653,,Y,Y,,Y,Dem,Y,Y,Lib
+1083486006,302,A,20090326,M,Brooks,Aaron,Jean,900,,Cedar,DR,,,Round Rock,78664,,Y,Y,,,,Y,Y,Dem
+1002481037,302,D,20180127,M,Cruz,Samuel,,2660,,Live Oak,CT,,,Austin,78756,,,,,Y,Dem,,,
+1033389903,302,D,20140419,M,Rodriguez,Miguel,,6766,S,Sycamore,CT,,,Manor,78653,,,Y,,Y,,Y,Y,Dem
+1071242344,303,C,20240202,F,Powell,Jennifer,Ann,7591,,Escarpment,TRL,,,Del Valle,78617,,Y,,,,,Y,,
+1043667204,303,,20110614,M,Washington,Nathan,E,6200,,Koenig,PL,,,Round Rock,78664,,,,Y,Y,Rep,Y,,
+1064605905,304,B,20170712,F,Garcia,Maria,,4979,,Creekside,PL,,,Round Rock,78681,,Y,Y,Y,Y,Rep,Y,Y,
+1055482648,304,,20200414,M,Gonzalez,Omar,Rose,3383,N,Convict Hill,CIR,APT,2B,Leander,78645,,Y,Y,Y,,,,Y,Lib
+1000143157,304,A,20250704,F,Jenkins,Carmen,Ray,4900,,Howard,BLVD,,,Round Rock,78681,,,Y,Y,Y,Rep,,Y,Rep
+1017406392,304,D,20161102,F,Rodriguez,Mei,R,9496,,Burnet,AVE,,,Round Rock,78665,,Y,Y,Y,Y,Dem,,Y,Lib
+1047746614,305,C,20090725,M,Peterson,Wei,E,3151,,Steck,TRL,,,Manor,78653,,Y,,Y,Y,Dem,Y,,
+1014016439,305,A,20191223,M,Thompson,Mark,,900,,Hillside,RD,,,Round Rock,78681,,Y,,,,,,,
+1034441894,306,B,20170604,F,Thompson,Carmen,A,5674,N,Sunset Valley,CT,,,Round Rock,78665,,,Y,,,,,Y,Dem
+1038448118,307,B,20230325,M,Chen,Daniel,J,3100,N,Sunset Valley,PL,,,Austin,78756,,,Y,Y,Y,Dem,,,
+1071978288,307,D,20240720,F,Coleman,Rebecca,J,377,,Hillside,RD,STE,32A,Manor,78653,,Y,,,Y,Rep,,Y,Dem
+1078298036,307,D,20090728,F,King,Rebecca,Lee,6537,,Sunset Valley,LN,#,393,Del Valle,78617,,,Y,Y,,,Y,Y,Dem
+1065288169,307,B,20140103,M,Martin,James,Jean,3600,W,Cesar Chavez,BLVD,,,Del Valle,78617,,Y,,,Y,Dem,Y,,
+1072064300,307,B,20080923,F,Mitchell,Barbara,E,2700,N,Manor,LN,,,Austin,78727,,,Y,,,,Y,,
+1099153541,307,D,20090323,F,Richardson,Linda,Grace,1825,,Airport,TRL,,,Austin,78704,,Y,Y,,,,Y,,
+1036945095,307,,20241112,M,Wright,Charles,Grace,4723,S,Burnet,CT,,,Cedar Park,78613,,,,,Y,Rep,,Y,Dem
+1058072529,308,B,20241017,M,Barnes,Brian,,7993,,Magnolia,AVE,,,Pflugerville,78660,,,Y,Y,Y,Rep,Y,Y,Dem
+1002812030,308,,20201028,M,Davis,Brian,Jean,6978,,Wells Branch,DR,,,Austin,78701,,Y,,Y,Y,Rep,,Y,
+1087807398,308,D,20080306,F,Davis,Mary,Jean,9323,,Pinewood,ST,#,23B,Austin,78721,,Y,,Y,,,Y,Y,Rep
+1034464867,308,B,20160415,F,Flores,Cynthia,M,6300,,Cameron,PL,APT,D1,Pflugerville,78660,,Y,,,,,Y,,
+1038423812,308,A,20170521,M,Kim,David,Ray,2925,W,Howard,TRL,UNIT,29B,Austin,78749,,Y,Y,,Y,Dem,Y,,
+1009421013,308,B,20250109,M,Lee,Sean,,8600,,Brodie,CIR,,,Del Valle,78617,,Y,,Y,,,,,
+1072099625,308,A,20150121,M,Lopez,Anthony,Jean,1500,,Davis,BLVD,STE,22B,Cedar Park,78613,,Y,,,Y,,,,
+1058227751,308,C,20190623,F,Rivera,Elizabeth,E,2400,S,Slaughter,DR,,,Round Rock,78664,,,,Y,,,Y,,
+1028670666,308,D,20220720,M,Sanders,Sean,Ray,3100,N,Balcones,RD,UNIT,D8,Round Rock,78665,S,,,,Y,Dem,Y,,
+1013515194,309,B,20090727,F,Abbott,Melissa,Marie,4800,,Creekside,ST,UNIT,127,Pflugerville,78660,,,,,,,,,
+1067705241,309,C,20221024,F,Anderson,Sofia,Grace,300,E,Oltorf,PL,,,Leander,78641,,Y,Y,,,,Y,,
+1095213660,309,D,20200317,F,Flores,Deborah,Jean,2900,E,Elm,BLVD,STE,D9,Manor,78653,,Y,Y,Y,Y,,,Y,Rep
+1087664233,309,D,20090905,M,Nguyen,Juan,,2159,W,Guadalupe,AVE,,,Leander,78645,,Y,Y,Y,Y,,,,
+1057365684,309,,20210208,F,Watson,Elizabeth,Paul,6598,S,Guadalupe,DR,,,Del Valle,78617,,,Y,,Y,Rep,Y,,
+1067714271,310,B,20220411,F,Foster,Betty,Ann,4400,,Ridgeline,LN,,,Del Valle,78617,,Y,Y,,,,,,
+1057981016,310,A,20090326,F,King,Isabella,M,9200,W,Burnet,AVE,APT,B9,Cedar Park,78613,,,Y,,Y,Rep,Y,,
+1047196874,310,D,20160527,M,Robinson,Anthony,Ray,9500,,Pecan,PL,,,Austin,78759,,Y,Y,,Y,Lib,Y,,
+1071399431,310,A,20120806,F,Sanchez,Lisa,M,9000,N,Convict Hill,CIR,STE,D3,Round Rock,78665,,Y,,Y,,,Y,Y,Lib
+1048724459,310,A,20160320,F,Wood,Laura,Ray,7500,,Live Oak,BLVD,STE,385,Austin,78721,,,,Y,Y,Dem,,,
+1051452113,311,A,20140401,M,Cruz,Paul,,8700,,Maple,CT,,,Del Valle,78617,,,Y,,Y,Rep,,,
+1048659824,311,B,20100710,M,Foster,Paul,Paul,3600,,Oltorf,CIR,UNIT,430,Round Rock,78665,,,,,,,Y,Y,Dem
+1074887390,311,A,20251113,F,Moore,Isabella,A,7808,,Convict Hill,RD,APT,364,Manor,78653,,,Y,,,,Y,Y,Dem
+1079200878,311,,20180516,M,Nelson,Joshua,,3851,,Steck,BLVD,,,Leander,78645,,,,,Y,Dem,Y,,
+1087386315,311,C,20140222,F,Okafor,Jessica,,2241,N,Palmer,TRL,,,Austin,78727,,Y,Y,,,,Y,,
+1007448161,311,C,20251026,M,Sanders,Aaron,R,6100,,William Cannon,CT,,,Leander,78641,,Y,,Y,Y,Dem,Y,Y,Dem
+1037420676,312,A,20140114,F,Jenkins,Amy,A,6178,W,Riverside,CIR,#,2A,Round Rock,78665,,,,,,,Y,Y,Rep
+1042905616,313,D,20230923,M,Kim,Samuel,Ann,6100,N,Ben White,TRL,APT,6A,Cedar Park,78613,,Y,Y,Y,,,,Y,Dem
+1020618460,313,A,20181208,F,Richardson,Ashley,Paul,5800,,Ridgeline,CIR,UNIT,7B,Round Rock,78681,,Y,Y,Y,Y,Rep,,Y,Rep
+1002425119,313,,20200616,M,Roberts,Henry,Ray,2534,W,Koenig,PKWY,,,Cedar Park,78613,,,,Y,,,,,
+1024061786,313,C,20221224,F,Sanders,Olivia,,3224,,Manor,CIR,,,Cedar Park,78613,,Y,,,,,,Y,Rep
+1026995276,313,D,20141217,M,Williams,Joseph,J,9807,,San Jacinto,WAY,,,Del Valle,78617,,Y,,,Y,Rep,,,
+1077392949,314,,20080104,F,Peterson,Jennifer,,1386,W,Brodie,LN,#,33B,Buda,78610,,Y,Y,Y,,,,Y,Lib
+1079069832,315,A,20160603,F,Bryant,Mary,Marie,6009,,Sycamore,ST,,,Manor,78653,,,,Y,,,Y,Y,Lib
+1050657189,315,B,20201016,F,Clark,Cynthia,,7800,E,Meadow,LN,,,Pflugerville,78660,,Y,,Y,Y,Dem,,Y,
+1025720800,315,B,20170418,M,Henderson,Paul,M,2600,N,Palmer,WAY,,,Austin,78721,,Y,Y,,Y,Rep,,Y,Rep
+1009547379,315,B,20100527,F,Martin,Priya,Dean,4500,N,Ridgeline,CT,,,Manor,78653,,Y,,Y,Y,Dem,,,
+1060915597,315,D,20170818,F,Ramirez,Melissa,Jean,8200,W,Cedar,CIR,,,Cedar Park,78613,,,,Y,Y,Rep,,,
+1029084595,315,D,20190226,F,Sanders,Sarah,Lee,5400,N,Hillside,CT,STE,A9,Manor,78653,,,,Y,,,Y,Y,Dem
+1035482521,316,C,20100618,F,Abbott,Margaret,Ann,7100,,Barton Springs,DR,,,Leander,78641,,Y,,,,,,,
+1062004539,316,A,20250807,F,Griffin,Carmen,M,9000,,Brodie,CIR,,,Pflugerville,78660,,Y,Y,Y,Y,Dem,Y,Y,Lib
+1043635733,316,D,20251109,M,Washington,Donald,Ann,9240,W,Airport,AVE,,,Manor,78653,,Y,Y,Y,,,Y,,
+1058154822,317,D,20090520,M,Carter,Jose,Paul,1481,S,Steck,AVE,,,Round Rock,78665,,,,Y,,,Y,,
+1053165854,317,C,20130918,F,Harris,Mary,Dean,5799,S,University,TRL,,,Manor,78653,,Y,,Y,Y,Rep,Y,,
+1036269644,317,A,20110223,M,Patterson,Omar,Marie,8400,W,Cameron,DR,STE,26A,Austin,78741,,Y,,Y,,,,Y,Dem
+1019742122,317,A,20230619,M,Sanchez,Daniel,L,6147,,Hillside,DR,STE,3B,Buda,78610,,Y,Y,,,,,,
+1088743148,317,D,20241206,M,Taylor,Samuel,Dean,4900,N,Koenig,AVE,,,Leander,78645,,,,Y,,,,Y,Lib
+1064960966,318,B,20200611,F,Brooks,Priya,Jean,8500,N,Lakeview,WAY,,,Buda,78610,,Y,,Y,,,Y,Y,
+1083521365,318,C,20170718,M,Coleman,Andrew,A,5215,,Rio Grande,BLVD,,,Buda,78610,,,,,,,,,
+1069460832,318,,20140422,M,Jenkins,Richard,,2600,,Duval,PL,,,Pflugerville,78660,,Y,Y,Y,,,Y,,
+1082103756,318,,20151212,F,Moore,Nancy,M,1313,,Far West,WAY,,,Cedar Park,78613,,,Y,Y,,,Y,Y,
+1091906586,318,D,20210305,F,Simmons,Grace,,1995,,Wells Branch,TRL,,,Cedar Park,78613,,,,Y,Y,Rep,Y,,
+1056007848,319,A,20170828,M,Jackson,William,,2567,,Cameron,TRL,,,Pflugerville,78660,,,,Y,Y,Rep,Y,Y,Dem
+1080420358,319,,20140415,M,Russell,Paul,,1200,E,Sycamore,WAY,,,Austin,78749,,,,,Y,Rep,,,
+1046298043,320,D,20160228,M,Okafor,Kevin,J,6261,N,Lakeview,RD,,,Buda,78610,,Y,Y,,Y,,Y,Y,Dem
+1066951227,320,,20110805,M,Watson,Wei,Marie,100,,Hillside,BLVD,,,Buda,78610,,,,Y,,,Y,Y,Lib
+1090049695,321,C,20101106,M,Cox,Sean,R,3800,,Sunset Valley,PL,STE,C10,Round Rock,78681,,Y,,,Y,Rep,Y,,
+1090129375,321,B,20210425,M,Nelson,Matthew,Jean,1700,,Pecan,BLVD,,,Cedar Park,78613,,,Y,Y,,,,Y,Rep
+1031026580,321,D,20180711,M,Walker,Carlos,,7753,S,Anderson,LN,,,Manor,78653,,Y,Y,Y,,,,,
+1011545076,321,D,20230620,M,Williams,Richard,Marie,9500,S,Bee Cave,WAY,,,Round Rock,78665,,Y,Y,,,,,Y,Lib
+1039518338,322,,20180105,M,Cox,Miguel,Marie,9200,S,Dessau,TRL,STE,B5,Cedar Park,78613,,,Y,,,,Y,,
+1013988312,322,,20140307,M,Green,Robert,M,8600,,Oak,BLVD,,,Round Rock,78664,,,,,,,Y,,
+1007037838,322,B,20120112,F,Green,Sandra,,1000,N,Davis,WAY,,,Pflugerville,78660,,Y,Y,Y,Y,,,Y,Dem
+1071961589,322,C,20130201,M,Hargrove,Wei,Ray,1370,W,Koenig,ST,,,Austin,78758,,,,Y,,,Y,Y,Rep
+1053376764,322,,20170423,F,Harris,Betty,A,567,,Red River,PKWY,,,Del Valle,78617,,,,Y,Y,Dem,,Y,Dem
+1060001686,322,B,20170626,F,Harris,Grace,Grace,3700,W,Convict Hill,TRL,,,Round Rock,78664,,Y,,,,,Y,Y,Dem
+1015633557,322,D,20110101,M,Hughes,Thomas,Ann,9805,S,Nueces,WAY,,,Round Rock,78665,,,,,Y,Rep,,,
+1020736240,322,C,20240203,F,Martinez,Maria,,9100,,Airport,ST,,,Pflugerville,78660,,,,Y,,,Y,,
+1074263381,322,D,20250821,M,Ramirez,Richard,Paul,3398,,San Jacinto,CT,#,B9,Del Valle,78617,,Y,Y,Y,,,Y,,
+1032652752,323,B,20190301,F,Allen,Margaret,J,4000,,Cesar Chavez,PL,,,Austin,78721,,Y,,Y,,,,,
+1036675464,324,D,20080913,M,Abbott,Juan,Kay,9500,N,Sunset Valley,TRL,,,Leander,78645,,,,Y,,,,Y,Rep
+1012860347,324,D,20200709,F,Brown,Patricia,A,7400,,Menchaca,CIR,,,Del Valle,78617,,,Y,Y,Y,Dem,,Y,Lib
+1003004591,324,D,20250826,F,Jackson,Elizabeth,Ann,1200,S,Spicewood Springs,BLVD,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1058771872,324,A,20171024,F,Johnson,Maria,Lee,5390,,Cedar,BLVD,,,Buda,78610,,Y,Y,,,,Y,Y,
+1067069000,325,A,20161004,M,Bryant,James,E,7000,,Red River,PL,,,Pflugerville,78660,,Y,,Y,Y,Dem,,Y,Dem
+1073251157,325,,20160823,F,Butler,Laura,Jean,2500,,Elm,CIR,STE,431,Round Rock,78681,,,Y,Y,Y,Rep,,Y,
+1078343464,325,,20250801,M,Jenkins,Miguel,,7700,N,Bee Cave,CIR,,,Cedar Park,78613,,Y,,,Y,Rep,,Y,Rep
+1030117244,325,A,20190809,F,Martin,Mary,Ray,2100,,Barton Springs,TRL,,,Manor,78653,,Y,Y,Y,Y,Rep,,,
+1031912104,326,D,20130420,M,Brooks,Joseph,Jean,6744,,Cedar,WAY,,,Del Valle,78617,,Y,Y,Y,,,,,
+1092144227,326,D,20200901,F,Cooper,Ana,R,8374,N,Parmer,PL,STE,A5,Buda,78610,,,Y,Y,,,,Y,
+1085922985,326,B,20190505,F,Hughes,Jessica,Dean,7954,,Hillside,RD,,,Manor,78653,,,Y,Y,Y,Dem,,,
+1045576118,326,A,20220126,M,Hughes,Wei,L,9900,N,Escarpment,TRL,,,Pflugerville,78660,,Y,Y,,Y,Rep,Y,Y,Lib
+1060654823,326,B,20130309,M,Ramirez,Kevin,Rose,1102,,Anderson,AVE,,,Manor,78653,,,,,Y,,Y,Y,Rep
+1079252163,327,B,20210228,F,Davis,Hannah,,9000,,Hillside,RD,UNIT,10,Austin,78717,,Y,,Y,Y,Dem,Y,Y,Rep
+1027880784,327,,20170501,M,Diaz,Donald,Rose,4200,,Balcones,CT,,,Cedar Park,78613,,Y,,,,,Y,,
+1008088871,327,C,20120318,M,Hill,Carlos,Paul,6700,S,Pecan,AVE,,,Round Rock,78665,,,Y,Y,,,,Y,
+1029631707,327,,20110322,M,Young,Raymond,,7075,W,McNeil,ST,,,Round Rock,78665,,Y,Y,,,,,,
+1005602853,327,D,20231223,F,Young,Sofia,Ann,5789,,Cedar,CT,#,B8,Austin,78731,,,,,,,,,
+1038051682,328,C,20260828,F,Calloway,Jordan,,4157,,Pecan,CT,,,Austin,78745,,,,,,,,,
+1003737891,328,B,20250604,F,Carter,Deborah,Ann,4600,S,Wells Branch,PL,STE,D6,Manor,78653,,,Y,,Y,Lib,,Y,Rep
+1080799254,328,,20150304,M,Rodriguez,David,A,7275,E,Menchaca,CIR,APT,168,Cedar Park,78613,,Y,Y,,,,Y,Y,Dem
+1037195406,328,C,20240312,M,Watson,Robert,Lee,2600,,Magnolia,TRL,#,5B,Manor,78653,,Y,,Y,Y,Dem,,,
+1075140213,329,A,20210410,F,Bailey,Karen,E,1431,E,Pinewood,PKWY,APT,C6,Buda,78610,,Y,,Y,Y,Rep,,,
+1016412811,329,A,20180527,M,Baker,John,Ray,6500,S,Hillside,ST,#,E5,Round Rock,78681,,,Y,Y,,,Y,Y,Dem
+1025330090,329,C,20161119,F,Lopez,Stephanie,L,8736,,William Cannon,PKWY,#,180,Austin,78741,,Y,Y,Y,,,Y,,
+1063388231,330,B,20201106,F,Chen,Nancy,A,4700,N,Manor,TRL,,,Cedar Park,78613,,,,Y,Y,,Y,Y,Rep
+1002453849,330,C,20150215,F,Kelly,Olivia,Marie,1963,,Barton Springs,LN,,,Cedar Park,78613,,Y,Y,Y,Y,Lib,,,
+1016455945,330,,20080222,F,Long,Isabella,Ray,3810,,Ben White,PKWY,,,Austin,78721,,Y,,Y,,,Y,Y,Rep
+1016998302,331,D,20100506,M,Allen,Christopher,Jean,809,W,Jollyville,AVE,,,Manor,78653,,,Y,Y,Y,Rep,Y,,
+1019029535,331,,20170406,F,Coleman,Michelle,Rose,7718,W,Menchaca,WAY,STE,C4,Buda,78610,,Y,,Y,,,Y,,
+1074426408,331,,20210819,F,Cooper,Hannah,Jean,7845,N,Jollyville,TRL,STE,17A,Pflugerville,78660,,,,,Y,Dem,Y,Y,Lib
+1063726237,331,A,20080601,F,Sanders,Kathleen,Dean,6749,N,Lamar,WAY,,,Pflugerville,78660,,,Y,Y,Y,Rep,Y,Y,Dem
+1002361886,331,,20130418,F,Wilson,Jessica,Ann,8687,,Duval,AVE,,,Austin,78759,,,Y,Y,Y,Rep,Y,,
+1079453670,332,,20120328,M,Allen,William,Paul,8287,W,Red River,CT,,,Manor,78653,S,,,,Y,,Y,Y,Rep
+1001892689,332,D,20180509,F,Garcia,Amanda,M,7030,S,Red River,PKWY,,,Leander,78641,,Y,Y,Y,Y,Dem,,Y,Rep
+1066470756,332,B,20170911,F,Jackson,Elizabeth,Rose,9128,,Burnet,RD,,,Cedar Park,78613,,Y,Y,Y,Y,Dem,Y,,
+1014930369,332,,20160413,F,Nelson,Betty,Paul,2082,S,Live Oak,CIR,UNIT,E4,Austin,78704,,Y,Y,,,,,,
+1000039811,332,C,20240821,M,Patel,Paul,,3627,N,Pecan,CIR,,,Pflugerville,78660,,Y,,Y,,,Y,,
+1039211641,332,C,20110810,F,Ward,Jessica,Ray,911,,Barton Springs,DR,,,Round Rock,78681,,Y,,Y,Y,,Y,Y,Rep
+1044871160,332,D,20110602,M,White,Wei,,2500,,Oak,BLVD,,,Manor,78653,,Y,Y,,Y,Dem,Y,Y,Lib
+1094531452,333,,20100612,M,Green,Kevin,Ray,6600,E,Live Oak,PKWY,,,Cedar Park,78613,,,,,Y,,Y,,
+1090343023,333,C,20140924,M,King,Joseph,Ann,7776,E,Lamar,PL,,,Austin,78756,,Y,,Y,,,,Y,
+1025313437,333,C,20200608,F,Powell,Ashley,Lee,9000,,Sunset Valley,LN,,,Manor,78653,,Y,Y,,Y,Rep,,Y,Dem
+1032426251,334,D,20160426,M,Anderson,James,Jean,8500,N,Lamar,PKWY,,,Pflugerville,78660,,,,Y,,,,,
+1039670986,334,D,20141121,M,Butler,Thomas,E,3300,,University,AVE,,,Buda,78610,,,Y,,Y,Rep,Y,Y,Rep
+1072404736,334,A,20090222,M,Carter,Anthony,Ann,3800,,San Jacinto,ST,APT,D7,Pflugerville,78660,,Y,Y,,,,Y,,
+1037252949,335,A,20111223,M,Brown,Adam,Dean,783,W,Barton Springs,ST,APT,409,Pflugerville,78660,,Y,,Y,Y,Dem,Y,Y,Rep
+1010193339,335,B,20250309,M,Hayes,Luis,,2141,S,Bee Cave,CIR,APT,E6,Del Valle,78617,,,Y,,Y,,Y,,
+1085494175,335,,20230903,F,Robinson,Kathleen,R,9400,,Live Oak,BLVD,#,A9,Buda,78610,,Y,Y,Y,Y,Lib,,,
+1017606905,336,D,20171120,F,Howard,Amy,Jean,1743,S,Rio Grande,CT,APT,A6,Leander,78645,,Y,Y,Y,Y,Dem,Y,Y,Dem
+1092461413,336,C,20150504,F,King,Laura,J,6100,,Elm,CT,,,Pflugerville,78660,,Y,,,,,Y,,
+1038308586,337,A,20220319,M,Carter,James,Ann,161,,Rio Grande,TRL,,,Buda,78610,,Y,Y,Y,,,Y,,
+1071325137,338,C,20240204,F,Foster,Margaret,R,4300,,William Cannon,LN,#,5B,Cedar Park,78613,,Y,,Y,Y,Rep,Y,Y,Dem
+1075654661,338,B,20160822,M,Gonzalez,Anthony,Rose,1227,W,Magnolia,PKWY,,,Del Valle,78617,,Y,,Y,Y,Dem,,Y,Lib
+1092155087,338,A,20170628,F,Gray,Melissa,A,6418,,Ben White,DR,,,Leander,78645,,,,Y,Y,Rep,,,
+1068607485,338,D,20211224,M,Nelson,Samuel,R,5660,,Menchaca,WAY,,,Round Rock,78664,,,,Y,Y,Rep,,,
+1049002299,338,D,20211008,M,Richardson,Sean,,5800,,Guadalupe,RD,,,Pflugerville,78660,,Y,Y,Y,,,,,
+1047867507,338,,20200304,M,Wilson,John,Paul,9451,S,Speedway,CIR,,,Manor,78653,,Y,,,,,Y,,
+1032259284,339,C,20140101,M,Hall,John,Ray,4913,,Far West,ST,UNIT,431,Leander,78641,,,Y,,Y,Dem,Y,Y,Rep
+1084955042,339,B,20150418,F,Lee,Linda,Marie,2315,,Riverside,TRL,,,Leander,78645,,,Y,,Y,Rep,Y,Y,Rep
+1020427771,339,C,20171024,M,Wright,Nathan,J,2600,E,Palmer,BLVD,APT,463,Pflugerville,78660,,,Y,,Y,Lib,,Y,Lib
+1072799127,340,D,20090418,F,Washington,Kathleen,M,6600,,William Cannon,BLVD,,,Cedar Park,78613,,Y,,,,,Y,,
+1073908721,341,D,20210102,M,Abbott,Joseph,L,4800,,Manor,CT,UNIT,24B,Del Valle,78617,,,Y,,,,,,
+1006404681,341,D,20120607,M,Martinez,Joshua,L,2200,,William Cannon,DR,,,Buda,78610,,,,Y,Y,Dem,,Y,Dem
+1024406679,341,D,20170610,M,Price,Joseph,Grace,4400,,Davis,PKWY,,,Leander,78645,,Y,Y,Y,,,,,
+1047717393,341,C,20220917,M,Taylor,Patrick,,1400,,Riverside,DR,,,Del Valle,78617,,,,,Y,,,Y,Lib
+1001772558,341,,20110207,F,Ward,Stephanie,Rose,3526,E,Bee Cave,DR,UNIT,D4,Del Valle,78617,,,Y,Y,Y,Dem,Y,Y,Lib
+1079853286,341,D,20200302,M,Wood,Steven,,9678,,Cesar Chavez,CIR,#,B5,Manor,78653,,,,Y,Y,Rep,,,
+1047323016,342,,20100307,M,Abbott,Patrick,Paul,4400,,Balcones,PL,,,Manor,78653,,Y,,Y,,,Y,,
+1031129726,342,,20241108,F,Gomez,Olivia,Dean,8883,,Braker,LN,,,Pflugerville,78660,,Y,,Y,,,Y,Y,
+1008300127,343,D,20120721,M,Diaz,Henry,,600,,Palmer,PKWY,,,Buda,78610,,,,Y,Y,Lib,,,
+1063081723,343,D,20210414,M,Jenkins,Miguel,,1899,E,Far West,RD,,,Pflugerville,78660,,,Y,,,,,,
+1065857425,343,D,20141002,M,Kim,Christopher,R,8800,E,Ben White,AVE,,,Del Valle,78617,,,,Y,Y,Lib,Y,Y,Lib
+1076168301,343,A,20161202,F,Kim,Emily,A,6947,,Bee Cave,DR,APT,462,Pflugerville,78660,,Y,,Y,,,,,
+1082100509,343,,20250221,M,Long,Jose,Ann,2952,,Gattis School,TRL,,,Pflugerville,78660,,Y,,Y,,,Y,Y,Dem
+1057741294,343,A,20180801,F,Ramirez,Laura,M,6240,,Metric,BLVD,,,Cedar Park,78613,,Y,,,,,Y,,
+1081844503,343,A,20140319,M,Ramirez,Michael,Ray,979,E,Creekside,CT,,,Manor,78653,,,,Y,,,Y,Y,Lib
+1079697713,343,D,20230520,M,Sanchez,John,L,7973,N,Cesar Chavez,PL,UNIT,40A,Austin,78758,,,,Y,Y,Dem,,Y,Dem
+1076658139,343,D,20130319,F,Smith,Ashley,L,7200,,Convict Hill,LN,STE,57,Del Valle,78617,,,,Y,Y,Dem,,Y,Rep
+1032672982,343,D,20110825,F,Thomas,Jennifer,,1039,W,Guadalupe,DR,,,Round Rock,78665,,,Y,,Y,Dem,,Y,Rep
+1031365637,344,D,20220821,F,Campbell,Kathleen,A,8600,N,Magnolia,CT,STE,8A,Leander,78645,,Y,Y,,Y,Dem,Y,Y,Dem
+1079153880,345,A,20100416,F,Gonzalez,Linda,Marie,7600,,Bee Cave,TRL,,,Manor,78653,,,Y,,Y,Dem,Y,Y,
+1038592188,345,A,20160106,M,Henderson,Miguel,Lee,1277,W,Gattis School,CIR,#,C3,Del Valle,78617,,,Y,Y,Y,Lib,,Y,Rep
+1055832390,345,D,20240801,F,Hughes,Elizabeth,Marie,9696,,Spicewood Springs,WAY,,,Cedar Park,78613,,Y,,,Y,Lib,Y,,
+1042425127,346,A,20100426,F,Alexander,Rosa,A,2994,E,William Cannon,WAY,APT,17A,Cedar Park,78613,,Y,Y,Y,,,Y,Y,
+1037568665,346,B,20230428,M,Chen,David,J,2566,,Hillside,WAY,,,Del Valle,78617,,,,,,,,Y,Rep
+1094601080,346,D,20151108,F,Harris,Rosa,,3400,E,Oltorf,DR,#,13A,Round Rock,78665,,,Y,,Y,Dem,Y,Y,Lib
+1034957461,347,,20230107,F,Clark,Angela,Marie,7694,,Lamar,TRL,STE,28A,Austin,78745,,,,,Y,Rep,Y,,
+1087949627,347,,20250712,F,Coleman,Barbara,Kay,9100,,Red River,WAY,APT,249,Del Valle,78617,,Y,,,Y,Lib,,Y,Rep
+1014882750,347,A,20200719,M,Flores,Joseph,Ann,6859,S,Lamar,BLVD,,,Round Rock,78681,,Y,Y,,,,,Y,Dem
+1065331466,347,A,20091202,M,Gomez,Michael,Grace,584,,San Jacinto,CT,,,Leander,78645,,,Y,,Y,Dem,,,
+1070302991,347,,20110309,M,Jones,John,Paul,8374,N,Brodie,RD,APT,129,Pflugerville,78660,,Y,,Y,Y,,,,
+1016514908,347,C,20140307,F,Kim,Betty,Lee,9500,E,Metric,DR,,,Manor,78653,,Y,Y,Y,,,Y,Y,Dem
+1018580139,347,B,20211214,F,Sanchez,Rebecca,Dean,3908,N,Koenig,DR,,,Del Valle,78617,,,,,,,Y,,
+1007643977,347,,20210212,F,Wilson,Karen,Lee,3100,S,Airport,WAY,UNIT,44,Pflugerville,78660,,Y,,,Y,Dem,Y,Y,Rep
+1041373978,348,D,20191203,F,Anderson,Karen,R,9508,,Lamar,PKWY,,,Leander,78645,,Y,Y,Y,Y,Dem,,,
+1062997598,348,C,20210728,M,Davis,Richard,Marie,3900,,Cameron,BLVD,,,Pflugerville,78660,,,Y,,Y,Rep,Y,,
+1034773347,348,C,20211205,M,Gomez,Steven,Kay,3190,N,Speedway,PL,#,452,Round Rock,78681,,Y,,,Y,Dem,Y,Y,Lib
+1057177039,348,B,20120904,F,Jackson,Stephanie,Jean,6900,,Airport,RD,,,Del Valle,78617,,,Y,,Y,,,Y,Dem
+1090767232,348,B,20090323,M,Richardson,David,Ann,2700,N,Barton Springs,RD,,,Round Rock,78664,,Y,Y,,Y,Rep,,Y,Dem
+1073624275,348,,20220201,F,Walker,Mary,M,2200,E,Sunset Valley,LN,,,Round Rock,78681,,,,,,,Y,,
+1004015191,348,D,20190323,M,Williams,Michael,Kay,5407,,Guadalupe,AVE,,,Manor,78653,,,Y,Y,Y,Lib,Y,,
+1013969947,349,C,20150504,F,Anderson,Mary,,5673,E,Cameron,PL,,,Leander,78645,,Y,Y,Y,Y,Dem,Y,,
+1041246775,349,B,20141001,F,Cooper,Emily,Grace,9000,S,Nueces,AVE,#,159,Round Rock,78681,,,,Y,Y,Dem,Y,,
+1059013426,349,D,20190901,M,Green,Omar,,6915,,McNeil,PL,,,Manor,78653,,,Y,Y,Y,Rep,Y,Y,Dem
+1080651009,349,B,20180714,F,Peterson,Carmen,Ray,609,S,McNeil,RD,,,Del Valle,78617,,Y,Y,Y,Y,,Y,,
+1062494327,349,D,20130109,F,Peterson,Lisa,Grace,3500,,Braker,PKWY,,,Austin,78727,,,,,,,Y,Y,Lib
+1015896500,351,D,20201117,F,Miller,Liya,Ray,1663,S,Duval,RD,,,Leander,78645,,,Y,Y,,,,Y,Dem
+1011820557,351,D,20190910,F,Powell,Sarah,,5806,N,Escarpment,ST,,,Buda,78610,,Y,Y,Y,Y,Rep,,Y,
+1096266704,352,B,20100724,M,Baker,Richard,Rose,6500,E,Anderson,DR,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1028198744,352,C,20191021,M,Carter,David,E,1616,S,Sycamore,DR,,,Round Rock,78664,,,Y,Y,,,,Y,
+1019138986,352,D,20180315,F,Walker,Karen,M,3626,,Lakeview,LN,,,Austin,78721,,,,Y,Y,Rep,,,
+1036340945,352,,20160410,M,White,Robert,J,9800,S,Lakeview,ST,,,Manor,78653,,Y,Y,Y,,,Y,,
+1037019330,353,D,20250212,M,Ramos,William,,4911,N,Balcones,LN,UNIT,37A,Leander,78645,,Y,,Y,,,,,
+1089760822,353,B,20190317,F,Russell,Deborah,Rose,2400,,Brodie,PL,,,Manor,78653,,Y,Y,,,,Y,Y,Rep
+1074702717,353,A,20120414,M,Sanders,David,Rose,7312,S,Congress,AVE,,,Leander,78641,,Y,Y,Y,Y,Rep,Y,,
+1053861623,353,D,20141113,M,Tran,Andrew,,4486,,Cedar,AVE,,,Leander,78641,S,,Y,,Y,Lib,Y,Y,Rep
+1006931862,354,A,20190110,M,Baker,Aaron,M,648,,Rio Grande,BLVD,,,Buda,78610,,Y,,Y,Y,,Y,Y,Lib
+1096340800,354,,20121228,M,Griffin,Nathan,,8300,N,Spicewood Springs,RD,,,Pflugerville,78660,,Y,,Y,Y,Rep,Y,,
+1093990334,354,,20110523,F,Lee,Isabella,,6474,,Sunset Valley,CIR,,,Cedar Park,78613,,Y,Y,Y,Y,Lib,Y,Y,Rep
+1009512246,354,C,20160713,M,Mitchell,Anthony,Ann,1101,,Brodie,RD,,,Buda,78610,,,,Y,Y,Dem,,,
+1081723003,354,C,20240625,F,Rivera,Lisa,Marie,6500,E,Live Oak,BLVD,STE,418,Del Valle,78617,,,,,,,Y,Y,Lib
+1053564821,354,B,20151123,M,Walker,Thomas,Paul,7700,,Rio Grande,DR,,,Pflugerville,78660,,Y,Y,,,,,Y,Lib
+1021174860,354,A,20230617,F,Williams,Sofia,L,9949,E,Lamar,CIR,,,Austin,78741,,Y,,Y,,,Y,Y,Lib
+1047307409,355,A,20240325,M,Jones,Donald,R,6200,S,Cesar Chavez,CIR,#,38B,Buda,78610,,,,Y,Y,Dem,,,
+1033802136,355,B,20101106,F,Jones,Sandra,Paul,4456,N,Red River,BLVD,UNIT,13A,Round Rock,78681,,Y,Y,Y,,,Y,,
+1072852700,355,,20190419,F,Moore,Elizabeth,Ann,9235,E,Hillside,ST,,,Austin,78702,,,Y,,,,Y,Y,Dem
+1023936090,355,D,20111005,F,Young,Svfia,J,5642,N,Oltorf,RD,,,Austin,78758,,,,,Y,Dem,,Y,Dem
+1061809333,356,C,20220505,F,Anderson,Sarah,Lee,7466,S,Guadalupe,RD,,,Buda,78610,,Y,,Y,Y,Rep,,,
+1003648534,357,C,20241017,M,Bennett,Kevin,R,8900,,Cesar Chavez,DR,,,Buda,78610,,,,,Y,Dem,Y,,
+1090283995,357,B,20151021,M,Gray,Juan,Dean,3485,E,Brodie,DR,APT,14A,Pflugerville,78660,,,,,,,,Y,Rep
+1001755028,357,,20091201,M,Harris,Joshua,,2900,,Balcones,TRL,,,Round Rock,78681,,,,,Y,,Y,Y,Rep
+1057378171,357,C,20110317,M,Miller,David,Ray,3409,,Riverside,AVE,,,Leander,78641,,,Y,Y,Y,Lib,,,
+1052396637,357,,20110505,F,Price,Mary,R,4771,,Cesar Chavez,RD,,,Pflugerville,78660,,,Y,Y,Y,Rep,,,
+1030760407,357,B,20080603,F,Rodriguez,Maria,J,200,,Ridgeline,DR,APT,B9,Austin,78756,,Y,,Y,Y,,Y,Y,Rep
+1019650445,357,C,20180102,M,Taylor,Joshua,L,2300,S,Jollyville,CT,,,Leander,78645,,,,,Y,Rep,Y,,
+1083067778,357,C,20220617,F,Thompson,Ana,Paul,1457,,William Cannon,DR,,,Round Rock,78664,,Y,Y,,Y,Dem,Y,,
+1033290072,357,B,20230814,M,Young,Henry,,8500,,Braker,PL,,,Cedar Park,78613,,Y,Y,,Y,Dem,,Y,Dem
+1067241958,358,C,20150626,M,Allen,Jose,A,9900,E,Brodie,CT,,,Buda,78610,,,,,,,,Y,
+1086663543,358,A,20211209,M,Bennett,Sean,,2600,W,Duval,WAY,,,Pflugerville,78660,,Y,,Y,Y,,Y,,
+1089952848,358,C,20210104,M,Harris,Anthony,Rose,641,E,Spicewood Springs,TRL,#,72,Round Rock,78681,,Y,Y,Y,Y,Lib,Y,Y,
+1007273833,358,,20110817,M,Martinez,Patrick,Rose,617,,Speedway,CT,,,Del Valle,78617,,,Y,,,,,Y,
+1035809804,358,,20250619,M,Sanchez,Adam,Ann,9904,,Koenig,PL,,,Round Rock,78665,,,,,Y,Dem,,,
+1034561235,358,C,20140919,F,Sanders,Cynthia,R,6400,,Menchaca,ST,,,Round Rock,78665,,,,Y,Y,Rep,Y,,
+1010157418,359,D,20170802,M,Cox,Steven,A,1000,,Howard,PKWY,,,Buda,78610,,,,,,,Y,,
+1098144123,359,,20210211,M,Johnson,Matthew,E,3164,N,William Cannon,WAY,,,Buda,78610,,,Y,Y,,,Y,Y,
+1097213657,360,A,20100722,F,Cruz,Priya,Jean,9885,,Menchaca,LN,,,Austin,78705,,Y,,,,,,,
+1041848289,360,,20160502,F,King,Betty,R,9970,N,Bee Cave,WAY,,,Austin,78702,,Y,,,,,Y,Y,Rep
+1037899712,360,D,20221001,F,Patel,Sofia,Ray,7258,,Sunset Valley,CT,,,Pflugerville,78660,,,,,Y,Rep,Y,Y,Dem
+1081598317,361,D,20240328,F,Barnes,Ashley,,2785,,Steck,ST,APT,C5,Round Rock,78664,,Y,Y,Y,Y,Dem,Y,Y,Rep
+1079301356,361,C,20241208,M,Clark,Wei,Ann,2726,,Magnolia,CIR,,,Austin,78756,,,Y,,Y,Rep,Y,Y,Rep
+1063184242,361,,20230514,M,Flores,David,R,1122,E,Lakeview,AVE,,,Manor,78653,,Y,Y,Y,,,Y,Y,Dem
+1021387765,361,B,20231120,F,Hall,Rebecca,Grace,5100,,Congress,TRL,,,Buda,78610,,Y,Y,,Y,,Y,Y,Rep
+1008492132,361,D,20130926,M,Long,Brian,Ann,3492,,Barton Springs,TRL,,,Cedar Park,78613,,Y,Y,Y,Y,Rep,Y,Y,Dem
+1079796155,361,C,20080505,F,Martin,Deborah,M,3800,S,Creekside,BLVD,,,Round Rock,78681,,Y,Y,Y,,,Y,,
+1041080738,361,B,20160117,M,Martin,Jose,Paul,6536,W,Magnolia,CT,,,Manor,78653,,Y,,Y,Y,Lib,,Y,Rep
+1062641101,361,,20160824,M,Perez,Kevin,,7700,,Cedar,RD,,,Pflugerville,78660,,,,Y,,,Y,,
+1094057312,361,D,20251019,F,Simmons,Betxy,Lee,9579,N,Steck,AVE,APT,32A,Pflugerville,78660,,,Y,Y,Y,,,,
+1008273918,361,B,20210603,F,Wood,Emily,L,9008,,Sunset Valley,DR,,,Buda,78610,,,,Y,,,,,
+1033238502,362,D,20100216,M,Adams,Luis,Dean,500,,Brodie,BLVD,,,Leander,78645,,Y,Y,Y,,,,Y,Dem
+1044724276,362,A,20110608,M,Allen,Patrick,E,3891,,Sycamore,AVE,,,Round Rock,78664,,Y,,Y,Y,Dem,Y,Y,Rep
+1087369307,362,C,20220203,M,Bryant,Michael,L,5581,E,Gattis School,PKWY,APT,16A,Pflugerville,78660,,Y,,,,,,,
+1012016499,362,B,20140515,F,Jackson,Mei,Ann,2300,N,Congress,ST,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1090349458,364,C,20140101,M,Abbott,Ethan,Lee,4343,,Lakeview,BLVD,,,Round Rock,78665,,Y,,Y,Y,Rep,Y,Y,Rep
+1005493449,364,,20101216,F,Clark,Betty,Rose,875,E,Maple,AVE,,,Round Rock,78665,,,,,,,,,
+1058447619,364,A,20251005,F,Cruz,Isabella,,6400,,Ben White,AVE,STE,44,Austin,78701,,Y,,Y,Y,Dem,,,
+1005120291,365,,20140717,F,Long,Sandra,Ray,5300,S,Lamar,RD,,,Pflugerville,78660,,Y,Y,Y,,,,Y,Rep
+1014401825,365,C,20160809,F,Nelson,Cynthia,Ann,1800,,Parmer,AVE,,,Pflugerville,78660,,Y,,,,,Y,,
+1042525360,365,B,20160827,M,Rivera,Aaron,Ann,4951,W,Slaughter,CT,,,Round Rock,78664,,,Y,Y,,,,Y,Rep
+1079254279,365,B,20160822,F,Robinson,Laura,Dean,4499,E,Palmer,PL,,,Buda,78610,,,Y,,Y,Dem,,Y,Rep
+1077996364,366,,20110124,M,Bailey,Aaron,Ann,5600,E,Braker,TRL,,,Round Rock,78665,,Y,Y,,Y,,Y,,
+1090426801,366,C,20250924,M,Butler,Donald,R,891,W,Elm,ST,,,Manor,78653,,,,Y,,,,,
+1067202933,366,B,20191003,M,Butler,Robert,Paul,1463,,Escarpment,CT,,,Austin,78751,,Y,Y,Y,,,Y,Y,Rep
+1006019167,366,D,20200709,F,Long,Angela,,7400,,Cedar,AVE,UNIT,4A,Buda,78610,,,Y,Y,Y,Rep,,Y,
+1046788987,366,A,20141023,M,Roberts,Luis,Rose,864,W,Lamar,DR,,,Leander,78641,,,,Y,Y,Lib,Y,,
+1099183564,366,A,20220511,M,Walker,Michael,Kay,3742,,Cameron,RD,,,Manor,78653,,,Y,,Y,Lib,Y,Y,Rep
+1061214956,367,,20200123,M,Abbott,Omar,E,512,E,Convict Hill,PL,,,Leander,78645,,Y,,,Y,Dem,,Y,
+1000287318,367,B,20150615,M,Adams,Brian,A,7549,,Meadow,CIR,,,Buda,78610,,,,,Y,Rep,Y,,
+1008519251,367,B,20160111,F,Barnes,Emily,Dean,3136,N,Parmer,CIR,,,Austin,78721,,Y,,Y,,,,Y,
+1046684105,367,D,20210524,M,Henderson,Donald,R,8735,,Congress,RD,,,Austin,78741,,Y,Y,Y,Y,Lib,,,
+1061449625,367,D,20221117,F,Lewis,Cynthia,A,5500,S,Balcones,PKWY,,,Buda,78610,,Y,Y,Y,Y,Rep,,Y,
+1079224161,367,,20100428,F,Long,Stephanie,,3700,,McNeil,CIR,STE,D7,Buda,78610,,,,Y,,,Y,,
+1086797317,368,D,20231128,F,Abbott,Margaret,,1500,,Ben White,PL,STE,230,Leander,78645,,Y,Y,,,,,,
+1042999971,368,,20250512,F,Robinson,Sandra,,8800,N,Balcones,RD,,,Cedar Park,78613,,Y,Y,Y,Y,Lib,,,
+1095025619,369,B,20220517,M,Adams,Jacob,R,3100,N,Manor,DR,,,Buda,78610,,,,Y,Y,Rep,,,
+1070679263,369,D,20200502,F,Lopez,Laura,J,5154,N,Lamar,PL,STE,163,Pflugerville,78660,,,,Y,Y,Rep,Y,Y,Rep
+1002301190,369,B,20091005,M,Moore,Thomas,,8204,W,Davis,PL,,,Austin,78756,,,Y,,Y,Lib,,,
+1063843189,369,,20220719,M,Nguyen,Eric,Kay,4996,S,Lamar,RD,,,Round Rock,78664,,,Y,Y,Y,Rep,Y,Y,Rep
+1048828034,370,C,20140618,M,Abbott,Henry,Dean,6900,N,Wells Branch,RD,,,Cedar Park,78613,,Y,,Y,,,,Y,Dem
+1042911887,370,A,20160521,F,Diaz,Olivia,Ray,7214,,Burnet,BLVD,,,Round Rock,78681,,Y,,,,,,Y,
+1058001016,370,B,20240726,M,Gray,Andrew,Grace,5900,,Davis,RD,,,Austin,78758,,Y,Y,Y,Y,Lib,,Y,Dem
+1005848837,370,A,20111018,M,Hayes,Eric,Lee,1200,,Slaughter,TRL,,,Austin,78704,,Y,,Y,Y,Rep,,,
+1072142396,370,A,20220917,M,Mitchell,Raymond,J,1946,E,Brodie,WAY,,,Austin,78717,,Y,,,,,,,
+1018325346,370,B,20190703,F,Perez,Jessica,Marie,6331,,Anderson,ST,,,Round Rock,78665,,Y,,Y,,,Y,Y,
+1093723316,370,A,20160123,F,Ross,Mei,J,1705,W,Cameron,CT,,,Leander,78645,,,Y,,Y,Lib,,,
+1013109828,370,B,20150712,F,Walker,Nancy,R,3203,N,William Cannon,PKWY,UNIT,A6,Del Valle,78617,,,Y,Y,,,,,
+1050434844,371,,20170310,M,Bryant,Carlos,E,2172,E,Maple,PL,,,Buda,78610,,,Y,Y,Y,Dem,Y,Y,Lib
+1015185084,371,C,20161225,M,Carter,Miguel,Ann,7634,N,Lamar,DR,,,Manor,78653,,Y,Y,Y,Y,Dem,Y,,
+1025634828,371,B,20240205,F,Coleman,Sofia,Dean,7429,S,Dessau,RD,#,25B,Manor,78653,,,,Y,Y,Dem,,Y,Rep
+1058912918,371,,20121119,F,Henderson,Nancy,,3700,W,Far West,CT,,,Del Valle,78617,,Y,,,Y,Dem,,,
+1099736206,371,,20150425,F,Mitchell,Rosa,,8000,,Elm,CT,,,Austin,78749,,Y,,Y,Y,Lib,Y,,
+1040064604,371,,20091019,M,Powell,Paul,A,9490,,Slaughter,AVE,,,Pflugerville,78660,,,Y,,,,Y,Y,Rep
+1090538925,371,C,20130801,M,Sanchez,Charles,Lee,5900,,Palmer,CIR,,,Leander,78645,,,,,Y,Lib,Y,Y,Dem
+1086463027,371,B,20120119,M,Ward,Mark,R,6927,N,Parmer,RD,,,Austin,78722,,Y,Y,,Y,Rep,Y,,
+1078719224,372,,20170122,M,Butler,James,Lee,4900,,Duval,DR,,,Leander,78641,,,,,Y,Dem,Y,Y,Rep
+1087224995,372,C,20080820,F,Carter,Mary,Rose,5007,,Wells Branch,TRL,STE,E8,Round Rock,78681,,Y,,Y,Y,Dem,Y,Y,Dem
+1098383636,372,B,20140722,F,Nguyen,Cynthia,Ray,9784,N,Pecan,PL,,,Leander,78641,,,,,,,,,
+1038838624,372,D,20181207,M,Perez,Jose,Jean,1948,W,Riverside,RD,,,Leander,78641,,,,Y,,,Y,Y,Lib
+1087446069,372,,20210707,M,Ward,Thomas,,2915,E,Burnet,CT,,,Manor,78653,,,,Y,Y,,,Y,
+1019725925,372,D,20220517,F,White,Mary,Lee,7849,E,Balcones,PL,,,Round Rock,78681,,,Y,Y,Y,Lib,Y,,
+1048915109,373,C,20101122,F,Long,Sandra,,623,W,Oltorf,ST,,,Pflugerville,78660,,Y,,Y,,,Y,Y,
+1041852991,373,D,20230410,F,Lopez,Carmen,Grace,6143,W,Howard,BLVD,,,Del Valle,78617,,,Y,Y,Y,Rep,,Y,Dem
+1072277344,373,,20110224,F,Thomas,Stephanie,M,3155,,Oltorf,AVE,,,Leander,78645,,,,Y,,,Y,Y,Lib
+1055392865,373,B,20110915,M,Watson,Adam,L,1231,W,Oak,BLVD,,,Del Valle,78617,,,Y,,,,,Y,Dem
+1098728129,374,B,20240818,F,Walker,Carmen,M,6824,N,Duval,TRL,,,Austin,78751,,Y,,,Y,Rep,,,
+1017531319,375,C,20190403,M,Chen,Mark,Grace,3225,,Howard,PL,,,Austin,78701,,Y,,Y,Y,Dem,Y,Y,Lib
+1098136915,375,C,20130225,F,Moore,Stephanie,,3900,,Elm,PKWY,,,Buda,78610,,Y,,,Y,,Y,,
+1039171853,375,B,20081119,F,Price,Amanda,Paul,7249,E,Congress,RD,,,Pflugerville,78660,,Y,,Y,,,Y,,
+1089413696,375,D,20110824,M,Rivera,Henry,,7600,,Ben White,RD,,,Manor,78653,,Y,,,,,,Y,Dem
+1095190829,376,D,20091102,F,Alexander,Rosa,Ann,1100,W,University,BLVD,,,Del Valle,78617,,Y,Y,,Y,Rep,,,
+1062426713,376,A,20251224,M,Cooper,Samuel,Ray,5700,,Lakeview,RD,,,Leander,78641,,Y,Y,,Y,Rep,Y,,
+1038371273,376,A,20140403,M,Gray,James,J,4379,E,Spicewood Springs,PKWY,,,Buda,78610,,Y,Y,,,,Y,,
+1059038477,376,D,20190702,F,Gray,Nancy,Jean,5926,,Braker,PL,APT,D7,Cedar Park,78613,,Y,,,,,Y,,
+1042883318,376,D,20110417,M,Sanders,Raymond,Dean,9110,S,Far West,BLVD,,,Cedar Park,78613,,Y,Y,Y,,,Y,,
+1028894799,377,,20170404,M,Carter,Michael,Kay,5600,,Elm,CT,,,Cedar Park,78613,,,,,Y,Dem,,Y,Rep
+1096161643,377,,20121021,M,Diaz,Brian,Marie,5500,E,Red River,LN,,,Buda,78610,,Y,Y,Y,,,Y,Y,Dem
+1093548023,377,C,20080924,M,Gomez,Juan,E,174,,Braker,TRL,,,Buda,78610,,,,Y,,,,,
+1020834365,377,B,20090611,M,Harris,Steven,,7600,W,Spicewood Springs,TRL,,,Manor,78653,,,,Y,Y,Lib,,Y,Dem
+1073893726,377,A,20240510,M,Howard,Eric,,7823,,Speedway,CT,,,Leander,78641,,Y,,Y,Y,Rep,,Y,Rep
+1086647776,378,,20100423,M,Baker,Adam,E,8700,,Pinewood,DR,UNIT,A10,Round Rock,78664,,Y,Y,,Y,Dem,,Y,
+1039175986,378,D,20210921,M,Powell,David,Rose,3136,E,Lakeview,DR,,,Pflugerville,78660,,Y,,Y,,,Y,Y,Rep
+1000112745,378,,20121001,F,Walker,Michelle,,7500,W,Metric,PL,#,119,Manor,78653,,,,Y,,,Y,Y,Rep
+1091797118,378,B,20220411,F,Wood,Carmen,Dean,9628,N,Barton Springs,AVE,,,Round Rock,78664,,,Y,,,,,,
+1069266637,379,B,20180619,M,Anderson,Thomas,E,5700,,McNeil,DR,,,Buda,78610,,Y,,Y,Y,Dem,,,
+1006739192,379,,20091208,M,Patterson,Omar,Rose,3256,N,Parmer,DR,,,Leander,78641,,Y,Y,Y,,,,,
+1094527590,379,C,20170501,F,Roberts,Fatima,Kay,7346,S,Meadow,PKWY,,,Del Valle,78617,,Y,,Y,Y,Rep,Y,,
+1079451768,380,D,20170520,F,Coleman,Elizabeth,L,5400,,Jollyville,TRL,,,Cedar Park,78613,,Y,Y,Y,Y,Dem,Y,Y,Dem
+1006684259,380,A,20211201,F,Mitchell,Linda,R,4476,S,Live Oak,ST,#,E11,Austin,78745,,,Y,Y,Y,Lib,Y,Y,Rep
+1091221338,380,D,20100311,F,Okafor,Fatima,Marie,980,W,Anderson,CIR,,,Pflugerville,78660,,Y,,Y,Y,Rep,,Y,Rep
+1022145571,380,B,20250510,M,Wood,Jose,J,200,N,William Cannon,CT,,,Austin,78702,,Y,Y,Y,,,Y,Y,Dem
+1011163038,381,C,20121019,F,Hill,Karen,M,2472,,Duval,AVE,,,Cedar Park,78613,,Y,,Y,Y,Dem,Y,,
+1006739365,381,C,20190114,F,Hughes,Ashley,Marie,5699,,Balcones,CT,,,Del Valle,78617,,Y,Y,Y,Y,Dem,Y,Y,
+1095741125,381,A,20140214,F,Hughes,Hannah,Paul,8000,,Koenig,TRL,,,Austin,78702,,Y,Y,Y,,,Y,,
+1085690374,381,,20230424,F,Mitchell,Ashley,J,9271,S,Palmer,WAY,,,Austin,78749,,Y,,Y,Y,Lib,,,
+1004824995,381,D,20190713,M,Ramos,Jacob,R,3300,N,William Cannon,AVE,,,Del Valle,78617,,,Y,Y,,,,Y,Lib
+1096920447,381,,20170206,F,Torres,Hannah,E,5500,E,Speedway,AVE,,,Manor,78653,,,,,Y,Rep,Y,,
+1031380009,381,C,20130914,F,Wilson,Melissa,E,255,,Red River,PL,,,Austin,78705,,Y,Y,Y,Y,Rep,,Y,Rep
+1005046292,382,B,20130523,M,Bryant,David,Lee,5600,W,Davis,RD,,,Leander,78641,,,,,,,,Y,Rep
+1047379122,382,A,20100120,F,Nelson,Fatima,,2197,,Balcones,CT,,,Round Rock,78664,S,,,Y,,,Y,Y,Dem
+1031303112,383,A,20100225,F,Bryant,Sofia,Paul,7300,,Ben White,TRL,,,Austin,78705,,Y,,Y,,,Y,Y,Rep
+1078593470,383,B,20121117,F,Chen,Emily,,3766,W,Congress,WAY,APT,480,Buda,78610,,Y,Y,,,,Y,,
+1056048847,383,,20160507,M,Howard,Charles,,7764,,Creekside,TRL,,,Manor,78653,,Y,,Y,,,,Y,Rep
+1052993733,383,C,20120602,F,Perez,Elizabeth,L,882,E,Palmer,BLVD,,,Cedar Park,78613,,Y,,Y,,,Y,Y,Dem
+1062988499,383,A,20160313,F,Rivera,Hannah,Grace,900,,Red River,PL,,,Pflugerville,78660,,,Y,,,,Y,Y,Rep
+1038335713,383,A,20191017,M,Robinson,Daniel,Ann,5500,,Manor,PKWY,,,Leander,78645,,,Y,,Y,Lib,Y,Y,
+1091097703,383,A,20250928,M,Taylor,Nathan,,8200,S,Rio Grande,TRL,,,Pflugerville,78660,,,Y,Y,Y,,Y,,
+1030163894,383,B,20230826,F,Young,Sofia,Paul,4000,,Slaughter,DR,,,Buda,78610,,Y,,Y,,,,Y,Dem
+1038200324,384,,20160706,F,Garcia,Rosa,Lee,2801,S,Parmer,AVE,STE,12A,Round Rock,78665,,,Y,Y,,,Y,,
+1042999163,384,,20080525,M,Long,Jacob,R,1309,W,Ridgeline,WAY,,,Cedar Park,78613,,,Y,,Y,Dem,,,
+1066313391,385,D,20080417,F,Barnes,Lisa,Jean,9000,E,Cesar Chavez,LN,,,Austin,78721,,,,,Y,Rep,Y,,
+1036017540,385,,20090117,F,Taylor,Sofia,,8162,,Pinewood,PKWY,,,Buda,78610,,Y,Y,,,,Y,Y,Rep
+1016357060,386,,20180208,M,Diaz,Wei,R,7900,N,Barton Springs,BLVD,#,C12,Buda,78610,,,,Y,,,,Y,Rep
+1089923044,386,,20230320,M,Jackson,Joseph,J,6700,,Bee Cave,PL,UNIT,38B,Buda,78610,,Y,Y,Y,Y,Lib,Y,,
+1035232458,386,B,20210907,F,Smith,Angela,Marie,7600,,Balcones,DR,#,217,Manor,78653,,Y,Y,Y,,,Y,Y,Lib
+1020164492,386,D,20251204,F,Walker,Melissa,Grace,4793,W,Burnet,RD,,,Cedar Park,78613,,,Y,,,,,Y,Dem
+1032919396,387,,20131015,F,Alexander,Margaret,A,6500,,Red River,DR,,,Austin,78749,,,,,,,Y,,
+1091014312,387,,20220823,F,Butler,Sarah,Kay,7773,N,Magnolia,LN,,,Del Valle,78617,,,Y,,Y,Lib,,,
+1089411796,387,B,20181119,M,Carter,Thomas,Rose,7870,S,Metric,LN,,,Buda,78610,,,Y,Y,Y,Lib,,,
+1034537842,387,B,20220905,M,Cox,Michael,Dean,6370,S,Braker,DR,,,Buda,78610,,Y,Y,Y,,,Y,Y,Lib
+1044742810,387,A,20140311,M,Flores,Raymond,L,5400,N,Cesar Chavez,CT,,,Leander,78645,,,,Y,Y,Dem,Y,Y,Lib
+1086072488,387,C,20230607,M,Griffin,Luis,,7600,W,Far West,BLVD,,,Leander,78641,,Y,Y,,,,,Y,
+1071826154,387,,20130603,F,Long,Rebecca,,3170,E,Congress,CIR,,,Pflugerville,78660,,,Y,,Y,Lib,,Y,Rep
+1093923877,387,A,20140723,M,Sanchez,Christopher,L,2714,W,Pinewood,PL,,,Del Valle,78617,,Y,Y,Y,Y,,Y,Y,Rep
+1091887687,388,C,20140911,F,Gray,Emily,Jean,7991,,Spicewood Springs,PL,UNIT,237,Cedar Park,78613,,,,Y,Y,Lib,Y,Y,Rep
+1022409413,388,D,20221203,M,Hayes,James,Grace,2800,,Jollyville,PL,,,Austin,78745,,,,Y,,,Y,Y,
+1081408174,388,D,20190413,M,Hill,Ethan,J,1604,,Burnet,WAY,UNIT,23A,Leander,78641,,,,Y,,,Y,,
+1007164502,388,B,20100812,M,Robinson,Ethan,Jean,1838,W,Convict Hill,AVE,#,E3,Pflugerville,78660,,Y,Y,,Y,,Y,Y,Lib
+1043972007,389,B,20240215,F,Baker,Sarah,Ray,5544,,Manor,BLVD,,,Pflugerville,78660,,,,,,,,Y,
+1082829374,389,,20120820,M,Campbell,Anthony,Ray,8355,E,Sycamore,LN,,,Manor,78653,,Y,Y,Y,,,Y,Y,Rep
+1094287806,389,,20091215,F,Coleman,Angela,,3669,S,Oltorf,LN,#,3A,Round Rock,78665,,,,,,,Y,,
+1043754416,389,B,20251219,M,Hughes,Miguel,,2674,N,Jollyville,TRL,,,Manor,78653,,Y,,Y,,,Y,,
+1077400087,389,C,20140624,M,Miller,Juan,R,4700,,Cedar,LN,#,290,Del Valle,78617,,Y,Y,Y,Y,Rep,Y,Y,Lib
+1070275356,389,,20090413,M,Torres,Anthony,J,3012,W,Sunset Valley,WAY,STE,26A,Manor,78653,,,Y,,,,,,
+1082043378,390,B,20140326,F,Roberts,Michelle,Ray,7300,N,William Cannon,PL,,,Leander,78641,,,Y,Y,Y,Dem,,Y,Lib
+1006328484,390,B,20190220,M,Scott,Brian,L,4300,,Howard,BLVD,,,Austin,78758,,Y,Y,Y,Y,Dem,Y,Y,Rep
+1078440990,391,B,20090407,M,Gray,Richard,Ray,4200,,Gattis School,ST,,,Cedar Park,78613,,,,,,,,Y,Rep
+1052666776,391,D,20220213,M,Patel,Carlos,L,3200,,Davis,AVE,,,Austin,78741,,Y,Y,Y,Y,Rep,Y,Y,Dem
+1086525184,391,B,20210911,F,Williams,Patricia,Ann,7535,,McNeil,BLVD,APT,B7,Buda,78610,,,,Y,Y,Dem,,,
+1034320005,392,D,20220316,M,Brown,Juan,Marie,9000,S,Palmer,ST,,,Buda,78610,,,Y,Y,Y,Dem,Y,,
+1071125898,392,A,20201003,F,Clark,Isabella,R,2947,,Live Oak,AVE,UNIT,29,Del Valle,78617,,Y,,Y,Y,,,,
+1009650455,392,C,20160216,F,Miller,Jennifer,R,831,S,Lakeview,CT,,,Austin,78749,,Y,Y,,,,Y,Y,Dem
+1062694340,392,D,20080416,M,Mitchell,Anthony,Kay,7465,,McNeil,BLVD,#,36B,Manor,78653,,,Y,Y,,,Y,,
+1076767942,393,B,20180325,F,Hernandez,Sandra,L,2600,N,Guadalupe,DR,#,C12,Manor,78653,,Y,,,,,,,
+1097003074,393,B,20230515,M,Hughes,Donald,Rose,1030,W,Meadow,CIR,,,Cedar Park,78613,,Y,Y,,,,,,
+1076243022,393,A,20161227,M,Hughes,Thomas,,4212,,Guadalupe,RD,,,Austin,78704,,Y,,,Y,Dem,Y,Y,Rep
+1015810423,393,D,20090827,M,King,Thomas,Rose,4978,,Anderson,TRL,,,Del Valle,78617,,Y,,Y,,,Y,Y,
+1030683548,393,B,20230904,F,Nelson,Nancy,Jean,8351,W,Sunset Valley,CIR,APT,174,Leander,78641,,,,,Y,Dem,Y,,
+1025922807,393,,20190911,F,Okafor,Ana,A,7415,,Braker,CIR,,,Manor,78653,S,,,,Y,Dem,Y,,
+1093712074,394,B,20101206,M,Clark,Mark,Ann,1938,,Lakeview,PL,UNIT,A4,Buda,78610,S,Y,Y,Y,Y,Lib,Y,Y,Dem
+1013962863,394,D,20121026,M,Hernandez,William,R,6700,N,Parmer,PL,,,Manor,78653,,,Y,Y,,,Y,Y,Rep
+1044561251,394,C,20180324,M,Lee,Thomas,Paul,1400,,Cedar,WAY,,,Leander,78641,,Y,,Y,Y,,Y,,
+1054793691,394,A,20080320,M,Murphy,Raymond,Kay,7100,,Anderson,ST,,,Leander,78641,,Y,Y,Y,,,,Y,Lib
+1017833148,394,D,20230906,F,Wright,Mei,Kay,1411,,Palmer,BLVD,,,Del Valle,78617,,Y,,,Y,Dem,,Y,Rep
+1084421628,395,A,20240612,M,Green,Adam,,2000,W,Anderson,CIR,,,Del Valle,78617,,Y,Y,Y,Y,Rep,Y,Y,Dem
+1066919512,395,B,20180418,M,Jackson,Andrew,,3908,,Cesar Chavez,DR,,,Cedar Park,78613,,Y,,,Y,Dem,,Y,Dem
+1008299048,395,,20110527,F,King,Sofia,,6600,,Hillside,PL,,,Austin,78702,,Y,Y,Y,,,,,
+1086732472,395,C,20170415,M,Roberts,Omar,Ray,5100,,Anderson,CT,,,Cedar Park,78613,,,,,Y,Dem,Y,,
+1001737959,395,B,20251226,M,Wright,Andrew,Kay,7546,,Lamar,AVE,,,Pflugerville,78660,,,Y,,Y,Rep,,,
+1046351171,396,,20230515,F,Cooper,Cynthia,,6298,,Howard,BLVD,,,Cedar Park,78613,,,Y,Y,Y,,Y,,
+1093857393,396,A,20250504,F,Lewis,Hannah,Paul,8102,,Spicewood Springs,LN,,,Round Rock,78681,,,,Y,Y,Dem,Y,Y,
+1005821777,396,A,20151002,F,Long,Kathleen,,5300,,Howard,CIR,STE,B12,Del Valle,78617,,,,Y,Y,,Y,Y,Rep
+1037772100,396,,20230222,M,Patel,Thomas,Lee,4930,,Pinewood,PKWY,,,Manor,78653,,Y,Y,Y,Y,Dem,,Y,Rep
+1096553836,397,C,20091201,M,Brown,Wei,Ray,1400,N,Jollyville,ST,,,Round Rock,78681,,Y,Y,,Y,Rep,,Y,Lib
+1005630210,397,D,20250616,F,Chen,Hannah,J,6500,E,Congress,ST,,,Austin,78703,,Y,Y,Y,,,Y,Y,Rep
+1054203074,397,B,20120702,M,Perez,Jacob,L,500,S,Cameron,TRL,,,Austin,78741,,Y,,,,,,,
+1043123325,397,,20221228,M,Sanders,John,Kay,5094,,Barton Springs,PKWY,UNIT,C7,Cedar Park,78613,,Y,,Y,Y,Dem,,Y,Lib
+1048937022,398,,20240410,F,Bennett,Nancy,,2500,,Jollyville,LN,UNIT,393,Del Valle,78617,,Y,Y,,Y,Lib,,Y,
+1091472559,398,C,20140807,F,OBrien,Maria,Grace,9400,,Nueces,PKWY,,,Cedar Park,78613,,Y,,Y,,,,,
+1079261343,398,,20180306,F,Taylor,Amanda,Marie,7232,,Oak,DR,,,Del Valle,78617,,Y,Y,Y,Y,Dem,Y,Y,
+1054478505,399,C,20130128,F,Brown,Olivia,Rose,600,S,Nueces,PL,,,Buda,78610,,,Y,Y,Y,Lib,,,
+1033482843,399,C,20150120,F,Harris,Linda,A,1700,N,San Jacinto,CT,,,Del Valle,78617,,Y,,,,,Y,,
+1055732378,399,B,20080216,F,Rodriguez,Patricia,,700,N,Howard,CIR,,,Buda,78610,,Y,Y,,,,Y,Y,Dem
+1002183079,400,A,20111009,F,Barnes,Rebecca,,9215,W,Duval,WAY,,,Buda,78610,,,Y,,,,Y,,
+1013484447,400,A,20081115,M,Patel,Kevin,Dean,138,,Burnet,AVE,,,Round Rock,78664,,Y,Y,,,,,,
+1016080426,400,D,20130207,M,Watson,Adam,,5300,N,Oak,CT,,,Austin,78723,,Y,,Y,Y,Dem,Y,,
+1026958339,400,B,20080118,M,Williams,Kevin,Ann,6300,S,Ben White,PKWY,,,Buda,78610,,Y,,,,,,Y,Rep
+1017518513,400,,20140603,M,Wilson,Andrew,Lee,3500,,Cameron,RD,UNIT,302,Del Valle,78617,,,Y,Y,Y,Rep,,Y,Lib
+1060349294,401,A,20231106,F,Brown,Rebecca,,4793,S,Dessau,RD,,,Manor,78653,,,,,Y,Dem,Y,Y,
+1091237203,401,B,20190619,F,Diaz,Rebecca,J,8200,N,Burnet,PL,,,Pflugerville,78660,,Y,Y,Y,,,Y,Y,Dem
+1076652087,401,A,20190220,F,Long,Grace,Marie,3500,,Manor,ST,,,Manor,78653,,Y,,Y,Y,,Y,Y,
+1042690299,401,A,20200806,F,Perez,Michelle,,2653,W,Congress,CIR,APT,C6,Buda,78610,,,Y,Y,,,,Y,Rep
+1000047889,401,A,20161018,F,Ross,Deborah,A,8627,N,Steck,PKWY,,,Manor,78653,,,Y,,Y,Lib,,,
+1078409220,401,B,20230714,F,Smith,Jennifer,Lee,9600,,Speedway,AVE,UNIT,2A,Buda,78610,,,,Y,Y,Dem,Y,,
+1078559413,402,,20170206,M,Cooper,Donald,E,6900,,Davis,CT,,,Round Rock,78681,,,,Y,,,Y,Y,Rep
+1063941364,402,D,20170625,M,Cox,Samuel,,300,,Balcones,DR,APT,32B,Round Rock,78681,,Y,Y,Y,,,Y,Y,Dem
+1073891040,402,B,20190914,M,Cruz,Phul,Kay,9829,,Live Oak,CT,APT,18B,Cedar Park,78613,,Y,,Y,,,Y,Y,Rep
+1052961753,402,C,20081215,F,Griffin,Fatima,Dean,7905,,Wells Branch,AVE,,,Round Rock,78665,,,Y,Y,,,,Y,
+1001908264,402,D,20230207,F,Kim,Stephanie,,6057,,Ridgeline,AVE,,,Pflugerville,78660,,,Y,,Y,Rep,Y,Y,Rep
+1097495394,402,,20210616,F,Watson,Fatima,,7400,S,Ridgeline,DR,,,Manor,78653,,,,Y,Y,Dem,Y,Y,Rep
+1042681085,404,B,20091122,F,Clark,Linda,,5923,,Bee Cave,LN,UNIT,359,Pflugerville,78660,,,Y,Y,Y,Lib,,Y,Lib
+1069113885,404,D,20210909,M,Cooper,Danmel,,6500,,Red River,CIR,,,Pflugerville,78660,,Y,Y,,Y,Dem,Y,Y,Lib
+1059738754,404,A,20111114,F,Moore,Isabella,Jean,557,,San Jacinto,BLVD,,,Austin,78703,,Y,Y,Y,Y,,Y,,
+1081824375,404,A,20120813,M,Nguyen,Christopher,A,1367,W,Bee Cave,DR,,,Round Rock,78665,,Y,,,Y,Rep,Y,Y,Dem
+1078425219,404,A,20100607,M,Young,Andrew,L,9089,,Brodie,CT,,,Del Valle,78617,,,Y,,,,Y,,
+1034968928,405,C,20110805,F,Bryant,Ana,J,4780,,Escarpment,PL,APT,D12,Buda,78610,,,Y,,Y,Dem,Y,Y,Rep
+1007713051,405,C,20101006,M,Campbell,Jose,Rose,8300,,Lakeview,AVE,,,Del Valle,78617,,,Y,Y,,,,Y,Rep
+1006437167,405,,20260309,M,Ellison,Dylan,A,6962,,Metric,CT,,,Cedar Park,78613,,,,,,,,,
+1019108559,405,C,20220317,M,Jackson,Steven,,422,W,Maple,DR,,,Del Valle,78617,,,Y,,,,,Y,Lib
+1014487036,405,A,20090615,M,Richardson,Michael,,5058,,Maple,CT,,,Manor,78653,,Y,,Y,,,Y,,
+1040550193,405,C,20170314,M,Tran,Nathan,Paul,6100,,Brodie,BLVD,#,A1,Pflugerville,78660,,,Y,Y,Y,Lib,Y,,
+1013066833,406,D,20091102,F,Bryant,Carmen,,9968,,Gattis School,LN,APT,A2,Leander,78645,,Y,,Y,Y,Dem,,Y,Dem
+1043740309,406,C,20131011,F,Jenkins,Angela,,9386,W,Davis,ST,,,Leander,78641,,Y,Y,Y,,,,Y,Dem
+1084903235,406,C,20170826,M,Ramirez,Adam,Ann,8400,,Barton Springs,ST,,,Leander,78641,S,,Y,Y,,,,,
+1055108496,406,A,20141204,F,Rivera,Sarah,,3900,,Bee Cave,AVE,,,Manor,78653,,Y,,,Y,Dem,Y,,
+1049376722,407,D,20151228,F,Clark,Emily,E,5100,E,Koenig,WAY,,,Manor,78653,,Y,,,,,Y,,
+1079675818,407,C,20231109,F,Davis,Patricia,R,2600,,Guadalupe,PL,,,Leander,78641,,,Y,Y,,,Y,Y,Dem
+1042523241,407,D,20210520,M,Hernandez,James,Ray,295,N,Pecan,RD,,,Manor,78653,,Y,Y,Y,Y,Lib,,,
+1023618552,407,C,20200302,F,Martinez,Mei,L,6000,E,Elm,DR,APT,A2,Leander,78641,,,,Y,Y,Rep,Y,,
+1018455277,407,,20190606,M,Nguyen,Miguel,Rose,3000,,Spicewood Springs,BLVD,UNIT,1A,Buda,78610,,,Y,,,,,Y,Dem
+1086207960,408,B,20150527,F,Bryant,Sofia,,3800,S,Nueces,AVE,,,Buda,78610,,Y,Y,,,,Y,,
+1047338548,408,D,20240510,F,Lewis,Cynthia,,9005,W,University,ST,STE,37A,Pflugerville,78660,,,,Y,,,,Y,Rep
+1072929556,408,,20110117,M,Sanchez,Aaron,Dean,1100,,Balcones,AVE,,,Austin,78727,,Y,Y,Y,Y,Rep,Y,,
+1071890441,408,A,20251023,M,Sanders,Thomas,R,3300,,Sycamore,CIR,,,Manor,78653,,Y,Y,Y,Y,Dem,,,
+1015903216,409,,20160216,M,Chen,Matthew,Paul,6900,,Lamar,PKWY,#,383,Buda,78610,,Y,,,,,,Y,Rep
+1053199297,409,A,20211221,F,Perez,Kathleen,A,5200,,Congress,ST,,,Cedar Park,78613,,Y,Y,Y,Y,,Y,Y,Dem
+1036120495,409,,20200324,F,Sanders,Elizabeth,Jean,2300,,San Jacinto,BLVD,,,Round Rock,78681,,Y,Y,Y,,,Y,Y,Dem
+1009766390,410,D,20100719,M,Bryant,Samuel,E,8364,W,Parmer,PKWY,,,Leander,78641,,,Y,Y,,,Y,,
+1002226994,410,D,20250707,M,Carter,Ethan,E,7221,W,Meadow,RD,,,Buda,78610,,,,,Y,Rep,Y,,
+1079945807,410,B,20180428,F,Gonzalez,Ashley,Dean,4700,,Brodie,CIR,,,Buda,78610,,,Y,,Y,Rep,,,
+1086080976,410,A,20210704,F,Patel,Laura,A,3400,,Sunset Valley,CT,,,Round Rock,78665,,Y,Y,,,,Y,,
+1042730135,410,A,20241213,M,Patel,Mark,Dean,5270,,Jollyville,TRL,,,Round Rock,78681,,,,Y,,,,Y,Lib
+1055302922,410,A,20091119,M,Ramos,Richard,,8342,,Jollyville,ST,APT,12B,Austin,78753,,Y,,,Y,Rep,Y,Y,Dem
+1030611246,410,D,20250504,F,Rodriguez,Carmen,Paul,993,,Airport,BLVD,,,Manor,78653,,Y,,Y,Y,Dem,Y,Y,Dem
+1067017791,410,,20130107,M,Sanchez,Mark,Dean,2713,N,Sunset Valley,RD,,,Pflugerville,78660,,Y,Y,,Y,Rep,Y,,
+1057265242,411,D,20130221,M,Allen,John,E,4600,W,Duval,BLVD,,,Cedar Park,78613,,Y,Y,,Y,Dem,Y,Y,Dem
+1021175081,411,B,20250611,F,Clark,Susan,J,5065,N,Braker,CIR,,,Pflugerville,78660,,Y,Y,Y,,,Y,,
+1083040211,411,,20130111,M,Okafor,Nathan,J,7600,,Wells Branch,WAY,UNIT,E2,Cedar Park,78613,,Y,,Y,Y,Dem,Y,Y,Dem
+1047951552,412,,20200107,F,Anderson,Mei,,500,E,Maple,ST,,,Del Valle,78617,,Y,,Y,Y,Rep,Y,Y,Dem
+1079817099,412,,20100627,M,Butler,Juan,Ray,2800,,Cesar Chavez,CIR,,,Austin,78703,S,Y,,Y,,,Y,,
+1058141830,412,,20171101,F,Garcia,Linda,Marie,994,E,Dessau,PKWY,,,Round Rock,78665,,,,,Y,Dem,Y,Y,
+1070060556,412,A,20150806,M,Jackson,Nathan,Ann,4700,,Duval,LN,,,Leander,78645,,Y,Y,Y,,,Y,,
+1082525402,412,D,20150523,F,Patel,Carmen,E,9739,,Metric,AVE,STE,140,Cedar Park,78613,S,,Y,Y,,,Y,Y,Dem
+1085989372,412,,20110612,F,Simmons,Michelle,E,2177,,Metric,ST,,,Austin,78727,,Y,,Y,Y,,Y,Y,Dem
+1065982259,413,,20200706,M,Gomez,Joshua,Ann,8432,N,Live Oak,ST,UNIT,4A,Cedar Park,78613,,,Y,Y,,,Y,Y,Rep
+1080991331,413,C,20220704,M,Miller,Charles,,9100,,Braker,WAY,#,A2,Cedar Park,78613,,,,,,,,Y,Rep
+1033221943,413,D,20190715,M,Rodriguez,Aaron,Lee,3754,,McNeil,CT,,,Round Rock,78665,,Y,Y,Y,Y,Rep,,Y,Lib
+1074395700,413,B,20211007,F,Thomas,Jennifer,Ray,4966,,Hillside,TRL,,,Manor,78653,,,Y,,,,,Y,Rep
+1073629061,414,C,20181120,F,Bryant,Rebecca,Ann,5200,,Ridgeline,LN,,,Buda,78610,S,,,,,,,Y,Rep
+1077712221,414,B,20180628,F,Bryant,Sofia,Jean,3600,W,Speedway,LN,,,Buda,78610,,,Y,Y,Y,Dem,Y,Y,
+1057503353,414,C,20160706,F,Lewis,Melissa,Lee,1867,,Airport,WAY,,,Buda,78610,,,,Y,,,Y,Y,Rep
+1069388065,414,A,20200423,F,Wright,Angela,A,7600,,Davis,DR,,,Buda,78610,,Y,,Y,,,,Y,Lib
+1003698227,415,D,20231212,F,OBrien,Kathleen,E,8028,,Red River,WAY,,,Pflugerville,78660,,,,Y,,,Y,Y,Dem
+1057833573,415,B,20130626,F,Thompson,Grace,Rose,5100,E,Rio Grande,CT,,,Buda,78610,,Y,Y,,Y,Rep,Y,,
+1002842243,416,C,20120312,F,Chen,Melissa,Jean,9085,,Oak,WAY,UNIT,34B,Cedar Park,78613,,,Y,Y,,,Y,Y,Rep
+1052218133,416,B,20230810,F,Robinson,Betty,Grace,9307,,Palmer,ST,,,Buda,78610,,,,,Y,Rep,,Y,
+1015041712,416,B,20080107,F,White,Fatima,Rose,612,E,Jollyville,LN,,,Austin,78717,,Y,,,,,Y,Y,Dem
+1022544805,417,,20110101,M,Hernandez,Daniel,R,6400,S,Barton Springs,RD,,,Austin,78702,,,Y,Y,,,,,
+1066887680,417,B,20191008,F,Nguyen,Melissa,,656,,Oltorf,ST,,,Del Valle,78617,,,,Y,,,Y,Y,Dem
+1069902540,418,C,20100224,F,Abbott,Stephanie,Kay,3841,,Palmer,RD,,,Pflugerville,78660,,,Y,Y,Y,Rep,,,
+1024472413,418,,20120801,M,Robinson,Christopher,,9777,,Parmer,AVE,,,Cedar Park,78613,S,,,Y,Y,Dem,,,
+1038903705,418,D,20101116,F,Scott,Elizabeth,E,4500,W,Nueces,WAY,,,Buda,78610,,,Y,Y,,,Y,Y,Rep
+1052126176,418,,20230117,F,Simmons,Sarah,Paul,9300,,Spicewood Springs,CIR,,,Buda,78610,,,,Y,Y,Rep,,,
+1085424207,418,,20150812,M,Torres,Michael,Grace,5920,W,Speedway,TRL,,,Pflugerville,78660,,Y,,,,,Y,Y,Rep
+1070619531,419,B,20230828,M,Abbott,Luis,,1604,S,Spicewood Springs,WAY,,,Round Rock,78681,,,,,Y,Rep,,Y,Rep
+1071038848,419,C,20090626,F,Bennett,Linda,Rose,9778,,Guadalupe,ST,,,Leander,78641,,,,Y,,,Y,,
+1084141097,419,A,20211222,F,King,Sofia,Ann,2651,W,Airport,PL,,,Cedar Park,78613,,,,Y,,,Y,,
+1034723297,419,B,20260715,M,Marsh,Riley,,1326,,Cedar,DR,,,Round Rock,78664,,,,,,,,,
+1026512639,420,B,20150217,F,Carter,Olivia,,6706,S,Oak,PL,,,Manor,78653,,Y,,,Y,Dem,Y,Y,Rep
+1027857738,420,D,20130328,F,Chen,Mary,Lee,8340,E,Rio Grande,ST,,,Round Rock,78665,,,Y,,Y,Dem,,,
+1084604179,420,D,20230124,F,Martinez,Angela,R,4100,S,Riverside,CT,,,Buda,78610,,,,,,,,Y,Rep
+1052900576,420,C,20120715,F,Nguyen,Emily,M,4572,W,Bee Cave,TRL,,,Austin,78701,,,Y,Y,,,,Y,Lib
+1084918941,420,,20100828,F,Ramirez,Kathleen,R,4400,S,Elm,DR,,,Pflugerville,78660,,,Y,Y,Y,Dem,Y,Y,Rep
+1043537848,420,,20130525,F,Ramirez,Laura,M,8133,E,Pinewood,ST,,,Buda,78610,,,,,Y,Dem,Y,,
+1037320712,420,B,20150623,F,Wilson,Emily,,200,,Davis,RD,,,Pflugerville,78660,,,,,,,Y,Y,Dem
+1059091432,421,A,20200722,M,Hughes,David,M,7264,,Cesar Chavez,PL,,,Manor,78653,,,Y,Y,,,Y,,
+1042377892,421,,20150817,F,Miller,Amanda,,198,,San Jacinto,TRL,,,Austin,78727,S,Y,Y,Y,Y,,,,
+1082585232,421,D,20091013,M,Mitchell,Wei,M,7172,E,Wells Branch,AVE,,,Austin,78741,,Y,Y,Y,Y,Dem,,Y,Rep
+1063959839,421,,20120722,M,Nguyen,David,Marie,8935,,Barton Springs,ST,,,Del Valle,78617,,Y,,Y,,,Y,,
+1081139861,421,B,20090407,F,Nguyen,Mei,Kay,2240,S,Jollyville,TRL,,,Del Valle,78617,,Y,Y,Y,,,Y,,
+1035772249,421,C,20130707,F,Sanchez,Barbara,M,5300,W,Magnolia,PL,,,Austin,78731,,Y,Y,Y,Y,Dem,Y,Y,Lib
+1011710881,422,A,20210224,F,Mitchell,Michelle,A,500,,Maple,ST,,,Del Valle,78617,,Y,,Y,Y,Rep,Y,,
+1030414147,422,D,20250903,F,Nelson,Rebecca,Paul,5504,,Lamar,AVE,,,Buda,78610,,,,,Y,Lib,Y,,
+1052127330,422,A,20101202,F,Nguyen,Margaret,Paul,1402,W,Manor,CIR,UNIT,13B,Manor,78653,,Y,Y,Y,Y,Rep,Y,Y,Dem
+1046953601,423,A,20150416,F,Gray,Amy,R,6400,N,Sunset Valley,DR,,,Del Valle,78617,,Y,Y,Y,,,,,
+1025460045,423,B,20170709,M,Moore,Sean,Lee,2900,N,Escarpment,TRL,,,Austin,78748,,,Y,Y,,,,Y,Lib
+1052835545,423,,20150727,M,Reyes,Samuel,Kay,1794,,Congress,TRL,,,Cedar Park,78613,,,Y,,Y,Lib,,Y,Lib
+1090840291,423,A,20160212,F,Rivera,Fatima,Paul,2800,S,Metric,RD,,,Austin,78749,,,Y,Y,Y,,Y,,
+1019835038,423,B,20140120,F,White,Rosa,Ann,7300,,Maple,WAY,,,Cedar Park,78613,,Y,,Y,Y,,,,
+1067657900,423,B,20170910,M,Wood,William,Paul,8800,,Manor,PL,#,29B,Austin,78722,,,,,Y,Rep,,Y,Dem
+1074275373,424,,20140408,M,Bailey,Daniel,Kay,5100,,Bee Cave,RD,,,Round Rock,78681,,Y,Y,,Y,Rep,,Y,
+1001306408,424,,20130426,M,Cox,Samuel,M,7300,,Ridgeline,DR,,,Leander,78641,,Y,Y,Y,,,Y,Y,
+1026842068,424,A,20210906,M,Lee,Donald,Marie,5901,,Guadalupe,LN,,,Cedar Park,78613,,,Y,Y,,,Y,,
+1036920614,424,C,20241006,M,Peterson,Wei,Dean,3068,,Jollyville,DR,,,Del Valle,78617,,,Y,Y,Y,Dem,Y,Y,Rep
+1086996245,424,C,20150614,F,Wilson,Olivia,,6201,W,Ridgeline,PL,,,Round Rock,78681,,Y,Y,Y,,,,,
+1055916864,425,A,20080707,M,Clark,Joseph,Rose,8171,,Speedway,DR,,,Austin,78753,,,Y,,Y,,Y,,
+1060306083,425,D,20090601,F,Griffin,Szndra,Ray,2000,,Rio Grande,PL,,,Leander,78641,,,,,Y,,Y,,
+1079359540,425,B,20230228,F,Nguyen,Michelle,Lee,6200,W,Hillside,AVE,,,Leander,78645,,,Y,,Y,Lib,Y,Y,Rep
+1082708113,425,C,20210801,M,Richardson,David,Dean,3600,N,Lamar,DR,,,Pflugerville,78660,,,Y,Y,Y,Dem,Y,Y,Dem
+1099054421,425,A,20111017,F,Robinson,Michelle,Dean,2500,,Oltorf,LN,,,Cedar Park,78613,S,Y,Y,Y,,,Y,,
+1009498955,425,B,20130510,F,Simmons,Karen,Ann,8077,N,Far West,RD,,,Del Valle,78617,,Y,,Y,,,,Y,Dem
+1029815856,425,D,20180907,M,Taylor,Carlos,E,6700,S,Sycamore,CT,,,Austin,78703,,Y,Y,Y,Y,Lib,Y,,
+1087226639,426,B,20210205,M,Baker,Nathan,Marie,6343,E,Duval,TRL,UNIT,10A,Leander,78645,,,Y,Y,,,Y,,
+1053793003,426,A,20100123,M,Garcia,Jacob,,6030,S,William Cannon,ST,,,Leander,78645,,Y,Y,Y,,,,Y,
+1033305389,426,,20171113,F,Gomez,Maria,E,3617,S,Spicewood Springs,AVE,,,Leander,78641,,,Y,,,,,,
+1014715147,426,C,20130224,F,Kelly,Laura,Kay,2818,W,McNeil,CIR,,,Buda,78610,,,Y,,,,Y,Y,Rep
+1099296994,426,C,20250419,F,Price,Susan,M,5099,,Bee Cave,PL,STE,14B,Round Rock,78664,,Y,,Y,Y,,,,
+1021088005,426,,20241202,F,Wright,Isabella,J,8530,,Red River,TRL,,,Austin,78702,S,,,,,,Y,Y,Rep
+1030709760,427,,20140117,F,Brooks,Melissa,E,3428,S,Wells Branch,RD,,,Round Rock,78681,,Y,Y,Y,,,Y,Y,Rep
+1038607475,427,C,20170322,M,Clark,Aaron,E,6851,,Dessau,ST,,,Del Valle,78617,,Y,Y,Y,Y,Rep,,Y,Rep
+1093356059,427,,20140418,F,Davis,Lisa,Jean,5000,,Jollyville,PL,,,Manor,78653,,Y,Y,,,,Y,Y,Rep
+1066980452,427,,20210322,M,Diaz,Christopher,,6996,E,Jollyville,AVE,,,Del Valle,78617,,Y,Y,Y,,,,Y,Rep
+1053475648,427,A,20221002,M,Foster,Ethan,J,7152,N,Live Oak,ST,,,Manor,78653,,Y,Y,Y,,,,Y,Dem
+1061082910,427,,20131220,M,Martinez,Adam,Kay,9110,,Ridgeline,RD,#,E9,Austin,78701,,Y,Y,,Y,Dem,Y,Y,Rep
+1064620386,427,C,20160308,M,Peterson,Juan,Rose,7400,,William Cannon,WAY,APT,C6,Buda,78610,,Y,Y,Y,Y,Dem,,Y,Dem
+1007274950,427,C,20220412,M,Price,James,Rose,2353,,Far West,PL,UNIT,53,Austin,78702,,Y,,,,,Y,,
+1093473551,427,D,20101225,M,Robinson,Richard,Lee,5300,,Cameron,PL,,,Leander,78641,,,,,,,,,
+1013747815,427,,20200210,M,Watson,Henry,Rose,6977,,Airport,PKWY,,,Pflugerville,78660,,Y,Y,,Y,,Y,,
+1074795927,428,D,20091021,F,Baker,Jennifer,Lee,6700,S,Elm,PKWY,,,Del Valle,78617,,Y,,Y,Y,Rep,Y,Y,Dem
+1047987234,428,B,20091012,M,Butler,Nathan,,1319,,Live Oak,BLVD,,,Manor,78653,,Y,,,Y,,,,
+1014747147,428,B,20210614,M,Carter,Segn,Grace,7700,E,Guadalupe,WAY,,,Manor,78653,,,Y,Y,Y,,Y,Y,Lib
+1003240047,428,D,20200819,M,Cruz,William,E,6600,,Riverside,LN,,,Del Valle,78617,,Y,,Y,,,,Y,
+1072162934,428,B,20180418,F,Hughes,Maria,Ray,1500,,Dessau,LN,,,Manor,78653,,Y,Y,Y,Y,Lib,Y,Y,Rep
+1079065600,428,,20130401,M,Jackson,James,E,9149,,Dessau,BLVD,,,Leander,78641,,,Y,Y,Y,Dem,,,
+1015161048,428,D,20220618,M,Moore,Mark,Ray,8200,E,William Cannon,RD,STE,B9,Round Rock,78665,,,,,,,,,
+1022642250,429,B,20160619,F,Campbell,Rosa,,2100,,San Jacinto,TRL,UNIT,B1,Austin,78748,,,,Y,Y,Dem,Y,Y,Rep
+1094759028,429,B,20110317,F,King,Susan,Jean,9031,,Palmer,PKWY,STE,135,Del Valle,78617,,Y,Y,,Y,Dem,Y,,
+1043919780,430,A,20160728,M,Kim,Carlos,Ann,6742,W,Pecan,PKWY,STE,A11,Buda,78610,,Y,Y,,Y,Dem,Y,Y,Dem
+1058098768,430,,20180325,M,Ramirez,Raymond,A,5260,,Palmer,CIR,,,Del Valle,78617,,,Y,Y,,,Y,,
+1019478729,430,A,20201209,F,Rodriguez,Ashley,J,7121,,Cedar,LN,,,Leander,78641,,,,Y,Y,Dem,Y,,
+1093475523,430,C,20250515,M,Simmons,Adam,J,9261,,Airport,WAY,STE,B9,Manor,78653,,Y,,,,,,Y,
+1006782573,431,D,20251016,M,Ramos,Christopher,M,7249,,Ridgeline,RD,,,Buda,78610,,Y,,Y,,,,Y,Dem
+1059384667,432,D,20130607,F,Hall,Ana,,1009,W,Burnet,CIR,,,Del Valle,78617,,Y,Y,,Y,,,,
+1055817749,432,B,20100727,M,Powell,Miguel,Dean,200,,Bee Cave,ST,,,Del Valle,78617,,,Y,Y,,,,Y,Rep
+1088482974,432,C,20101112,M,Washington,Luis,Ray,2800,N,Barton Springs,WAY,,,Leander,78641,,Y,Y,Y,,,Y,Y,Lib
+1057249683,433,C,20170128,M,Campbell,Patrick,E,200,,Magnolia,WAY,UNIT,20A,Del Valle,78617,,Y,,Y,Y,Rep,,,
+1069722001,433,B,20121021,M,Carter,Carlos,Rose,5900,,Barton Springs,AVE,UNIT,300,Round Rock,78665,,Y,,Y,,,Y,,
+1050088767,433,B,20150519,F,Hall,Ana,Paul,7300,E,Creekside,TRL,,,Austin,78727,,,,Y,Y,Lib,,,
+1044594777,434,A,20120307,F,Gonzalez,Elizabeth,Grace,6623,,Creekside,CT,,,Manor,78653,,Y,,,Y,Rep,,Y,Rep
+1038813619,434,C,20160709,F,Martinez,Patricia,L,8245,S,Burnet,DR,UNIT,172,Manor,78653,,,Y,,,,,,
+1048651133,434,C,20081224,F,Tran,Deborah,Grace,7341,S,Cesar Chavez,CT,APT,C7,Round Rock,78665,,,Y,Y,Y,Rep,Y,,
+1068004880,434,D,20240520,F,Walker,Sandra,R,800,S,Sunset Valley,TRL,,,Pflugerville,78660,,,,,Y,Dem,Y,Y,Rep
+1008804011,435,D,20170502,M,Martinez,Robert,Marie,7100,W,Cameron,ST,,,Cedar Park,78613,,Y,,,,,,Y,Dem
+1022756260,435,C,20161004,F,Peterson,Kathleen,Paul,2169,,Brodie,CIR,,,Round Rock,78681,,Y,,Y,,,,Y,Rep
+1051336452,435,D,20230607,M,Taylor,Richard,E,800,N,Gattis School,WAY,UNIT,22B,Del Valle,78617,,,Y,Y,,,,,
+1098566987,435,A,20080206,M,Tran,Eric,L,9455,E,Lamar,BLVD,STE,126,Del Valle,78617,,,,,,,Y,Y,Rep
+1033760857,436,,20230908,M,Cooper,Thomas,Marie,1460,,Duval,BLVD,STE,17A,Round Rock,78664,,,Y,,,,Y,,
+1076672116,436,,20160805,M,Howard,Kevin,,3100,,Menchaca,LN,,,Manor,78653,,,Y,,,,Y,Y,Dem
+1056268619,436,B,20210606,F,Jones,Mei,Jean,9500,E,Gattis School,AVE,,,Pflugerville,78660,,,,Y,Y,Rep,,Y,Rep
+1091725342,436,D,20110603,M,Kelly,Patrick,J,6547,,Brodie,DR,,,Pflugerville,78660,,Y,Y,Y,,,Y,Y,Rep
+1039691256,437,B,20081102,M,Flores,Kevin,Paul,7700,,Cedar,LN,APT,E7,Manor,78653,,Y,Y,,Y,Lib,Y,Y,
+1085149039,437,C,20190527,F,Gomez,Jennifer,Paul,1386,,Gattis School,ST,,,Leander,78645,,Y,,Y,Y,,,,
+1053141469,437,D,20090305,F,Richardson,Jennifer,,6100,,Lakeview,AVE,,,Del Valle,78617,,,Y,Y,,,Y,Y,Rep
+1086294753,437,C,20220913,F,Scott,Grace,Marie,7562,,Slaughter,PKWY,,,Austin,78751,,,Y,Y,Y,Rep,Y,Y,Rep
+1017179344,438,D,20090617,M,Barnes,Aaron,L,3925,S,Cameron,PL,,,Buda,78610,,Y,Y,,,,,,
+1047309908,438,D,20220710,F,Garcia,Karen,L,4566,E,Steck,PKWY,#,14,Round Rock,78681,,Y,Y,,,,,Y,Dem
+1007809755,438,D,20210902,F,Gomez,Karen,Dean,1334,N,Speedway,LN,,,Del Valle,78617,,Y,Y,,,,Y,,
+1028788171,439,C,20200418,F,Alexander,Stephanie,,4000,,Jollyville,PKWY,,,Del Valle,78617,,Y,Y,Y,Y,Dem,Y,Y,
+1081288536,439,A,20111201,F,Cruz,Karen,R,9500,W,Maple,ST,,,Del Valle,78617,,,Y,,Y,Rep,Y,,
+1062904750,439,,20230201,M,Davis,Richard,Rose,9300,W,Manor,DR,,,Del Valle,78617,,Y,Y,,,,,Y,Rep
+1093803667,439,B,20231225,F,Garcia,Deborah,M,1800,W,Manor,CIR,,,Austin,78701,,,,,,,Y,Y,
+1026555568,439,A,20180111,F,Henderson,Margaret,Marie,5521,W,Duval,RD,,,Cedar Park,78613,,Y,,Y,Y,Rep,Y,,
+1007767993,439,,20180203,M,Rodriguez,Omar,,3028,,Creekside,LN,,,Buda,78610,,,Y,,,,,,
+1062209948,440,D,20110327,M,Bryant,Samuel,Lee,9100,,Cesar Chavez,PL,UNIT,30B,Cedar Park,78613,,,Y,,,,,,
+1076469535,440,B,20160626,M,Long,Anthony,Ann,4200,,William Cannon,AVE,,,Cedar Park,78613,,Y,,Y,Y,Rep,,Y,Rep
+1056241122,440,B,20080802,F,Ramos,Ashley,Ann,8534,S,Brodie,BLVD,#,B5,Buda,78610,,,Y,,Y,Dem,Y,,
+1018162490,440,B,20200105,M,Wright,Luis,Paul,4328,E,Sunset Valley,LN,,,Pflugerville,78660,,Y,,,Y,Rep,Y,Y,Rep
+1089523182,441,D,20091110,M,Lewis,Steven,M,4700,S,Cesar Chavez,AVE,,,Buda,78610,,,,Y,Y,Dem,,,
+1011372063,441,D,20130805,F,Robinson,Ashley,E,400,,Magnolia,PKWY,,,Buda,78610,,Y,Y,Y,Y,Dem,,,
+1028423139,442,C,20130114,F,Anderson,Olivia,J,1129,,Maple,PKWY,,,Manor,78653,,Y,Y,Y,,,Y,,
+1044818679,442,,20211104,F,Butler,Rebecca,R,4600,,Wells Branch,AVE,,,Manor,78653,,Y,Y,,,,Y,Y,Dem
+1085127389,442,D,20200812,M,Martin,Richard,,6900,S,Jollyville,AVE,,,Pflugerville,78660,,,Y,Y,Y,,Y,,
+1021373707,442,B,20080602,F,Nelson,Betty,R,9019,N,Gattis School,DR,,,Buda,78610,,,Y,,,,,,
+1071640164,442,,20150207,M,Nelson,John,J,5434,W,University,AVE,,,Cedar Park,78613,,,Y,Y,Y,Dem,Y,,
+1057361225,442,A,20121002,F,Nguyen,Olivia,L,9800,,Elm,PKWY,,,Austin,78723,,Y,,,,,Y,Y,Lib
+1007968227,442,A,20090619,M,Perez,Andrew,Rose,8445,S,Elm,DR,UNIT,D10,Buda,78610,,,Y,,,,Y,Y,Dem
+1077628763,443,C,20210417,M,Clark,Matthew,E,1290,,Spicewood Springs,PL,,,Buda,78610,,,Y,Y,,,Y,Y,Dem
+1020560048,443,D,20110118,F,Foster,Nancy,Marie,7260,S,Cedar,LN,,,Round Rock,78665,,Y,Y,,,,Y,,
+1036528814,443,B,20140603,M,Jenkins,Patrick,Kay,1700,,Meadow,PL,STE,35B,Round Rock,78681,,Y,Y,Y,,,Y,,
+1034467862,443,B,20230225,M,Ramos,Sean,A,3106,W,Slaughter,BLVD,,,Cedar Park,78613,,Y,Y,,,,,,
+1009806421,444,B,20250110,M,Garcia,Raymond,Rose,7536,W,Meadow,PKWY,UNIT,27A,Austin,78753,,,,,,,,Y,Rep
+1006446348,444,C,20251102,M,Scott,Nathan,Dean,3700,N,Far West,CIR,,,Manor,78653,,Y,,Y,Y,Lib,,Y,Rep
+1038517807,445,B,20231222,F,Gonzalez,Patricia,,7200,S,Congress,WAY,STE,12B,Pflugerville,78660,,,Y,Y,,,Y,Y,
+1010776541,446,C,20211111,M,Coleman,Jose,Kay,8300,,Gattis School,DR,,,Pflugerville,78660,,Y,,Y,,,Y,Y,Rep
+1064716214,446,D,20110808,M,Garcia,Christopher,,2000,,San Jacinto,ST,,,Leander,78641,,,,,,,,,
+1033599838,446,C,20130908,M,Patterson,William,Lee,7669,S,Davis,DR,,,Cedar Park,78613,,,Y,,,,Y,Y,Dem
+1044072163,446,C,20171001,M,Sanchez,William,Marie,8700,E,Gattis School,PKWY,,,Austin,78727,,,Y,,Y,Rep,Y,Y,Rep
+1079623732,446,C,20181109,F,Taylor,Susan,M,2858,,Creekside,DR,,,Austin,78753,,,,,,,,Y,
+1012110428,446,A,20180207,F,Walker,Karen,Grace,9700,,Meadow,PKWY,UNIT,119,Leander,78641,,Y,,,Y,Dem,Y,,
+1047475332,446,B,20150915,M,Ward,Luis,Dean,7091,S,Pinewood,WAY,,,Round Rock,78681,,,Y,Y,Y,Lib,Y,,
+1093305754,447,B,20170508,F,Brown,Kathleen,,4102,W,Lamar,BLVD,,,Austin,78741,,,Y,Y,Y,Dem,Y,,
+1044562554,447,,20150414,F,Wilson,Nancy,Ann,8900,W,Pinewood,DR,,,Manor,78653,,,Y,,Y,Dem,Y,,
+1056809000,448,A,20241111,M,Allen,Richard,E,9900,,Speedway,PKWY,,,Cedar Park,78613,,Y,,,Y,Rep,Y,Y,Rep
+1000485628,448,C,20230710,F,Gray,Jennifer,E,3884,S,Lamar,PL,,,Leander,78641,,Y,Y,Y,Y,Dem,Y,,
+1057217806,448,B,20090710,F,Howard,Stephanie,Ray,1100,N,Koenig,LN,,,Del Valle,78617,,,Y,Y,,,,Y,Lib
+1072954639,448,B,20100814,F,Kim,Margaret,J,3534,N,Menchaca,PL,,,Buda,78610,,,,Y,,,Y,Y,Lib
+1033295944,448,C,20231024,F,Lopez,Hannah,Rose,2038,N,Convict Hill,AVE,,,Manor,78653,,,,Y,Y,Rep,Y,Y,
+1015151591,448,D,20251111,F,Rivera,Cynthia,,3400,E,Gattis School,RD,,,Del Valle,78617,,,Y,,Y,Rep,,,
+1055125522,449,D,20221010,M,Hill,Eric,Lee,1391,,San Jacinto,ST,,,Manor,78653,,,Y,,Y,Lib,,,
+1018248225,449,C,20231202,M,Hughes,Nathan,Paul,6300,,Pecan,AVE,,,Leander,78641,,,,,Y,Rep,Y,Y,
+1007026549,449,D,20220619,M,Jenkins,Sean,A,6900,,Sunset Valley,WAY,,,Manor,78653,,Y,,,,,,Y,Rep
+1087083391,449,A,20180621,F,Martinez,Betty,Dean,9500,,Meadow,BLVD,,,Austin,78721,,,,,,,,,
+1058663307,449,A,20111203,F,Young,Lisa,Lee,2500,W,Menchaca,CT,,,Manor,78653,,,,,Y,Dem,,,
+1098801269,450,A,20260307,F,Pruitt,Riley,L,1178,,Guadalupe,DR,,,Pflugerville,78660,,,,,,,,,
+1054158907,450,A,20111122,M,Rivera,Jacob,Kay,6516,N,Brodie,AVE,,,Buda,78610,,Y,,,,,Y,,
+1057664965,451,C,20220327,M,Abbott,Sean,Dean,3100,,Cesar Chavez,WAY,STE,13B,Pflugerville,78660,,,,,Y,Rep,,Y,Rep
+1063594216,451,C,20180820,M,Diaz,Henry,Marie,1051,W,Oak,BLVD,,,Cedar Park,78613,,,,,Y,Lib,Y,Y,Rep
+1039321490,451,D,20100526,M,Foster,Wei,M,4572,,San Jacinto,TRL,,,Pflugerville,78660,,,Y,,Y,Rep,Y,,
+1010025308,451,A,20091104,M,Rivera,Brian,Ray,3502,,Elm,WAY,,,Del Valle,78617,,Y,,,,,Y,,
+1017451224,451,,20110627,M,Scott,Michael,A,7600,E,Nueces,DR,,,Round Rock,78665,,Y,,Y,Y,Rep,,,
+1056181902,451,D,20220103,F,Ward,Grace,Rose,649,E,Braker,RD,,,Austin,78759,,,Y,,,,,Y,
+1014580143,452,A,20190811,M,Baker,Wei,,8988,E,Ben White,TRL,,,Leander,78641,,,Y,Y,,,Y,,
+1049807990,452,C,20130428,M,Davis,Donald,L,1200,,Slaughter,CT,APT,19,Del Valle,78617,,,Y,,,,,,
+1041971816,452,D,20131027,M,Mitchell,Raymond,M,2100,N,Koenig,PL,STE,475,Del Valle,78617,,Y,,Y,,,Y,Y,Dem
+1022350066,453,C,20161119,F,Barnes,Sarah,L,9700,N,Balcones,PKWY,,,Round Rock,78681,,Y,,Y,Y,Lib,Y,Y,Rep
+1099052064,453,A,20151225,M,Davis,David,,9100,E,Steck,CIR,,,Leander,78641,,Y,,Y,Y,Rep,,,
+1026493771,453,A,20160217,F,Hayes,Sofia,M,7400,,Koenig,PKWY,UNIT,25A,Austin,78701,,Y,Y,Y,,,Y,,
+1097748729,453,B,20230124,F,Powell,Linda,Dean,2452,W,Ben White,CIR,,,Austin,78704,,,,,,,Y,,
+1095666786,453,,20220528,M,Ross,Joshua,Rose,7190,,Barton Springs,DR,APT,C8,Leander,78645,,,Y,,Y,Rep,Y,Y,Rep
+1094863784,453,D,20201102,F,Walker,Linda,Kay,6974,W,Steck,WAY,,,Buda,78610,,,,Y,Y,Rep,Y,Y,Dem
+1034705815,454,C,20170602,F,Diaz,Amy,Rose,626,N,Meadow,BLVD,,,Del Valle,78617,,,,,Y,Dem,,Y,Dem
+1029528963,454,A,20120215,M,Lewis,Christopher,,700,S,Anderson,RD,APT,A9,Del Valle,78617,,Y,Y,,Y,Rep,,Y,Dem
+1017005213,454,B,20110906,M,Moore,Kevin,,9292,,Gattis School,PL,,,Round Rock,78681,,Y,,Y,,,,Y,Lib
+1060271281,454,A,20250501,F,Okafor,Isabella,,6000,,Hillside,CIR,,,Round Rock,78665,,,Y,,Y,Dem,Y,,
+1046069364,454,D,20220522,M,Tran,Omar,Ray,9137,S,Magnolia,BLVD,,,Del Valle,78617,,Y,,Y,Y,Dem,,Y,Lib
+1070290876,455,D,20180608,F,Bennett,Emily,,1200,,Live Oak,TRL,APT,22B,Del Valle,78617,,,,,,,Y,Y,Lib
+1061491190,455,,20250126,F,Gomez,Rosa,Lee,7544,,Davis,LN,,,Buda,78610,,Y,Y,,Y,Lib,,Y,Rep
+1068780352,455,C,20240725,M,Simmons,Richard,Kay,9400,,Oltorf,PKWY,,,Austin,78745,,,Y,Y,Y,,Y,,
+1002048743,455,B,20201127,F,Thomas,Olivia,A,2100,N,Far West,PL,APT,5A,Del Valle,78617,,,Y,,Y,Dem,,Y,Lib
+1055943234,455,B,20190808,F,Wood,Maria,A,2900,N,Balcones,PKWY,,,Cedar Park,78613,,,Y,Y,,,Y,,
+1034879348,456,,20080515,M,Murphy,Raymond,,6000,,Rio Grande,CT,,,Del Valle,78617,S,Y,,,,,Y,Y,Rep
+1017787315,456,D,20140616,M,Scott,Ethan,Jean,2100,,Barton Springs,ST,#,191,Buda,78610,,Y,,,Y,Rep,,,
+1033293764,456,B,20240921,F,Torres,Fatima,Lee,7721,S,Gattis School,BLVD,UNIT,B10,Del Valle,78617,,Y,,Y,Y,,Y,,
+1078775594,457,D,20181107,M,Brooks,Anthony,Paul,700,,Duval,ST,APT,4A,Cedar Park,78613,,,Y,Y,Y,Rep,,Y,Dem
+1080579572,457,,20180527,M,Moore,Samuel,Rose,900,N,Metric,BLVD,STE,274,Buda,78610,,Y,Y,Y,Y,,Y,,
+1071185050,457,B,20260218,F,Pruitt,Morgan,L,4139,,Maple,LN,,,Austin,78704,,,,,,,,,
+1059724953,459,,20140527,M,Alexander,Michael,L,8536,W,Metric,BLVD,,,Manor,78653,,Y,Y,,Y,,Y,,
+1029600339,459,,20220302,M,Brooks,Wei,Rose,7100,N,Bee Cave,DR,,,Round Rock,78681,,Y,Y,Y,Y,Dem,Y,Y,Dem
+1096074825,459,D,20100704,M,Jackson,Richard,A,9301,N,Oltorf,LN,APT,298,Manor,78653,,Y,Y,,,,,Y,Lib
+1014267913,459,D,20240423,M,Lee,Matthew,Paul,8900,,Dessau,PL,,,Manor,78653,,Y,,,,,Y,Y,Rep
+1012661470,459,D,20110801,F,Peterson,Linda,Jean,8000,W,Nueces,CT,,,Del Valle,78617,,Y,Y,Y,Y,,,Y,Rep
+1059854547,459,,20080723,M,Ross,Carlos,Jean,7400,W,Barton Springs,PL,,,Buda,78610,,,Y,,Y,Dem,Y,Y,
+1038079163,459,C,20161120,M,Wright,Mark,R,5651,S,Manor,RD,,,Cedar Park,78613,S,Y,,Y,,,,Y,
+1072362220,460,A,20170726,M,Adams,Robert,,4940,S,Pecan,DR,STE,365,Leander,78641,,Y,,Y,Y,Rep,Y,Y,Lib
+1045413090,460,A,20220803,M,Cruz,Carlos,,4900,,Hillside,ST,APT,D11,Manor,78653,,,Y,Y,Y,Lib,Y,Y,Dem
+1000017461,460,C,20081208,F,Griffin,Margaret,Grace,9200,,Oak,TRL,,,Austin,78705,,Y,Y,,Y,Lib,Y,,
+1053996777,460,,20240311,M,Smith,Miguel,,5620,,Howard,PL,,,Del Valle,78617,,Y,,,Y,Rep,,,

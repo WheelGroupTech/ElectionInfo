@@ -53,12 +53,11 @@ that wraps `ElectionExplorer.exe` as MSIX and builds a single **x64 + ARM64**
   `WheelGroupTech.ElectionExplorer`, Publisher
   `CN=19C9DED9-26A0-4883-97F5-C2A81BF980D6`, PublisherDisplayName
   `WheelGroupTech`. Ready to upload.
-- **Logo:** `tools/logo-source.png` (ballot-box + magnifier art, 784×1168) is
-  **opaque white background** (not alpha-transparent), so tiles are rendered on
-  white (manifest `BackgroundColor=#FFFFFF`), cropped to the logo content.
-  Taskbar/Start icons therefore sit on a small white square. To get transparent
-  icons, drop a true alpha PNG in as `logo-source.png` and re-run the generator
-  (it auto-detects alpha). User was shown the white tiles.
+- **Logo:** `tools/logo-source.png` (ballot-box + magnifier art, 1152×1712) has a
+  **real alpha channel**, so assets are rendered on a **transparent** canvas
+  (transparent tiles + unplated taskbar icons), cropped to the logo content.
+  Manifest `BackgroundColor=#FFFFFF` (shows behind the logo on plated tiles and
+  splash; kept white per the user's choice). User was shown the transparent tiles.
 - Build command (also VS → Publish → Create App Packages):
   `msbuild ElectionExplorer.Package\ElectionExplorer.Package.wapproj /p:Configuration=Release /p:Platform=x64 /p:AppxBundle=Always /p:AppxBundlePlatforms="x64|arm64" /p:UapAppxPackageBuildMode=StoreUpload`
 - **BEFORE first Store upload:** replace the three `TODO-STORE` identity tokens in
@@ -260,11 +259,9 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 - **Submit:** the `.msixupload` in `Build/msix/` is built with the real Store
   identity — upload it in Partner Center (see the project `README.md`). No code
   or manifest changes needed first.
-- Optional polish: if transparent taskbar icons are wanted, replace
-  `tools/logo-source.png` with a real alpha-transparent PNG and re-run
-  `generate-assets.ps1` (auto-detects alpha), then set the manifest
-  `BackgroundColor` back to a brand color. Consider persisting **window
-  size/position** alongside the other options.
+- Optional polish: `BackgroundColor` is currently `#FFFFFF` (shows behind the
+  transparent logo on plated tiles/splash) — switch to a brand color if desired.
+  Consider persisting **window size/position** alongside the other options.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
 - Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for

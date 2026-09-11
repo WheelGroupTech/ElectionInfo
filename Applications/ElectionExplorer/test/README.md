@@ -26,6 +26,6 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
 test\smoke_load.exe
 ```

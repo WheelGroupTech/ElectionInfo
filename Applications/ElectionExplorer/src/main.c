@@ -7,6 +7,7 @@
 #include "resource.h"
 #include "voter_table.h"
 #include "filter.h"
+#include "settings.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -174,6 +175,10 @@ typedef struct AppState
 
 static AppState *g_viewers = NULL;
 static int g_viewer_count = 0;
+
+/* Persisted user options, loaded once at startup and re-saved when the Options
+ * dialog commits a change. Seeds the first viewer window's defaults. */
+static EeSettings g_settings;
 
 /* Modeless two-file compare summary window (one at a time). Owns the transient
  * per-row classification arrays and points at both viewers it summarizes. */
@@ -406,10 +411,11 @@ static void App_InitViewerState(AppState *app, HINSTANCE instance, const AppStat
     }
     else
     {
-        app->copy_prepend_normalized = TRUE;
-        app->name_surname_first = TRUE;
-        app->zoom_percent = k_ZoomDefault;
-        app->map_engine = EeMap_Google;
+        /* First window of the run: seed from the options saved last run. */
+        app->copy_prepend_normalized = g_settings.copy_prepend_normalized;
+        app->name_surname_first = g_settings.name_surname_first;
+        app->zoom_percent = App_ClampZoom(g_settings.zoom_percent);
+        app->map_engine = App_ClampMapEngine(g_settings.map_engine);
     }
     InitializeCriticalSection(&app->progress_lock);
     EeVoterTable_Init(&app->table);
@@ -3191,6 +3197,13 @@ static LRESULT CALLBACK OptionsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                         DestroyWindow(hwnd);
                         App_ApplyNameFormat(app, surname_first);
                         App_ApplyZoom(app, (int)zoom);
+
+                        /* Persist the committed options for the next run. */
+                        g_settings.copy_prepend_normalized = app->copy_prepend_normalized;
+                        g_settings.name_surname_first = app->name_surname_first;
+                        g_settings.zoom_percent = app->zoom_percent;
+                        g_settings.map_engine = (int)app->map_engine;
+                        EeSettings_Save(&g_settings);
                     }
                     return 0;
                 }
@@ -8667,6 +8680,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     /* Per-monitor v2 (manifest also declares this). */
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+    /* Restore user options saved on a previous run (defaults if none). */
+    EeSettings_Load(&g_settings);
 
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES |

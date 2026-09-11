@@ -4,11 +4,12 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-08
-**Branch:** main — all Compare work (minor/major grading, side-by-side
-Differences view, canonical address, ZIP+4 handling) is now **committed**, along
-with this session's **version bump to 1.0.1.0** and the About-dialog "Open
-Source" line, plus a `.gitignore` entry for `Voter_Lists/`.
+**Last updated:** 2026-09-10
+**Branch:** main — **uncommitted** this session: **registry-backed persistence
+of user options** (zoom, map engine, copy/name formatting) via a new
+`settings.{c,h}` module. Prior session's version bump to 1.0.1.0, About "Open
+Source" line, and `.gitignore` entry for `Voter_Lists/` are committed.
+Heads-up for release: the app is being published via the **Microsoft Store**.
 
 ---
 
@@ -35,7 +36,40 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-08) — committed
+## This session (2026-09-10) — uncommitted (ready to commit)
+
+**Registry-backed option persistence.** User options now survive between runs,
+stored per user in the registry under
+`HKEY_CURRENT_USER\Software\WheelGroupTech\ElectionExplorer`, following
+Microsoft's guidance for
+Win32 desktop settings: per-user options under HKCU (no elevation), REG_DWORD
+values, key path carries no version segment so upgrades preserve options.
+Persisted: `ZoomPercent`, `MapEngine`, `CopyPrependNormalized`,
+`NameSurnameFirst`.
+- New `src/settings.{c,h}` module (`EeSettings` struct; `EeSettings_Load/Save`
+  on the default key, `EeSettings_LoadFrom/SaveTo(subkey, …)` for testing,
+  `EeSettings_Defaults`). Links `advapi32.lib` via `#pragma comment`.
+- `main.c` wiring: global `g_settings`; `EeSettings_Load` at the top of
+  `wWinMain`; `App_InitViewerState`'s no-prefs branch (the first window of the
+  run) now seeds from `g_settings` instead of hardcoded defaults; the Options
+  dialog `IDOK` handler saves after applying (single choke point for all four
+  options). New windows still inherit live values from their parent window.
+- **Store note:** for an MSIX/Store package these HKCU writes are transparently
+  virtualized by the packaging runtime, so no code change is needed — the same
+  registry APIs work. Documented in `settings.h`.
+- Added `settings.{c,h}` to `.vcxproj` + `.filters`; unit test
+  `test_settings_roundtrip` (tag `settings`, uses a throwaway
+  `…\Election Explorer Test` key so real options are untouched); updated the
+  `test/README.md` compile command (adds `src\settings.c` + `advapi32.lib`).
+- Verified: x64 Debug **and** Release build clean; full smoke suite passes
+  (26 tests incl. `settings roundtrip: ok`). **GUI not yet click-tested** — i.e.
+  change options, reopen the app, confirm they stuck.
+- Note on tooling: `clang-format` on this machine (LLVM 20) reformats
+  comment-alignment on lines it shouldn't, so the two edited existing files
+  (`main.c`, `test/smoke_load.c`) were hand-edited to keep the diff minimal
+  rather than run whole-file formatting.
+
+## Prior session (2026-09-08) — committed
 
 **Version 1.0.1.0 + About "Open Source" line.** Bumped the app version from
 `0.1.0.0` to `1.0.1.0` in `res/ElectionExplorer.rc` (`FILEVERSION` /
@@ -183,7 +217,13 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- No work in progress — the tree is clean. Pick up the next feature request.
+- **Click-test option persistence**, then commit `settings.{c,h}`, `main.c`,
+  `.vcxproj`, `.vcxproj.filters`, `test/smoke_load.c`, `test/README.md`: change
+  zoom / map engine / copy / name options, close and reopen the app, confirm
+  they restore; optionally check the values under
+  `HKCU\Software\WheelGroupTech\ElectionExplorer` in `regedit`.
+- Also consider persisting **window size/position** and building the ARM64
+  configs before the Store release if that path is still shipped.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
 - Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for

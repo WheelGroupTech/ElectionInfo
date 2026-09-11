@@ -4,6 +4,7 @@
  */
 
 #include "filter.h"
+#include "settings.h"
 #include "voter_table.h"
 
 #include <stdio.h>
@@ -2483,6 +2484,64 @@ done:
     return rc;
 }
 
+/* Round-trip the registry-backed settings through a throwaway test key so the
+ * user's real options are never touched (tag: settings). */
+static int test_settings_roundtrip(void)
+{
+    static const wchar_t k_TestKey[] = L"Software\\WheelGroupTech\\ElectionExplorer Test";
+    EeSettings a;
+    EeSettings b;
+    int rc = 0;
+
+    /* A missing key must yield defaults and report FALSE. */
+    RegDeleteKeyW(HKEY_CURRENT_USER, k_TestKey);
+    EeSettings_Defaults(&a);
+    ZeroMemory(&b, sizeof(b));
+    if (EeSettings_LoadFrom(k_TestKey, &b))
+    {
+        wprintf(L"settings: load of absent key should return FALSE\n");
+        rc = 1;
+    }
+    if (b.zoom_percent != a.zoom_percent || b.map_engine != a.map_engine ||
+        b.copy_prepend_normalized != a.copy_prepend_normalized ||
+        b.name_surname_first != a.name_surname_first)
+    {
+        wprintf(L"settings: absent key did not yield defaults\n");
+        rc = 1;
+    }
+
+    /* Round-trip a non-default set of options. */
+    a.zoom_percent = 175;
+    a.map_engine = 3;
+    a.copy_prepend_normalized = FALSE;
+    a.name_surname_first = FALSE;
+    if (!EeSettings_SaveTo(k_TestKey, &a))
+    {
+        wprintf(L"settings: SaveTo failed\n");
+        rc = 1;
+    }
+    ZeroMemory(&b, sizeof(b));
+    if (!EeSettings_LoadFrom(k_TestKey, &b))
+    {
+        wprintf(L"settings: LoadFrom of saved key failed\n");
+        rc = 1;
+    }
+    if (b.zoom_percent != 175 || b.map_engine != 3 || b.copy_prepend_normalized ||
+        b.name_surname_first)
+    {
+        wprintf(L"settings: round-trip mismatch (zoom=%d map=%d pre=%d sur=%d)\n",
+                b.zoom_percent,
+                b.map_engine,
+                (int)b.copy_prepend_normalized,
+                (int)b.name_surname_first);
+        rc = 1;
+    }
+
+    RegDeleteKeyW(HKEY_CURRENT_USER, k_TestKey);
+    wprintf(L"settings roundtrip: %s\n", rc == 0 ? L"ok" : L"FAIL");
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2514,5 +2573,6 @@ int wmain(void)
     failed |= test_compare_diffs();
     failed |= test_preamble_skip();
     failed |= test_id_voter_header();
+    failed |= test_settings_roundtrip();
     return failed == 0 ? 0 : 1;
 }

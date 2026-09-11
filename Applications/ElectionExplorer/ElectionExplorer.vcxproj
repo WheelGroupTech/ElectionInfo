@@ -168,12 +168,14 @@
     <ClCompile Include="src\main.c" />
     <ClCompile Include="src\voter_table.c" />
     <ClCompile Include="src\filter.c" />
+    <ClCompile Include="src\settings.c" />
   </ItemGroup>
 
   <ItemGroup>
     <ClInclude Include="src\main.h" />
     <ClInclude Include="src\voter_table.h" />
     <ClInclude Include="src\filter.h" />
+    <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\resource.h" />
   </ItemGroup>
 

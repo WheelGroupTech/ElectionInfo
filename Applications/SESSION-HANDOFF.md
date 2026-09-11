@@ -5,13 +5,13 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-09-11
-**Branch:** main — option persistence, clang-format cleanup, the **MSIX packaging
-project**, the transparent logo, and the **privacy policy** are all **committed**.
-Store identity in `Package.appxmanifest` is set (Name `WheelGroupTech.ElectionExplorer`,
-Publisher `CN=19C9DED9-…980D6`, PublisherDisplayName `WheelGroupTech`).
-**Uncommitted (Store-listing prep):** `TRADEMARKS.md`, brand-string fix in the
-`.rc`, and a Privacy Policy link in the About dialog — see "Store listing prep"
-below. The app is being published via the **Microsoft Store**.
+**Branch:** main — MSIX packaging, transparent logo, privacy policy, trademarks,
+brand-string fix, About-dialog privacy link, and the synthetic sample datasets
+are all **committed**. Store identity in `Package.appxmanifest` is set (Name
+`WheelGroupTech.ElectionExplorer`, Publisher `CN=19C9DED9-…980D6`,
+PublisherDisplayName `WheelGroupTech`). **Uncommitted:** the **app-icon refresh**
+(new high-res `res/app.ico` + `generate-icon.ps1`) — see "App icon" below. The
+app is being published via the **Microsoft Store**.
 
 ---
 
@@ -38,26 +38,37 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-11) — Store listing prep (uncommitted)
+## This session (2026-09-11)
 
-- **Privacy policy** committed at `ElectionExplorer/PRIVACY.md` (no data
-  collection; local-only; discloses that "Show in Maps" opens the chosen provider
-  in the browser). Store privacy URL (GitHub Pages):
+**App icon refresh (uncommitted).** Rebuilt `res/app.ico` from the transparent
+`logo-source.png` — a multi-resolution icon (16/24/32/48/64/128/256) using a
+**square crop** of the portrait logo (previously the icon topped out at 64px and
+was upscaled). New `ElectionExplorer.Package/tools/generate-icon.ps1` (ImageMagick
+7+) regenerates it; documented in the package `README.md`. App rebuilt so the icon
+is compiled in, and the **MSIX bundle was rebuilt** to include it (verified: x64 +
+arm64, identity intact). Uncommitted files: `res/app.ico`,
+`ElectionExplorer.Package/tools/generate-icon.ps1`, package `README.md`,
+this handoff. Icon not yet eyeballed in a real Explorer/title-bar view; the 16px
+frame is a busy composition — swap to a simplified small-size glyph later if it
+reads poorly.
+
+**Store listing prep (committed earlier this session).**
+- `ElectionExplorer/PRIVACY.md` — no data collection; local-only; discloses that
+  "Show in Maps" opens the chosen provider in the browser. Store privacy URL
+  (GitHub Pages, needs Pages enabled to resolve):
   `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`
-- **About dialog** now shows a **Privacy Policy** link under the GitHub link
-  (`k_PrivacyUrl`, `IDC_ABOUT_PRIVACY` in `main.c`/`resource.h`); dialog grew to
-  300px tall to fit. Builds clean, clang-clean. **Uncommitted.** Not click-tested.
-- **`TRADEMARKS.md`** added at `ElectionExplorer/` — code is MIT, names/logos are
-  WheelGroupTech trademarks (not licensed by MIT). **Uncommitted.**
-- **Brand strings** in `res/ElectionExplorer.rc` fixed to `WheelGroupTech`
-  (CompanyName + LegalCopyright, added 2024–2026) to match the MIT/Store identity.
-  **Uncommitted — changes the binary's version resource, so rebuild the MSIX
-  bundle before the next Store upload.**
-- License stays **MIT** (repo-root `LICENSE`, © 2024–2026 WheelGroupTech). For the
-  Partner Center "License terms" field, accept Microsoft's Standard Application
-  License Terms (fine for a free MIT app).
-- Store submission note: the `runFullTrust` capability triggers a Partner Center
-  approval prompt (a warning, not a blocker) — expected for a packaged Win32 app.
+- About dialog shows a **Privacy Policy** link under the GitHub link
+  (`k_PrivacyUrl`, `IDC_ABOUT_PRIVACY`); dialog is 320px tall (the long URL wraps
+  to two lines).
+- `ElectionExplorer/TRADEMARKS.md` — code is MIT, names/logos are WheelGroupTech
+  trademarks (not licensed by MIT). License stays **MIT** (repo-root `LICENSE`).
+  For Partner Center "License terms," accept MS Standard Application License Terms.
+- `res/ElectionExplorer.rc` brand strings fixed to `WheelGroupTech`.
+- Synthetic sample datasets under `ElectionExplorer/docs/` (+ generators in
+  `docs/sample-data/`) for Store screenshots: base list, an edited copy for
+  Compare, and a duplicates list (with DOB). Screenshots already taken.
+- Store note: the `runFullTrust` capability triggers a Partner Center approval
+  prompt (a warning, not a blocker) — expected for a packaged Win32 app.
 
 ## MSIX packaging for the Microsoft Store (committed)
 
@@ -276,20 +287,18 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Commit the Store-listing prep** (uncommitted): `ElectionExplorer/TRADEMARKS.md`,
-  `res/ElectionExplorer.rc` (brand strings), `src/main.c` + `src/resource.h`
-  (About-dialog Privacy Policy link). Suggested:
-  `docs: add trademarks + About privacy link; fix brand strings`.
-- **Rebuild the MSIX bundle before the next upload** — the `.rc` brand-string
-  change alters the binary's version resource, so the currently built
-  `.msixupload` is stale. Rebuild, then submit in Partner Center.
-- Enable **GitHub Pages** so the privacy URL resolves:
+- **Commit the app-icon refresh** (uncommitted): `res/app.ico`,
+  `ElectionExplorer.Package/tools/generate-icon.ps1`, package `README.md`, this
+  handoff. Suggested: `build: refresh app icon from the new logo (multi-res .ico)`.
+- **Submit to the Store:** the freshly rebuilt
+  `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload`
+  includes the new icon and correct identity — upload it in Partner Center.
+- Enable **GitHub Pages** so the privacy URL resolves (used by the Store listing
+  and the About-dialog link):
   `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`
-  (used by the Store listing and the new About-dialog link).
-- Click-test the About dialog (privacy link opens; layout at 300px looks right).
-- Optional polish: `BackgroundColor` is `#FFFFFF` (behind the transparent logo on
-  plated tiles/splash) — switch to a brand color if desired; consider persisting
-  **window size/position** alongside the other options.
+- Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a
+  simplified small-size glyph if busy); `BackgroundColor` is `#FFFFFF` — switch to
+  a brand color if desired; consider persisting **window size/position**.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
 - Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for

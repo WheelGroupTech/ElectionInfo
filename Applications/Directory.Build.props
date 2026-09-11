@@ -10,14 +10,22 @@
     <AppArch Condition="'$(Platform)' == 'x64'">x64</AppArch>
     <AppArch Condition="'$(Platform)' == 'ARM64'">arm64</AppArch>
     <AppArch Condition="'$(AppArch)' == ''">$(Platform)</AppArch>
-    <AppConfig Condition="'$(Configuration)' == 'Debug'">debug</AppConfig>
-    <AppConfig Condition="'$(Configuration)' == 'Release'">release</AppConfig>
-    <AppConfig Condition="'$(AppConfig)' == ''">$(Configuration.ToLower())</AppConfig>
+    <!-- NB: do not name this property "AppConfig". That is a reserved MSBuild
+         property (path to App.config); overriding it makes the
+         _CopyAppConfigFile target try to copy a file named e.g. "release",
+         which breaks the .wapproj build. -->
+    <AppBuildConfig Condition="'$(Configuration)' == 'Debug'">debug</AppBuildConfig>
+    <AppBuildConfig Condition="'$(Configuration)' == 'Release'">release</AppBuildConfig>
+    <AppBuildConfig Condition="'$(AppBuildConfig)' == ''">$(Configuration.ToLower())</AppBuildConfig>
   </PropertyGroup>
 
-  <PropertyGroup>
+  <!--
+    Custom OutDir/IntDir for the compiled projects. Skipped for MSIX packaging
+    projects (.wapproj), which manage their own output layout under Build\msix\.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' != '.wapproj'">
     <!-- MSBuildThisFileDirectory is Applications/ (trailing slash). -->
-    <OutDir>$(MSBuildThisFileDirectory)Build\$(AppOs)-$(AppArch)-$(AppConfig)\$(MSBuildProjectName)\</OutDir>
+    <OutDir>$(MSBuildThisFileDirectory)Build\$(AppOs)-$(AppArch)-$(AppBuildConfig)\$(MSBuildProjectName)\</OutDir>
     <IntDir>$(OutDir)obj\</IntDir>
   </PropertyGroup>
 

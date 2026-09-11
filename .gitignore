@@ -176,6 +176,14 @@ cython_debug/
 # layout: Applications/README.md
 Applications/Build/
 
+# MSIX packaging project (.wapproj) intermediate output. The shippable
+# packages are written to Applications/Build/msix/ (ignored above); these
+# bin/ and obj/ trees are DesktopBridge scratch that cannot be redirected there.
+Applications/ElectionExplorer.Package/bin/
+Applications/ElectionExplorer.Package/obj/
+Applications/ElectionExplorer.Package/AppPackages/
+Applications/ElectionExplorer.Package/BundleArtifacts/
+
 # Visual Studio user-specific / cache files
 *.user
 *.suo

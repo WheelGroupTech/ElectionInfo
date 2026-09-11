@@ -4,6 +4,8 @@ VisualStudioVersion = 18.0.0.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ElectionExplorer", "ElectionExplorer\ElectionExplorer.vcxproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
+Project("{C7167F0D-BC9F-4E6E-AFE1-012C56B48DB5}") = "ElectionExplorer.Package", "ElectionExplorer.Package\ElectionExplorer.Package.wapproj", "{26902556-B160-4464-A794-D41F0D408D75}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -20,6 +22,10 @@ Global
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|ARM64.Build.0 = Release|ARM64
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.ActiveCfg = Release|x64
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|x64.Build.0 = Release|x64
+		{26902556-B160-4464-A794-D41F0D408D75}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{26902556-B160-4464-A794-D41F0D408D75}.Debug|x64.ActiveCfg = Debug|x64
+		{26902556-B160-4464-A794-D41F0D408D75}.Release|ARM64.ActiveCfg = Release|ARM64
+		{26902556-B160-4464-A794-D41F0D408D75}.Release|x64.ActiveCfg = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

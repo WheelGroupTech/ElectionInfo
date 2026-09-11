@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|ARM64">
+      <Configuration>Debug</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|ARM64">
+      <Configuration>Release</Configuration>
+      <Platform>ARM64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup>
+    <WapProjPath Condition="'$(WapProjPath)'==''">$(MSBuildExtensionsPath)\Microsoft\DesktopBridge\</WapProjPath>
+  </PropertyGroup>
+  <Import Project="$(WapProjPath)\Microsoft.DesktopBridge.props" />
+
+  <PropertyGroup>
+    <ProjectGuid>{26902556-B160-4464-A794-D41F0D408D75}</ProjectGuid>
+    <TargetPlatformVersion>10.0.22621.0</TargetPlatformVersion>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <EntryPointProjectUniqueName>..\ElectionExplorer\ElectionExplorer.vcxproj</EntryPointProjectUniqueName>
+
+    <!-- The Store signs the upload; we don't sign here. For local sideload
+         testing, sign the produced .msix with signtool (see README). -->
+    <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
+    <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
+    <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
+    <AppxSymbolPackageEnabled>True</AppxSymbolPackageEnabled>
+
+    <!-- Build one bundle covering both architectures for a single Store upload. -->
+    <AppxBundle>Always</AppxBundle>
+    <AppxBundlePlatforms>x64|arm64</AppxBundlePlatforms>
+
+    <!-- Final .msix / .msixbundle / .msixupload land under Applications/Build/
+         (gitignored), per the repo's build-output policy (AGENTS.md). The
+         DesktopBridge targets keep their default intermediate layout (bin\ and
+         obj\ under this project); overriding OutDir here breaks payload
+         harvesting (APPX0703). -->
+    <AppxPackageDir>$(MSBuildThisFileDirectory)..\Build\msix\</AppxPackageDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AppxManifest Include="Package.appxmanifest">
+      <SubType>Designer</SubType>
+    </AppxManifest>
+  </ItemGroup>
+
+  <!-- Store logo assets. Declared as Content with Link so the DesktopBridge
+       targets place them into the package at Images\<name>.png. -->
+  <ItemGroup>
+    <Content Include="Images\SplashScreen.png"><Link>Images\SplashScreen.png</Link></Content>
+    <Content Include="Images\Square150x150Logo.png"><Link>Images\Square150x150Logo.png</Link></Content>
+    <Content Include="Images\Square310x310Logo.png"><Link>Images\Square310x310Logo.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.png"><Link>Images\Square44x44Logo.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.targetsize-16.png"><Link>Images\Square44x44Logo.targetsize-16.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.targetsize-24.png"><Link>Images\Square44x44Logo.targetsize-24.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.targetsize-24_altform-unplated.png"><Link>Images\Square44x44Logo.targetsize-24_altform-unplated.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.targetsize-32.png"><Link>Images\Square44x44Logo.targetsize-32.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.targetsize-48.png"><Link>Images\Square44x44Logo.targetsize-48.png</Link></Content>
+    <Content Include="Images\Square44x44Logo.targetsize-48_altform-unplated.png"><Link>Images\Square44x44Logo.targetsize-48_altform-unplated.png</Link></Content>
+    <Content Include="Images\Square71x71Logo.png"><Link>Images\Square71x71Logo.png</Link></Content>
+    <Content Include="Images\StoreLogo.png"><Link>Images\StoreLogo.png</Link></Content>
+    <Content Include="Images\Wide310x150Logo.png"><Link>Images\Wide310x150Logo.png</Link></Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ElectionExplorer\ElectionExplorer.vcxproj" />
+  </ItemGroup>
+
+  <Import Project="$(WapProjPath)\Microsoft.DesktopBridge.targets" />
+
+</Project>

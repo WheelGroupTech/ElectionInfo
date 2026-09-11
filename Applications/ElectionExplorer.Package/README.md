@@ -64,6 +64,22 @@ its sampled background color. A different source can be passed with
 `-SourcePng path\to\logo.png`. (No 256px small-logo target size is emitted: it can
 exceed the 200 KB per-asset limit.)
 
+### Application icon (res/app.ico)
+
+The Win32 app icon is generated from the same `logo-source.png` by
+[`tools/generate-icon.ps1`](tools/generate-icon.ps1) (requires ImageMagick 7+):
+
+```bash
+pwsh -File tools\generate-icon.ps1
+```
+
+It writes a multi-resolution transparent `..\ElectionExplorer\res\app.ico`
+(16/24/32/48/64/128/256) using a **square crop** of the portrait logo (trim
+margins, center-crop to square, inset slightly). `app.ico` drives the window
+title-bar icon, Alt+Tab, and the Explorer icon of the `.exe`; the Store tiles use
+the `Images\` assets above. Rebuild the app after regenerating so the new icon is
+compiled in.
+
 ## Local sideload testing (optional)
 
 Store upload needs no signature, but to install locally you must sign with a

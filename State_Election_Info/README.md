@@ -5,10 +5,33 @@ For each state it records the **statutory election code** (citation and official
 URL), the state's **chief election-administration agency** and its official website, and
 the public **voter portal**.
 
-Unlike most folders in this repository, this one contains **data, not scripts**. The same
-records are provided in three formats so they can be read by people or consumed by the app.
+Unlike most folders in this repository, this one is primarily **reference data** (plus a
+small generator script). The dataset records are provided in three formats so they can be
+read by people or consumed by the app. The directory also holds a set of **concept memos**
+(policy/security analysis) that build on the dataset — see below.
 
-## Files
+## Dataset files
+
+| File | Overview |
+|------|----------|
+| `state_election_codes.json` | Canonical source. Top-level `title`, `description`, `generated` date, `notes`, and a `states` array of 50 records. Intended for programmatic use. |
+| `state_election_codes.csv` | Flat, one row per state (same fields as the JSON records) for spreadsheets and imports. |
+| `State_Election_Codes.md` | Human-readable table of all 50 states. |
+| `generate.py` | Regenerates the CSV and Markdown from the JSON (see below). |
+
+The three data files are kept in sync: the CSV and Markdown are generated from the JSON by
+`generate.py`.
+
+## Concept memos
+
+Analytical memos that use the dataset as a foundation. These are **concept/analysis
+documents, not legal advice**; each states its status and the certification/statutory
+caveats inline.
+
+| File | Overview |
+|------|----------|
+| `Co-Judge_Reconciliation_Concept.md` | A bipartisan two-co-judge, pre-canvass records-reconciliation and bounded forensic-examination program that keeps all records/equipment under the election administrator's authority (satisfying federal chain-of-custody constraints). |
+| `RMF_for_EMS_Control_Catalog.md` | Adapts DoD/IC classified-system assurance (NIST RMF, STIGs, application whitelisting, removable-media control) to auditing Election Management Systems; maps each control to an election adaptation, marks certification-safe vs. certification-affecting, and tiers by county/state/federal capacity. |
 
 | File | Overview |
 |------|----------|

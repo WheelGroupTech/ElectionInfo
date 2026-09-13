@@ -17,6 +17,7 @@ and sample commands. Compiled tools are built with Visual Studio (see
 | [`Applications/`](Applications/) | Compiled election tools (Visual Studio solution, per-app projects, build outputs under `Build/`) |
 | [`ES&S/`](ES&S/) | Process and analyze ES&S CVR, ballot, and audit exports |
 | [`Results_Tapes/`](Results_Tapes/) | OCR/process ES&S DS200 results-tape TIFF images and analyze captured totals |
+| [`State_Election_Info/`](State_Election_Info/) | Reference dataset (JSON/CSV/Markdown) of each state's election code, election-administration agency, and voter portal |
 | [`Travis_County_Appraisal_District/`](Travis_County_Appraisal_District/) | Parse TCAD certified appraisal exports into property CSV files |
 | [`Travis_County_Elections/`](Travis_County_Elections/) | Election-specific Travis County roster, registration, RID, check-in, and ballot tools |
 | [`Travis_County_Voter_Registration/`](Travis_County_Voter_Registration/) | General Travis County voter-registration list analysis and property matching |
@@ -45,6 +46,25 @@ Tools for **DS200 scanner results tapes** captured as TIFF images (for example f
 | `process_tif_results_tapes.py` | Processes TIFF images of ES&S DS200 results tapes and stores extracted data |
 | `analyze_tif_results_tapes_data.py` | Analyzes results-tape data produced by `process_tif_results_tapes.py` (uses the local `results_dbfile.*` shelve files) |
 | `analyze_dallas_missing_tapes.py` | Compares expected vs captured Dallas results tapes to help identify missing tapes |
+
+---
+
+## `State_Election_Info/`
+
+Reference **dataset** (not scripts) of official state-government election resources for all
+50 states: each state's statutory **election code** (citation + official source URL), its
+**chief election-administration agency** and website, and its public **voter portal**.
+Detailed field definitions and data notes are in
+[`State_Election_Info/README.md`](State_Election_Info/README.md).
+
+| File | Overview |
+|------|----------|
+| `state_election_codes.json` | Canonical source: 50 state records plus title/notes/generated date |
+| `state_election_codes.csv` | Flat one-row-per-state export of the same fields |
+| `State_Election_Codes.md` | Human-readable table of all 50 states |
+| `README.md` | Record schema, data notes, and regeneration steps |
+
+The CSV and Markdown are generated from the JSON; edit the JSON and regenerate to keep them in sync.
 
 ---
 

@@ -1,0 +1,514 @@
+{
+  "title": "State Election Codes and Election-Administration Sites",
+  "description": "For each U.S. state: the official statutory election code (with citation and official source URL) and the state's chief election-administration agency and its official website.",
+  "generated": "2026-09-13",
+  "notes": [
+    "code_url points to the state's official code host (legislature / legislative-service site, or the state's designated official code publisher).",
+    "code_url_secondary is an alternate official source (e.g., a compiled PDF, or the LexisNexis public-access portal for states whose official code is published only through LexisNexis: AR, GA, MS, TN).",
+    "admin_agency is the state's chief election authority; it is not always the Secretary of State (some states use a Board/Commission, a Department of Elections, or the Lieutenant Governor).",
+    "Deep links into statute browsers can shift when codes are recompiled; the code_citation lets you re-navigate if a link breaks.",
+    "voter_portal_url is the state's public voter portal (register / check registration / find polling place / view ballot). Wyoming has none statewide (no online registration; records are held by county clerks), so its value is empty."
+  ],
+  "states": [
+    {
+      "state": "Alabama",
+      "abbr": "AL",
+      "code_citation": "Code of Alabama, Title 17 (Elections)",
+      "code_url": "https://alison.legislature.state.al.us/",
+      "code_url_secondary": null,
+      "admin_agency": "Alabama Secretary of State (Elections)",
+      "admin_url": "https://www.sos.alabama.gov/alabama-votes",
+      "voter_portal_url": "https://myinfo.alabamavotes.gov/"
+    },
+    {
+      "state": "Alaska",
+      "abbr": "AK",
+      "code_citation": "Alaska Statutes, Title 15 (Elections)",
+      "code_url": "https://www.akleg.gov/basis/statutes.asp",
+      "code_url_secondary": null,
+      "admin_agency": "Alaska Division of Elections (Office of the Lieutenant Governor)",
+      "admin_url": "https://www.elections.alaska.gov/",
+      "voter_portal_url": "https://myvoterportal.alaska.gov/"
+    },
+    {
+      "state": "Arizona",
+      "abbr": "AZ",
+      "code_citation": "Arizona Revised Statutes, Title 16 (Elections and Electors)",
+      "code_url": "https://www.azleg.gov/arsDetail/?title=16",
+      "code_url_secondary": null,
+      "admin_agency": "Arizona Secretary of State (Elections)",
+      "admin_url": "https://azsos.gov/elections",
+      "voter_portal_url": "https://my.arizona.vote/"
+    },
+    {
+      "state": "Arkansas",
+      "abbr": "AR",
+      "code_citation": "Arkansas Code, Title 7 (Elections)",
+      "code_url": "https://arkleg.state.ar.us/",
+      "code_url_secondary": "https://advance.lexis.com/container?config=00JAA3ZTU0NTIzYy0zZDEyLTRhYmQtYmRmMS1iMWIxNDgxYWMxZTQKAFBvZENhdGFsb2cubRW4ifTiwi5vLw6cI1uX",
+      "admin_agency": "Arkansas Secretary of State (Elections)",
+      "admin_url": "https://www.sos.arkansas.gov/elections/",
+      "voter_portal_url": "https://www.voterview.ar-nova.org/"
+    },
+    {
+      "state": "California",
+      "abbr": "CA",
+      "code_citation": "California Elections Code (ELEC)",
+      "code_url": "https://leginfo.legislature.ca.gov/faces/codesTOCSelected.xhtml?tocCode=ELEC",
+      "code_url_secondary": null,
+      "admin_agency": "California Secretary of State (Elections)",
+      "admin_url": "https://www.sos.ca.gov/elections",
+      "voter_portal_url": "https://voterstatus.sos.ca.gov/"
+    },
+    {
+      "state": "Colorado",
+      "abbr": "CO",
+      "code_citation": "Colorado Revised Statutes, Title 1 (Elections)",
+      "code_url": "https://leg.colorado.gov/colorado-revised-statutes",
+      "code_url_secondary": "https://content.leg.colorado.gov/sites/default/files/images/olls/crs2024-title-01.pdf",
+      "admin_agency": "Colorado Secretary of State (Elections)",
+      "admin_url": "https://www.sos.state.co.us/pubs/elections/",
+      "voter_portal_url": "https://www.govotecolorado.gov/"
+    },
+    {
+      "state": "Connecticut",
+      "abbr": "CT",
+      "code_citation": "Connecticut General Statutes, Title 9 (Elections)",
+      "code_url": "https://www.cga.ct.gov/current/pub/title_09.htm",
+      "code_url_secondary": null,
+      "admin_agency": "Connecticut Secretary of the State (Election Services)",
+      "admin_url": "https://portal.ct.gov/SOTS/Election-Services/",
+      "voter_portal_url": "https://myvote.ct.gov/"
+    },
+    {
+      "state": "Delaware",
+      "abbr": "DE",
+      "code_citation": "Delaware Code, Title 15 (Elections)",
+      "code_url": "https://delcode.delaware.gov/title15/index.html",
+      "code_url_secondary": null,
+      "admin_agency": "Delaware Department of Elections",
+      "admin_url": "https://elections.delaware.gov/",
+      "voter_portal_url": "https://ivote.de.gov/"
+    },
+    {
+      "state": "Florida",
+      "abbr": "FL",
+      "code_citation": "Florida Statutes, Chapters 97-106 (Florida Election Code)",
+      "code_url": "https://www.flsenate.gov/Laws/Statutes",
+      "code_url_secondary": null,
+      "admin_agency": "Florida Department of State, Division of Elections",
+      "admin_url": "https://dos.fl.gov/elections/",
+      "voter_portal_url": "https://registration.elections.myflorida.com/"
+    },
+    {
+      "state": "Georgia",
+      "abbr": "GA",
+      "code_citation": "O.C.G.A., Title 21 (Elections)",
+      "code_url": "https://www.legis.ga.gov/",
+      "code_url_secondary": "https://advance.lexis.com/container?config=00JAAyNDIyN2JjNC04NzBkLTRiNGQtYjcyNC04MjIxYTA1ZmI1OGYKAFBvZENhdGFsb2fj2wGx7D8FlWJs9VMmJTXe",
+      "admin_agency": "Georgia Secretary of State (Elections Division)",
+      "admin_url": "https://sos.ga.gov/page/about-elections-division",
+      "voter_portal_url": "https://mvp.sos.ga.gov/"
+    },
+    {
+      "state": "Hawaii",
+      "abbr": "HI",
+      "code_citation": "Hawaii Revised Statutes, Title 2, Chapters 11-19 (Elections)",
+      "code_url": "https://www.capitol.hawaii.gov/hrscurrent/vol01_ch0001-0042f/HRS0011/HRS_0011-.htm",
+      "code_url_secondary": null,
+      "admin_agency": "Hawaii Office of Elections",
+      "admin_url": "https://elections.hawaii.gov/",
+      "voter_portal_url": "https://olvr.hawaii.gov/"
+    },
+    {
+      "state": "Idaho",
+      "abbr": "ID",
+      "code_citation": "Idaho Code, Title 34 (Elections)",
+      "code_url": "https://legislature.idaho.gov/statutesrules/idstat/title34/",
+      "code_url_secondary": null,
+      "admin_agency": "Idaho Secretary of State (Elections Division)",
+      "admin_url": "https://sos.idaho.gov/elections-division/",
+      "voter_portal_url": "https://voteidaho.gov/"
+    },
+    {
+      "state": "Illinois",
+      "abbr": "IL",
+      "code_citation": "Illinois Election Code, 10 ILCS 5",
+      "code_url": "https://www.ilga.gov/legislation/ilcs/ilcs5.asp?ActID=170&ChapterID=3",
+      "code_url_secondary": null,
+      "admin_agency": "Illinois State Board of Elections",
+      "admin_url": "https://www.elections.il.gov/",
+      "voter_portal_url": "https://ova.elections.il.gov/"
+    },
+    {
+      "state": "Indiana",
+      "abbr": "IN",
+      "code_citation": "Indiana Code, Title 3 (Elections)",
+      "code_url": "https://iga.in.gov/laws/2025/ic/titles/3",
+      "code_url_secondary": null,
+      "admin_agency": "Indiana Secretary of State (Election Division)",
+      "admin_url": "https://www.in.gov/sos/elections/",
+      "voter_portal_url": "https://indianavoters.in.gov/"
+    },
+    {
+      "state": "Iowa",
+      "abbr": "IA",
+      "code_citation": "Iowa Code, Title II, Chapters 39-53 (Elections)",
+      "code_url": "https://www.legis.iowa.gov/law/iowaCode/chapters?title=II",
+      "code_url_secondary": null,
+      "admin_agency": "Iowa Secretary of State (Elections & Voting)",
+      "admin_url": "https://sos.iowa.gov/elections-voting",
+      "voter_portal_url": "https://voterready.iowa.gov/"
+    },
+    {
+      "state": "Kansas",
+      "abbr": "KS",
+      "code_citation": "Kansas Statutes, Chapter 25 (Elections)",
+      "code_url": "https://www.ksrevisor.gov/statutes/ksa_ch25.html",
+      "code_url_secondary": null,
+      "admin_agency": "Kansas Secretary of State (Elections)",
+      "admin_url": "https://sos.ks.gov/elections/elections.html",
+      "voter_portal_url": "https://myvoteinfo.voteks.org/VoterView/"
+    },
+    {
+      "state": "Kentucky",
+      "abbr": "KY",
+      "code_citation": "Kentucky Revised Statutes, Chapters 116-121A (Elections)",
+      "code_url": "https://apps.legislature.ky.gov/law/statutes/",
+      "code_url_secondary": null,
+      "admin_agency": "Kentucky State Board of Elections",
+      "admin_url": "https://elect.ky.gov/",
+      "voter_portal_url": "https://govoteky.com/"
+    },
+    {
+      "state": "Louisiana",
+      "abbr": "LA",
+      "code_citation": "Louisiana Election Code, Title 18 (La. R.S. Title 18)",
+      "code_url": "https://legis.la.gov/legis/Law.aspx?d=81241",
+      "code_url_secondary": null,
+      "admin_agency": "Louisiana Secretary of State (Elections & Voting)",
+      "admin_url": "https://www.sos.la.gov/elections-voting",
+      "voter_portal_url": "https://voterportal.sos.la.gov/"
+    },
+    {
+      "state": "Maine",
+      "abbr": "ME",
+      "code_citation": "Maine Revised Statutes, Title 21-A (Elections)",
+      "code_url": "https://legislature.maine.gov/statutes/21-A/title21-Ach0sec0.html",
+      "code_url_secondary": null,
+      "admin_agency": "Maine Secretary of State, Bureau of Corporations, Elections and Commissions",
+      "admin_url": "https://www.maine.gov/sos/elections-voting",
+      "voter_portal_url": "https://www.maine.gov/portal/government/edemocracy/voter_lookup.php"
+    },
+    {
+      "state": "Maryland",
+      "abbr": "MD",
+      "code_citation": "Election Law Article, Annotated Code of Maryland",
+      "code_url": "https://mgaleg.maryland.gov/mgawebsite/Laws/StatutesText?article=gel",
+      "code_url_secondary": null,
+      "admin_agency": "Maryland State Board of Elections",
+      "admin_url": "https://elections.maryland.gov/",
+      "voter_portal_url": "https://voterservices.elections.maryland.gov/"
+    },
+    {
+      "state": "Massachusetts",
+      "abbr": "MA",
+      "code_citation": "General Laws, Part I, Title VIII, Chapters 50-56 (Elections)",
+      "code_url": "https://malegislature.gov/Laws/GeneralLaws/PartI/TitleVIII",
+      "code_url_secondary": null,
+      "admin_agency": "Secretary of the Commonwealth (Elections Division)",
+      "admin_url": "https://www.sec.state.ma.us/divisions/elections/elections-and-voting.htm",
+      "voter_portal_url": "https://www.sec.state.ma.us/ovr/"
+    },
+    {
+      "state": "Michigan",
+      "abbr": "MI",
+      "code_citation": "Michigan Election Law, Act 116 of 1954 (MCL Chapter 168)",
+      "code_url": "https://www.legislature.mi.gov/Laws/MCL?objectName=MCL-ACT-116-OF-1954",
+      "code_url_secondary": null,
+      "admin_agency": "Michigan Department of State (Secretary of State), Elections",
+      "admin_url": "https://www.michigan.gov/sos/elections",
+      "voter_portal_url": "https://mvic.sos.state.mi.us/"
+    },
+    {
+      "state": "Minnesota",
+      "abbr": "MN",
+      "code_citation": "Minnesota Statutes, Chapters 200-212 (Elections)",
+      "code_url": "https://www.revisor.mn.gov/statutes/part/ELECTIONS",
+      "code_url_secondary": null,
+      "admin_agency": "Minnesota Secretary of State (Elections & Voting)",
+      "admin_url": "https://www.sos.mn.gov/elections-voting/",
+      "voter_portal_url": "https://mnvotes.sos.mn.gov/"
+    },
+    {
+      "state": "Mississippi",
+      "abbr": "MS",
+      "code_citation": "Mississippi Code, Title 23, Chapter 15 (Mississippi Election Code)",
+      "code_url": "http://www.legislature.ms.gov/",
+      "code_url_secondary": "https://advance.lexis.com/container?config=00JAAzNzhjOTYxNC0wZjRkLTQzNzAtYjJlYS1jNjExZWYxZGFhMGYKAFBvZENhdGFsb2cMlW40w5iIH7toHnTBIEP0",
+      "admin_agency": "Mississippi Secretary of State (Elections & Voting)",
+      "admin_url": "https://www.sos.ms.gov/elections-voting",
+      "voter_portal_url": "https://www.yallvote.sos.ms.gov/"
+    },
+    {
+      "state": "Missouri",
+      "abbr": "MO",
+      "code_citation": "Revised Statutes of Missouri, Title IX, Chapter 115 (Elections)",
+      "code_url": "https://revisor.mo.gov/main/OneChapter.aspx?chapter=115",
+      "code_url_secondary": null,
+      "admin_agency": "Missouri Secretary of State (Elections)",
+      "admin_url": "https://www.sos.mo.gov/elections",
+      "voter_portal_url": "https://s1.sos.mo.gov/elections/voterlookup/"
+    },
+    {
+      "state": "Montana",
+      "abbr": "MT",
+      "code_citation": "Montana Code Annotated, Title 13 (Elections)",
+      "code_url": "https://mca.legmt.gov/bills/mca/title_0130/chapters_index.html",
+      "code_url_secondary": null,
+      "admin_agency": "Montana Secretary of State (Elections)",
+      "admin_url": "https://sosmt.gov/elections/",
+      "voter_portal_url": "https://app.mt.gov/voterinfo/"
+    },
+    {
+      "state": "Nebraska",
+      "abbr": "NE",
+      "code_citation": "Nebraska Revised Statutes, Chapter 32 (Elections)",
+      "code_url": "https://nebraskalegislature.gov/laws/browse-chapters.php?chapter=32",
+      "code_url_secondary": null,
+      "admin_agency": "Nebraska Secretary of State (Elections Division)",
+      "admin_url": "https://sos.nebraska.gov/elections-division",
+      "voter_portal_url": "https://www.votercheck.necvr.ne.gov/voterview/"
+    },
+    {
+      "state": "Nevada",
+      "abbr": "NV",
+      "code_citation": "Nevada Revised Statutes, Title 24, Chapters 293-304 (Elections)",
+      "code_url": "https://www.leg.state.nv.us/nrs/nrs-293.html",
+      "code_url_secondary": null,
+      "admin_agency": "Nevada Secretary of State (Elections)",
+      "admin_url": "https://www.nvsos.gov/sos/elections",
+      "voter_portal_url": "https://www.nvsos.gov/SOSVoterServices/start.aspx"
+    },
+    {
+      "state": "New Hampshire",
+      "abbr": "NH",
+      "code_citation": "RSA, Title LXIII, Chapters 652-671 (Elections)",
+      "code_url": "https://gc.nh.gov/rsa/html/nhtoc/nhtoc-lxiii.htm",
+      "code_url_secondary": null,
+      "admin_agency": "New Hampshire Secretary of State (Elections)",
+      "admin_url": "https://www.sos.nh.gov/elections",
+      "voter_portal_url": "https://app.sos.nh.gov/voterinformation"
+    },
+    {
+      "state": "New Jersey",
+      "abbr": "NJ",
+      "code_citation": "New Jersey Revised Statutes, Title 19 (Elections)",
+      "code_url": "https://www.njleg.state.nj.us/",
+      "code_url_secondary": "https://nj.gov/state/elections/election-information-title-19.html",
+      "admin_agency": "New Jersey Department of State, Division of Elections",
+      "admin_url": "https://nj.gov/state/elections/index.shtml",
+      "voter_portal_url": "https://www.nj.gov/state/elections/vote.shtml"
+    },
+    {
+      "state": "New Mexico",
+      "abbr": "NM",
+      "code_citation": "NMSA 1978, Chapter 1 (Elections / Election Code)",
+      "code_url": "https://nmonesource.com/",
+      "code_url_secondary": null,
+      "admin_agency": "New Mexico Secretary of State (Voting & Elections)",
+      "admin_url": "https://www.sos.nm.gov/voting-and-elections/",
+      "voter_portal_url": "https://voterportal.servis.sos.state.nm.us/"
+    },
+    {
+      "state": "New York",
+      "abbr": "NY",
+      "code_citation": "New York Election Law (ELN)",
+      "code_url": "https://www.nysenate.gov/legislation/laws/ELN",
+      "code_url_secondary": null,
+      "admin_agency": "New York State Board of Elections",
+      "admin_url": "https://elections.ny.gov/",
+      "voter_portal_url": "https://voterlookup.elections.ny.gov/"
+    },
+    {
+      "state": "North Carolina",
+      "abbr": "NC",
+      "code_citation": "General Statutes, Chapter 163 (Elections and Election Laws)",
+      "code_url": "https://www.ncleg.gov/EnactedLegislation/Statutes/PDF/ByChapter/Chapter_163.pdf",
+      "code_url_secondary": null,
+      "admin_agency": "North Carolina State Board of Elections",
+      "admin_url": "https://www.ncsbe.gov/",
+      "voter_portal_url": "https://vt.ncsbe.gov/reglkup/"
+    },
+    {
+      "state": "North Dakota",
+      "abbr": "ND",
+      "code_citation": "North Dakota Century Code, Title 16.1 (Elections)",
+      "code_url": "https://ndlegis.gov/cencode/t16-1.html",
+      "code_url_secondary": null,
+      "admin_agency": "North Dakota Secretary of State (Elections)",
+      "admin_url": "https://www.sos.nd.gov/elections",
+      "voter_portal_url": "https://vip.sos.nd.gov/"
+    },
+    {
+      "state": "Ohio",
+      "abbr": "OH",
+      "code_citation": "Ohio Revised Code, Title 35, Chapters 3501-3599 (Elections)",
+      "code_url": "https://codes.ohio.gov/ohio-revised-code/title-35",
+      "code_url_secondary": null,
+      "admin_agency": "Ohio Secretary of State (Elections)",
+      "admin_url": "https://www.ohiosos.gov/elections/",
+      "voter_portal_url": "https://voterlookup.ohiosos.gov/"
+    },
+    {
+      "state": "Oklahoma",
+      "abbr": "OK",
+      "code_citation": "Oklahoma Statutes, Title 26 (Elections)",
+      "code_url": "https://www.oscn.net/applications/oscn/index.asp?ftdb=STOKST26&level=1",
+      "code_url_secondary": null,
+      "admin_agency": "Oklahoma State Election Board",
+      "admin_url": "https://oklahoma.gov/elections.html",
+      "voter_portal_url": "https://okvoterportal.okelections.gov/"
+    },
+    {
+      "state": "Oregon",
+      "abbr": "OR",
+      "code_citation": "Oregon Revised Statutes, Chapters 246-260 (Elections)",
+      "code_url": "https://www.oregonlegislature.gov/bills_laws/ors/ors246.html",
+      "code_url_secondary": null,
+      "admin_agency": "Oregon Secretary of State (Elections Division)",
+      "admin_url": "https://sos.oregon.gov/voting-elections/Pages/default.aspx",
+      "voter_portal_url": "https://secure.sos.state.or.us/orestar/vr/showVoterSearch.do"
+    },
+    {
+      "state": "Pennsylvania",
+      "abbr": "PA",
+      "code_citation": "Pennsylvania Election Code (25 P.S.); Title 25",
+      "code_url": "https://www.legis.state.pa.us/WU01/LI/LI/CT/HTM/25/25.HTM",
+      "code_url_secondary": "https://www.palegis.us/",
+      "admin_agency": "Pennsylvania Department of State (Voting & Elections)",
+      "admin_url": "https://www.pa.gov/agencies/vote",
+      "voter_portal_url": "https://www.pavoterservices.pa.gov/"
+    },
+    {
+      "state": "Rhode Island",
+      "abbr": "RI",
+      "code_citation": "General Laws, Title 17 (Elections)",
+      "code_url": "https://webserver.rilegislature.gov/Statutes/TITLE17/INDEX.HTM",
+      "code_url_secondary": null,
+      "admin_agency": "Rhode Island Department of State (Elections & Civics Division)",
+      "admin_url": "https://vote.sos.ri.gov/",
+      "voter_portal_url": "https://vote.sos.ri.gov/"
+    },
+    {
+      "state": "South Carolina",
+      "abbr": "SC",
+      "code_citation": "Code of Laws, Title 7 (Elections)",
+      "code_url": "https://www.scstatehouse.gov/code/title7.php",
+      "code_url_secondary": null,
+      "admin_agency": "South Carolina State Election Commission",
+      "admin_url": "https://scvotes.gov/",
+      "voter_portal_url": "https://info.scvotes.sc.gov/Eng/VoterInquiry/VoterInformation.aspx"
+    },
+    {
+      "state": "South Dakota",
+      "abbr": "SD",
+      "code_citation": "Codified Laws, Title 12 (Elections)",
+      "code_url": "https://sdlegislature.gov/Statutes/12",
+      "code_url_secondary": null,
+      "admin_agency": "South Dakota Secretary of State (Elections & Voting)",
+      "admin_url": "https://sdsos.gov/elections-voting/default.aspx",
+      "voter_portal_url": "https://vip.sdsos.gov/"
+    },
+    {
+      "state": "Tennessee",
+      "abbr": "TN",
+      "code_citation": "Tennessee Code Annotated, Title 2 (Elections)",
+      "code_url": "https://www.capitol.tn.gov/",
+      "code_url_secondary": "https://www.lexisnexis.com/hottopics/tncode/",
+      "admin_agency": "Tennessee Secretary of State (Division of Elections / GoVoteTN)",
+      "admin_url": "https://sos.tn.gov/elections",
+      "voter_portal_url": "https://web.go-vote-tn.elections.tn.gov/"
+    },
+    {
+      "state": "Texas",
+      "abbr": "TX",
+      "code_citation": "Texas Election Code",
+      "code_url": "https://statutes.capitol.texas.gov/?link=EL",
+      "code_url_secondary": "https://statutes.capitol.texas.gov/docs/sdocs/electioncode.pdf",
+      "admin_agency": "Texas Secretary of State (Elections Division)",
+      "admin_url": "https://www.sos.texas.gov/elections/index.shtml",
+      "voter_portal_url": "https://www.votetexas.gov/"
+    },
+    {
+      "state": "Utah",
+      "abbr": "UT",
+      "code_citation": "Utah Code, Title 20A (Election Code)",
+      "code_url": "https://le.utah.gov/xcode/Title20A/20a.html",
+      "code_url_secondary": null,
+      "admin_agency": "Utah Lieutenant Governor's Office (Elections)",
+      "admin_url": "https://elections.utah.gov/",
+      "voter_portal_url": "https://vote.utah.gov/"
+    },
+    {
+      "state": "Vermont",
+      "abbr": "VT",
+      "code_citation": "Vermont Statutes, Title 17 (Elections)",
+      "code_url": "https://legislature.vermont.gov/statutes/title/17",
+      "code_url_secondary": null,
+      "admin_agency": "Vermont Secretary of State (Elections Division)",
+      "admin_url": "https://sos.vermont.gov/elections/",
+      "voter_portal_url": "https://mvp.vermont.gov/"
+    },
+    {
+      "state": "Virginia",
+      "abbr": "VA",
+      "code_citation": "Code of Virginia, Title 24.2 (Elections)",
+      "code_url": "https://law.lis.virginia.gov/vacode/title24.2/",
+      "code_url_secondary": null,
+      "admin_agency": "Virginia Department of Elections",
+      "admin_url": "https://www.elections.virginia.gov/",
+      "voter_portal_url": "https://vote.elections.virginia.gov/"
+    },
+    {
+      "state": "Washington",
+      "abbr": "WA",
+      "code_citation": "Revised Code of Washington, Title 29A (Elections)",
+      "code_url": "https://app.leg.wa.gov/rcw/default.aspx?cite=29A",
+      "code_url_secondary": null,
+      "admin_agency": "Washington Secretary of State (Elections)",
+      "admin_url": "https://www.sos.wa.gov/elections",
+      "voter_portal_url": "https://www.votewa.gov/"
+    },
+    {
+      "state": "West Virginia",
+      "abbr": "WV",
+      "code_citation": "West Virginia Code, Chapter 3 (Elections)",
+      "code_url": "https://code.wvlegislature.gov/3/",
+      "code_url_secondary": null,
+      "admin_agency": "West Virginia Secretary of State (Elections)",
+      "admin_url": "https://sos.wv.gov/elections",
+      "voter_portal_url": "https://govotewv.com/"
+    },
+    {
+      "state": "Wisconsin",
+      "abbr": "WI",
+      "code_citation": "Wisconsin Statutes, Chapters 5-12 (Elections)",
+      "code_url": "https://docs.legis.wisconsin.gov/statutes/statutes/5",
+      "code_url_secondary": null,
+      "admin_agency": "Wisconsin Elections Commission",
+      "admin_url": "https://elections.wi.gov/",
+      "voter_portal_url": "https://myvote.wi.gov/"
+    },
+    {
+      "state": "Wyoming",
+      "abbr": "WY",
+      "code_citation": "Wyoming Statutes, Title 22 (Elections / Wyoming Election Code)",
+      "code_url": "https://www.wyoleg.gov/StateStatutes/StatutesDownload",
+      "code_url_secondary": "https://wyoleg.gov/statutes/compress/title22.pdf",
+      "admin_agency": "Wyoming Secretary of State (Elections Division)",
+      "admin_url": "https://sos.wyo.gov/elections/",
+      "voter_portal_url": ""
+    }
+  ]
+}

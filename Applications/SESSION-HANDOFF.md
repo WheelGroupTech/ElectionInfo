@@ -6,12 +6,12 @@
 
 **Last updated:** 2026-09-16
 **Branch:** main — Store prep (MSIX packaging, logo, privacy policy, trademarks,
-brand strings, About privacy link, sample datasets, app-icon refresh) all
-**committed**. Store identity in `Package.appxmanifest` is set (Name
-`WheelGroupTech.ElectionExplorer`, Publisher `CN=19C9DED9-…980D6`,
-PublisherDisplayName `WheelGroupTech`). **Uncommitted:** a normalized-address
-**bug fix** for Travis exports (district codes wrongly appended) — see "This
-session" below. The app is being published via the **Microsoft Store**.
+brand strings, About privacy link, sample datasets, app-icon refresh) and the
+Travis normalized-address **bug fix** are all **committed**. Store identity in
+`Package.appxmanifest` is set (Name `WheelGroupTech.ElectionExplorer`, Publisher
+`CN=19C9DED9-…980D6`, PublisherDisplayName `WheelGroupTech`). **Uncommitted:** the
+**Store association** files from VS (staged) plus a `.gitignore` rule for `*.pfx`
+— see "This session" below. The app is being published via the **Microsoft Store**.
 
 ---
 
@@ -38,7 +38,25 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-16) — normalized-address fix (uncommitted)
+## This session (2026-09-16) — Store association (uncommitted)
+
+**Associated the package with the Store (done in Visual Studio).** Reviewed the
+staged changes — correct and consistent with the manifest identity.
+- New `ElectionExplorer.Package/Package.StoreAssociation.xml` (staged): Publisher
+  `CN=19C9DED9-…980D6`, PublisherDisplayName `WheelGroupTech`,
+  MainPackageIdentityName `WheelGroupTech.ElectionExplorer`, ReservedName
+  `Election Explorer`. No secrets (all public Store identifiers). Wired into the
+  `.wapproj` as `<None Include=…>`.
+- `.wapproj` (staged): added `GenerateTemporaryStoreCertificate=True` (benign —
+  Store signs the upload; local signing stays off) and the `<None>` above; the
+  rest of the diff is VS reformatting (multi-line `Content`, blank-line/trailing-
+  newline changes), no functional change.
+- Added `*.pfx` to the repo-root `.gitignore` (uncommitted) — a temporary store
+  cert could otherwise be dropped next to the project and accidentally committed.
+  Verified ignored via `git check-ignore`. No `.pfx` exists yet.
+- `Package.appxmanifest` was NOT rewritten by the association (identity intact).
+
+## Travis normalized-address fix (committed)
 
 **District codes appended to normalized address (Travis 2026-07-06 export).** The
 first record showed `1109 N IH 35  NB AUSTIN TX 78702, C10, 5` instead of
@@ -55,7 +73,7 @@ tail from columns.
 - Regression test `test_district_codes_not_appended` (tag `distcode`). Full smoke
   suite passes; clang-clean. Verified on the **real 929,662-row Travis file**:
   row 0 address is now `1109 N IH 35  NB AUSTIN TX 78702`.
-- Files: `src/voter_table.c`, `test/smoke_load.c`. Uncommitted.
+- Files: `src/voter_table.c`, `test/smoke_load.c`. Committed.
 - Note: the header heuristics still *classify* `CITY`/`STATE BOARD OF EDUCATION`
   as city/state (loose `header_contains` matches at ~line 2697-2703 in
   `voter_table.c`); the compose gate neutralizes the effect for ZIP-tailed
@@ -309,10 +327,10 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Commit the address fix** (uncommitted): `src/voter_table.c`,
-  `test/smoke_load.c`, this handoff. Suggested:
-  `fix(explorer): don't append jurisdiction CITY/STATE codes to a full address`.
-- **Rebuild the MSIX bundle** after committing (the fix changes the binary), then
+- **Commit the Store association** (staged) + the `.gitignore` `*.pfx` rule
+  (unstaged) + this handoff. Suggested:
+  `build: associate package with the Store; ignore *.pfx`.
+- **Rebuild the MSIX bundle** (it must include the committed address fix), then
   **submit to the Store**:
   `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
   Partner Center.

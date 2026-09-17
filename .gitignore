@@ -203,3 +203,5 @@ ipch/
 # Voter registration lists — raw county exports, too large to push to GitHub
 Voter_Lists/
 
+# Voter rosters from elections - raw county and state exports, too large to push to GitHub
+Voter_Rosters/

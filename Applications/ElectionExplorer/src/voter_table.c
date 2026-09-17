@@ -3539,6 +3539,29 @@ static BOOL unit_type_is_lot(const char *unit_type)
            ascii_fold((unsigned char)p[1]) == 'O' && ascii_fold((unsigned char)p[2]) == 'T';
 }
 
+/* TRUE if the last whitespace/comma-separated token of @p s (length @p len) is a
+ * US ZIP, i.e. the address already carries its own ZIP tail. */
+static BOOL last_token_is_zip(const char *s, size_t len)
+{
+    size_t end = len;
+    size_t start;
+
+    while (end > 0 && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == ','))
+    {
+        end--;
+    }
+    start = end;
+    while (start > 0 && s[start - 1] != ' ' && s[start - 1] != '\t' && s[start - 1] != ',')
+    {
+        start--;
+    }
+    if (start >= end)
+    {
+        return FALSE;
+    }
+    return token_is_zip(s + start, end - start);
+}
+
 static BOOL compose_address(const FieldList *fields,
                             int full_idx,
                             int number_idx,
@@ -3570,6 +3593,7 @@ static BOOL compose_address(const FieldList *fields,
      * consistent street line (including the unit) regardless of whether a
      * full-address column carries the unit / city / state / ZIP. */
     BOOL have_parts = (number[0] != '\0' || street[0] != '\0');
+    BOOL append_tail = TRUE;
 
     split_zip(field_at(fields, zip_idx),
               field_at(fields, zip4_idx),
@@ -3614,17 +3638,33 @@ static BOOL compose_address(const FieldList *fields,
         tidy_house_number_token(full_buf);
         tidy_zip_tail(full_buf);
         flen = strlen(full_buf);
-        if (zip5[0] != '\0' && ends_with_zip5(full_buf, flen, zip5, &remain))
         {
-            flen = remain;
-        }
-        if (state[0] != '\0' && ends_with_phrase_ci(full_buf, flen, state, &remain))
-        {
-            flen = remain;
-        }
-        if (city[0] != '\0' && ends_with_phrase_ci(full_buf, flen, city, &remain))
-        {
-            flen = remain;
+            /* If the full address already ends with its own ZIP tail and none of
+             * the city / state / ZIP columns actually match that tail, those
+             * columns are unrelated jurisdiction / district codes (e.g. Travis
+             * "CITY" = "C10", "STATE BOARD OF EDUCATION" = "5"), not residence
+             * fields -- keep the address intact and do not append them. */
+            BOOL full_has_own_tail = last_token_is_zip(full_buf, flen);
+            BOOL any_matched = FALSE;
+            if (zip5[0] != '\0' && ends_with_zip5(full_buf, flen, zip5, &remain))
+            {
+                flen = remain;
+                any_matched = TRUE;
+            }
+            if (state[0] != '\0' && ends_with_phrase_ci(full_buf, flen, state, &remain))
+            {
+                flen = remain;
+                any_matched = TRUE;
+            }
+            if (city[0] != '\0' && ends_with_phrase_ci(full_buf, flen, city, &remain))
+            {
+                flen = remain;
+                any_matched = TRUE;
+            }
+            if (!any_matched && full_has_own_tail)
+            {
+                append_tail = FALSE;
+            }
         }
         skip_trailing_addr_seps(full_buf, &flen);
         full_buf[flen] = '\0';
@@ -3635,9 +3675,10 @@ static BOOL compose_address(const FieldList *fields,
     }
 
     {
-        /* Consistent tail: "…, City, STATE ZIP[-ZIP4]" from the columns. The
-         * street line above never contains these, so always append them. */
-        if (city[0] != '\0' || state[0] != '\0' || zip5[0] != '\0')
+        /* Consistent tail: "…, City, STATE ZIP[-ZIP4]" from the columns. Skipped
+         * when the full address already carries its own ZIP tail and the columns
+         * did not match it (see append_tail above). */
+        if (append_tail && (city[0] != '\0' || state[0] != '\0' || zip5[0] != '\0'))
         {
             if (len > 0 && !append_literal(out, out_cap, &len, ","))
             {

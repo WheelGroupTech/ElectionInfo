@@ -4,14 +4,14 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-11
-**Branch:** main — MSIX packaging, transparent logo, privacy policy, trademarks,
-brand-string fix, About-dialog privacy link, and the synthetic sample datasets
-are all **committed**. Store identity in `Package.appxmanifest` is set (Name
+**Last updated:** 2026-09-16
+**Branch:** main — Store prep (MSIX packaging, logo, privacy policy, trademarks,
+brand strings, About privacy link, sample datasets, app-icon refresh) all
+**committed**. Store identity in `Package.appxmanifest` is set (Name
 `WheelGroupTech.ElectionExplorer`, Publisher `CN=19C9DED9-…980D6`,
-PublisherDisplayName `WheelGroupTech`). **Uncommitted:** the **app-icon refresh**
-(new high-res `res/app.ico` + `generate-icon.ps1`) — see "App icon" below. The
-app is being published via the **Microsoft Store**.
+PublisherDisplayName `WheelGroupTech`). **Uncommitted:** a normalized-address
+**bug fix** for Travis exports (district codes wrongly appended) — see "This
+session" below. The app is being published via the **Microsoft Store**.
 
 ---
 
@@ -38,19 +38,41 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-11)
+## This session (2026-09-16) — normalized-address fix (uncommitted)
 
-**App icon refresh (uncommitted).** Rebuilt `res/app.ico` from the transparent
+**District codes appended to normalized address (Travis 2026-07-06 export).** The
+first record showed `1109 N IH 35  NB AUSTIN TX 78702, C10, 5` instead of
+`…78702`. Root cause: the file has a complete `Residential Address` column plus a
+jurisdiction-code column literally named `CITY` (`C10`) and a
+`STATE BOARD OF EDUCATION` column (`5`); the header heuristics classify those as
+residence city/state, and `compose_address` always appended the city/state/ZIP
+tail from columns.
+- Fix in `compose_address` (`voter_table.c`): in the full-address branch, if the
+  address already ends with its own ZIP tail **and** none of the city/state/ZIP
+  columns match that tail, skip appending them (`append_tail = FALSE`). New helper
+  `last_token_is_zip`. The `123 Main St` + real City/State/Zip case (no ZIP tail)
+  still appends — the `resdup` test covers both.
+- Regression test `test_district_codes_not_appended` (tag `distcode`). Full smoke
+  suite passes; clang-clean. Verified on the **real 929,662-row Travis file**:
+  row 0 address is now `1109 N IH 35  NB AUSTIN TX 78702`.
+- Files: `src/voter_table.c`, `test/smoke_load.c`. Uncommitted.
+- Note: the header heuristics still *classify* `CITY`/`STATE BOARD OF EDUCATION`
+  as city/state (loose `header_contains` matches at ~line 2697-2703 in
+  `voter_table.c`); the compose gate neutralizes the effect for ZIP-tailed
+  addresses. Tightening detection is a possible follow-up but was left alone to
+  avoid breaking legitimate `CITY`/`STATE` residence columns.
+
+## App icon refresh (committed)
+
+**App icon refresh.** Rebuilt `res/app.ico` from the transparent
 `logo-source.png` — a multi-resolution icon (16/24/32/48/64/128/256) using a
 **square crop** of the portrait logo (previously the icon topped out at 64px and
 was upscaled). New `ElectionExplorer.Package/tools/generate-icon.ps1` (ImageMagick
 7+) regenerates it; documented in the package `README.md`. App rebuilt so the icon
 is compiled in, and the **MSIX bundle was rebuilt** to include it (verified: x64 +
-arm64, identity intact). Uncommitted files: `res/app.ico`,
-`ElectionExplorer.Package/tools/generate-icon.ps1`, package `README.md`,
-this handoff. Icon not yet eyeballed in a real Explorer/title-bar view; the 16px
-frame is a busy composition — swap to a simplified small-size glyph later if it
-reads poorly.
+arm64, identity intact). Icon not yet eyeballed in a real Explorer/title-bar view;
+the 16px frame is a busy composition — swap to a simplified small-size glyph later
+if it reads poorly.
 
 **Store listing prep (committed earlier this session).**
 - `ElectionExplorer/PRIVACY.md` — no data collection; local-only; discloses that
@@ -287,12 +309,13 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Commit the app-icon refresh** (uncommitted): `res/app.ico`,
-  `ElectionExplorer.Package/tools/generate-icon.ps1`, package `README.md`, this
-  handoff. Suggested: `build: refresh app icon from the new logo (multi-res .ico)`.
-- **Submit to the Store:** the freshly rebuilt
-  `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload`
-  includes the new icon and correct identity — upload it in Partner Center.
+- **Commit the address fix** (uncommitted): `src/voter_table.c`,
+  `test/smoke_load.c`, this handoff. Suggested:
+  `fix(explorer): don't append jurisdiction CITY/STATE codes to a full address`.
+- **Rebuild the MSIX bundle** after committing (the fix changes the binary), then
+  **submit to the Store**:
+  `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
+  Partner Center.
 - Enable **GitHub Pages** so the privacy URL resolves (used by the Store listing
   and the About-dialog link):
   `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`

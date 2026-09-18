@@ -1,8 +1,11 @@
 # Design: XLSX import for ElectionExplorer
 
-**Status:** Phases 1–2 implemented (`src/xlsx.{c,h}` + row-sink refactor, tested).
-Remaining: GUI sheet picker + `*.xlsx` dialog filter; Phase 3 (styles-driven
-date/number fidelity).
+**Status:** Implemented — Phases 1–3 + the GUI sheet picker and `*.xlsx` File→Open
+filter. Reads shared/inline strings, numbers, booleans, error cells; converts
+date serials to `YYYY-MM-DD` and preserves zero-padded formats (e.g. ZIP
+`00000`) via `styles.xml`. Tested (`xlsx`, `xlsxfmt` round-trip tests; verified on
+a real workbook). Possible future work: broader number-format coverage; streaming
+very large parts instead of extract-to-heap.
 **Date:** 2026-09-17
 **Scope:** Add the ability to open and extract tabular data from Microsoft Excel
 `.xlsx` workbooks, as an alternative input to the existing CSV/TSV loader.

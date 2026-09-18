@@ -10,9 +10,10 @@
 last session. **Uncommitted this session:** **XLSX import Phases 1–2** — vendored
 miniz, `src/xlsx.{c,h}`, the CSV/XLSX row-sink refactor in `voter_table.c`,
 `.vcxproj` wiring, tests, and the design doc. Builds clean; full smoke suite
-passes. The **GUI sheet picker + `*.xlsx` File→Open filter** are now in too
-(builds clean; not yet click-tested). Remaining for XLSX: Phase 3 date/number
-fidelity. The app is being published via the **Microsoft Store**.
+passes. The **GUI sheet picker + `*.xlsx` File→Open filter** (click-tested) and
+**Phase 3 fidelity** (date serials → `YYYY-MM-DD`, ZIP/ID leading-zero
+preservation via `styles.xml`) are in too. XLSX import is now **feature-complete**
+(uncommitted). The app is being published via the **Microsoft Store**.
 
 ---
 
@@ -69,9 +70,8 @@ fidelity is a Phase 3 follow-up); (3) **sheet picker up front** (part of v1);
 (4) tests via a **generator** (Python/openpyxl) + runtime-built `.xlsx`, no
 binaries; (5) `t="b"`→TRUE/FALSE, `t="e"`→error text. Doc updated to match.
 
-**Phases 1–2 implemented + tested (uncommitted).** XLSX import works end to end
-(reader + the row-sink refactor). Remaining: the GUI sheet-picker + `*.xlsx`
-open-dialog filter, and Phase 3 fidelity.
+**Implemented + tested (uncommitted) — reader, row-sink refactor, GUI, Phase 3.**
+XLSX import works end to end.
 - Vendored **miniz 3.0.2** at `src/third_party/miniz/` (`miniz.c`, `miniz.h`,
   `LICENSE`, `README.md`).
 - `src/xlsx.{c,h}` — self-contained reader: reads the file into memory, opens it
@@ -101,9 +101,15 @@ open-dialog filter, and Phase 3 fidelity.
   `App_PickSheet`, listbox + Load/Cancel) before loading. `App_StartLoad` gained a
   `sheet_index`; `LoadThreadProc` calls `EeVoterTable_LoadXlsxSheet` for `.xlsx`,
   else `EeVoterTable_LoadFromFile`. New IDs `IDC_SHEET_LIST`/`IDC_SHEET_LABEL`.
-  Builds clean (x64 Debug+Release); **not yet click-tested** — test with the
-  3-sheet fixture from `gen_xlsx_fixtures.py` (picker should list Voters/Roster/
-  EdgeCases).
+  Builds clean (x64 Debug+Release); **click-tested OK** with the 3-sheet fixture.
+- **Phase 3 fidelity (`xlsx.c`):** reads `xl/styles.xml` (`cellXfs` → numFmt) and
+  the workbook date system; a date-formatted numeric cell now loads as
+  `YYYY-MM-DD` (was a serial), and a zero-padded format keeps leading zeros
+  (ZIP `00000`). Custom + builtin date formats handled; `date1904` respected.
+  Test `test_xlsx_styles` (tag `xlsxfmt`); verified on the real openpyxl fixture
+  (DOB `28957` → `1979-04-12`). Known caveats: extract-to-heap per part (memory
+  ~2× on huge sheets); arbitrary custom number formats beyond date/zero-pad fall
+  back to the stored value.
 
 ## Travis normalized-address fix (committed)
 
@@ -383,16 +389,15 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   **submit to the Store**:
   `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
   Partner Center.
-- **XLSX import Phases 1–2 done** (reader + row-sink refactor, tested, builds
-  clean) — commit when ready (new: `src/xlsx.{c,h}`, `src/third_party/miniz/`,
+- **XLSX import is feature-complete** (reader + row-sink refactor + GUI sheet
+  picker + `*.xlsx` filter + Phase 3 fidelity; tested, builds clean, click-tested)
+  — commit when ready. New: `src/xlsx.{c,h}`, `src/third_party/miniz/`,
   `docs/xlsx-import-design.md`, `docs/sample-data/gen_xlsx_fixtures.py`; modified:
-  `voter_table.{c,h}`, `test/smoke_load.c`, `test/README.md`, `.vcxproj`,
-  `.filters`). Suggested: `feat(explorer): read .xlsx workbooks (miniz + shared row sink)`.
-  (`main.c` sheet picker + `*.xlsx` filter now included.) Then:
-  - **Click-test the GUI:** open the 3-sheet fixture, confirm the picker lists the
-    sheets and the chosen one loads; open a single-sheet `.xlsx` (no picker).
-  - **Phase 3 fidelity:** read `styles.xml` to convert date serials → text and
-    preserve leading zeros / avoid scientific notation for numeric IDs/ZIPs.
+  `voter_table.{c,h}`, `src/main.c`, `src/resource.h`, `test/smoke_load.c`,
+  `test/README.md`, `.vcxproj`, `.filters`. Suggested:
+  `feat(explorer): import .xlsx workbooks (sheet picker, dates, miniz)`.
+  Optional future work: broader number-format coverage; stream very large sheet
+  parts instead of extract-to-heap.
 - Enable **GitHub Pages** so the privacy URL resolves (used by the Store listing
   and the About-dialog link):
   `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`

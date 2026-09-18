@@ -27,6 +27,12 @@
     <ClCompile Include="src\settings.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\xlsx.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\third_party\miniz\miniz.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\main.h">
@@ -39,6 +45,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\settings.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\xlsx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\third_party\miniz\miniz.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\resource.h">

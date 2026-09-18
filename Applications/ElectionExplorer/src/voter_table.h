@@ -397,6 +397,32 @@ extern "C"
                                            wchar_t *error_message,
                                            size_t error_cch);
 
+    /**
+ * @brief Load one worksheet of an Excel .xlsx workbook into @p out_table.
+ *
+ * Rows are fed through the same ingestion pipeline as the CSV/TSV loader, so
+ * column-role detection and Voter ID / Precinct / Name / Address composition
+ * behave identically. Use EeXlsx_ListSheets (xlsx.h) to present a sheet picker.
+ * EeVoterTable_LoadFromFile dispatches a ".xlsx" path here with @p sheet_index 0.
+ *
+ * @param path           Wide path to the .xlsx file.
+ * @param sheet_index    0-based worksheet index in workbook order.
+ * @param out_table      Destination; cleared on entry.
+ * @param cancel_flag    Optional; non-zero means cancel (checked often).
+ * @param progress_fn    Optional progress callback.
+ * @param progress_user  Passed to progress_fn.
+ * @param error_message  Optional; receives message on failure (cch includes NUL).
+ * @param error_cch      Capacity of error_message.
+ */
+    EeLoadStatus EeVoterTable_LoadXlsxSheet(const wchar_t *path,
+                                            int sheet_index,
+                                            EeVoterTable *out_table,
+                                            volatile LONG *cancel_flag,
+                                            EeLoadProgressFn progress_fn,
+                                            void *progress_user,
+                                            wchar_t *error_message,
+                                            size_t error_cch);
+
 #ifdef __cplusplus
 }
 #endif

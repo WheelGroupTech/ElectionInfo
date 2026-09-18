@@ -4,6 +4,7 @@
  */
 
 #include "voter_table.h"
+#include "xlsx.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -4018,6 +4019,483 @@ static BOOL fields_look_like_preamble(const FieldList *f)
     return TRUE;
 }
 
+/* Resolved source-column indices for one loaded table. Shared by the CSV/TSV
+ * and XLSX ingestion paths so both build rows identically. */
+typedef struct LoadColumnMap
+{
+    int vuid_idx;
+    int other_id_idx;
+    int full_idx;
+    int pre_idx;
+    int first_idx;
+    int mid_idx;
+    int last_idx;
+    int suf_idx;
+    int precinct_idx;
+    int addr_full_idx;
+    int house_idx;
+    int predir_idx;
+    int street_idx;
+    int strtype_idx;
+    int dir_idx;
+    int postdir_idx;
+    int unitype_idx;
+    int unit_idx;
+    int city_idx;
+    int state_idx;
+    int zip_idx;
+    int zip4_idx;
+    uint32_t src_col_count;
+} LoadColumnMap;
+
+/* Classify the header row, resolve column roles, and set up @p out's display
+ * columns + titles. On failure returns _Error with a message; the caller owns
+ * cleanup (EeVoterTable_Clear). @p delim is stored for reference (0 for XLSX). */
+static EeLoadStatus ingest_header(EeVoterTable *out,
+                                  const FieldList *header,
+                                  char delim,
+                                  LoadColumnMap *map,
+                                  wchar_t *err,
+                                  size_t errcch)
+{
+    FieldRole roles[EE_MAX_COLUMNS];
+    uint32_t src_col_count;
+    size_t i;
+
+    map->vuid_idx = map->other_id_idx = -1;
+    map->full_idx = map->pre_idx = map->first_idx = map->mid_idx = map->last_idx = map->suf_idx =
+        -1;
+    map->precinct_idx = -1;
+    map->addr_full_idx = map->house_idx = map->predir_idx = map->street_idx = map->strtype_idx =
+        map->dir_idx = map->postdir_idx = map->unitype_idx = map->unit_idx = map->city_idx =
+            map->state_idx = map->zip_idx = map->zip4_idx = -1;
+
+    if (header->count == 0 || header->count > EE_MAX_COLUMNS - EE_FROZEN_COLUMN_COUNT)
+    {
+        set_error(err, errcch, L"Unsupported column count in voter list.");
+        return EeLoadStatus_Error;
+    }
+
+    ZeroMemory(roles, sizeof(roles));
+    src_col_count = (uint32_t)header->count;
+    out->delimiter = delim;
+    for (i = 0; i < header->count; i++)
+    {
+        char norm[128];
+        normalize_header(header->items[i], norm, sizeof(norm));
+        roles[i] = classify_field(norm);
+        switch (roles[i])
+        {
+            case Role_Vuid:
+                if (map->vuid_idx < 0)
+                    map->vuid_idx = (int)i;
+                break;
+            case Role_OtherId:
+                if (map->other_id_idx < 0)
+                    map->other_id_idx = (int)i;
+                break;
+            case Role_FullName:
+                if (map->full_idx < 0)
+                    map->full_idx = (int)i;
+                break;
+            case Role_NamePrefix:
+                if (map->pre_idx < 0)
+                    map->pre_idx = (int)i;
+                break;
+            case Role_FirstName:
+                if (map->first_idx < 0)
+                    map->first_idx = (int)i;
+                break;
+            case Role_MiddleName:
+                if (map->mid_idx < 0)
+                    map->mid_idx = (int)i;
+                break;
+            case Role_LastName:
+                if (map->last_idx < 0)
+                    map->last_idx = (int)i;
+                break;
+            case Role_Precinct:
+                if (map->precinct_idx < 0)
+                    map->precinct_idx = (int)i;
+                break;
+            case Role_NameSuffix:
+                if (map->suf_idx < 0)
+                    map->suf_idx = (int)i;
+                break;
+            case Role_AddrFull:
+                if (map->addr_full_idx < 0)
+                    map->addr_full_idx = (int)i;
+                break;
+            case Role_AddrNumber:
+                if (map->house_idx < 0)
+                    map->house_idx = (int)i;
+                break;
+            case Role_AddrPredir:
+                if (map->predir_idx < 0)
+                    map->predir_idx = (int)i;
+                break;
+            case Role_AddrStreet:
+                if (map->street_idx < 0)
+                    map->street_idx = (int)i;
+                break;
+            case Role_AddrType:
+                if (map->strtype_idx < 0)
+                    map->strtype_idx = (int)i;
+                break;
+            case Role_AddrDir:
+                if (map->dir_idx < 0)
+                    map->dir_idx = (int)i;
+                break;
+            case Role_AddrPostdir:
+                if (map->postdir_idx < 0)
+                    map->postdir_idx = (int)i;
+                break;
+            case Role_AddrUnitType:
+                if (map->unitype_idx < 0)
+                    map->unitype_idx = (int)i;
+                break;
+            case Role_AddrUnit:
+                if (map->unit_idx < 0)
+                    map->unit_idx = (int)i;
+                break;
+            case Role_AddrCity:
+                if (map->city_idx < 0)
+                    map->city_idx = (int)i;
+                break;
+            case Role_AddrState:
+                if (map->state_idx < 0)
+                    map->state_idx = (int)i;
+                break;
+            case Role_AddrZip:
+                if (map->zip_idx < 0)
+                    map->zip_idx = (int)i;
+                break;
+            case Role_AddrZip4:
+                if (map->zip4_idx < 0)
+                    map->zip4_idx = (int)i;
+                break;
+            default:
+                break;
+        }
+    }
+    if (map->vuid_idx < 0)
+    {
+        map->vuid_idx = map->other_id_idx;
+    }
+    if (map->predir_idx < 0)
+    {
+        map->predir_idx = map->dir_idx;
+    }
+    else if (map->postdir_idx < 0)
+    {
+        map->postdir_idx = map->dir_idx;
+    }
+
+    out->name_full_col = (map->full_idx < 0) ? -1 : map->full_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->name_prefix_col = (map->pre_idx < 0) ? -1 : map->pre_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->name_first_col = (map->first_idx < 0) ? -1 : map->first_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->name_middle_col = (map->mid_idx < 0) ? -1 : map->mid_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->name_last_col = (map->last_idx < 0) ? -1 : map->last_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->name_suffix_col = (map->suf_idx < 0) ? -1 : map->suf_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_full_col =
+        (map->addr_full_idx < 0) ? -1 : map->addr_full_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_number_col = (map->house_idx < 0) ? -1 : map->house_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_predir_col =
+        (map->predir_idx < 0) ? -1 : map->predir_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_street_col =
+        (map->street_idx < 0) ? -1 : map->street_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_type_col =
+        (map->strtype_idx < 0) ? -1 : map->strtype_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_postdir_col =
+        (map->postdir_idx < 0) ? -1 : map->postdir_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_unit_type_col =
+        (map->unitype_idx < 0) ? -1 : map->unitype_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_unit_col = (map->unit_idx < 0) ? -1 : map->unit_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_city_col = (map->city_idx < 0) ? -1 : map->city_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_state_col = (map->state_idx < 0) ? -1 : map->state_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_zip_col = (map->zip_idx < 0) ? -1 : map->zip_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_zip4_col = (map->zip4_idx < 0) ? -1 : map->zip4_idx + (int)EE_FROZEN_COLUMN_COUNT;
+
+    out->column_count = EE_FROZEN_COLUMN_COUNT + src_col_count;
+    if (!utf8_to_wide_dup("Voter ID", &out->column_titles[EE_COL_VOTER_ID]) ||
+        !utf8_to_wide_dup("Precinct", &out->column_titles[EE_COL_PRECINCT]) ||
+        !utf8_to_wide_dup("Name", &out->column_titles[EE_COL_NAME]) ||
+        !utf8_to_wide_dup("Address", &out->column_titles[EE_COL_ADDRESS]))
+    {
+        set_error(err, errcch, L"Out of memory.");
+        return EeLoadStatus_Error;
+    }
+    for (i = 0; i < header->count; i++)
+    {
+        if (!utf8_to_wide_dup(header->items[i], &out->column_titles[EE_FROZEN_COLUMN_COUNT + i]))
+        {
+            set_error(err, errcch, L"Out of memory.");
+            return EeLoadStatus_Error;
+        }
+    }
+    if (!pool_reserve(out, 1))
+    {
+        set_error(err, errcch, L"Out of memory.");
+        return EeLoadStatus_Error;
+    }
+    map->src_col_count = src_col_count;
+    return EeLoadStatus_Ok;
+}
+
+/* Append one data row to @p out using the resolved column map. On failure sets a
+ * message and returns FALSE; the caller owns cleanup (EeVoterTable_Clear). */
+static BOOL ingest_row(EeVoterTable *out,
+                       const LoadColumnMap *m,
+                       const FieldList *row,
+                       wchar_t *err,
+                       size_t errcch)
+{
+    uint32_t rowi;
+    uint32_t *cell;
+    uint32_t c;
+    char name_buf[512];
+    const char *vuid_text = "";
+
+    if (!ensure_row_capacity(out, out->row_count + 1))
+    {
+        set_error(err, errcch, L"Out of memory loading rows.");
+        return FALSE;
+    }
+    rowi = out->row_count;
+    cell = out->cells + (size_t)rowi * (size_t)out->column_count;
+
+    if (m->vuid_idx >= 0 && (size_t)m->vuid_idx < row->count)
+    {
+        vuid_text = row->items[m->vuid_idx];
+    }
+    if (!pool_add_cell(out, EE_COL_VOTER_ID, vuid_text, strlen(vuid_text), &cell[EE_COL_VOTER_ID]))
+    {
+        set_error(err, errcch, L"Out of memory.");
+        return FALSE;
+    }
+
+    if (!compose_name(row,
+                      m->full_idx,
+                      m->pre_idx,
+                      m->first_idx,
+                      m->mid_idx,
+                      m->last_idx,
+                      m->suf_idx,
+                      out->name_surname_first,
+                      name_buf,
+                      sizeof(name_buf)))
+    {
+        name_buf[0] = '\0';
+    }
+
+    {
+        char pct_buf[16];
+        const char *pct_src = field_at(row, m->precinct_idx);
+        extract_precinct_number(pct_src, pct_buf, sizeof(pct_buf));
+        if (!pool_add_cell(out, EE_COL_PRECINCT, pct_buf, strlen(pct_buf), &cell[EE_COL_PRECINCT]))
+        {
+            set_error(err, errcch, L"Out of memory.");
+            return FALSE;
+        }
+    }
+
+    if (!pool_add_cell(out, EE_COL_NAME, name_buf, strlen(name_buf), &cell[EE_COL_NAME]))
+    {
+        set_error(err, errcch, L"Out of memory.");
+        return FALSE;
+    }
+
+    {
+        char addr_buf[512];
+        if (!compose_address(row,
+                             m->addr_full_idx,
+                             m->house_idx,
+                             m->predir_idx,
+                             m->street_idx,
+                             m->strtype_idx,
+                             m->postdir_idx,
+                             m->unitype_idx,
+                             m->unit_idx,
+                             m->city_idx,
+                             m->state_idx,
+                             m->zip_idx,
+                             m->zip4_idx,
+                             addr_buf,
+                             sizeof(addr_buf)))
+        {
+            addr_buf[0] = '\0';
+        }
+        if (!pool_add_cell(out, EE_COL_ADDRESS, addr_buf, strlen(addr_buf), &cell[EE_COL_ADDRESS]))
+        {
+            set_error(err, errcch, L"Out of memory.");
+            return FALSE;
+        }
+    }
+
+    for (c = 0; c < m->src_col_count; c++)
+    {
+        const char *t = "";
+        size_t tlen = 0;
+        if (c < row->count)
+        {
+            t = row->items[c];
+            tlen = row->lengths[c];
+        }
+        if (!pool_add_cell(out,
+                           EE_FROZEN_COLUMN_COUNT + c,
+                           t,
+                           tlen,
+                           &cell[EE_FROZEN_COLUMN_COUNT + c]))
+        {
+            set_error(err, errcch, L"Out of memory.");
+            return FALSE;
+        }
+    }
+
+    out->view_index[rowi] = rowi;
+    out->row_count++;
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* XLSX ingestion (delegates the ZIP/XML work to xlsx.c, reuses the sink)      */
+/* -------------------------------------------------------------------------- */
+
+typedef struct XlsxSinkCtx
+{
+    EeVoterTable *out;
+    LoadColumnMap map;
+    FieldList fields;
+    BOOL got_header;
+    BOOL failed;
+    wchar_t *err;
+    size_t errcch;
+} XlsxSinkCtx;
+
+static BOOL xlsx_row_sink(void *vctx, const char *const *cells, uint32_t ncells)
+{
+    XlsxSinkCtx *ctx = (XlsxSinkCtx *)vctx;
+    uint32_t i;
+
+    field_list_free(&ctx->fields);
+    for (i = 0; i < ncells; i++)
+    {
+        const char *s = (cells[i] != NULL) ? cells[i] : "";
+        if (!field_list_push(&ctx->fields, s, strlen(s)))
+        {
+            set_error(ctx->err, ctx->errcch, L"Out of memory.");
+            ctx->failed = TRUE;
+            return FALSE;
+        }
+    }
+
+    if (!ctx->got_header)
+    {
+        if (ctx->fields.count == 0 || fields_look_like_preamble(&ctx->fields))
+        {
+            return TRUE; /* skip a leading blank/banner row */
+        }
+        if (ingest_header(ctx->out, &ctx->fields, 0, &ctx->map, ctx->err, ctx->errcch) !=
+            EeLoadStatus_Ok)
+        {
+            ctx->failed = TRUE;
+            return FALSE;
+        }
+        ctx->got_header = TRUE;
+        return TRUE;
+    }
+
+    if (!ingest_row(ctx->out, &ctx->map, &ctx->fields, ctx->err, ctx->errcch))
+    {
+        ctx->failed = TRUE;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+EeLoadStatus EeVoterTable_LoadXlsxSheet(const wchar_t *path,
+                                        int sheet_index,
+                                        EeVoterTable *out_table,
+                                        volatile LONG *cancel_flag,
+                                        EeLoadProgressFn progress_fn,
+                                        void *progress_user,
+                                        wchar_t *error_message,
+                                        size_t error_cch)
+{
+    XlsxSinkCtx ctx;
+    EeLoadStatus status;
+
+    if (path == NULL || out_table == NULL)
+    {
+        set_error(error_message, error_cch, L"Invalid load arguments.");
+        return EeLoadStatus_Error;
+    }
+
+    {
+        BOOL surname_first = out_table->name_surname_first;
+        EeVoterTable_Clear(out_table);
+        out_table->name_surname_first = surname_first;
+    }
+
+    ZeroMemory(&ctx, sizeof(ctx));
+    ctx.out = out_table;
+    ctx.err = error_message;
+    ctx.errcch = error_cch;
+
+    status = EeXlsx_ReadSheet(path,
+                              sheet_index,
+                              xlsx_row_sink,
+                              &ctx,
+                              cancel_flag,
+                              progress_fn,
+                              progress_user,
+                              error_message,
+                              error_cch);
+    field_list_free(&ctx.fields);
+
+    if (ctx.failed)
+    {
+        EeVoterTable_Clear(out_table);
+        return EeLoadStatus_Error;
+    }
+    if (status == EeLoadStatus_Cancelled)
+    {
+        EeVoterTable_Clear(out_table);
+        set_error(error_message, error_cch, L"Load cancelled.");
+        return EeLoadStatus_Cancelled;
+    }
+    if (status != EeLoadStatus_Ok)
+    {
+        EeVoterTable_Clear(out_table);
+        return status;
+    }
+    if (out_table->column_count == 0)
+    {
+        EeVoterTable_Clear(out_table);
+        set_error(error_message, error_cch, L"The worksheet has no header row.");
+        return EeLoadStatus_Error;
+    }
+
+    finalize_column_kinds(out_table);
+    report_progress(progress_fn, progress_user, 99, out_table->row_count, 0, 0);
+    return EeLoadStatus_Ok;
+}
+
+/* Case-insensitive test for a ".xlsx" path suffix. */
+static BOOL path_has_xlsx_ext(const wchar_t *path)
+{
+    size_t n = wcslen(path);
+    if (n < 5)
+    {
+        return FALSE;
+    }
+    {
+        const wchar_t *e = path + (n - 5);
+        return (e[0] == L'.' && (e[1] == L'x' || e[1] == L'X') && (e[2] == L'l' || e[2] == L'L') &&
+                (e[3] == L's' || e[3] == L'S') && (e[4] == L'x' || e[4] == L'X'));
+    }
+}
+
 EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                                        EeVoterTable *out_table,
                                        volatile LONG *cancel_flag,
@@ -4035,48 +4513,37 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
     BOOL in_crlf = FALSE;
     FieldList header_fields;
     FieldList row_fields;
-    FieldRole roles[EE_MAX_COLUMNS];
+    LoadColumnMap map;
     char delim = ',';
     uint64_t file_size = 0;
     uint64_t bytes_read = 0;
     uint32_t last_percent = 0;
-    int vuid_idx = -1;
-    int other_id_idx = -1;
-    int full_idx = -1;
-    int pre_idx = -1;
-    int first_idx = -1;
-    int mid_idx = -1;
-    int last_idx = -1;
-    int suf_idx = -1;
-    int addr_full_idx = -1;
-    int house_idx = -1;
-    int predir_idx = -1;
-    int street_idx = -1;
-    int strtype_idx = -1;
-    int dir_idx = -1;
-    int postdir_idx = -1;
-    int unitype_idx = -1;
-    int unit_idx = -1;
-    int city_idx = -1;
-    int state_idx = -1;
-    int zip_idx = -1;
-    int zip4_idx = -1;
-    int precinct_idx = -1;
-    uint32_t src_col_count = 0;
-    uint32_t display_cols = 0;
-    size_t i;
     errno_t err;
     LARGE_INTEGER li;
     HANDLE hfile;
 
     ZeroMemory(&header_fields, sizeof(header_fields));
     ZeroMemory(&row_fields, sizeof(row_fields));
-    ZeroMemory(roles, sizeof(roles));
+    ZeroMemory(&map, sizeof(map));
 
     if (path == NULL || out_table == NULL)
     {
         set_error(error_message, error_cch, L"Invalid load arguments.");
         return EeLoadStatus_Error;
+    }
+
+    /* Excel workbooks: delegate to the XLSX reader (first sheet). The GUI uses
+     * EeXlsx_ListSheets + EeVoterTable_LoadXlsxSheet for a sheet picker. */
+    if (path_has_xlsx_ext(path))
+    {
+        return EeVoterTable_LoadXlsxSheet(path,
+                                          0,
+                                          out_table,
+                                          cancel_flag,
+                                          progress_fn,
+                                          progress_user,
+                                          error_message,
+                                          error_cch);
     }
 
     {
@@ -4279,257 +4746,23 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                             }
                             continue;
                         }
-                        if (header_fields.count == 0 ||
-                            header_fields.count > EE_MAX_COLUMNS - EE_FROZEN_COLUMN_COUNT)
                         {
-                            free(read_buf);
-                            free(line);
-                            field_list_free(&header_fields);
-                            fclose(fp);
-                            set_error(error_message,
-                                      error_cch,
-                                      L"Unsupported column count in voter list.");
-                            return EeLoadStatus_Error;
-                        }
-
-                        src_col_count = (uint32_t)header_fields.count;
-                        out_table->delimiter = delim;
-                        for (i = 0; i < header_fields.count; i++)
-                        {
-                            char norm[128];
-                            normalize_header(header_fields.items[i], norm, sizeof(norm));
-                            roles[i] = classify_field(norm);
-                            switch (roles[i])
-                            {
-                                case Role_Vuid:
-                                    if (vuid_idx < 0)
-                                    {
-                                        vuid_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_OtherId:
-                                    if (other_id_idx < 0)
-                                    {
-                                        other_id_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_FullName:
-                                    if (full_idx < 0)
-                                    {
-                                        full_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_NamePrefix:
-                                    if (pre_idx < 0)
-                                    {
-                                        pre_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_FirstName:
-                                    if (first_idx < 0)
-                                    {
-                                        first_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_MiddleName:
-                                    if (mid_idx < 0)
-                                    {
-                                        mid_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_LastName:
-                                    if (last_idx < 0)
-                                    {
-                                        last_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_Precinct:
-                                    if (precinct_idx < 0)
-                                    {
-                                        precinct_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_NameSuffix:
-                                    if (suf_idx < 0)
-                                    {
-                                        suf_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrFull:
-                                    if (addr_full_idx < 0)
-                                    {
-                                        addr_full_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrNumber:
-                                    if (house_idx < 0)
-                                    {
-                                        house_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrPredir:
-                                    if (predir_idx < 0)
-                                    {
-                                        predir_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrStreet:
-                                    if (street_idx < 0)
-                                    {
-                                        street_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrType:
-                                    if (strtype_idx < 0)
-                                    {
-                                        strtype_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrDir:
-                                    if (dir_idx < 0)
-                                    {
-                                        dir_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrPostdir:
-                                    if (postdir_idx < 0)
-                                    {
-                                        postdir_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrUnitType:
-                                    if (unitype_idx < 0)
-                                    {
-                                        unitype_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrUnit:
-                                    if (unit_idx < 0)
-                                    {
-                                        unit_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrCity:
-                                    if (city_idx < 0)
-                                    {
-                                        city_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrState:
-                                    if (state_idx < 0)
-                                    {
-                                        state_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrZip:
-                                    if (zip_idx < 0)
-                                    {
-                                        zip_idx = (int)i;
-                                    }
-                                    break;
-                                case Role_AddrZip4:
-                                    if (zip4_idx < 0)
-                                    {
-                                        zip4_idx = (int)i;
-                                    }
-                                    break;
-                                default:
-                                    break;
-                            }
-                        }
-                        if (vuid_idx < 0)
-                        {
-                            vuid_idx = other_id_idx;
-                        }
-                        if (predir_idx < 0)
-                        {
-                            predir_idx = dir_idx;
-                        }
-                        else if (postdir_idx < 0)
-                        {
-                            postdir_idx = dir_idx;
-                        }
-
-                        out_table->name_full_col =
-                            (full_idx < 0) ? -1 : full_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->name_prefix_col =
-                            (pre_idx < 0) ? -1 : pre_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->name_first_col =
-                            (first_idx < 0) ? -1 : first_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->name_middle_col =
-                            (mid_idx < 0) ? -1 : mid_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->name_last_col =
-                            (last_idx < 0) ? -1 : last_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->name_suffix_col =
-                            (suf_idx < 0) ? -1 : suf_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_full_col =
-                            (addr_full_idx < 0) ? -1 : addr_full_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_number_col =
-                            (house_idx < 0) ? -1 : house_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_predir_col =
-                            (predir_idx < 0) ? -1 : predir_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_street_col =
-                            (street_idx < 0) ? -1 : street_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_type_col =
-                            (strtype_idx < 0) ? -1 : strtype_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_postdir_col =
-                            (postdir_idx < 0) ? -1 : postdir_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_unit_type_col =
-                            (unitype_idx < 0) ? -1 : unitype_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_unit_col =
-                            (unit_idx < 0) ? -1 : unit_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_city_col =
-                            (city_idx < 0) ? -1 : city_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_state_col =
-                            (state_idx < 0) ? -1 : state_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_zip_col =
-                            (zip_idx < 0) ? -1 : zip_idx + (int)EE_FROZEN_COLUMN_COUNT;
-                        out_table->addr_zip4_col =
-                            (zip4_idx < 0) ? -1 : zip4_idx + (int)EE_FROZEN_COLUMN_COUNT;
-
-                        /* Display columns: Voter ID, Precinct, Name, Address, then source. */
-                        display_cols = EE_FROZEN_COLUMN_COUNT + src_col_count;
-                        out_table->column_count = display_cols;
-                        if (!utf8_to_wide_dup("Voter ID",
-                                              &out_table->column_titles[EE_COL_VOTER_ID]) ||
-                            !utf8_to_wide_dup("Precinct",
-                                              &out_table->column_titles[EE_COL_PRECINCT]) ||
-                            !utf8_to_wide_dup("Name", &out_table->column_titles[EE_COL_NAME]) ||
-                            !utf8_to_wide_dup("Address", &out_table->column_titles[EE_COL_ADDRESS]))
-                        {
-                            free(read_buf);
-                            free(line);
-                            field_list_free(&header_fields);
-                            fclose(fp);
-                            EeVoterTable_Clear(out_table);
-                            set_error(error_message, error_cch, L"Out of memory.");
-                            return EeLoadStatus_Error;
-                        }
-                        for (i = 0; i < header_fields.count; i++)
-                        {
-                            if (!utf8_to_wide_dup(
-                                    header_fields.items[i],
-                                    &out_table->column_titles[EE_FROZEN_COLUMN_COUNT + i]))
+                            EeLoadStatus hs = ingest_header(out_table,
+                                                            &header_fields,
+                                                            delim,
+                                                            &map,
+                                                            error_message,
+                                                            error_cch);
+                            if (hs != EeLoadStatus_Ok)
                             {
                                 free(read_buf);
                                 free(line);
                                 field_list_free(&header_fields);
+                                field_list_free(&row_fields);
                                 fclose(fp);
                                 EeVoterTable_Clear(out_table);
-                                set_error(error_message, error_cch, L"Out of memory.");
-                                return EeLoadStatus_Error;
+                                return hs;
                             }
-                        }
-
-                        if (!pool_reserve(out_table, 1))
-                        {
-                            free(read_buf);
-                            free(line);
-                            field_list_free(&header_fields);
-                            fclose(fp);
-                            EeVoterTable_Clear(out_table);
-                            set_error(error_message, error_cch, L"Out of memory.");
-                            return EeLoadStatus_Error;
                         }
 
                         got_header = TRUE;
@@ -4554,7 +4787,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         return EeLoadStatus_Error;
                     }
 
-                    if (!ensure_row_capacity(out_table, out_table->row_count + 1))
+                    if (!ingest_row(out_table, &map, &row_fields, error_message, error_cch))
                     {
                         free(read_buf);
                         free(line);
@@ -4562,153 +4795,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
                         field_list_free(&row_fields);
                         fclose(fp);
                         EeVoterTable_Clear(out_table);
-                        set_error(error_message, error_cch, L"Out of memory loading rows.");
                         return EeLoadStatus_Error;
-                    }
-
-                    {
-                        uint32_t row = out_table->row_count;
-                        uint32_t *cell =
-                            out_table->cells + (size_t)row * (size_t)out_table->column_count;
-                        char name_buf[512];
-                        const char *vuid_text = "";
-                        uint32_t c;
-
-                        if (vuid_idx >= 0 && (size_t)vuid_idx < row_fields.count)
-                        {
-                            vuid_text = row_fields.items[vuid_idx];
-                        }
-                        if (!pool_add_cell(out_table,
-                                           EE_COL_VOTER_ID,
-                                           vuid_text,
-                                           strlen(vuid_text),
-                                           &cell[EE_COL_VOTER_ID]))
-                        {
-                            free(read_buf);
-                            free(line);
-                            field_list_free(&header_fields);
-                            field_list_free(&row_fields);
-                            fclose(fp);
-                            EeVoterTable_Clear(out_table);
-                            set_error(error_message, error_cch, L"Out of memory.");
-                            return EeLoadStatus_Error;
-                        }
-
-                        if (!compose_name(&row_fields,
-                                          full_idx,
-                                          pre_idx,
-                                          first_idx,
-                                          mid_idx,
-                                          last_idx,
-                                          suf_idx,
-                                          out_table->name_surname_first,
-                                          name_buf,
-                                          sizeof(name_buf)))
-                        {
-                            name_buf[0] = '\0';
-                        }
-                        {
-                            char pct_buf[16];
-                            const char *pct_src = field_at(&row_fields, precinct_idx);
-                            extract_precinct_number(pct_src, pct_buf, sizeof(pct_buf));
-                            if (!pool_add_cell(out_table,
-                                               EE_COL_PRECINCT,
-                                               pct_buf,
-                                               strlen(pct_buf),
-                                               &cell[EE_COL_PRECINCT]))
-                            {
-                                free(read_buf);
-                                free(line);
-                                field_list_free(&header_fields);
-                                field_list_free(&row_fields);
-                                fclose(fp);
-                                EeVoterTable_Clear(out_table);
-                                set_error(error_message, error_cch, L"Out of memory.");
-                                return EeLoadStatus_Error;
-                            }
-                        }
-
-                        if (!pool_add_cell(out_table,
-                                           EE_COL_NAME,
-                                           name_buf,
-                                           strlen(name_buf),
-                                           &cell[EE_COL_NAME]))
-                        {
-                            free(read_buf);
-                            free(line);
-                            field_list_free(&header_fields);
-                            field_list_free(&row_fields);
-                            fclose(fp);
-                            EeVoterTable_Clear(out_table);
-                            set_error(error_message, error_cch, L"Out of memory.");
-                            return EeLoadStatus_Error;
-                        }
-
-                        {
-                            char addr_buf[512];
-                            if (!compose_address(&row_fields,
-                                                 addr_full_idx,
-                                                 house_idx,
-                                                 predir_idx,
-                                                 street_idx,
-                                                 strtype_idx,
-                                                 postdir_idx,
-                                                 unitype_idx,
-                                                 unit_idx,
-                                                 city_idx,
-                                                 state_idx,
-                                                 zip_idx,
-                                                 zip4_idx,
-                                                 addr_buf,
-                                                 sizeof(addr_buf)))
-                            {
-                                addr_buf[0] = '\0';
-                            }
-                            if (!pool_add_cell(out_table,
-                                               EE_COL_ADDRESS,
-                                               addr_buf,
-                                               strlen(addr_buf),
-                                               &cell[EE_COL_ADDRESS]))
-                            {
-                                free(read_buf);
-                                free(line);
-                                field_list_free(&header_fields);
-                                field_list_free(&row_fields);
-                                fclose(fp);
-                                EeVoterTable_Clear(out_table);
-                                set_error(error_message, error_cch, L"Out of memory.");
-                                return EeLoadStatus_Error;
-                            }
-                        }
-
-                        for (c = 0; c < src_col_count; c++)
-                        {
-                            const char *t = "";
-                            size_t tlen = 0;
-                            if (c < row_fields.count)
-                            {
-                                t = row_fields.items[c];
-                                tlen = row_fields.lengths[c];
-                            }
-                            if (!pool_add_cell(out_table,
-                                               EE_FROZEN_COLUMN_COUNT + c,
-                                               t,
-                                               tlen,
-                                               &cell[EE_FROZEN_COLUMN_COUNT + c]))
-                            {
-                                free(read_buf);
-                                free(line);
-                                field_list_free(&header_fields);
-                                field_list_free(&row_fields);
-                                fclose(fp);
-                                EeVoterTable_Clear(out_table);
-                                set_error(error_message, error_cch, L"Out of memory.");
-                                return EeLoadStatus_Error;
-                            }
-                        }
-
-                        out_table->view_index[row] = row;
-                        out_table->row_count++;
                     }
 
                     line_len = 0;

@@ -7,6 +7,7 @@
 #include "resource.h"
 #include "voter_table.h"
 #include "filter.h"
+#include "xlsx.h"
 #include "settings.h"
 
 #include <commctrl.h>
@@ -129,6 +130,7 @@ typedef struct AppState
     volatile LONG load_cancel;
     HANDLE load_thread;
     wchar_t load_path[MAX_PATH];
+    int load_sheet_index; /* worksheet to load for .xlsx (0 for CSV/TSV) */
     wchar_t load_error[512];
     EeLoadStatus load_status;
     CRITICAL_SECTION progress_lock;
@@ -228,6 +230,22 @@ static WNDPROC g_old_title_proc = NULL;
 
 static int App_ClampZoom(int zoom_percent);
 static EeMapEngine App_ClampMapEngine(int engine);
+static int App_PickSheet(AppState *app, const wchar_t (*names)[EE_XLSX_SHEET_NAME_CCH], int count);
+
+/* Case-insensitive test for a ".xlsx" path suffix. */
+static BOOL is_xlsx_path(const wchar_t *path)
+{
+    size_t n = (path != NULL) ? wcslen(path) : 0;
+    if (n < 5)
+    {
+        return FALSE;
+    }
+    {
+        const wchar_t *e = path + (n - 5);
+        return (e[0] == L'.' && (e[1] == L'x' || e[1] == L'X') && (e[2] == L'l' || e[2] == L'L') &&
+                (e[3] == L's' || e[3] == L'S') && (e[4] == L'x' || e[4] == L'X'));
+    }
+}
 static LRESULT CALLBACK FrozenSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK ScrollSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK PaneTitleSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -238,7 +256,7 @@ static AppState *App_CreateViewer(HINSTANCE instance,
                                   int nCmdShow,
                                   HWND offset_from,
                                   const AppState *prefs);
-static void App_StartLoad(AppState *app, const wchar_t *path);
+static void App_StartLoad(AppState *app, const wchar_t *path, int sheet_index);
 static void App_RequestClose(AppState *app);
 static void App_ExitAll(void);
 static void App_ApplyFilter(AppState *app);
@@ -1830,19 +1848,33 @@ static DWORD WINAPI LoadThreadProc(void *param)
     AppState *app = (AppState *)param;
 
     app->load_error[0] = L'\0';
-    app->load_status = EeVoterTable_LoadFromFile(app->load_path,
-                                                 &app->table,
-                                                 &app->load_cancel,
-                                                 LoadProgressThunk,
-                                                 app,
-                                                 app->load_error,
-                                                 ARRAYSIZE(app->load_error));
+    if (is_xlsx_path(app->load_path))
+    {
+        app->load_status = EeVoterTable_LoadXlsxSheet(app->load_path,
+                                                      app->load_sheet_index,
+                                                      &app->table,
+                                                      &app->load_cancel,
+                                                      LoadProgressThunk,
+                                                      app,
+                                                      app->load_error,
+                                                      ARRAYSIZE(app->load_error));
+    }
+    else
+    {
+        app->load_status = EeVoterTable_LoadFromFile(app->load_path,
+                                                     &app->table,
+                                                     &app->load_cancel,
+                                                     LoadProgressThunk,
+                                                     app,
+                                                     app->load_error,
+                                                     ARRAYSIZE(app->load_error));
+    }
 
     PostMessageW(app->hwnd_main, EEM_LOAD_FINISHED, 0, 0);
     return 0;
 }
 
-static void App_StartLoad(AppState *app, const wchar_t *path)
+static void App_StartLoad(AppState *app, const wchar_t *path, int sheet_index)
 {
     if (app == NULL || path == NULL || path[0] == L'\0' || app->loading)
     {
@@ -1850,6 +1882,7 @@ static void App_StartLoad(AppState *app, const wchar_t *path)
     }
 
     StringCchCopyW(app->load_path, ARRAYSIZE(app->load_path), path);
+    app->load_sheet_index = (sheet_index > 0) ? sheet_index : 0;
     InterlockedExchange(&app->load_cancel, 0);
     App_ClearMarks(app);   /* prior duplicates view indexed the old table */
     App_CloseReports(app); /* reports summarize the outgoing table */
@@ -1900,7 +1933,8 @@ static void App_BeginOpenVoterList(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Voter lists (*.csv;*.txt)\0*.csv;*.txt\0"
+    ofn.lpstrFilter = L"Voter lists (*.csv;*.txt;*.xlsx)\0*.csv;*.txt;*.xlsx\0"
+                      L"Excel workbooks (*.xlsx)\0*.xlsx\0"
                       L"CSV (*.csv)\0*.csv\0"
                       L"Tab-delimited (*.txt)\0*.txt\0"
                       L"All files (*.*)\0*.*\0";
@@ -1925,22 +1959,51 @@ static void App_BeginOpenVoterList(AppState *app)
         return;
     }
 
-    if (app->load_path[0] != L'\0' || app->table.row_count > 0)
+    /* For an Excel workbook, let the user choose which worksheet to load. */
     {
-        AppState *created = App_CreateViewer(app->instance, SW_SHOWNORMAL, app->hwnd_main, app);
-        if (created == NULL)
+        int sheet_index = 0;
+        if (is_xlsx_path(canon))
         {
-            MessageBoxW(app->hwnd_main,
-                        L"Could not open another window.",
-                        k_WindowTitle,
-                        MB_ICONERROR | MB_OK);
+            wchar_t names[EE_XLSX_MAX_SHEETS][EE_XLSX_SHEET_NAME_CCH];
+            int count = 0;
+            wchar_t serr[256];
+            EeLoadStatus ls =
+                EeXlsx_ListSheets(canon, names, EE_XLSX_MAX_SHEETS, &count, serr, ARRAYSIZE(serr));
+            if (ls != EeLoadStatus_Ok || count <= 0)
+            {
+                MessageBoxW(app->hwnd_main,
+                            (serr[0] != L'\0') ? serr : L"Could not read the Excel workbook.",
+                            k_WindowTitle,
+                            MB_ICONERROR | MB_OK);
+                return;
+            }
+            if (count > 1)
+            {
+                sheet_index = App_PickSheet(app, names, count);
+                if (sheet_index < 0)
+                {
+                    return; /* user cancelled */
+                }
+            }
+        }
+
+        if (app->load_path[0] != L'\0' || app->table.row_count > 0)
+        {
+            AppState *created = App_CreateViewer(app->instance, SW_SHOWNORMAL, app->hwnd_main, app);
+            if (created == NULL)
+            {
+                MessageBoxW(app->hwnd_main,
+                            L"Could not open another window.",
+                            k_WindowTitle,
+                            MB_ICONERROR | MB_OK);
+                return;
+            }
+            App_StartLoad(created, canon, sheet_index);
             return;
         }
-        App_StartLoad(created, canon);
-        return;
-    }
 
-    App_StartLoad(app, canon);
+        App_StartLoad(app, canon, sheet_index);
+    }
 }
 
 static void App_OnLoadFinished(AppState *app)
@@ -7460,6 +7523,161 @@ static void App_CenterModalClient(HWND dlg, AppState *app, int client_w, int cli
         y = owner.top + ((owner.bottom - owner.top) - outer_h) / 2;
     }
     SetWindowPos(dlg, NULL, x, y, outer_w, outer_h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+typedef struct SheetPickData
+{
+    AppState *app;
+    const wchar_t (*names)[EE_XLSX_SHEET_NAME_CCH];
+    int count;
+    int selected;
+} SheetPickData;
+
+static INT_PTR CALLBACK SheetPickerDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    SheetPickData *d = (SheetPickData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            int margin;
+            int btn_w;
+            int btn_h;
+            int gap;
+            int list_top;
+            int i;
+            HWND label;
+            HWND list;
+            HWND ok;
+            HWND cancel;
+
+            d = (SheetPickData *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+            app = d->app;
+
+            App_CenterModalClient(dlg, app, Scale(app, 320), Scale(app, 250));
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 14);
+            btn_w = Scale(app, 84);
+            btn_h = Scale(app, 26);
+            gap = Scale(app, 8);
+            list_top = margin + Scale(app, 36);
+
+            label = CreateWindowExW(0,
+                                    L"STATIC",
+                                    L"This workbook has multiple sheets. Choose one to load:",
+                                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                    margin,
+                                    margin,
+                                    rc.right - 2 * margin,
+                                    Scale(app, 32),
+                                    dlg,
+                                    (HMENU)(INT_PTR)IDC_SHEET_LABEL,
+                                    app->instance,
+                                    NULL);
+            list = CreateWindowExW(WS_EX_CLIENTEDGE,
+                                   L"LISTBOX",
+                                   L"",
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY |
+                                       LBS_HASSTRINGS,
+                                   margin,
+                                   list_top,
+                                   rc.right - 2 * margin,
+                                   rc.bottom - list_top - btn_h - 2 * margin,
+                                   dlg,
+                                   (HMENU)(INT_PTR)IDC_SHEET_LIST,
+                                   app->instance,
+                                   NULL);
+            for (i = 0; i < d->count; i++)
+            {
+                SendMessageW(list, LB_ADDSTRING, 0, (LPARAM)d->names[i]);
+            }
+            SendMessageW(list, LB_SETCURSEL, 0, 0);
+
+            ok = CreateWindowExW(0,
+                                 L"BUTTON",
+                                 L"Load",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                 rc.right - margin - 2 * btn_w - gap,
+                                 rc.bottom - margin - btn_h,
+                                 btn_w,
+                                 btn_h,
+                                 dlg,
+                                 (HMENU)(INT_PTR)IDOK,
+                                 app->instance,
+                                 NULL);
+            cancel = CreateWindowExW(0,
+                                     L"BUTTON",
+                                     L"Cancel",
+                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                     rc.right - margin - btn_w,
+                                     rc.bottom - margin - btn_h,
+                                     btn_w,
+                                     btn_h,
+                                     dlg,
+                                     (HMENU)(INT_PTR)IDCANCEL,
+                                     app->instance,
+                                     NULL);
+            if (app->font_ui != NULL)
+            {
+                SendMessageW(label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(list, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+            SetFocus(list);
+            return (INT_PTR)FALSE;
+        }
+
+        case WM_COMMAND:
+        {
+            WORD id = LOWORD(wParam);
+            if (id == IDOK || (id == IDC_SHEET_LIST && HIWORD(wParam) == LBN_DBLCLK))
+            {
+                HWND list = GetDlgItem(dlg, IDC_SHEET_LIST);
+                int sel = (int)SendMessageW(list, LB_GETCURSEL, 0, 0);
+                if (d != NULL)
+                {
+                    d->selected = (sel == LB_ERR) ? 0 : sel;
+                }
+                EndDialog(dlg, 1);
+                return (INT_PTR)TRUE;
+            }
+            if (id == IDCANCEL)
+            {
+                EndDialog(dlg, 0);
+                return (INT_PTR)TRUE;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+/* Show the worksheet picker; returns the chosen 0-based index, or -1 if the user
+ * cancelled. */
+static int App_PickSheet(AppState *app, const wchar_t (*names)[EE_XLSX_SHEET_NAME_CCH], int count)
+{
+    SheetPickData d;
+    d.app = app;
+    d.names = names;
+    d.count = count;
+    d.selected = 0;
+    if (App_RunModalDialog(app, L"Select Worksheet", SheetPickerDlgProc, (LPARAM)&d) == 1)
+    {
+        return d.selected;
+    }
+    return -1;
 }
 
 static INT_PTR CALLBACK HelpTextDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)

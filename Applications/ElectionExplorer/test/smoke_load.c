@@ -7,6 +7,8 @@
 #include "settings.h"
 #include "voter_table.h"
 
+#include "third_party/miniz/miniz.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2598,6 +2600,153 @@ static int test_settings_roundtrip(void)
     return rc;
 }
 
+/* Author a minimal .xlsx in memory (miniz) that uses the SHARED-STRING table
+ * (which the openpyxl fixture does not), a numeric cell, a boolean, and an error
+ * cell, load it via EeVoterTable_LoadXlsxSheet, and verify the pipeline output
+ * (tag: xlsx). */
+static int test_xlsx_roundtrip(void)
+{
+    static const char *k_workbook =
+        "<?xml version=\"1.0\"?><workbook "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<sheets><sheet name=\"Voters\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+    static const char *k_rels =
+        "<?xml version=\"1.0\"?><Relationships "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
+        "Target=\"worksheets/sheet1.xml\"/></Relationships>";
+    static const char *k_shared =
+        "<?xml version=\"1.0\"?><sst "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"7\" "
+        "uniqueCount=\"7\"><si><t>VUID</t></si><si><t>NAME</t></si>"
+        "<si><t>Residential Address</t></si><si><t>Active</t></si><si><t>Note</t></si>"
+        "<si><t>Smith, John</t></si><si><t>100 Main St Austin TX 78701</t></si></sst>";
+    static const char *k_sheet =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>"
+        "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c>"
+        "<c r=\"C1\" t=\"s\"><v>2</v></c><c r=\"D1\" t=\"s\"><v>3</v></c>"
+        "<c r=\"E1\" t=\"s\"><v>4</v></c></row>"
+        "<row r=\"2\"><c r=\"A2\"><v>100</v></c><c r=\"B2\" t=\"s\"><v>5</v></c>"
+        "<c r=\"C2\" t=\"s\"><v>6</v></c><c r=\"D2\" t=\"b\"><v>1</v></c>"
+        "<c r=\"E2\" t=\"e\"><v>#DIV/0!</v></c></row></sheetData></worksheet>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[256] = L"";
+    wchar_t buf[128];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_writer_init_heap(&zip, 0, 0) ||
+        !mz_zip_writer_add_mem(&zip,
+                               "xl/workbook.xml",
+                               k_workbook,
+                               strlen(k_workbook),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip,
+                               "xl/_rels/workbook.xml.rels",
+                               k_rels,
+                               strlen(k_rels),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip,
+                               "xl/sharedStrings.xml",
+                               k_shared,
+                               strlen(k_shared),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip,
+                               "xl/worksheets/sheet1.xml",
+                               k_sheet,
+                               strlen(k_sheet),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize))
+    {
+        wprintf(L"xlsx: failed to author test workbook\n");
+        mz_zip_writer_end(&zip);
+        return 1;
+    }
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_roundtrip.xlsx")))
+    {
+        wprintf(L"xlsx: temp path failed\n");
+        mz_free(zbuf);
+        mz_zip_writer_end(&zip);
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL || fwrite(zbuf, 1, zsize, fp) != zsize)
+    {
+        wprintf(L"xlsx: could not write %s\n", path);
+        if (fp != NULL)
+            fclose(fp);
+        mz_free(zbuf);
+        mz_zip_writer_end(&zip);
+        return 1;
+    }
+    fclose(fp);
+    mz_free(zbuf);
+    mz_zip_writer_end(&zip);
+
+    EeVoterTable_Init(&t);
+    s = EeVoterTable_LoadXlsxSheet(path, 0, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 1 || t.column_count != 9)
+    {
+        wprintf(L"xlsx: load failed s=%d rows=%u cols=%u err=%s\n",
+                (int)s,
+                t.row_count,
+                t.column_count,
+                err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    /* Frozen: 0=Voter ID 1=Precinct 2=Name 3=Address; source: 4=VUID 5=NAME
+     * 6=Residential Address 7=Active 8=Note. */
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_VOTER_ID, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"100") != 0)
+    {
+        wprintf(L"xlsx: Voter ID (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"100 Main St Austin TX 78701") != 0)
+    {
+        wprintf(L"xlsx: Address (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 7, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"TRUE") != 0)
+    {
+        wprintf(L"xlsx: boolean (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 8, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"#DIV/0!") != 0)
+    {
+        wprintf(L"xlsx: error cell (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"xlsx ok\n");
+
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"xlsx test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2631,5 +2780,6 @@ int wmain(void)
     failed |= test_preamble_skip();
     failed |= test_id_voter_header();
     failed |= test_settings_roundtrip();
+    failed |= test_xlsx_roundtrip();
     return failed == 0 ? 0 : 1;
 }

@@ -4,14 +4,15 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-16
-**Branch:** main — Store prep (MSIX packaging, logo, privacy policy, trademarks,
-brand strings, About privacy link, sample datasets, app-icon refresh) and the
-Travis normalized-address **bug fix** are all **committed**. Store identity in
-`Package.appxmanifest` is set (Name `WheelGroupTech.ElectionExplorer`, Publisher
-`CN=19C9DED9-…980D6`, PublisherDisplayName `WheelGroupTech`). **Uncommitted:** the
-**Store association** files from VS (staged) plus a `.gitignore` rule for `*.pfx`
-— see "This session" below. The app is being published via the **Microsoft Store**.
+**Last updated:** 2026-09-17
+**Branch:** main — Store prep and the Travis normalized-address bug fix are
+**committed**; the Store-association files + `.gitignore` `*.pfx` are staged from
+last session. **Uncommitted this session:** **XLSX import Phases 1–2** — vendored
+miniz, `src/xlsx.{c,h}`, the CSV/XLSX row-sink refactor in `voter_table.c`,
+`.vcxproj` wiring, tests, and the design doc. Builds clean; full smoke suite
+passes. The **GUI sheet picker + `*.xlsx` File→Open filter** are now in too
+(builds clean; not yet click-tested). Remaining for XLSX: Phase 3 date/number
+fidelity. The app is being published via the **Microsoft Store**.
 
 ---
 
@@ -55,6 +56,54 @@ staged changes — correct and consistent with the manifest identity.
   cert could otherwise be dropped next to the project and accidentally committed.
   Verified ignored via `git check-ignore`. No `.pfx` exists yet.
 - `Package.appxmanifest` was NOT rewritten by the association (identity intact).
+
+## XLSX import — Phases 1–2 (uncommitted)
+
+Wrote `ElectionExplorer/docs/xlsx-import-design.md` — a proposal to read Excel
+`.xlsx` (voter lists, rosters, CVRs, ePollbook exports) by emitting rows into the
+existing load pipeline. `.xlsx` = ZIP of XML parts, so it needs a vendored
+DEFLATE decompressor (Windows has no ZIP-DEFLATE API) + a small streaming XML
+scanner (no COM). **Decisions resolved 2026-09-17:** (1) ZIP engine = vendor
+**miniz** (Option A); (2) ship **Phases 1–2 first** (values as stored; date/number
+fidelity is a Phase 3 follow-up); (3) **sheet picker up front** (part of v1);
+(4) tests via a **generator** (Python/openpyxl) + runtime-built `.xlsx`, no
+binaries; (5) `t="b"`→TRUE/FALSE, `t="e"`→error text. Doc updated to match.
+
+**Phases 1–2 implemented + tested (uncommitted).** XLSX import works end to end
+(reader + the row-sink refactor). Remaining: the GUI sheet-picker + `*.xlsx`
+open-dialog filter, and Phase 3 fidelity.
+- Vendored **miniz 3.0.2** at `src/third_party/miniz/` (`miniz.c`, `miniz.h`,
+  `LICENSE`, `README.md`).
+- `src/xlsx.{c,h}` — self-contained reader: reads the file into memory, opens it
+  with miniz, extracts parts, and scans with a small XML reader (no COM). Handles
+  BOTH shared strings and inline strings, numeric/bool(`TRUE`/`FALSE`)/error
+  (verbatim) cells, `r=`-addressed gap-filled rows, sheet enumeration, progress +
+  cancel, and size caps (zip-bomb guard). API: `EeXlsx_ListSheets`,
+  `EeXlsx_ReadSheet`, `EeXlsxRowSink`.
+- **Row-sink refactor** in `voter_table.c`: extracted `ingest_header` +
+  `ingest_row` (shared by CSV and XLSX) and a `LoadColumnMap`; CSV path now calls
+  them (behavior-preserving — all 26 prior tests still pass). New public
+  `EeVoterTable_LoadXlsxSheet`; `EeVoterTable_LoadFromFile` dispatches a `.xlsx`
+  path to sheet 0.
+- `.vcxproj`/`.filters` wired (`xlsx.c`; `miniz.c` with per-file warning
+  suppression). App builds clean, x64 Debug + Release.
+- Tests: `test_xlsx_roundtrip` (tag `xlsx`) authors a tiny `.xlsx` via miniz to
+  cover the shared-string + error-cell paths; full smoke suite passes (`xlsx ok`).
+  `test/README.md` compile line updated (adds `xlsx.c` + `miniz.c`).
+- Verified on the openpyxl fixture end to end via `EeVoterTable_LoadFromFile`:
+  sheet list, inline strings, gap-filled empties, Name/Address composition. Date
+  cells surface as **serials** (e.g. DOB `28957`) — the documented v1 limitation;
+  Phase 3 (`styles.xml`) converts them and preserves leading zeros.
+- **Finding:** openpyxl emits `t="inlineStr"` with no `sharedStrings.xml`; real
+  Excel files use shared strings. Both paths are handled + tested.
+- **GUI (`main.c`):** File→Open filter now includes `*.xlsx`; opening a workbook
+  with >1 sheet shows a modal **sheet picker** (`SheetPickerDlgProc` /
+  `App_PickSheet`, listbox + Load/Cancel) before loading. `App_StartLoad` gained a
+  `sheet_index`; `LoadThreadProc` calls `EeVoterTable_LoadXlsxSheet` for `.xlsx`,
+  else `EeVoterTable_LoadFromFile`. New IDs `IDC_SHEET_LIST`/`IDC_SHEET_LABEL`.
+  Builds clean (x64 Debug+Release); **not yet click-tested** — test with the
+  3-sheet fixture from `gen_xlsx_fixtures.py` (picker should list Voters/Roster/
+  EdgeCases).
 
 ## Travis normalized-address fix (committed)
 
@@ -334,6 +383,16 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   **submit to the Store**:
   `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
   Partner Center.
+- **XLSX import Phases 1–2 done** (reader + row-sink refactor, tested, builds
+  clean) — commit when ready (new: `src/xlsx.{c,h}`, `src/third_party/miniz/`,
+  `docs/xlsx-import-design.md`, `docs/sample-data/gen_xlsx_fixtures.py`; modified:
+  `voter_table.{c,h}`, `test/smoke_load.c`, `test/README.md`, `.vcxproj`,
+  `.filters`). Suggested: `feat(explorer): read .xlsx workbooks (miniz + shared row sink)`.
+  (`main.c` sheet picker + `*.xlsx` filter now included.) Then:
+  - **Click-test the GUI:** open the 3-sheet fixture, confirm the picker lists the
+    sheets and the chosen one loads; open a single-sheet `.xlsx` (no picker).
+  - **Phase 3 fidelity:** read `styles.xml` to convert date serials → text and
+    preserve leading zeros / avoid scientific notation for numeric IDs/ZIPs.
 - Enable **GitHub Pages** so the privacy URL resolves (used by the Store listing
   and the About-dialog link):
   `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`

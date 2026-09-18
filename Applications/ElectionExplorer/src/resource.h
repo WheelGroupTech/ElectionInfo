@@ -41,6 +41,10 @@
 #define IDC_ABOUT_LINK    41203
 #define IDC_ABOUT_PRIVACY 41204
 
+/* Sheet-picker dialog (XLSX). */
+#define IDC_SHEET_LIST  41300
+#define IDC_SHEET_LABEL 41301
+
 /* Compare / Differences window child controls. */
 #define IDC_CMP_DIFF 41210
 

@@ -40,6 +40,14 @@ ballots in a sortable grid like the voter-list window.
   displays/sorts as `1` (handled in `xlsx.c`, benefits all `.xlsx`).
 - **Sparse:** a ballot only has values for contests on its ballot style; most
   cells are blank.
+- **"Vote for N" contests span multiple columns.** A contest that lets the voter
+  pick several candidates uses one column per selection: the first column carries
+  the contest title and each additional column has a **blank** header. A
+  continuation cell holds another selection or `undervote`. The loader attributes
+  these blank columns to the contest — see
+  [Multi-column contests](#multi-column-contests-vote-for-n). **A repeated identical
+  title is a *different* race, not a continuation** — verified against the official
+  results (see that section).
 
 ## Decisions (resolved 2026-09-18)
 
@@ -83,6 +91,36 @@ Rough memory: ~100 filled cells/ballot × 1M ballots ≈ 100M entries ≈ 800 MB
   nothing.
 - Data rows → append a sparse row (skip blank cells; intern non-blank values).
 - Honors cancel + progress (by rows).
+
+## Multi-column contests (vote for N)
+
+A "vote for N" contest occupies N adjacent columns: the first is titled and the
+rest have a **blank** header. When building the header, `cvr_build_titles`:
+
+- keeps the first column's title verbatim (so Phase 2 can key a race by its title);
+- gives each **blank** continuation the derived display title `<contest> (2)`,
+  `<contest> (3)`, … so the grid no longer shows blank headers;
+- records `col_group[i]` = the contest's title column for every column (a titled or
+  key column points at itself; a blank continuation points at the title column), so
+  **Phase 2 can tabulate a race across all its columns without parsing the display
+  suffix** — the race is listed once with the selections drawn from
+  `{ c : col_group[c] == title_col }`.
+
+**Only a blank header marks a continuation.** A title that repeats verbatim on the
+next column is a *separate* race, not a continuation. This was confirmed against the
+official Travis County results for `L26 CVR.xlsx`
+(`results.enr.clarityelections.com/TX/Travis/126203/web.345435`): two adjacent
+identically-named "City of Bee Cave, City Councilmember at Large" columns are listed
+there as **two separate (Vote For 1) races**, whereas the blank-header contests are
+genuinely multi-seat — Village of Briarcliff Alderman = **Vote For 3** (3 columns),
+Ensenadas MUD Director Election = **Vote For 5** (5 columns), Ranch at Cypress Creek
+MUD No. 1 Directors = **Vote For 2** (2 columns). So repeated titles stay as
+distinct columns/groups; only blank headers merge.
+
+The blank-only derivation runs on every file's header, so the multi-file
+identical-schema check still accepts matching layouts. The N selections remain N
+sortable/copyable columns (the user confirmed one column per selection, not a merged
+cell).
 
 ## Frozen vs scrolling columns
 

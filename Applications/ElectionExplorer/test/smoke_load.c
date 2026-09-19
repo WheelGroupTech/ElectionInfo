@@ -3095,6 +3095,143 @@ done:
     return rc;
 }
 
+/* "Vote for N" contests: the first column is titled and the following BLANK-header
+ * columns continue it. The continuation columns must be attributed to the contest
+ * (derived title "<contest> (2)"/"(3)", col_group -> the title column), and their
+ * per-selection data must load. A repeated identical title, by contrast, is a
+ * distinct race and must NOT be merged (verified against official election results
+ * for Travis County L26 -- see docs/cvr-design.md) (tag: cvrmulti). */
+static int test_cvr_multiselect(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* Header: 3 key columns, then a vote-for-3 "City Council (100)" contest whose
+     * 2nd/3rd columns have blank headers (explicit empty cells set the width), then
+     * a vote-for-2 "School Board (200)" contest encoded as a repeated title. */
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+        "<c r=\"D1\" t=\"inlineStr\"><is><t>City Council (100)</t></is></c>"
+        "<c r=\"E1\"/><c r=\"F1\"/>"
+        "<c r=\"G1\" t=\"inlineStr\"><is><t>School Board (200)</t></is></c>"
+        "<c r=\"H1\" t=\"inlineStr\"><is><t>School Board (200)</t></is></c></row>";
+    /* One ballot: two picks then an undervote for the third allowed selection; the
+     * two same-named School Board columns are separate single-winner races. */
+    static const char *k_row =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>A</t></is></c>"
+        "<c r=\"D2\" t=\"inlineStr\"><is><t>Alice (E1)</t></is></c>"
+        "<c r=\"E2\" t=\"inlineStr\"><is><t>Bob (E2)</t></is></c>"
+        "<c r=\"F2\" t=\"inlineStr\"><is><t>undervote</t></is></c>"
+        "<c r=\"G2\" t=\"inlineStr\"><is><t>Carol (E3)</t></is></c>"
+        "<c r=\"H2\" t=\"inlineStr\"><is><t>undervote</t></is></c></row>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[128];
+    char sheet[2048];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_multi.xlsx"))
+    {
+        wprintf(L"cvrmulti: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr, k_row);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrmulti: write failed\n");
+        return 1;
+    }
+
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.ncols != 8 || t.frozen_count != 3 || t.nrows != 1)
+    {
+        wprintf(L"cvrmulti: load s=%d cols=%u frozen=%u rows=%u err=%s\n",
+                (int)s,
+                t.ncols,
+                t.frozen_count,
+                t.nrows,
+                err);
+        goto done;
+    }
+    /* Blank-header continuations are suffixed; the two same-named School Board
+     * columns stay separate (each keeps the plain title). */
+    if (wcscmp(t.col_titles[3], L"City Council (100)") != 0 ||
+        wcscmp(t.col_titles[4], L"City Council (100) (2)") != 0 ||
+        wcscmp(t.col_titles[5], L"City Council (100) (3)") != 0 ||
+        wcscmp(t.col_titles[6], L"School Board (200)") != 0 ||
+        wcscmp(t.col_titles[7], L"School Board (200)") != 0)
+    {
+        wprintf(L"cvrmulti: titles [3]=%s [4]=%s [5]=%s [6]=%s [7]=%s\n",
+                t.col_titles[3],
+                t.col_titles[4],
+                t.col_titles[5],
+                t.col_titles[6],
+                t.col_titles[7]);
+        goto done;
+    }
+    /* Grouping: blank continuations point at the title column; the repeated-title
+     * columns are independent groups (7 -> 7, not 6). */
+    if (t.col_group == NULL || t.col_group[3] != 3 || t.col_group[4] != 3 ||
+        t.col_group[5] != 3 || t.col_group[6] != 6 || t.col_group[7] != 7 ||
+        t.col_group[0] != 0 || t.col_group[2] != 2)
+    {
+        wprintf(L"cvrmulti: col_group mismatch\n");
+        goto done;
+    }
+    /* Each selection loads in its own column. */
+    EeCvr_GetViewCellW(&t, 0, 3, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Alice (E1)") != 0)
+    {
+        wprintf(L"cvrmulti: col3 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 0, 4, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Bob (E2)") != 0)
+    {
+        wprintf(L"cvrmulti: col4 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 0, 5, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"undervote") != 0)
+    {
+        wprintf(L"cvrmulti: col5 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 0, 6, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Carol (E3)") != 0)
+    {
+        wprintf(L"cvrmulti: col6 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 0, 7, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"undervote") != 0)
+    {
+        wprintf(L"cvrmulti: col7 (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"cvrmulti ok\n");
+
+done:
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrmulti test failed\n");
+    }
+    return rc;
+}
+
 /* Write-in detection: a worksheet whose drawing anchors a picture onto an
  * otherwise-empty contest cell (ES&S write-in) must surface as "[write-in]",
  * while an ordinary selection is untouched (tag: writein). */
@@ -3261,6 +3398,7 @@ int wmain(void)
     failed |= test_xlsx_roundtrip();
     failed |= test_xlsx_styles();
     failed |= test_cvr();
+    failed |= test_cvr_multiselect();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;
 }

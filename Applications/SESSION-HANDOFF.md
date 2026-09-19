@@ -51,8 +51,50 @@ and design: `docs/cvr-design.md`.
   dedicated top-level **CVR window** (`CvrWndProc`, class `k_CvrClassName`) shows
   the ballots in an owner-data (virtual) report ListView — every column, header-
   click sort on any column (`EeCvr_SortByColumn`), status bar `N ballots · M
-  columns`. Modeled on the Report window; owns its `EeCvrTable`, frees on close.
-  Schema-mismatch aborts with an error message box.
+  columns`. Modeled on the Report/Diff windows; owns its `EeCvrTable`, frees on
+  close. Schema-mismatch aborts with an error message box.
+- **CVR window polish (`main.c`, this pass):**
+  - **Bold/grey column headers** matching the voter list — `CvrListSubclass`
+    forwards the header `NM_CUSTOMDRAW` to `App_HeaderCustomDraw(app, cd, FALSE)`
+    (same mechanism as the Differences window).
+  - **Independent window** — created with owner `NULL` (was `app->hwnd_main`) so the
+    voter list can overlap it instead of it always staying on top.
+  - **Menu bar** (`App_CreateCvrMenu`): **File** (Load Voter List Ctrl+O, Load Cast
+    Vote Records, **Close Cast Vote Records** = new `IDM_FILE_CLOSE_CVR`, Exit) +
+    **Edit** (Copy Ctrl+C), handled in `CvrWndProc` `WM_COMMAND`.
+  - **Copy selected ballots** — `Cvr_CopySelected` writes the selected rows as
+    tab-separated UTF-8 (all columns, CR/LF between rows) to the clipboard;
+    reachable via Edit→Copy, Ctrl+C (shared accelerator table), and right-click →
+    Copy (`Cvr_OnContextMenu`, `NM_RCLICK`). Builds clean x64 Debug; click-test
+    pending.
+- **"Vote for N" multi-column contests (`ee_cvr.c`, `xlsx.c`, this pass):** a
+  contest that lets a voter pick several candidates spans multiple columns; only the
+  first is titled and each additional column has a **blank** header. Previously these
+  showed as stray blank-titled columns after the contest.
+  - `cvr_build_titles` keeps the first column's title, gives each **blank**
+    continuation the derived display title `<contest> (2)`/`(3)`/…, and records
+    `col_group[i]` (new `EeCvrTable` field) = the contest's title column so **Phase 2
+    can tabulate a race across all its columns** (its stated purpose). The derivation
+    also runs in `header_matches`, so the multi-file identical-schema check still
+    works. N selections stay N sortable/copyable columns (user chose columns, not a
+    merged cell).
+  - **Only blank headers merge; a repeated identical title is a *separate* race.**
+    Confirmed against the official Travis County results
+    (`results.enr.clarityelections.com/TX/Travis/126203/web.345435`): two adjacent
+    identically-named "City of Bee Cave, City Councilmember at Large" columns are two
+    separate (Vote For 1) races, while the blank-header contests are genuinely
+    multi-seat (Briarcliff Alderman = Vote For 3, Ensenadas Director = Vote For 5,
+    Ranch at Cypress Creek = Vote For 2). (An earlier draft also merged repeated
+    titles; reverted after this check.)
+  - **Reader bug fixed in `xlsx.c`:** self-closed cells (`<c r="E1"/>`) were skipped
+    with a `</c>`-length advance, dropping the *next* cell — so rows of adjacent
+    empty cells (blank continuation columns) came up short. Now resumes just past
+    the `/>`. Benefits all `.xlsx`.
+  - Test `test_cvr_multiselect` (tag `cvrmulti`) covers blank-header grouping,
+    repeated-title separation, and self-closed empties. Verified on real
+    `L26 CVR.xlsx` (91 cols): Briarcliff (3), Ensenadas Director (5), Ranch at
+    Cypress Creek (2), Travis MUD 15 (3) grouped; Bee Cave stays two columns. Full
+    suite green; app + tests build clean x64.
 - **Click-test fix:** some ES&S files (Dallas P26) store the Cast Vote Record as a
   float (`1.0`), which displayed as `1.0` and sorted lexically. `xlsx.c` now
   normalizes integer-valued numeric cells (drops the trailing `.0`, no scientific
@@ -443,7 +485,11 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 - **Click-test CVR:** File → Load Cast Vote Records…, select one or more real
   `.xlsx` from `Election_CVRs/`; confirm the progress dialog, the window's columns
   + rows, header-click sorting, and the schema-mismatch error on a cross-schema
-  multi-select. Then commit CVR Phase 1: new `src/ee_cvr.{c,h}`, `docs/cvr-design.md`;
+  multi-select. Also verify this pass's polish: **bold/grey headers**, the **File**
+  (incl. Close Cast Vote Records) and **Edit** (Copy) menus, **row selection →
+  copy** via Edit→Copy / Ctrl+C / right-click, and that the CVR window is now
+  **independent** (the voter list can overlap it). Then commit CVR Phase 1: new
+  `src/ee_cvr.{c,h}`, `docs/cvr-design.md`;
   modified `src/main.c`, `src/resource.h`, `src/xlsx.c` (write-in detection),
   `docs/xlsx-import-design.md`, `test/smoke_load.c`, `test/README.md`, `.vcxproj`,
   `.filters`. Suggested:

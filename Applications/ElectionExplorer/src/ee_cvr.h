@@ -26,6 +26,13 @@ extern "C"
     typedef struct EeCvrTable
     {
         wchar_t **col_titles;  /* ncols owned wide strings */
+        uint32_t *col_group;   /* ncols: index of the contest's title column that
+                                * owns this column. For a titled column (and each
+                                * frozen key column) col_group[i] == i; for a blank
+                                * "vote for N" continuation column it is the index
+                                * of the preceding titled column, so Phase 2 can
+                                * tabulate a contest across all its columns without
+                                * parsing the "(2)"/"(3)" display suffix. */
         uint32_t ncols;
         uint32_t frozen_count; /* leading key columns (>= 1 once loaded) */
         uint32_t nrows;

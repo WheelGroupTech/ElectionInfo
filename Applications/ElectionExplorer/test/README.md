@@ -33,6 +33,9 @@ test\smoke_load.exe
 
 (The `xlsx` round-trip test authors a tiny `.xlsx` in memory via miniz, so
 `src\xlsx.c` and `src\third_party\miniz\miniz.c` are required to build the tests.
-The `cvr` and `writein` tests also need `src\ee_cvr.c`; `writein` authors a
-workbook with a worksheet-rels → drawing → anchor and checks a blank contest cell
-carrying a write-in image reads back as `[write-in]`.)
+The `cvr`, `cvrmulti`, and `writein` tests also need `src\ee_cvr.c`; `writein`
+authors a workbook with a worksheet-rels → drawing → anchor and checks a blank
+contest cell carrying a write-in image reads back as `[write-in]`; `cvrmulti`
+covers "vote for N" contests (blank-header continuation columns → derived
+`<contest> (2)` titles + `col_group`, incl. self-closed empty cells) and checks
+that a repeated identical title stays a *separate* race.)

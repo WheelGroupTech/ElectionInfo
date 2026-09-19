@@ -195,6 +195,7 @@ void EeCvr_Clear(EeCvrTable *t)
         }
         free(t->col_titles);
     }
+    free(t->col_group);
     free(t->view_index);
     free(t->row_start);
     free(t->ent_col);
@@ -245,6 +246,120 @@ static BOOL cvr_is_key_header(const wchar_t *s)
     return wcieq_trimmed(s, L"cast vote record") || wcieq_trimmed(s, L"batch") ||
            wcieq_trimmed(s, L"ballot status") || wcieq_trimmed(s, L"precinct") ||
            wcieq_trimmed(s, L"ballot style");
+}
+
+/* True if a header cell is blank (empty or only whitespace). */
+static BOOL wstr_blank(const wchar_t *s)
+{
+    if (s == NULL)
+    {
+        return TRUE;
+    }
+    for (; *s != L'\0'; s++)
+    {
+        if (*s != L' ' && *s != L'\t')
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/*
+ * Build the effective column titles and contest grouping from a raw header row.
+ *
+ * A "vote for N" contest spans several columns: the first carries the contest
+ * title and each additional column has a BLANK header. Those blank continuation
+ * columns each hold one of the voter's selections (or "undervote"); they get the
+ * derived title "<contest> (2)", "<contest> (3)", ... and col_group[i] is set to
+ * the contest's title column, so they read as part of the contest in the grid and
+ * Phase 2 can tabulate a race across all of its columns without parsing the display
+ * suffix. Titled columns (and the leading key columns) get col_group[i] == i.
+ *
+ * Only a blank header marks a continuation. A title that merely repeats verbatim is
+ * a DISTINCT race, not a continuation: Travis County's L26 lists "City of Bee Cave,
+ * City Councilmember at Large" on two adjacent columns, and the official Clarity
+ * results show these as two separate single-winner (Vote For 1) races. (By contrast
+ * the blank-header contests there are genuinely multi-seat: Briarcliff Alderman =
+ * Vote For 3, Ensenadas Director Election = Vote For 5.)
+ *
+ * On success *out_titles / *out_group are heap arrays of length @p ncells that the
+ * caller owns (free each title, then both arrays). On failure everything is freed
+ * and both outputs are NULL.
+ */
+static BOOL cvr_build_titles(const char *const *cells,
+                             uint32_t ncells,
+                             wchar_t ***out_titles,
+                             uint32_t **out_group)
+{
+    wchar_t **titles;
+    uint32_t *group;
+    uint32_t i;
+    uint32_t last_title = 0; /* index of the current contest's title column */
+    BOOL have_title = FALSE;
+    uint32_t choice = 1; /* selections seen so far within the current contest */
+
+    *out_titles = NULL;
+    *out_group = NULL;
+    titles = (wchar_t **)calloc(ncells, sizeof(wchar_t *));
+    group = (uint32_t *)malloc((size_t)ncells * sizeof(uint32_t));
+    if (titles == NULL || group == NULL)
+    {
+        free(titles);
+        free(group);
+        return FALSE;
+    }
+    for (i = 0; i < ncells; i++)
+    {
+        wchar_t *w = utf8_to_wide_alloc(cells[i] != NULL ? cells[i] : "");
+        BOOL is_cont;
+        if (w == NULL)
+        {
+            goto oom;
+        }
+        /* Continuation of the current contest: a blank header only. A repeated
+         * identical title is a distinct race (confirmed against official results). */
+        is_cont = have_title && wstr_blank(w);
+        if (!is_cont)
+        {
+            /* A titled column, or a leading blank before any contest: its own group. */
+            titles[i] = w;
+            group[i] = i;
+            if (!wstr_blank(w))
+            {
+                last_title = i;
+                have_title = TRUE;
+                choice = 1;
+            }
+        }
+        else
+        {
+            const wchar_t *base = titles[last_title];
+            size_t need = wcslen(base) + 16; /* base + " (" + digits + ")" + NUL */
+            wchar_t *d = (wchar_t *)malloc(need * sizeof(wchar_t));
+            free(w);
+            if (d == NULL)
+            {
+                goto oom;
+            }
+            choice++;
+            StringCchPrintfW(d, need, L"%s (%u)", base, choice);
+            titles[i] = d;
+            group[i] = last_title;
+        }
+    }
+    *out_titles = titles;
+    *out_group = group;
+    return TRUE;
+
+oom:
+    for (i = 0; i < ncells; i++)
+    {
+        free(titles[i]);
+    }
+    free(titles);
+    free(group);
+    return FALSE;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -316,26 +431,15 @@ static BOOL ensure_ent(EeCvrTable *t, size_t add)
 static BOOL establish_header(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
 {
     EeCvrTable *t = ctx->t;
-    uint32_t i;
     if (ncells == 0)
     {
         cvr_set_err(ctx->err, ctx->errcch, L"The CVR file has an empty header row.");
         return FALSE;
     }
-    t->col_titles = (wchar_t **)calloc(ncells, sizeof(wchar_t *));
-    if (t->col_titles == NULL)
+    if (!cvr_build_titles(cells, ncells, &t->col_titles, &t->col_group))
     {
         cvr_set_err(ctx->err, ctx->errcch, L"Out of memory.");
         return FALSE;
-    }
-    for (i = 0; i < ncells; i++)
-    {
-        t->col_titles[i] = utf8_to_wide_alloc(cells[i] != NULL ? cells[i] : "");
-        if (t->col_titles[i] == NULL)
-        {
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory.");
-            return FALSE;
-        }
     }
     t->ncols = ncells;
     t->frozen_count = 0;
@@ -360,27 +464,36 @@ static BOOL establish_header(CvrLoadCtx *ctx, const char *const *cells, uint32_t
 static BOOL header_matches(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
 {
     EeCvrTable *t = ctx->t;
+    wchar_t **titles = NULL;
+    uint32_t *group = NULL;
     uint32_t i;
+    BOOL ok = TRUE;
+
     if (ncells != t->ncols)
+    {
+        return FALSE;
+    }
+    /* Derive the same effective titles as the first file so a matching "vote for N"
+     * layout is accepted (blank continuation columns line up identically). */
+    if (!cvr_build_titles(cells, ncells, &titles, &group))
     {
         return FALSE;
     }
     for (i = 0; i < ncells; i++)
     {
-        wchar_t *w = utf8_to_wide_alloc(cells[i] != NULL ? cells[i] : "");
-        int eq;
-        if (w == NULL)
+        if (wcscmp(titles[i], t->col_titles[i]) != 0)
         {
-            return FALSE;
-        }
-        eq = (wcscmp(w, t->col_titles[i]) == 0);
-        free(w);
-        if (!eq)
-        {
-            return FALSE;
+            ok = FALSE;
+            break;
         }
     }
-    return TRUE;
+    for (i = 0; i < ncells; i++)
+    {
+        free(titles[i]);
+    }
+    free(titles);
+    free(group);
+    return ok;
 }
 
 static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)

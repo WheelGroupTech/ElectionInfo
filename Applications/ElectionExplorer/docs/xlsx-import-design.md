@@ -144,6 +144,12 @@ Per-cell handling in `sheetN.xml` (`<c r="B5" t="…" s="…"><v>…</v></c>`):
 - **Empty cells are omitted.** Cells carry `r="B5"`; we parse the column letters
   (`A`, `B`, …, `AA`) to place values by column index and fill gaps with `""` so
   every row has a consistent width aligned to the header.
+- **Self-closed cells** (`<c r="E1"/>`, common for empty-but-styled cells) have no
+  `</c>`; the row scanner resumes just past the `/>` for these (advancing by a
+  `</c>` length would skip into — and drop — the next cell, e.g. two adjacent empty
+  cells `<c r="E1"/><c r="F1"/>`). This matters for "vote for N" contests whose
+  blank continuation columns are self-closed empties; without it the row width
+  came up short and trailing columns were lost.
 
 The shared string table is interned once into a UTF-8 pool (same idea as the
 table's existing string pool) and indexed; cells reference by position.

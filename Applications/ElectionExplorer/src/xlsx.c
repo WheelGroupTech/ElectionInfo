@@ -1560,7 +1560,17 @@ static EeLoadStatus parse_worksheet(const char *xml,
                 /* else: arena-backed; pointer patched in emit_row */
             }
 
-            c = (cellend < rowend) ? cellend + 4 : rowend;
+            if (cgt[-1] == '/')
+            {
+                /* Self-closed <c .../>: no "</c>" to skip; resume just past it.
+                 * (Using cellend + 4 here would skip into the next cell and drop
+                 * it — e.g. consecutive empty cells "<c r=.../><c r=.../>".) */
+                c = cgt + 1;
+            }
+            else
+            {
+                c = (cellend < rowend) ? cellend + 4 : rowend;
+            }
         }
 
         /* Overlay write-in markers: cells on this row that carry an anchored

@@ -8996,6 +8996,196 @@ static void Cvr_LayoutList(CvrWindow *cw, int width, int height)
     MoveWindow(cw->list, 0, 0, width, height, TRUE);
 }
 
+/* Menu bar for a CVR window: File (mirrors the voter window, but "Close Cast Vote
+ * Records") + Edit (Copy). */
+static HMENU App_CreateCvrMenu(void)
+{
+    HMENU menu = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
+    if (menu == NULL || file_menu == NULL || edit_menu == NULL)
+    {
+        if (file_menu != NULL)
+        {
+            DestroyMenu(file_menu);
+        }
+        if (edit_menu != NULL)
+        {
+            DestroyMenu(edit_menu);
+        }
+        if (menu != NULL)
+        {
+            DestroyMenu(menu);
+        }
+        return NULL;
+    }
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_CVR, L"&Close Cast Vote Records");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    return menu;
+}
+
+/* Subclass so the CVR list draws its header bold on the grey header background,
+ * like the voter list (header NM_CUSTOMDRAW is delivered to the list, the header's
+ * parent). */
+static WNDPROC g_old_cvr_list_proc = NULL;
+
+static LRESULT CALLBACK CvrListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        CvrWindow *cw = (CvrWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (cw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(cw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_cvr_list_proc, hwnd, msg, wParam, lParam);
+}
+
+/* Grow @p *buf (wide chars) so it holds at least @p need elements. */
+static BOOL cvr_wbuf_reserve(wchar_t **buf, size_t *cap, size_t need)
+{
+    size_t nc;
+    wchar_t *nb;
+    if (need <= *cap)
+    {
+        return TRUE;
+    }
+    nc = (*cap == 0) ? 4096 : *cap;
+    while (nc < need)
+    {
+        if (nc > ((size_t)-1) / (2 * sizeof(wchar_t)))
+        {
+            return FALSE;
+        }
+        nc *= 2;
+    }
+    nb = (wchar_t *)realloc(*buf, nc * sizeof(wchar_t));
+    if (nb == NULL)
+    {
+        return FALSE;
+    }
+    *buf = nb;
+    *cap = nc;
+    return TRUE;
+}
+
+/* Copy the selected ballots to the clipboard as tab-separated UTF-8, one row per
+ * ballot with every column (frozen keys + contests), CR/LF between rows. */
+static void Cvr_CopySelected(CvrWindow *cw)
+{
+    int i;
+    wchar_t *buf = NULL;
+    size_t cap = 0;
+    size_t len = 0;
+    wchar_t cell[512];
+    char *utf8 = NULL;
+    int u8len;
+
+    if (cw == NULL || cw->list == NULL || cw->table.ncols == 0)
+    {
+        return;
+    }
+    i = ListView_GetNextItem(cw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        uint32_t c;
+        for (c = 0; c < cw->table.ncols; c++)
+        {
+            size_t n;
+            cell[0] = L'\0';
+            EeCvr_GetViewCellW(&cw->table, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            n = wcslen(cell);
+            if (!cvr_wbuf_reserve(&buf, &cap, len + n + 2))
+            {
+                free(buf);
+                return;
+            }
+            if (n > 0)
+            {
+                memcpy(buf + len, cell, n * sizeof(wchar_t));
+                len += n;
+            }
+            if (c + 1 < cw->table.ncols)
+            {
+                buf[len++] = L'\t';
+            }
+            else
+            {
+                buf[len++] = L'\r';
+                buf[len++] = L'\n';
+            }
+        }
+        i = ListView_GetNextItem(cw->list, i, LVNI_SELECTED);
+    }
+    if (buf == NULL || len == 0)
+    {
+        free(buf);
+        return;
+    }
+    if (!cvr_wbuf_reserve(&buf, &cap, len + 1))
+    {
+        free(buf);
+        return;
+    }
+    buf[len] = L'\0';
+
+    u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+    if (u8len > 0)
+    {
+        utf8 = (char *)malloc((size_t)u8len);
+        if (utf8 != NULL &&
+            WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+        {
+            App_SetClipboardUtf8(cw->hwnd, utf8);
+        }
+    }
+    free(utf8);
+    free(buf);
+}
+
+/* Right-click: select the row if needed, then a Copy menu. */
+static void Cvr_OnContextMenu(CvrWindow *cw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+
+    if (cw == NULL || cw->list == NULL)
+    {
+        return;
+    }
+    if (item >= 0 && !(ListView_GetItemState(cw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(cw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(cw->list,
+                              item,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    cmd = (UINT)
+        TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, cw->hwnd, NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_EDIT_COPY)
+    {
+        Cvr_CopySelected(cw);
+    }
+}
+
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     CvrWindow *cw = (CvrWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -9028,6 +9218,15 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (cw->list == NULL)
             {
                 return -1;
+            }
+            /* Subclass so the header draws bold/grey like the voter list. */
+            {
+                WNDPROC old =
+                    (WNDPROC)SetWindowLongPtrW(cw->list, GWLP_WNDPROC, (LONG_PTR)CvrListSubclass);
+                if (g_old_cvr_list_proc == NULL)
+                {
+                    g_old_cvr_list_proc = old;
+                }
             }
             ListView_SetExtendedListViewStyle(cw->list,
                                               LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
@@ -9084,12 +9283,47 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             }
             return 0;
 
+        case WM_COMMAND:
+            if (cw == NULL)
+            {
+                break;
+            }
+            switch (LOWORD(wParam))
+            {
+                case IDM_EDIT_COPY: /* also Ctrl+C via the shared accelerator table */
+                    Cvr_CopySelected(cw);
+                    return 0;
+                case IDM_FILE_OPEN_VOTER_LIST:
+                    App_BeginOpenVoterList(cw->app);
+                    return 0;
+                case IDM_FILE_OPEN_CVR:
+                    App_BeginOpenCvr(cw->app);
+                    return 0;
+                case IDM_FILE_CLOSE_CVR:
+                    DestroyWindow(hwnd);
+                    return 0;
+                case IDM_FILE_EXIT:
+                    App_ExitAll();
+                    return 0;
+                default:
+                    break;
+            }
+            break;
+
         case WM_NOTIFY:
         {
             NMHDR *hdr = (NMHDR *)lParam;
             if (cw == NULL || hdr->hwndFrom != cw->list)
             {
                 break;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(cw->list, &screen);
+                Cvr_OnContextMenu(cw, ia->iItem, screen);
+                return 0;
             }
             if (hdr->code == LVN_GETDISPINFOW)
             {
@@ -9166,16 +9400,18 @@ static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t 
     cw->sort_col = -1;
     cw->sort_asc = TRUE;
 
-    h = CreateWindowExW(WS_EX_APPWINDOW,
+    /* Independent top-level window (owner NULL) so the voter list can overlap it,
+     * rather than the CVR window always staying above its opener. */
+    h = CreateWindowExW(0,
                         k_CvrClassName,
                         (title != NULL) ? title : L"Cast Vote Records",
-                        WS_OVERLAPPEDWINDOW,
+                        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                         CW_USEDEFAULT,
                         CW_USEDEFAULT,
                         Scale(app, 900),
                         Scale(app, 560),
-                        app->hwnd_main,
                         NULL,
+                        App_CreateCvrMenu(),
                         app->instance,
                         cw);
     if (h == NULL)

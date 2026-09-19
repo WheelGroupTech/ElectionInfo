@@ -15,9 +15,22 @@ contest handling**, **Phase 2 vote tabulation** (Reports → Tabulate CVR Votes�
 a per-user **Edit → Options… "Merge image and text write-ins"** toggle, and
 **selection whitespace normalization**. Builds clean (x64 Debug+Release), full smoke
 suite passes (incl. `cvr`, `cvrmulti`, `cvrtab`, `cvrmerge`, `cvrws`, `writein`);
-tabulation validated exactly against official published results for **five** Travis
-elections (L26, P26, PR26, G24 = 6 files/587,090 ballots, G20 = 7 files/612,696
-ballots). The app is being published via the **Microsoft Store**.
+tabulation validated exactly against official published results for **seven**
+elections across two counties — Travis (L26, P26, PR26, G24 = 6 files/587,090, G20 =
+7 files/612,696) and Dallas (P26 Rep = 2 files/103,818, P26 Dem = 3 files/280,326
+ballots). Dallas Dem revealed the CVR is **one row per ballot card** (multi-sheet
+ballots ⇒ more rows than ballots; contest tallies unaffected — all matched).
+
+**Uncommitted (this session):** CVR window status relabeled "N **ballot records**"
+(a record = a card/sheet) and, when detected, appends "(multi-card ballots
+detected)" via new `EeCvr_HasMultiCard` (`ee_cvr.{c,h}`, `main.c`). Detection is
+threshold-free — gates on a top-of-ballot reference contest (President/Governor/U.S.
+Senator, excl. Lieutenant Governor) and flags when a minority of rows carry none
+(continuation sheets). Flags Dallas-Dem only; not Dallas-Rep, Travis
+L26/PR26/P26/G24/G20, or combined-party primaries. Test `cvrmc`; full suite green;
+app builds clean x64.
+
+The app is being published via the **Microsoft Store**.
 
 ---
 

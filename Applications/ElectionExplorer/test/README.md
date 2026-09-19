@@ -42,5 +42,7 @@ that a repeated identical title stays a *separate* race; `cvrtab` covers
 `EeCvr_Tabulate` (per-contest selection counts summed across a contest's columns,
 ordered by contest then count); `cvrmerge` covers the write-in merge option (image
 `[write-in]` + text `Write-in` collapse to one `write-in` row when on, separate when
-off); `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
+off); `cvrmc` covers multi-card detection (`EeCvr_HasMultiCard`: a long ballot split
+across two cards is flagged; a clean per-ballot CVR and a combined-party primary are
+not); `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

@@ -184,6 +184,29 @@ contest.
   Harris 398,968 / Trump 170,781 / …, and the merged **write-in 3,690** = 3,680
   image + 10 text, matching the official combined Write-in total).
 
+### Multi-card / multi-page ballots
+
+Some counties (e.g. Dallas) export **one row per ballot card/sheet**, not per
+ballot: a ballot that spills onto page 2 produces a second CVR row that is blank in
+the page-1 contests. So the row count can exceed the number of ballots (Dallas Mar
+2026 Dem: 286,258 rows vs 280,326 ballots — 5,932 continuation sheets). Travis
+exports one row per ballot, so its row count equals ballots. **Tallies are
+unaffected** either way — each contest is counted from whichever card carries it, and
+every validated election matched official results. ES&S supports up to 9-page
+front/back mail ballots, and a contest can be page 1 in one style and page 2 in
+another, so cards are *not* a fixed column range.
+
+- The CVR window status bar reads "**N ballot records**" (a record is a card/sheet),
+  and appends "**(multi-card ballots detected)**" when detected.
+- `EeCvr_HasMultiCard(t)` (informational only; never affects tallies) is
+  threshold-free: the top-of-ballot statewide races — **President, Governor, U.S.
+  Senator** (excluding Lieutenant Governor) — appear on page 1 of every ballot style
+  in every U.S. county. It gates on such a *reference contest* being present, then
+  flags the CVR when the rows carrying **none** of them (continuation sheets) are a
+  minority (>0, <50% of rows). This fires on Dallas-Dem but not on Dallas-Rep, the
+  Travis elections, or **combined-party primaries** (each party's ballot carries its
+  own top race, so no row lacks a reference contest). Test `cvrmc`.
+
 ### Future Phase 2 polish
 
 Blank-vs-`undervote`-vs-`overvote` rate summaries, ballot-style breakdowns, and

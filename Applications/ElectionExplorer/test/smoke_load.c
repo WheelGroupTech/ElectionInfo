@@ -3473,6 +3473,184 @@ done:
     return rc;
 }
 
+/* Multi-card detection. Three cases:
+ *  A) a long ballot style split across two cards (a continuation row blank in the
+ *     top contest, which is on every style's first page) -> flagged;
+ *  B) a clean one-row-per-ballot CVR -> not flagged;
+ *  C) a combined-party primary where the leading contest is blank on the other
+ *     party's (full) ballots -> not flagged (that blank fraction isn't a card).
+ * (tag: cvrmc) */
+static int test_cvr_multicard(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+        "<c r=\"D1\" t=\"inlineStr\"><is><t>President</t></is></c>"
+        "<c r=\"E1\" t=\"inlineStr\"><is><t>Judge</t></is></c></row>";
+    /* Cells: President (col D, a reference contest) and Judge (col E, down-ballot),
+     * each present or omitted (blank). */
+#define MCP "<c r=\"D%d\" t=\"inlineStr\"><is><t>P</t></is></c>"
+#define MCJ "<c r=\"E%d\" t=\"inlineStr\"><is><t>J</t></is></c>"
+
+    wchar_t patha[MAX_PATH], pathb[MAX_PATH], pathc[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[8192];
+    char row[512];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    int rc = 1;
+    int i;
+    size_t used;
+
+    if (!cvr_temp_path(patha, ARRAYSIZE(patha), L"ee_cvr_mc_a.xlsx") ||
+        !cvr_temp_path(pathb, ARRAYSIZE(pathb), L"ee_cvr_mc_b.xlsx") ||
+        !cvr_temp_path(pathc, ARRAYSIZE(pathc), L"ee_cvr_mc_c.xlsx"))
+    {
+        wprintf(L"cvrmc: temp path failed\n");
+        return 1;
+    }
+
+    /* File A (multi-card): 5 short-ballot rows (President+Judge on one card), then a
+     * long ballot split into a page-1 row (President, Judge blank) and a page-2 row
+     * (President blank, Judge). President filled 6/7, Judge 6/7 -> max 85.7%, blank
+     * one row -> flagged. */
+    StringCchCopyA(sheet, ARRAYSIZE(sheet), k_head);
+    StringCchCatA(sheet, ARRAYSIZE(sheet), k_hdr);
+    for (i = 2; i <= 6; i++) /* short ballots */
+    {
+        StringCchPrintfA(row, ARRAYSIZE(row),
+                         "<row r=\"%d\"><c r=\"A%d\"><v>%d</v></c>"
+                         "<c r=\"B%d\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                         "<c r=\"C%d\" t=\"inlineStr\"><is><t>S1</t></is></c>" MCP MCJ "</row>",
+                         i, i, i, i, i, i, i);
+        StringCchCatA(sheet, ARRAYSIZE(sheet), row);
+    }
+    /* long-ballot page 1: President, Judge omitted */
+    StringCchPrintfA(row, ARRAYSIZE(row),
+                     "<row r=\"7\"><c r=\"A7\"><v>7</v></c>"
+                     "<c r=\"B7\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                     "<c r=\"C7\" t=\"inlineStr\"><is><t>S2</t></is></c>" MCP "</row>", 7);
+    StringCchCatA(sheet, ARRAYSIZE(sheet), row);
+    /* long-ballot page 2: President omitted, Judge present */
+    StringCchPrintfA(row, ARRAYSIZE(row),
+                     "<row r=\"8\"><c r=\"A8\"><v>8</v></c>"
+                     "<c r=\"B8\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                     "<c r=\"C8\" t=\"inlineStr\"><is><t>S2 [2]</t></is></c>" MCJ "</row>", 8);
+    StringCchCatA(sheet, ARRAYSIZE(sheet), row);
+    StringCchCatA(sheet, ARRAYSIZE(sheet), "</sheetData></worksheet>");
+    if (!cvr_write_xlsx(patha, sheet))
+    {
+        wprintf(L"cvrmc: write A failed\n");
+        return 1;
+    }
+
+    /* File B (clean): every row has President + Judge -> no contest blank -> not flagged. */
+    StringCchCopyA(sheet, ARRAYSIZE(sheet), k_head);
+    StringCchCatA(sheet, ARRAYSIZE(sheet), k_hdr);
+    for (i = 2; i <= 6; i++)
+    {
+        StringCchPrintfA(row, ARRAYSIZE(row),
+                         "<row r=\"%d\"><c r=\"A%d\"><v>%d</v></c>"
+                         "<c r=\"B%d\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                         "<c r=\"C%d\" t=\"inlineStr\"><is><t>S1</t></is></c>" MCP MCJ "</row>",
+                         i, i, i, i, i, i, i);
+        StringCchCatA(sheet, ARRAYSIZE(sheet), row);
+    }
+    StringCchCatA(sheet, ARRAYSIZE(sheet), "</sheetData></worksheet>");
+    if (!cvr_write_xlsx(pathb, sheet))
+    {
+        wprintf(L"cvrmc: write B failed\n");
+        return 1;
+    }
+
+    /* File C (combined primary): each party ballot carries its OWN top race, both
+     * reference contests ("Dem President"/"Rep President"). 6 DEM rows fill col D, 4
+     * REP rows fill col E. Every row has a reference contest -> extra == 0 -> not
+     * flagged, even though each party's race is blank on the other party's ballots. */
+    {
+        static const char *k_hdr_c =
+            "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+            "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+            "<c r=\"C1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+            "<c r=\"D1\" t=\"inlineStr\"><is><t>Dem President</t></is></c>"
+            "<c r=\"E1\" t=\"inlineStr\"><is><t>Rep President</t></is></c></row>";
+        StringCchCopyA(sheet, ARRAYSIZE(sheet), k_head);
+        StringCchCatA(sheet, ARRAYSIZE(sheet), k_hdr_c);
+        for (i = 2; i <= 11; i++)
+        {
+            char cell[128];
+            StringCchPrintfA(cell, ARRAYSIZE(cell), (i <= 7) ? MCP : MCJ, i); /* 6 DEM, 4 REP */
+            StringCchPrintfA(row, ARRAYSIZE(row),
+                             "<row r=\"%d\"><c r=\"A%d\"><v>%d</v></c>"
+                             "<c r=\"B%d\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                             "<c r=\"C%d\" t=\"inlineStr\"><is><t>S1</t></is></c>%s</row>",
+                             i, i, i, i, i, cell);
+            StringCchCatA(sheet, ARRAYSIZE(sheet), row);
+        }
+        StringCchCatA(sheet, ARRAYSIZE(sheet), "</sheetData></worksheet>");
+    }
+    used = strlen(sheet);
+    (void)used;
+    if (!cvr_write_xlsx(pathc, sheet))
+    {
+        wprintf(L"cvrmc: write C failed\n");
+        return 1;
+    }
+#undef MCP
+#undef MCJ
+
+    /* A -> flagged; B -> not; C -> not. */
+    EeCvr_Init(&t);
+    one[0] = patha;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || !EeCvr_HasMultiCard(&t))
+    {
+        wprintf(L"cvrmc: multi-card file not detected (s=%d rows=%u)\n", (int)s, t.nrows);
+        EeCvr_Clear(&t);
+        goto done;
+    }
+    EeCvr_Clear(&t);
+
+    EeCvr_Init(&t);
+    one[0] = pathb;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || EeCvr_HasMultiCard(&t))
+    {
+        wprintf(L"cvrmc: clean file wrongly flagged (s=%d)\n", (int)s);
+        EeCvr_Clear(&t);
+        goto done;
+    }
+    EeCvr_Clear(&t);
+
+    EeCvr_Init(&t);
+    one[0] = pathc;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || EeCvr_HasMultiCard(&t))
+    {
+        wprintf(L"cvrmc: combined-primary file wrongly flagged (s=%d)\n", (int)s);
+        EeCvr_Clear(&t);
+        goto done;
+    }
+    EeCvr_Clear(&t);
+    rc = 0;
+    wprintf(L"cvrmc ok\n");
+
+done:
+    DeleteFileW(patha);
+    DeleteFileW(pathb);
+    DeleteFileW(pathc);
+    if (rc != 0)
+    {
+        wprintf(L"cvrmc test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -3748,6 +3926,7 @@ int wmain(void)
     failed |= test_cvr_multiselect();
     failed |= test_cvr_tabulate();
     failed |= test_cvr_merge_writeins();
+    failed |= test_cvr_multicard();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

@@ -8962,6 +8962,7 @@ typedef struct CvrWindow
     EeCvrTable table;
     int sort_col; /* -1 = unsorted */
     BOOL sort_asc;
+    BOOL multi_card;         /* CVR looks like one row per ballot card/page */
     CvrReportWindow *report; /* tabulation report tied to this window, or NULL */
 } CvrWindow;
 
@@ -8981,16 +8982,20 @@ static void App_ShowCvrOptions(CvrWindow *cw);
 
 static void Cvr_UpdateStatus(CvrWindow *cw)
 {
-    wchar_t buf[128];
+    wchar_t buf[160];
     if (cw->status == NULL)
     {
         return;
     }
     StringCchPrintfW(buf,
                      ARRAYSIZE(buf),
-                     L"%u ballots  \x2022  %u columns",
+                     L"%u ballot records  \x2022  %u columns",
                      cw->table.nrows,
                      cw->table.ncols);
+    if (cw->multi_card)
+    {
+        StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  (multi-card ballots detected)");
+    }
     SendMessageW(cw->status, SB_SETTEXTW, 0, (LPARAM)buf);
 }
 
@@ -9438,6 +9443,7 @@ static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t 
     EeCvr_Init(table);
     cw->sort_col = -1;
     cw->sort_asc = TRUE;
+    cw->multi_card = EeCvr_HasMultiCard(&cw->table);
 
     /* Independent top-level window (owner NULL) so the voter list can overlap it,
      * rather than the CVR window always staying above its opener. */

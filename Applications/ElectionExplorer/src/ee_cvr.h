@@ -139,6 +139,26 @@ extern "C"
     /** Free an array returned by EeCvr_Tabulate. */
     void EeCvr_FreeTally(EeCvrTally *items, uint32_t count);
 
+    /**
+     * Heuristic: does the CVR look like it holds multi-card/multi-page ballots
+     * (one row per ballot sheet rather than per ballot)?
+     *
+     * ES&S per-sheet CVRs record each additional page/card as its own row that is
+     * blank in the top-of-ballot statewide contests -- President, Governor (not
+     * Lieutenant Governor), or U.S. Senator -- which appear on page 1 of every ballot
+     * style in every U.S. county.
+     * So the CVR is treated as multi-card when it contains such a reference contest
+     * AND a MINORITY of rows carry none of them (those rows are continuation sheets).
+     *
+     * This is informational only (it never affects tallies). It deliberately does
+     * not fire on: combined-party primary CVRs (every ballot carries its own party's
+     * top race, so no row lacks a reference contest); runoff/local CVRs that lack
+     * these statewide races (no reference contest to gate on). Because it keys on the
+     * presence/absence of the reference contest rather than a fixed fill threshold,
+     * it stays correct even when many ballot styles are multi-page.
+     */
+    BOOL EeCvr_HasMultiCard(const EeCvrTable *t);
+
 #ifdef __cplusplus
 }
 #endif

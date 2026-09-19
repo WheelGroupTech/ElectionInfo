@@ -1137,3 +1137,107 @@ void EeCvr_FreeTally(EeCvrTally *items, uint32_t count)
     }
     free(items);
 }
+
+/* Case-insensitive substring test; @p needle must already be lowercase. */
+static BOOL wcs_contains_ci(const wchar_t *hay, const wchar_t *needle)
+{
+    size_t nl = wcslen(needle);
+    if (nl == 0)
+    {
+        return TRUE;
+    }
+    for (; *hay != L'\0'; hay++)
+    {
+        size_t i = 0;
+        while (i < nl)
+        {
+            wchar_t a = hay[i];
+            wchar_t b = needle[i];
+            if (a >= L'A' && a <= L'Z')
+            {
+                a = (wchar_t)(a - L'A' + L'a');
+            }
+            if (a != b)
+            {
+                break;
+            }
+            i++;
+        }
+        if (i == nl)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* The top-of-ballot statewide contests that appear on page 1 of EVERY ballot
+ * style (in every U.S. county/state): President, Governor, U.S. Senator. Excludes
+ * "Lieutenant Governor". Matches the (possibly party-prefixed) contest title. */
+static BOOL cvr_is_reference_contest(const wchar_t *title)
+{
+    return wcs_contains_ci(title, L"president") ||
+           wcs_contains_ci(title, L"united states senator") ||
+           (wcs_contains_ci(title, L"governor") && !wcs_contains_ci(title, L"lieutenant"));
+}
+
+BOOL EeCvr_HasMultiCard(const EeCvrTable *t)
+{
+    char *isref;
+    uint32_t c;
+    uint32_t r;
+    uint32_t nref = 0;
+    uint32_t extra = 0;
+
+    if (t == NULL || t->nrows == 0 || t->ncols <= t->frozen_count)
+    {
+        return FALSE;
+    }
+    /* Gate on the presence of a top-of-ballot reference contest. Without one (e.g. a
+     * purely local election, or a runoff lacking these races) we do not judge. */
+    isref = (char *)calloc(t->ncols, 1);
+    if (isref == NULL)
+    {
+        return FALSE;
+    }
+    for (c = t->frozen_count; c < t->ncols; c++)
+    {
+        if (cvr_is_reference_contest(t->col_titles[c]))
+        {
+            isref[c] = 1;
+            nref++;
+        }
+    }
+    if (nref == 0)
+    {
+        free(isref);
+        return FALSE;
+    }
+    /* A page-1 ballot always carries a reference contest; a continuation page carries
+     * none. Count rows with no reference contest -- those are extra sheets. */
+    for (r = 0; r < t->nrows; r++)
+    {
+        uint32_t a = t->row_start[r];
+        uint32_t b = t->row_start[r + 1];
+        uint32_t e;
+        BOOL has = FALSE;
+        for (e = a; e < b; e++)
+        {
+            if (isref[t->ent_col[e]])
+            {
+                has = TRUE;
+                break;
+            }
+        }
+        if (!has)
+        {
+            extra++;
+        }
+    }
+    free(isref);
+
+    /* Continuation sheets are a minority; the majority of rows are page-1 ballots
+     * that carry a reference contest. (Combined-party CVRs never trip this: every
+     * ballot carries its own party's top race, so extra == 0.) */
+    return (extra > 0 && (uint64_t)extra * 2u < (uint64_t)t->nrows);
+}

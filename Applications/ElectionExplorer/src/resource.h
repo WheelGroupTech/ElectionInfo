@@ -10,6 +10,7 @@
 #define IDM_FILE_OPEN_VOTER_LIST  40001
 #define IDM_FILE_EXIT             40002
 #define IDM_FILE_CLOSE_VOTER_LIST 40003
+#define IDM_FILE_OPEN_CVR         40004
 #define IDM_EDIT_COPY             40010
 #define IDM_EDIT_OPTIONS          40011
 #define IDM_FILTER_EDIT           40020

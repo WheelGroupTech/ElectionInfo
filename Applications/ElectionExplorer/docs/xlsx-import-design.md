@@ -3,9 +3,11 @@
 **Status:** Implemented — Phases 1–3 + the GUI sheet picker and `*.xlsx` File→Open
 filter. Reads shared/inline strings, numbers, booleans, error cells; converts
 date serials to `YYYY-MM-DD` and preserves zero-padded formats (e.g. ZIP
-`00000`) via `styles.xml`. Tested (`xlsx`, `xlsxfmt` round-trip tests; verified on
-a real workbook). Possible future work: broader number-format coverage; streaming
-very large parts instead of extract-to-heap.
+`00000`) via `styles.xml`; detects cells whose only content is an anchored
+picture (see §Write-in images) and marks them `[write-in]`. Tested (`xlsx`,
+`xlsxfmt`, `writein` round-trip tests; verified on a real workbook). Possible
+future work: broader number-format coverage; streaming very large parts instead
+of extract-to-heap.
 **Date:** 2026-09-17
 **Scope:** Add the ability to open and extract tabular data from Microsoft Excel
 `.xlsx` workbooks, as an alternative input to the existing CSV/TSV loader.
@@ -169,6 +171,32 @@ numeric), and:
 This is the fiddliest piece and is isolated in **Phase 3** so earlier phases can
 land and be useful first. (Fully reproducing arbitrary custom number formats is
 out of scope; we target the date/general/text cases that matter here.)
+
+### 6.1 Write-in images (cells whose content is a picture)
+
+Some exporters store a value as a *picture* anchored over the cell rather than as
+cell text — notably ES&S CVR exports, which paste a scanned snippet of the
+voter's handwritten **write-in** into the contest cell. The cell itself is empty,
+so a naive reader shows it blank even though the ballot recorded a selection.
+
+Detection (no OCR — presence only):
+
+- A worksheet that has pictures references a drawing part via
+  `xl/worksheets/_rels/sheetN.xml.rels` (`Relationship` `Type` ending `/drawing`
+  → `Target`, resolved relative to `xl/worksheets/`).
+- `xl/drawings/drawingM.xml` holds one anchor per picture; each
+  `<xdr:twoCellAnchor>`'s `<xdr:from>` gives the 0-based `<xdr:col>` / `<xdr:row>`
+  of the cell the image sits in.
+- We collect those `(row, col)` anchors (sorted) and, while streaming rows, when a
+  row's 0-based worksheet index carries an anchored image over an **empty** cell,
+  emit the marker `[write-in]` instead of `""`. Cells that already have text are
+  left untouched.
+
+The handwritten text is a raster image, so only the *presence* of a write-in is
+surfaced, not its value. This lives entirely in the reader, so any `.xlsx`
+benefits; in practice it matters for CVRs. Tested by `writein` (authors a
+workbook with a worksheet-rels → drawing → anchor) and verified on real Travis
+County G24 CVRs (President write-ins that had read blank now show `[write-in]`).
 
 ## 7. Security (untrusted input)
 

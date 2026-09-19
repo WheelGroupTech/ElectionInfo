@@ -697,6 +697,43 @@ static int append_zeropad(Buf *b, const char *s, size_t n, int pad)
     return buf_append(b, s, n) ? 1 : -1;
 }
 
+/* Append a general (non-date, non-zero-pad) number: an integer-valued cell is
+ * emitted without a trailing ".0" (and without scientific notation) so keys like
+ * a Cast Vote Record number display and sort as integers; other numbers are the
+ * stored text. Returns 1 on success, -1 on OOM. */
+static int append_number_general(Buf *b, const char *s, size_t n)
+{
+    char numbuf[64];
+    char out[32];
+    char *endp = NULL;
+    double d;
+    size_t cc = (n < sizeof(numbuf) - 1) ? n : sizeof(numbuf) - 1;
+
+    memcpy(numbuf, s, cc);
+    numbuf[cc] = '\0';
+    d = strtod(numbuf, &endp);
+    if (endp != numbuf)
+    {
+        while (*endp == ' ' || *endp == '\t')
+        {
+            endp++;
+        }
+        if (*endp == '\0' && d >= -9007199254740992.0 && d <= 9007199254740992.0)
+        {
+            long long v = (long long)d;
+            if ((double)v == d)
+            {
+                if (FAILED(StringCchPrintfA(out, ARRAYSIZE(out), "%lld", v)))
+                {
+                    return -1;
+                }
+                return buf_append(b, out, strlen(out)) ? 1 : -1;
+            }
+        }
+    }
+    return xml_append_unescaped(b, s, n) ? 1 : -1; /* non-integer / non-numeric: raw */
+}
+
 static NumFmtKind builtin_numfmt_kind(int id)
 {
     if ((id >= 14 && id <= 22) || (id >= 27 && id <= 36) || (id >= 45 && id <= 47) ||
@@ -901,6 +938,213 @@ oom:
 }
 
 /* -------------------------------------------------------------------------- */
+/* Write-in images: cells that carry an anchored picture (no text value).      */
+/* ES&S CVR exports render a write-in selection as a small JPEG anchored to the */
+/* contest cell; the cell itself is empty. We mark such cells "[write-in]".     */
+/* -------------------------------------------------------------------------- */
+
+static const char k_writein_marker[] = "[write-in]";
+
+typedef struct ImgCell
+{
+    uint32_t row; /* 0-based worksheet row of the anchor's <xdr:from> */
+    uint32_t col; /* 0-based column */
+} ImgCell;
+
+static int __cdecl imgcell_cmp(const void *a, const void *b)
+{
+    const ImgCell *x = (const ImgCell *)a;
+    const ImgCell *y = (const ImgCell *)b;
+    if (x->row != y->row)
+    {
+        return (x->row < y->row) ? -1 : 1;
+    }
+    if (x->col != y->col)
+    {
+        return (x->col < y->col) ? -1 : 1;
+    }
+    return 0;
+}
+
+static uint32_t read_uint_prefix(const char *p, const char *end)
+{
+    uint32_t v = 0;
+    while (p < end && *p >= '0' && *p <= '9')
+    {
+        v = v * 10 + (uint32_t)(*p - '0');
+        p++;
+    }
+    return v;
+}
+
+/* Parse a spreadsheetDrawing part: each anchor's <xdr:from> gives the cell a
+ * picture sits in. Returns a row/col-sorted array (caller frees). */
+static BOOL parse_drawing_anchors(const char *xml, size_t len, ImgCell **out, size_t *out_n)
+{
+    const char *p = xml;
+    const char *end = xml + len;
+    ImgCell *arr = NULL;
+    size_t n = 0;
+    size_t cap = 0;
+
+    *out = NULL;
+    *out_n = 0;
+    while (p < end)
+    {
+        const char *fr = mem_find(p, end, "<xdr:from>", 10);
+        const char *fe;
+        const char *ct;
+        const char *rt;
+        if (fr == NULL)
+        {
+            break;
+        }
+        fe = mem_find(fr, end, "</xdr:from>", 11);
+        if (fe == NULL)
+        {
+            break;
+        }
+        ct = mem_find(fr, fe, "<xdr:col>", 9);
+        rt = mem_find(fr, fe, "<xdr:row>", 9);
+        if (ct != NULL && rt != NULL)
+        {
+            if (n == cap)
+            {
+                size_t nc = cap ? cap * 2 : 256;
+                ImgCell *na = (ImgCell *)realloc(arr, nc * sizeof(ImgCell));
+                if (na == NULL)
+                {
+                    free(arr);
+                    return FALSE;
+                }
+                arr = na;
+                cap = nc;
+            }
+            arr[n].col = read_uint_prefix(ct + 9, fe);
+            arr[n].row = read_uint_prefix(rt + 9, fe);
+            n++;
+        }
+        p = fe + 11;
+    }
+    if (n > 1)
+    {
+        qsort(arr, n, sizeof(ImgCell), imgcell_cmp);
+    }
+    *out = arr;
+    *out_n = n;
+    return TRUE;
+}
+
+/* Build the .rels path for a part, e.g. xl/worksheets/sheet1.xml ->
+ * xl/worksheets/_rels/sheet1.xml.rels. */
+static void part_rels_path(const char *part, char *out, size_t cap)
+{
+    const char *slash = strrchr(part, '/');
+    if (slash != NULL)
+    {
+        size_t dlen = (size_t)(slash - part) + 1;
+        StringCchCopyNA(out, cap, part, dlen);
+        StringCchCatA(out, cap, "_rels/");
+        StringCchCatA(out, cap, slash + 1);
+        StringCchCatA(out, cap, ".rels");
+    }
+    else
+    {
+        StringCchCopyA(out, cap, "_rels/");
+        StringCchCatA(out, cap, part);
+        StringCchCatA(out, cap, ".rels");
+    }
+}
+
+/* Find the Target of the first Relationship whose Type contains @p type_sub. */
+static BOOL rel_target_by_type(const char *xml, size_t len, const char *type_sub, char *out,
+                               size_t cap)
+{
+    const char *p = xml;
+    const char *end = xml + len;
+    size_t sublen = strlen(type_sub);
+    while (p < end)
+    {
+        const char *rel = mem_find(p, end, "<Relationship", 13);
+        const char *gt;
+        const char *tv;
+        size_t tvl;
+        const char *gv;
+        size_t gvl;
+        if (rel == NULL)
+        {
+            break;
+        }
+        gt = memchr(rel, '>', (size_t)(end - rel));
+        if (gt == NULL)
+        {
+            break;
+        }
+        if (tag_attr(rel, gt, "Type", &tv, &tvl) && mem_find(tv, tv + tvl, type_sub, sublen) &&
+            tag_attr(rel, gt, "Target", &gv, &gvl))
+        {
+            return SUCCEEDED(StringCchCopyNA(out, cap, gv, gvl));
+        }
+        p = gt + 1;
+    }
+    return FALSE;
+}
+
+/* Resolve a relative part target against a base directory (handles ../ and a
+ * leading /). */
+static void resolve_part_path(const char *base_dir, const char *target, char *out, size_t cap)
+{
+    char work[512];
+    const char *t = target;
+    if (target[0] == '/')
+    {
+        StringCchCopyA(out, cap, target + 1);
+        return;
+    }
+    StringCchCopyA(work, sizeof(work), base_dir);
+    while (*t != '\0')
+    {
+        const char *seg = t;
+        size_t sl;
+        while (*t != '\0' && *t != '/')
+        {
+            t++;
+        }
+        sl = (size_t)(t - seg);
+        if (sl == 2 && seg[0] == '.' && seg[1] == '.')
+        {
+            size_t wl = strlen(work);
+            if (wl > 0 && work[wl - 1] == '/')
+            {
+                wl--;
+            }
+            while (wl > 0 && work[wl - 1] != '/')
+            {
+                wl--;
+            }
+            work[wl] = '\0';
+        }
+        else if (sl == 1 && seg[0] == '.')
+        {
+            /* current dir: skip */
+        }
+        else if (sl > 0)
+        {
+            StringCchCatNA(work, sizeof(work), seg, sl);
+            if (*t == '/')
+            {
+                StringCchCatA(work, sizeof(work), "/");
+            }
+        }
+        if (*t == '/')
+        {
+            t++;
+        }
+    }
+    StringCchCopyA(out, cap, work);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Worksheet -> rows                                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -963,6 +1207,9 @@ typedef struct XlsxReadCtx
     uint64_t bytes_total;
     uint32_t rows;
     BOOL aborted;
+    const ImgCell *img; /* write-in image cells, sorted by (row,col); may be NULL */
+    size_t nimg;
+    size_t img_cursor; /* forward cursor into img[] as rows stream by */
 } XlsxReadCtx;
 
 /* Resolve one <c ...>...</c> cell's text. Arena-backed results are appended to
@@ -1093,7 +1340,8 @@ static BOOL cell_value(const XlsxReadCtx *ctx,
             }
             if (r == 0 && vstart != NULL)
             {
-                if (!xml_append_unescaped(&rb->arena, vstart, (size_t)(vend - vstart)))
+                /* General number: drop a trailing ".0" for integer values. */
+                if (append_number_general(&rb->arena, vstart, (size_t)(vend - vstart)) == -1)
                 {
                     return FALSE;
                 }
@@ -1167,6 +1415,7 @@ static EeLoadStatus parse_worksheet(const char *xml,
         const char *rowend;
         uint32_t width = 0;
         const char *c;
+        uint32_t row0 = (uint32_t)-1; /* 0-based worksheet row (from <row r>) */
 
         rb.arena.len = 0; /* reuse the arena for each row */
 
@@ -1195,6 +1444,20 @@ static EeLoadStatus parse_worksheet(const char *xml,
         if (rowend == NULL)
         {
             rowend = end;
+        }
+
+        /* Row number (1-based in the file) -> 0-based for image-anchor matching. */
+        {
+            const char *rrv;
+            size_t rrvlen;
+            if (tag_attr(row, rowgt, "r", &rrv, &rrvlen))
+            {
+                uint32_t rr = read_uint_prefix(rrv, rrv + rrvlen);
+                if (rr > 0)
+                {
+                    row0 = rr - 1;
+                }
+            }
         }
 
         /* Walk cells in this row, placing each by its column index. */
@@ -1298,6 +1561,43 @@ static EeLoadStatus parse_worksheet(const char *xml,
             }
 
             c = (cellend < rowend) ? cellend + 4 : rowend;
+        }
+
+        /* Overlay write-in markers: cells on this row that carry an anchored
+         * picture but no text value (ES&S renders a scanned write-in image). */
+        if (ctx->img != NULL && row0 != (uint32_t)-1)
+        {
+            while (ctx->img_cursor < ctx->nimg && ctx->img[ctx->img_cursor].row < row0)
+            {
+                ctx->img_cursor++;
+            }
+            while (ctx->img_cursor < ctx->nimg && ctx->img[ctx->img_cursor].row == row0)
+            {
+                uint32_t col = ctx->img[ctx->img_cursor].col;
+                ctx->img_cursor++;
+                if (col >= XLSX_MAX_COLS)
+                {
+                    continue;
+                }
+                if (!rb_ensure(&rb, col + 1))
+                {
+                    status = EeLoadStatus_Error;
+                    xlsx_err(err, errcch, L"Out of memory reading a worksheet row.");
+                    goto done;
+                }
+                while (width <= col)
+                {
+                    rb.cells[width] = "";
+                    rb.starts[width] = (size_t)-1;
+                    width++;
+                }
+                /* only fill genuinely empty cells */
+                if (rb.cells[col] == NULL || rb.cells[col][0] == '\0')
+                {
+                    rb.cells[col] = k_writein_marker;
+                    rb.starts[col] = (size_t)-1;
+                }
+            }
         }
 
         if (width > 0)
@@ -1575,6 +1875,8 @@ EeLoadStatus EeXlsx_ReadSheet(const wchar_t *path,
     int n;
     EeLoadStatus status = EeLoadStatus_Error;
     XlsxReadCtx ctx;
+    ImgCell *img = NULL;
+    size_t nimg = 0;
 
     if (path == NULL || sink == NULL || sheet_index < 0)
     {
@@ -1649,6 +1951,38 @@ EeLoadStatus EeXlsx_ReadSheet(const wchar_t *path,
         goto cleanup;
     }
 
+    /* Write-in images (optional): a worksheet may reference a drawing part whose
+     * anchors place pictures in otherwise-empty cells (ES&S CVR write-ins). */
+    {
+        char rels_part[300];
+        char *ws_rels = NULL;
+        size_t ws_rels_size = 0;
+        part_rels_path(sheet_part, rels_part, ARRAYSIZE(rels_part));
+        ws_rels = extract_part(&zip, rels_part, &ws_rels_size);
+        if (ws_rels != NULL)
+        {
+            char target[300];
+            if (rel_target_by_type(ws_rels, ws_rels_size, "/drawing", target, ARRAYSIZE(target)))
+            {
+                char base_dir[300];
+                char drawing_part[300];
+                char *drawing = NULL;
+                size_t drawing_size = 0;
+                const char *slash = strrchr(sheet_part, '/');
+                size_t dlen = slash ? (size_t)(slash - sheet_part) + 1 : 0;
+                StringCchCopyNA(base_dir, ARRAYSIZE(base_dir), sheet_part, dlen);
+                resolve_part_path(base_dir, target, drawing_part, ARRAYSIZE(drawing_part));
+                drawing = extract_part(&zip, drawing_part, &drawing_size);
+                if (drawing != NULL)
+                {
+                    parse_drawing_anchors(drawing, drawing_size, &img, &nimg);
+                    mz_free(drawing);
+                }
+            }
+            mz_free(ws_rels);
+        }
+    }
+
     ctx.shared = &shared;
     ctx.styles = &styles;
     ctx.date1904 = date1904;
@@ -1660,10 +1994,14 @@ EeLoadStatus EeXlsx_ReadSheet(const wchar_t *path,
     ctx.bytes_total = sheet_size;
     ctx.rows = 0;
     ctx.aborted = FALSE;
+    ctx.img = img;
+    ctx.nimg = nimg;
+    ctx.img_cursor = 0;
 
     status = parse_worksheet(sheet_xml, sheet_size, &ctx, error_message, error_cch);
 
 cleanup:
+    free(img);
     shared_free(&shared);
     styles_free(&styles);
     if (sheet_xml != NULL)

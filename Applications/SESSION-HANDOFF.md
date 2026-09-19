@@ -4,16 +4,17 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-17
-**Branch:** main — Store prep and the Travis normalized-address bug fix are
-**committed**; the Store-association files + `.gitignore` `*.pfx` are staged from
-last session. **Uncommitted this session:** **XLSX import Phases 1–2** — vendored
-miniz, `src/xlsx.{c,h}`, the CSV/XLSX row-sink refactor in `voter_table.c`,
-`.vcxproj` wiring, tests, and the design doc. Builds clean; full smoke suite
-passes. The **GUI sheet picker + `*.xlsx` File→Open filter** (click-tested) and
-**Phase 3 fidelity** (date serials → `YYYY-MM-DD`, ZIP/ID leading-zero
-preservation via `styles.xml`) are in too. XLSX import is now **feature-complete**
-(uncommitted). The app is being published via the **Microsoft Store**.
+**Last updated:** 2026-09-18
+**Branch:** main — Store prep, the Travis address fix, and the full **XLSX import**
+feature are all **committed**. **Uncommitted this session:** **CVR support
+Phase 1** — the sparse Cast Vote Record engine + multi-file loader
+(`src/ee_cvr.{c,h}`) **and** the CVR viewer window + **File → Load Cast Vote
+Records…** in `main.c`, plus **write-in image detection** in `xlsx.c` (a contest
+cell whose only content is an anchored picture — ES&S write-ins — now reads
+`[write-in]` instead of blank). Builds clean (x64 Debug+Release), app launches,
+full smoke suite passes (incl. `cvr`, `writein`), loader + write-in detection
+verified on real ES&S files. Remaining for CVR: click-test the window UI, then the
+report feature (Phase 2). The app is being published via the **Microsoft Store**.
 
 ---
 
@@ -40,7 +41,64 @@ display:
   and block-number handling.
 - Partial / imperfect birth dates handled during parse and filtering.
 
-## This session (2026-09-16) — Store association (uncommitted)
+## This session (2026-09-18) — CVR support, Phase 1 (uncommitted)
+
+Cast Vote Record import — data engine, loader, **and viewer window**. Decisions
+and design: `docs/cvr-design.md`.
+- **CVR window + File menu (`main.c`):** new `File → Load Cast Vote Records…`
+  opens a multi-select (`OFN_ALLOWMULTISELECT`) `*.xlsx` dialog; files load on a
+  worker thread behind a modal marquee progress dialog with Cancel; on success a
+  dedicated top-level **CVR window** (`CvrWndProc`, class `k_CvrClassName`) shows
+  the ballots in an owner-data (virtual) report ListView — every column, header-
+  click sort on any column (`EeCvr_SortByColumn`), status bar `N ballots · M
+  columns`. Modeled on the Report window; owns its `EeCvrTable`, frees on close.
+  Schema-mismatch aborts with an error message box.
+- **Click-test fix:** some ES&S files (Dallas P26) store the Cast Vote Record as a
+  float (`1.0`), which displayed as `1.0` and sorted lexically. `xlsx.c` now
+  normalizes integer-valued numeric cells (drops the trailing `.0`, no scientific
+  notation) so it shows/sorts as `1` — verified on P26 Dem. Guarded by `test_cvr`
+  (CVR values authored as floats). Benefits all `.xlsx`.
+- **Write-in image detection (`xlsx.c`):** ES&S renders a write-in selection as a
+  scanned image pasted over the (text-empty) contest cell, so it would otherwise
+  read blank. The reader now resolves the worksheet's drawing part
+  (`worksheets/_rels/sheetN.xml.rels` → `Relationship Type …/drawing` → target),
+  parses each `<xdr:twoCellAnchor>`'s `<xdr:from>` `(row,col)`, and while streaming
+  overlays the marker **`[write-in]`** onto empty cells that carry an anchored
+  picture. Presence only — the handwriting is a raster; OCR is out of scope.
+  Benefits every `.xlsx`. Test `test_xlsx_writein` (tag `writein`). Verified on the
+  real **Travis G24** set (6 files, 587,090 ballots): President write-ins that had
+  read blank now show `[write-in]` (3,680 in President; also Senator, Railroad
+  Commissioner, a JP race). See `docs/xlsx-import-design.md` §6.1.
+- **Domain note for Phase 2 (recorded in the design doc):** in ES&S CVRs a
+  **blank** contest cell = contest not on that ballot; **`undervote`** = on the
+  ballot, no selection made; **`[write-in]`** = a write-in was cast (image cell).
+  Count them separately in reports. Unknown yet whether other vendors match this
+  convention.
+- **`src/ee_cvr.{c,h}` — sparse CVR table.** One row per ballot; leading key
+  columns (`Cast Vote Record, Batch, Ballot Status, Precinct, Ballot Style`, as
+  present) are frozen, the rest are contests. Cells stored **sparsely** (CSR:
+  per-row non-blank entries) with **value interning**, so thousands of mostly-blank
+  contest columns cost nothing. API: `EeCvr_Init/Clear`, `EeCvr_LoadFromFiles`,
+  `EeCvr_GetViewCellW`, `EeCvr_SortByColumn` (numeric-aware, `qsort_s`).
+- **Multi-file = identical schema, concatenated** (per decision): the first file
+  sets columns; any later file whose header differs → error window naming the
+  file, load nothing. Reuses `EeXlsx_ReadSheet` (one sink per file).
+- **Verified on real ES&S files:** Dallas P24 (123 cols, frozen 3, 99,999 rows,
+  ~5 s); concat 0+1+2 → 231,465 rows; Travis G24 (157 cols, frozen 5, contest
+  `President / Vice President (4268)` = `(D) Kamala D. Harris (EC2)`); cross-county
+  pair correctly rejected. Test `test_cvr` (tag `cvr`); full suite passes; builds
+  clean (app + tests). `.vcxproj`/`.filters` + `test/README.md` updated.
+- **Next (Phase 1b):** the CVR viewer window (dedicated class, frozen/scroll grid,
+  header-click sort via `EeCvr_SortByColumn`) + **File → Load Cast Vote Records…**
+  with a multi-select (`OFN_ALLOWMULTISELECT`) `.xlsx` dialog. Then Phase 2 reports.
+
+## Recently committed
+
+XLSX import (reader, sheet picker, Phase 3 fidelity), MSIX packaging + Store
+association, privacy/trademarks, app icon, and the Travis address fix are all
+committed. The dated sections below are committed history.
+
+## This session (2026-09-16) — Store association
 
 **Associated the package with the Store (done in Visual Studio).** Reviewed the
 staged changes — correct and consistent with the manifest identity.
@@ -382,32 +440,31 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **Commit the Store association** (staged) + the `.gitignore` `*.pfx` rule
-  (unstaged) + this handoff. Suggested:
-  `build: associate package with the Store; ignore *.pfx`.
-- **Rebuild the MSIX bundle** (it must include the committed address fix), then
-  **submit to the Store**:
+- **Click-test CVR:** File → Load Cast Vote Records…, select one or more real
+  `.xlsx` from `Election_CVRs/`; confirm the progress dialog, the window's columns
+  + rows, header-click sorting, and the schema-mismatch error on a cross-schema
+  multi-select. Then commit CVR Phase 1: new `src/ee_cvr.{c,h}`, `docs/cvr-design.md`;
+  modified `src/main.c`, `src/resource.h`, `src/xlsx.c` (write-in detection),
+  `docs/xlsx-import-design.md`, `test/smoke_load.c`, `test/README.md`, `.vcxproj`,
+  `.filters`. Suggested:
+  `feat(explorer): load & view Cast Vote Records (.xlsx, sparse, sortable)`; the
+  write-in detection could be its own commit,
+  `feat(explorer): detect .xlsx write-in image cells as [write-in]`.
+- **CVR Phase 2 (next):** report/analysis over the loaded CVR data (per-contest
+  tallies, undervote/overvote rates, ballot-style breakdowns).
+- Possible CVR polish: freeze the leading key columns (a frozen/scroll split like
+  the voter window); per-file byte progress instead of the marquee.
+- **Store:** submit the built
   `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
-  Partner Center.
-- **XLSX import is feature-complete** (reader + row-sink refactor + GUI sheet
-  picker + `*.xlsx` filter + Phase 3 fidelity; tested, builds clean, click-tested)
-  — commit when ready. New: `src/xlsx.{c,h}`, `src/third_party/miniz/`,
-  `docs/xlsx-import-design.md`, `docs/sample-data/gen_xlsx_fixtures.py`; modified:
-  `voter_table.{c,h}`, `src/main.c`, `src/resource.h`, `test/smoke_load.c`,
-  `test/README.md`, `.vcxproj`, `.filters`. Suggested:
-  `feat(explorer): import .xlsx workbooks (sheet picker, dates, miniz)`.
-  Optional future work: broader number-format coverage; stream very large sheet
-  parts instead of extract-to-heap.
-- Enable **GitHub Pages** so the privacy URL resolves (used by the Store listing
-  and the About-dialog link):
-  `https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`
+  Partner Center; enable **GitHub Pages** so the privacy URL resolves
+  (`https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`).
 - Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a
   simplified small-size glyph if busy); `BackgroundColor` is `#FFFFFF` — switch to
   a brand color if desired; consider persisting **window size/position**.
 - Tune `EE_CMP_MINOR_MAX_EDITS` / `EE_CMP_MINOR_MAX_PCT` in `voter_table.c`
   against real files if the minor/major split needs adjusting.
 - Possible follow-ups: selectable match key (Name+DOB), a reaper-thread for
-  responsive deletion of large row sets, and Excel (.xlsx) import (postponed).
+  responsive deletion of large row sets.
 
 ## Notes for the next session
 

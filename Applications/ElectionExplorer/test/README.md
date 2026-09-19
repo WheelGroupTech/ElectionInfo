@@ -26,10 +26,13 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c ^
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\ee_cvr.c ^
   src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
 test\smoke_load.exe
 ```
 
 (The `xlsx` round-trip test authors a tiny `.xlsx` in memory via miniz, so
-`src\xlsx.c` and `src\third_party\miniz\miniz.c` are required to build the tests.)
+`src\xlsx.c` and `src\third_party\miniz\miniz.c` are required to build the tests.
+The `cvr` and `writein` tests also need `src\ee_cvr.c`; `writein` authors a
+workbook with a worksheet-rels → drawing → anchor and checks a blank contest cell
+carrying a write-in image reads back as `[write-in]`.)

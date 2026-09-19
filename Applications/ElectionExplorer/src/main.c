@@ -8,6 +8,7 @@
 #include "voter_table.h"
 #include "filter.h"
 #include "xlsx.h"
+#include "ee_cvr.h"
 #include "settings.h"
 
 #include <commctrl.h>
@@ -38,6 +39,7 @@ static const wchar_t k_FilterClassName[] = L"ElectionExplorerFilter";
 static const wchar_t k_ReportClassName[] = L"ElectionExplorerReport";
 static const wchar_t k_CompareClassName[] = L"ElectionExplorerCompare";
 static const wchar_t k_DiffClassName[] = L"ElectionExplorerDiff";
+static const wchar_t k_CvrClassName[] = L"ElectionExplorerCvr";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -266,6 +268,8 @@ static void App_ClearMarks(AppState *app);
 static void App_ShowReport(AppState *app, int kind);
 static void App_CloseReports(AppState *app);
 static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static void App_BeginOpenCvr(AppState *app);
+static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_StartDuplicateScan(AppState *app, int kind);
 static void App_OnScanFinished(AppState *app);
 static void App_ApplyMarks(AppState *app,
@@ -2558,6 +2562,7 @@ static HMENU App_CreateMenu(void)
     HMENU file_menu = CreatePopupMenu();
     HMENU edit_menu = CreatePopupMenu();
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter List");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
@@ -8464,6 +8469,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_FILE_OPEN_VOTER_LIST:
                     App_BeginOpenVoterList(app);
                     return 0;
+                case IDM_FILE_OPEN_CVR:
+                    App_BeginOpenCvr(app);
+                    return 0;
                 case IDM_FILE_CLOSE_VOTER_LIST:
                     App_RequestClose(app);
                     return 0;
@@ -8939,6 +8947,544 @@ static AppState *App_CreateViewer(HINSTANCE instance,
 }
 
 /* -------------------------------------------------------------------------- */
+/* Cast Vote Record viewer window                                             */
+/* -------------------------------------------------------------------------- */
+
+typedef struct CvrWindow
+{
+    AppState *app;
+    HWND hwnd;
+    HWND list;    /* owner-data report list view */
+    HWND status;  /* bottom status bar */
+    EeCvrTable table;
+    int sort_col; /* -1 = unsorted */
+    BOOL sort_asc;
+} CvrWindow;
+
+static void Cvr_UpdateStatus(CvrWindow *cw)
+{
+    wchar_t buf[128];
+    if (cw->status == NULL)
+    {
+        return;
+    }
+    StringCchPrintfW(buf,
+                     ARRAYSIZE(buf),
+                     L"%u ballots  \x2022  %u columns",
+                     cw->table.nrows,
+                     cw->table.ncols);
+    SendMessageW(cw->status, SB_SETTEXTW, 0, (LPARAM)buf);
+}
+
+static void Cvr_LayoutList(CvrWindow *cw, int width, int height)
+{
+    int sb_h = 0;
+    if (cw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(cw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(cw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (cw->list == NULL)
+    {
+        return;
+    }
+    height = (height > sb_h) ? height - sb_h : 0;
+    MoveWindow(cw->list, 0, 0, width, height, TRUE);
+}
+
+static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrWindow *cw = (CvrWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            RECT rc;
+            uint32_t i;
+            cw = (CvrWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cw);
+            cw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            cw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       cw->app->instance,
+                                       NULL);
+            if (cw->list == NULL)
+            {
+                return -1;
+            }
+            ListView_SetExtendedListViewStyle(cw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (cw->app->font_ui)
+            {
+                SendMessageW(cw->list, WM_SETFONT, (WPARAM)cw->app->font_ui, TRUE);
+            }
+            for (i = 0; i < cw->table.ncols; i++)
+            {
+                LVCOLUMNW col;
+                ZeroMemory(&col, sizeof(col));
+                col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                col.fmt = LVCFMT_LEFT;
+                col.pszText = cw->table.col_titles[i];
+                col.cx = Scale(cw->app, (i < cw->table.frozen_count) ? 130 : 190);
+                ListView_InsertColumn(cw->list, (int)i, &col);
+            }
+
+            cw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         cw->app->instance,
+                                         NULL);
+            if (cw->status != NULL && cw->app->font_ui)
+            {
+                SendMessageW(cw->status, WM_SETFONT, (WPARAM)cw->app->font_ui, TRUE);
+            }
+            Cvr_UpdateStatus(cw);
+
+            ListView_SetItemCountEx(cw->list, (int)cw->table.nrows, LVSICF_NOINVALIDATEALL);
+            Cvr_LayoutList(cw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (cw != NULL)
+            {
+                Cvr_LayoutList(cw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (cw != NULL && cw->list != NULL)
+            {
+                SetFocus(cw->list);
+            }
+            return 0;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (cw == NULL || hdr->hwndFrom != cw->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_GETDISPINFOW)
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0)
+                {
+                    if (di->item.cchTextMax > 0)
+                    {
+                        di->item.pszText[0] = L'\0';
+                    }
+                    EeCvr_GetViewCellW(&cw->table,
+                                       (uint32_t)di->item.iItem,
+                                       (uint32_t)di->item.iSubItem,
+                                       di->item.pszText,
+                                       (size_t)di->item.cchTextMax);
+                }
+                return 0;
+            }
+            if (hdr->code == LVN_COLUMNCLICK)
+            {
+                NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+                uint32_t col = (uint32_t)nlv->iSubItem;
+                if (nlv->iSubItem == cw->sort_col)
+                {
+                    cw->sort_asc = !cw->sort_asc;
+                }
+                else
+                {
+                    cw->sort_col = nlv->iSubItem;
+                    cw->sort_asc = TRUE;
+                }
+                EeCvr_SortByColumn(&cw->table, col, cw->sort_asc);
+                ListView_RedrawItems(cw->list, 0, (int)cw->table.nrows);
+                InvalidateRect(cw->list, NULL, FALSE);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (cw != NULL)
+            {
+                EeCvr_Clear(&cw->table);
+                free(cw);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Create a CVR window, taking ownership of @p table (moved; the source is reset
+ * to empty). */
+static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t *title)
+{
+    CvrWindow *cw = (CvrWindow *)calloc(1, sizeof(CvrWindow));
+    HWND h;
+    if (cw == NULL)
+    {
+        EeCvr_Clear(table);
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    cw->app = app;
+    cw->table = *table; /* move */
+    EeCvr_Init(table);
+    cw->sort_col = -1;
+    cw->sort_asc = TRUE;
+
+    h = CreateWindowExW(WS_EX_APPWINDOW,
+                        k_CvrClassName,
+                        (title != NULL) ? title : L"Cast Vote Records",
+                        WS_OVERLAPPEDWINDOW,
+                        CW_USEDEFAULT,
+                        CW_USEDEFAULT,
+                        Scale(app, 900),
+                        Scale(app, 560),
+                        app->hwnd_main,
+                        NULL,
+                        app->instance,
+                        cw);
+    if (h == NULL)
+    {
+        EeCvr_Clear(&cw->table);
+        free(cw);
+        MessageBoxW(app->hwnd_main,
+                    L"Could not create the CVR window.",
+                    k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    ShowWindow(h, SW_SHOWNORMAL);
+    UpdateWindow(h);
+}
+
+/* -------------------------------------------------------------------------- */
+/* CVR loading (worker thread behind a modal progress dialog)                 */
+/* -------------------------------------------------------------------------- */
+
+#define EEM_CVR_LOAD_DONE (WM_APP + 11)
+
+typedef struct CvrLoadJob
+{
+    AppState *app;
+    const wchar_t *const *paths;
+    int count;
+    EeCvrTable *table;
+    volatile LONG cancel;
+    EeLoadStatus status;
+    wchar_t err[512];
+    HWND dlg;
+    HANDLE thread;
+} CvrLoadJob;
+
+static DWORD WINAPI CvrLoadThreadProc(void *param)
+{
+    CvrLoadJob *j = (CvrLoadJob *)param;
+    j->status = EeCvr_LoadFromFiles(j->paths,
+                                    j->count,
+                                    j->table,
+                                    &j->cancel,
+                                    NULL,
+                                    NULL,
+                                    j->err,
+                                    ARRAYSIZE(j->err));
+    PostMessageW(j->dlg, EEM_CVR_LOAD_DONE, 0, 0);
+    return 0;
+}
+
+static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrLoadJob *j = (CvrLoadJob *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            int margin;
+            HWND label;
+            HWND bar;
+            HWND cancel;
+            j = (CvrLoadJob *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)j);
+            j->dlg = dlg;
+            app = j->app;
+
+            App_CenterModalClient(dlg, app, Scale(app, 340), Scale(app, 116));
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 14);
+            label = CreateWindowExW(0,
+                                    L"STATIC",
+                                    L"Loading Cast Vote Records…",
+                                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                    margin,
+                                    margin,
+                                    rc.right - 2 * margin,
+                                    Scale(app, 20),
+                                    dlg,
+                                    NULL,
+                                    app->instance,
+                                    NULL);
+            bar = CreateWindowExW(0,
+                                  PROGRESS_CLASSW,
+                                  NULL,
+                                  WS_CHILD | WS_VISIBLE | PBS_MARQUEE,
+                                  margin,
+                                  margin + Scale(app, 26),
+                                  rc.right - 2 * margin,
+                                  Scale(app, 16),
+                                  dlg,
+                                  NULL,
+                                  app->instance,
+                                  NULL);
+            cancel = CreateWindowExW(0,
+                                     L"BUTTON",
+                                     L"Cancel",
+                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                     rc.right - margin - Scale(app, 84),
+                                     rc.bottom - margin - Scale(app, 26),
+                                     Scale(app, 84),
+                                     Scale(app, 26),
+                                     dlg,
+                                     (HMENU)(INT_PTR)IDCANCEL,
+                                     app->instance,
+                                     NULL);
+            if (app->font_ui)
+            {
+                SendMessageW(label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+            if (bar != NULL)
+            {
+                SendMessageW(bar, PBM_SETMARQUEE, TRUE, 30);
+            }
+            j->thread = CreateThread(NULL, 0, CvrLoadThreadProc, j, 0, NULL);
+            if (j->thread == NULL)
+            {
+                j->status = EeLoadStatus_Error;
+                StringCchCopyW(j->err, ARRAYSIZE(j->err), L"Could not start the load thread.");
+                EndDialog(dlg, 0);
+            }
+            return (INT_PTR)FALSE;
+        }
+
+        case EEM_CVR_LOAD_DONE:
+            if (j != NULL && j->thread != NULL)
+            {
+                WaitForSingleObject(j->thread, INFINITE);
+                CloseHandle(j->thread);
+                j->thread = NULL;
+            }
+            EndDialog(dlg, 1);
+            return (INT_PTR)TRUE;
+
+        case WM_COMMAND:
+            if (j != NULL && LOWORD(wParam) == IDCANCEL)
+            {
+                HWND b = GetDlgItem(dlg, IDCANCEL);
+                InterlockedExchange(&j->cancel, 1);
+                if (b != NULL)
+                {
+                    EnableWindow(b, FALSE);
+                }
+                return (INT_PTR)TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            if (j != NULL)
+            {
+                InterlockedExchange(&j->cancel, 1);
+            }
+            return (INT_PTR)TRUE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static EeLoadStatus App_RunCvrLoad(AppState *app,
+                                   const wchar_t *const *paths,
+                                   int count,
+                                   EeCvrTable *table,
+                                   wchar_t *err,
+                                   size_t errcch)
+{
+    CvrLoadJob job;
+    ZeroMemory(&job, sizeof(job));
+    job.app = app;
+    job.paths = paths;
+    job.count = count;
+    job.table = table;
+    job.status = EeLoadStatus_Error;
+    App_RunModalDialog(app, L"Loading Cast Vote Records", CvrLoadDlgProc, (LPARAM)&job);
+    if (err != NULL && errcch > 0)
+    {
+        StringCchCopyW(err, errcch, job.err);
+    }
+    return job.status;
+}
+
+static void App_BeginOpenCvr(AppState *app)
+{
+    OPENFILENAMEW ofn;
+    wchar_t *files;
+    wchar_t *paths[64];
+    int count = 0;
+    int i;
+    EeCvrTable table;
+    EeLoadStatus s;
+    wchar_t err[512];
+    wchar_t title[160];
+
+    if (app == NULL)
+    {
+        return;
+    }
+    files = (wchar_t *)malloc(32768 * sizeof(wchar_t));
+    if (files == NULL)
+    {
+        return;
+    }
+    files[0] = L'\0';
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = app->hwnd_main;
+    ofn.lpstrFilter = L"Excel workbooks (*.xlsx)\0*.xlsx\0All files (*.*)\0*.*\0";
+    ofn.lpstrFile = files;
+    ofn.nMaxFile = 32768;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+    ofn.lpstrTitle = L"Load Cast Vote Records";
+
+    if (!GetOpenFileNameW(&ofn))
+    {
+        free(files);
+        return;
+    }
+
+    /* Parse the multi-select result: either a single full path, or a directory
+     * followed by NUL-separated file names, terminated by a double NUL. */
+    {
+        const wchar_t *dir = files;
+        size_t dlen = wcslen(dir);
+        const wchar_t *p = files + dlen + 1;
+        if (*p == L'\0')
+        {
+            paths[count++] = _wcsdup(files); /* single selection */
+        }
+        else
+        {
+            BOOL need_sep = (dlen > 0 && dir[dlen - 1] != L'\\');
+            while (*p != L'\0' && count < (int)ARRAYSIZE(paths))
+            {
+                size_t need = dlen + 1 + wcslen(p) + 1;
+                wchar_t *full = (wchar_t *)malloc(need * sizeof(wchar_t));
+                if (full == NULL)
+                {
+                    break;
+                }
+                StringCchCopyW(full, need, dir);
+                if (need_sep)
+                {
+                    StringCchCatW(full, need, L"\\");
+                }
+                StringCchCatW(full, need, p);
+                paths[count++] = full;
+                p += wcslen(p) + 1;
+            }
+        }
+    }
+    free(files);
+    if (count == 0)
+    {
+        return;
+    }
+
+    EeCvr_Init(&table);
+    err[0] = L'\0';
+    s = App_RunCvrLoad(app, (const wchar_t *const *)paths, count, &table, err, ARRAYSIZE(err));
+
+    if (s == EeLoadStatus_Ok)
+    {
+        const wchar_t *leaf = paths[0];
+        const wchar_t *q;
+        for (q = paths[0]; *q != L'\0'; q++)
+        {
+            if (*q == L'\\' || *q == L'/')
+            {
+                leaf = q + 1;
+            }
+        }
+        if (count > 1)
+        {
+            StringCchPrintfW(title,
+                             ARRAYSIZE(title),
+                             L"%s (+%d more) — Cast Vote Records",
+                             leaf,
+                             count - 1);
+        }
+        else
+        {
+            StringCchPrintfW(title, ARRAYSIZE(title), L"%s — Cast Vote Records", leaf);
+        }
+        App_CreateCvrWindow(app, &table, title);
+    }
+    else
+    {
+        EeCvr_Clear(&table);
+        if (s == EeLoadStatus_Error)
+        {
+            MessageBoxW(app->hwnd_main,
+                        (err[0] != L'\0') ? err : L"Could not load the Cast Vote Records.",
+                        k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+        }
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        free(paths[i]);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Entry                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -9081,6 +9627,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         dc.hIcon = wc.hIcon;
         dc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&dc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW vc;
+        ZeroMemory(&vc, sizeof(vc));
+        vc.cbSize = sizeof(vc);
+        vc.lpfnWndProc = CvrWndProc;
+        vc.hInstance = hInstance;
+        vc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        vc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        vc.lpszClassName = k_CvrClassName;
+        vc.hIcon = wc.hIcon;
+        vc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&vc) == 0)
         {
             return 1;
         }

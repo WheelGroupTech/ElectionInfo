@@ -6,6 +6,7 @@
 #include "filter.h"
 #include "settings.h"
 #include "voter_table.h"
+#include "ee_cvr.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -2884,6 +2885,346 @@ done:
     return rc;
 }
 
+/* Package a minimal .xlsx (given the full <worksheet> body) at @p path. */
+static BOOL cvr_write_xlsx(const wchar_t *path, const char *sheet_xml)
+{
+    static const char *k_workbook =
+        "<?xml version=\"1.0\"?><workbook "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<sheets><sheet name=\"CVR\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+    static const char *k_rels =
+        "<?xml version=\"1.0\"?><Relationships "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
+        "Target=\"worksheets/sheet1.xml\"/></Relationships>";
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    FILE *fp = NULL;
+    BOOL ok = FALSE;
+
+    mz_zip_zero_struct(&zip);
+    if (mz_zip_writer_init_heap(&zip, 0, 0) &&
+        mz_zip_writer_add_mem(&zip,
+                              "xl/workbook.xml",
+                              k_workbook,
+                              strlen(k_workbook),
+                              MZ_DEFAULT_COMPRESSION) &&
+        mz_zip_writer_add_mem(&zip,
+                              "xl/_rels/workbook.xml.rels",
+                              k_rels,
+                              strlen(k_rels),
+                              MZ_DEFAULT_COMPRESSION) &&
+        mz_zip_writer_add_mem(&zip,
+                              "xl/worksheets/sheet1.xml",
+                              sheet_xml,
+                              strlen(sheet_xml),
+                              MZ_DEFAULT_COMPRESSION) &&
+        mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize))
+    {
+        if (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL && fwrite(zbuf, 1, zsize, fp) == zsize)
+        {
+            ok = TRUE;
+        }
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    if (zbuf != NULL)
+    {
+        mz_free(zbuf);
+    }
+    mz_zip_writer_end(&zip);
+    return ok;
+}
+
+static BOOL cvr_temp_path(wchar_t *buf, size_t cch, const wchar_t *name)
+{
+    DWORD n = GetTempPathW((DWORD)cch, buf);
+    return (n != 0 && n < cch && SUCCEEDED(StringCchCatW(buf, cch, name)));
+}
+
+/* CVR loader: identical-schema concatenation, sparse cells, mismatch rejection,
+ * sort (tag: cvr). */
+static int test_cvr(void)
+{
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+        "<c r=\"D1\" t=\"inlineStr\"><is><t>Governor</t></is></c>"
+        "<c r=\"E1\" t=\"inlineStr\"><is><t>Senator</t></is></c></row>";
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* File A: two ballots; CVR stored as a float (ES&S P26 style) -> "1"/"2".
+     * One ballot has a blank Governor cell (D3 omitted). */
+    static const char *k_a = "<row r=\"2\"><c r=\"A2\"><v>1.0</v></c>"
+                             "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                             "<c r=\"C2\" t=\"inlineStr\"><is><t>A</t></is></c>"
+                             "<c r=\"D2\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+                             "<c r=\"E2\" t=\"inlineStr\"><is><t>undervote</t></is></c></row>"
+                             "<row r=\"3\"><c r=\"A3\"><v>2.0</v></c>"
+                             "<c r=\"B3\" t=\"inlineStr\"><is><t>P2</t></is></c>"
+                             "<c r=\"C3\" t=\"inlineStr\"><is><t>B</t></is></c>"
+                             "<c r=\"E3\" t=\"inlineStr\"><is><t>Bob</t></is></c></row>";
+    /* File B: same schema, one ballot. */
+    static const char *k_b = "<row r=\"2\"><c r=\"A2\"><v>3.0</v></c>"
+                             "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+                             "<c r=\"C2\" t=\"inlineStr\"><is><t>A</t></is></c>"
+                             "<c r=\"D2\" t=\"inlineStr\"><is><t>Carol</t></is></c>"
+                             "<c r=\"E2\" t=\"inlineStr\"><is><t>Dave</t></is></c></row>";
+
+    wchar_t pa[MAX_PATH], pb[MAX_PATH], pc[MAX_PATH];
+    wchar_t err[512];
+    wchar_t buf[128];
+    char sheet[4096];
+    const wchar_t *pair[2];
+    EeCvrTable t;
+    EeLoadStatus s;
+    int rc = 1;
+
+    if (!cvr_temp_path(pa, ARRAYSIZE(pa), L"ee_cvr_a.xlsx") ||
+        !cvr_temp_path(pb, ARRAYSIZE(pb), L"ee_cvr_b.xlsx") ||
+        !cvr_temp_path(pc, ARRAYSIZE(pc), L"ee_cvr_c.xlsx"))
+    {
+        wprintf(L"cvr: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr, k_a);
+    if (!cvr_write_xlsx(pa, sheet))
+    {
+        wprintf(L"cvr: write A failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr, k_b);
+    if (!cvr_write_xlsx(pb, sheet))
+    {
+        wprintf(L"cvr: write B failed\n");
+        return 1;
+    }
+    /* File C: different last header -> schema mismatch. */
+    StringCchPrintfA(sheet,
+                     ARRAYSIZE(sheet),
+                     "%s<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is>"
+                     "</c><c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+                     "<c r=\"C1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+                     "<c r=\"D1\" t=\"inlineStr\"><is><t>Governor</t></is></c>"
+                     "<c r=\"E1\" t=\"inlineStr\"><is><t>Attorney General</t></is></c></row>"
+                     "<row r=\"2\"><c r=\"A2\"><v>9</v></c></row></sheetData></worksheet>",
+                     k_head);
+    if (!cvr_write_xlsx(pc, sheet))
+    {
+        wprintf(L"cvr: write C failed\n");
+        return 1;
+    }
+
+    /* Same-schema concatenation. */
+    EeCvr_Init(&t);
+    pair[0] = pa;
+    pair[1] = pb;
+    s = EeCvr_LoadFromFiles(pair, 2, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.ncols != 5 || t.frozen_count != 3 || t.nrows != 3)
+    {
+        wprintf(L"cvr: concat load s=%d cols=%u frozen=%u rows=%u err=%s\n",
+                (int)s,
+                t.ncols,
+                t.frozen_count,
+                t.nrows,
+                err);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"1") != 0)
+    {
+        wprintf(L"cvr: row0 col0 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 0, 4, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"undervote") != 0)
+    {
+        wprintf(L"cvr: row0 senator (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 1, 3, buf, ARRAYSIZE(buf)); /* blank Governor */
+    if (buf[0] != L'\0')
+    {
+        wprintf(L"cvr: row1 governor not blank (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 2, 3, buf, ARRAYSIZE(buf)); /* from file B */
+    if (wcscmp(buf, L"Carol") != 0)
+    {
+        wprintf(L"cvr: row2 governor (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_SortByColumn(&t, 0, FALSE); /* descending by Cast Vote Record */
+    EeCvr_GetViewCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"3") != 0)
+    {
+        wprintf(L"cvr: desc sort top (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_Clear(&t);
+
+    /* Mismatched schema must be rejected with no data. */
+    EeCvr_Init(&t);
+    pair[0] = pa;
+    pair[1] = pc;
+    s = EeCvr_LoadFromFiles(pair, 2, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Error || t.nrows != 0)
+    {
+        wprintf(L"cvr: mismatch not rejected s=%d rows=%u\n", (int)s, t.nrows);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"cvr ok\n");
+
+done:
+    EeCvr_Clear(&t);
+    DeleteFileW(pa);
+    DeleteFileW(pb);
+    DeleteFileW(pc);
+    if (rc != 0)
+    {
+        wprintf(L"cvr test failed\n");
+    }
+    return rc;
+}
+
+/* Write-in detection: a worksheet whose drawing anchors a picture onto an
+ * otherwise-empty contest cell (ES&S write-in) must surface as "[write-in]",
+ * while an ordinary selection is untouched (tag: writein). */
+static int test_xlsx_writein(void)
+{
+    static const char *k_workbook =
+        "<?xml version=\"1.0\"?><workbook "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<sheets><sheet name=\"CVR\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+    static const char *k_rels =
+        "<?xml version=\"1.0\"?><Relationships "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
+        "Target=\"worksheets/sheet1.xml\"/></Relationships>";
+    /* Header + two ballots. Row 2 (data row 0) picks "Smith" for President;
+     * row 3 (data row 1) leaves President (col C, 0-based 2) blank -- a write-in
+     * image is anchored there. */
+    static const char *k_sheet =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheetData>"
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>President</t></is></c></row>"
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>Smith</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>P2</t></is></c></row>"
+        "</sheetData><drawing r:id=\"rId1\"/></worksheet>";
+    static const char *k_sheet_rels =
+        "<?xml version=\"1.0\"?><Relationships "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" "
+        "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing\" "
+        "Target=\"../drawings/drawing1.xml\"/></Relationships>";
+    /* One anchor at (col 2, row 2) 0-based == cell C3 == data row 1, President. */
+    static const char *k_drawing =
+        "<?xml version=\"1.0\"?><xdr:wsDr "
+        "xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" "
+        "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">"
+        "<xdr:twoCellAnchor editAs=\"oneCell\">"
+        "<xdr:from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff>"
+        "<xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>"
+        "<xdr:to><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff>"
+        "<xdr:row>3</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"
+        "<xdr:pic><xdr:nvPicPr/><xdr:blipFill><a:blip r:embed=\"rId1\"/></xdr:blipFill>"
+        "</xdr:pic><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[128];
+    FILE *fp = NULL;
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    EeCvrTable t;
+    EeLoadStatus s;
+    const wchar_t *one[1];
+    int rc = 1;
+
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_writer_init_heap(&zip, 0, 0) ||
+        !mz_zip_writer_add_mem(&zip, "xl/workbook.xml", k_workbook, strlen(k_workbook),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip, "xl/_rels/workbook.xml.rels", k_rels, strlen(k_rels),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip, "xl/worksheets/sheet1.xml", k_sheet, strlen(k_sheet),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip, "xl/worksheets/_rels/sheet1.xml.rels", k_sheet_rels,
+                               strlen(k_sheet_rels), MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_add_mem(&zip, "xl/drawings/drawing1.xml", k_drawing, strlen(k_drawing),
+                               MZ_DEFAULT_COMPRESSION) ||
+        !mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize))
+    {
+        wprintf(L"writein: failed to author test workbook\n");
+        mz_zip_writer_end(&zip);
+        return 1;
+    }
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_writein.xlsx") ||
+        _wfopen_s(&fp, path, L"wb") != 0 || fp == NULL || fwrite(zbuf, 1, zsize, fp) != zsize)
+    {
+        wprintf(L"writein: could not write temp file\n");
+        if (fp != NULL)
+            fclose(fp);
+        mz_free(zbuf);
+        mz_zip_writer_end(&zip);
+        return 1;
+    }
+    fclose(fp);
+    mz_free(zbuf);
+    mz_zip_writer_end(&zip);
+
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.ncols != 3 || t.nrows != 2)
+    {
+        wprintf(L"writein: load s=%d cols=%u rows=%u err=%s\n", (int)s, t.ncols, t.nrows, err);
+        goto done;
+    }
+    /* Data row 0 (CVR 1): ordinary selection preserved. */
+    EeCvr_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Smith") != 0)
+    {
+        wprintf(L"writein: row0 President (%s)\n", buf);
+        goto done;
+    }
+    /* Data row 1 (CVR 2): blank President cell carries a write-in image. */
+    EeCvr_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"[write-in]") != 0)
+    {
+        wprintf(L"writein: row1 President (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"writein ok\n");
+
+done:
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"writein test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -2919,5 +3260,7 @@ int wmain(void)
     failed |= test_settings_roundtrip();
     failed |= test_xlsx_roundtrip();
     failed |= test_xlsx_styles();
+    failed |= test_cvr();
+    failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;
 }

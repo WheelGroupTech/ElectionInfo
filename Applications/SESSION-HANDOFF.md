@@ -113,12 +113,21 @@ and design: `docs/cvr-design.md`.
     via list subclass), multi-select **right-click → Copy** + Ctrl+C (tab-separated
     UTF-8). Unowned top-level, tracked in `CvrWindow.report`, one per CVR window,
     closed when the CVR window closes. Runs synchronously behind a wait cursor.
-  - **Validated against official results:** tabulating real `L26 CVR.xlsx` reproduces
-    the certified Travis County totals exactly (Bee Cave Mayor 871/369; Briarcliff
-    Alderman Vote-For-3 239/233/167/120/76/75/61/26; the two same-named Councilmember
-    races counted separately 830 & 826; Ensenadas Director Vote-For-5 all 1).
-    Results page: `results.enr.clarityelections.com/TX/Travis/126203/web.345435`.
-  - Test `test_cvr_tabulate` (tag `cvrtab`). Full suite green; app builds clean x64.
+  - **Validated against official results (three elections, all exact):**
+    `L26 CVR.xlsx` (May 2026 local; Bee Cave Mayor 871/369; Briarcliff Alderman
+    Vote-For-3 239/233/167/120/76/75/61/26; two same-named Councilmember races 830 &
+    826; Ensenadas Director Vote-For-5 all 1);
+    `P26 CVR.xlsx` (Mar 2026 primary, 274,443 ballots, both parties — DEM & REP
+    Senator/Governor/AG/Railroad/Props all match; 127 MB tabulates in ~18 s);
+    `PR26 CVR.xlsx` (June 2026 runoff, 97,460 ballots, all 10 contests match). Result
+    pages under `results.enr.clarityelections.com/TX/Travis/{126203,125931,126357}`.
+  - **Selection whitespace normalization (`normalize_ws` in `ee_cvr.c`):** collapse
+    space/tab runs to one space and trim ends before interning, so exporter quirks
+    (e.g. `John   Cornyn` → `John Cornyn`) display cleanly and equivalent selections
+    share one tally; UTF-8 safe; all-whitespace → blank; headers untouched. Test
+    `cvrws`.
+  - Tests `test_cvr_tabulate` (tag `cvrtab`) + `test_cvr_whitespace` (tag `cvrws`).
+    Full suite green; app builds clean x64.
 - **Click-test fix:** some ES&S files (Dallas P26) store the Cast Vote Record as a
   float (`1.0`), which displayed as `1.0` and sorted lexically. `xlsx.c` now
   normalizes integer-valued numeric cells (drops the trailing `.0`, no scientific

@@ -49,6 +49,41 @@ static wchar_t *utf8_to_wide_alloc(const char *s)
     return w;
 }
 
+/* Collapse runs of spaces/tabs to a single space and trim both ends, writing the
+ * result to @p dst (which must hold at least strlen(src)+1 bytes). Returns the new
+ * length. UTF-8 safe: only ASCII 0x20/0x09 are inspected, and those bytes never
+ * occur inside a multibyte sequence. Fixes CVR values stored with stray internal
+ * spacing (e.g. "John   Cornyn" -> "John Cornyn"). */
+static size_t normalize_ws(const char *src, char *dst)
+{
+    const char *s = src;
+    char *d = dst;
+    while (*s == ' ' || *s == '\t')
+    {
+        s++; /* trim leading */
+    }
+    while (*s != '\0')
+    {
+        if (*s == ' ' || *s == '\t')
+        {
+            while (*s == ' ' || *s == '\t')
+            {
+                s++;
+            }
+            if (*s != '\0')
+            {
+                *d++ = ' '; /* single space, only when non-ws follows (trims trailing) */
+            }
+        }
+        else
+        {
+            *d++ = *s++;
+        }
+    }
+    *d = '\0';
+    return (size_t)(d - dst);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Value interning (UTF-8 -> id)                                              */
 /* -------------------------------------------------------------------------- */
@@ -510,18 +545,37 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
     for (c = 0; c < limit; c++)
     {
         const char *v = cells[c];
+        char stackbuf[256];
+        char *heapbuf = NULL;
+        char *dst;
         size_t vlen;
         uint32_t id;
         if (v == NULL || v[0] == '\0')
         {
             continue; /* sparse: skip blanks */
         }
+        /* Normalize stray whitespace before interning so equivalent selections
+         * (e.g. "John Cornyn" vs "John   Cornyn") share one value + one tally. */
         vlen = strlen(v);
-        if (!val_intern(t, v, vlen, &id))
+        dst = (vlen < sizeof(stackbuf)) ? stackbuf : (heapbuf = (char *)malloc(vlen + 1));
+        if (dst == NULL)
         {
+            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+            return FALSE;
+        }
+        vlen = normalize_ws(v, dst);
+        if (vlen == 0)
+        {
+            free(heapbuf);
+            continue; /* value was only whitespace -> treat as blank */
+        }
+        if (!val_intern(t, dst, vlen, &id))
+        {
+            free(heapbuf);
             cvr_set_err(ctx->err, ctx->errcch, L"Out of memory interning values.");
             return FALSE;
         }
+        free(heapbuf);
         if (!ensure_ent(t, 1))
         {
             cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");

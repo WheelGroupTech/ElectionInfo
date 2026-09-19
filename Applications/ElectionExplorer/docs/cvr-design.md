@@ -91,6 +91,12 @@ Rough memory: ~100 filled cells/ballot × 1M ballots ≈ 100M entries ≈ 800 MB
   `EeLoadStatus_Error` with a message naming the offending file; caller loads
   nothing.
 - Data rows → append a sparse row (skip blank cells; intern non-blank values).
+  Selection values are **whitespace-normalized** before interning (`normalize_ws`:
+  runs of spaces/tabs collapse to a single space, ends trimmed) so exporter quirks
+  like `John   Cornyn` display cleanly and equivalent selections share one interned
+  value and one tally. UTF-8 safe (only ASCII space/tab are touched). A value that
+  is only whitespace becomes blank (not stored). Header/contest titles are left
+  as-is.
 - Honors cancel + progress (by rows).
 
 ## Multi-column contests (vote for N)

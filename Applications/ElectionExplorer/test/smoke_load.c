@@ -3355,6 +3355,112 @@ done:
     return rc;
 }
 
+/* Whitespace normalization: CVR selection values with stray internal spacing or
+ * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
+ * equivalent selections share one tally (tag: cvrws). */
+static int test_cvr_whitespace(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Senate (10)</t></is></c></row>";
+    /* Ballot 1: "John   Cornyn" (3 spaces); ballot 2: "John Cornyn" (1 space) -> must
+     * merge. Ballot 3: "  Jane Doe  " (leading/trailing) -> trimmed. */
+    static const char *k_rows =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>John   Cornyn</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>John Cornyn</t></is></c></row>"
+        "<row r=\"4\"><c r=\"A4\"><v>3</v></c>"
+        "<c r=\"B4\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C4\" t=\"inlineStr\"><is><t>  Jane Doe  </t></is></c></row>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[128];
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t count = 0;
+    EeLoadStatus s;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_ws.xlsx"))
+    {
+        wprintf(L"cvrws: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrws: write failed\n");
+        return 1;
+    }
+
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 3)
+    {
+        wprintf(L"cvrws: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Both spellings collapse to "John Cornyn"; leading/trailing trimmed. */
+    EeCvr_GetViewCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"John Cornyn") != 0)
+    {
+        wprintf(L"cvrws: row0 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 1, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"John Cornyn") != 0)
+    {
+        wprintf(L"cvrws: row1 (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetViewCellW(&t, 2, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Jane Doe") != 0)
+    {
+        wprintf(L"cvrws: row2 (%s)\n", buf);
+        goto done;
+    }
+    /* The two Cornyn spellings tabulate as a single selection with count 2. */
+    if (!EeCvr_Tabulate(&t, &items, &count) || count != 2)
+    {
+        wprintf(L"cvrws: tabulate count=%u (want 2)\n", count);
+        goto done;
+    }
+    if (wcscmp(items[0].selection, L"John Cornyn") != 0 || items[0].count != 2 ||
+        wcscmp(items[1].selection, L"Jane Doe") != 0 || items[1].count != 1)
+    {
+        wprintf(L"cvrws: tally (%s=%u, %s=%u)\n",
+                items[0].selection,
+                items[0].count,
+                items[1].selection,
+                items[1].count);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"cvrws ok\n");
+
+done:
+    EeCvr_FreeTally(items, count);
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrws test failed\n");
+    }
+    return rc;
+}
+
 /* Write-in detection: a worksheet whose drawing anchors a picture onto an
  * otherwise-empty contest cell (ES&S write-in) must surface as "[write-in]",
  * while an ordinary selection is untouched (tag: writein). */
@@ -3523,6 +3629,7 @@ int wmain(void)
     failed |= test_cvr();
     failed |= test_cvr_multiselect();
     failed |= test_cvr_tabulate();
+    failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;
 }

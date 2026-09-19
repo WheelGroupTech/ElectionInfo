@@ -122,10 +122,19 @@ extern "C"
      * Results are grouped by contest (in column order). Within a contest, real
      * candidates come first (by count descending, then selection text), followed by
      * the non-candidate outcomes in this fixed order: write-in, overvote, undervote.
+     *
+     * When @p merge_writeins is TRUE, all write-in variants in a contest (the scanned
+     * `[write-in]` image marker and any literal "Write-in" text) are combined into a
+     * single "write-in" tally row; when FALSE each distinct write-in value is its own
+     * row.
+     *
      * On success *out_items / *out_count receive a heap array the caller owns (free
      * with EeCvr_FreeTally). Returns FALSE on OOM or bad args.
      */
-    BOOL EeCvr_Tabulate(const EeCvrTable *t, EeCvrTally **out_items, uint32_t *out_count);
+    BOOL EeCvr_Tabulate(const EeCvrTable *t,
+                        BOOL merge_writeins,
+                        EeCvrTally **out_items,
+                        uint32_t *out_count);
 
     /** Free an array returned by EeCvr_Tabulate. */
     void EeCvr_FreeTally(EeCvrTally *items, uint32_t count);

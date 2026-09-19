@@ -8977,6 +8977,7 @@ struct CvrReportWindow
 };
 
 static void App_ShowCvrReport(CvrWindow *cw);
+static void App_ShowCvrOptions(CvrWindow *cw);
 
 static void Cvr_UpdateStatus(CvrWindow *cw)
 {
@@ -9047,6 +9048,8 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(edit_menu, MF_STRING, IDM_CVR_OPTIONS, L"&Options…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate CVR Votes…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
@@ -9319,6 +9322,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_CVR_TABULATE:
                     App_ShowCvrReport(cw);
+                    return 0;
+                case IDM_CVR_OPTIONS:
+                    App_ShowCvrOptions(cw);
                     return 0;
                 case IDM_FILE_OPEN_VOTER_LIST:
                     App_BeginOpenVoterList(cw->app);
@@ -9858,7 +9864,7 @@ static void App_ShowCvrReport(CvrWindow *cw)
     }
 
     old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (!EeCvr_Tabulate(&cw->table, &items, &count))
+    if (!EeCvr_Tabulate(&cw->table, g_settings.cvr_merge_writeins, &items, &count))
     {
         SetCursor(old_cursor);
         MessageBoxW(cw->hwnd,
@@ -9929,6 +9935,227 @@ static void App_ShowCvrReport(CvrWindow *cw)
     cw->report = rw;
     ShowWindow(rw->hwnd, SW_SHOW);
     SetForegroundWindow(rw->hwnd);
+}
+
+/* Re-tabulate an open report with the current merge setting and refresh its list. */
+static void App_RefreshCvrReport(CvrReportWindow *rw)
+{
+    EeCvrTally *items = NULL;
+    uint32_t count = 0;
+    HCURSOR old_cursor;
+
+    if (rw == NULL || rw->owner == NULL)
+    {
+        return;
+    }
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!EeCvr_Tabulate(&rw->owner->table, g_settings.cvr_merge_writeins, &items, &count))
+    {
+        SetCursor(old_cursor);
+        return; /* keep the existing tally on failure */
+    }
+    SetCursor(old_cursor);
+    EeCvr_FreeTally(rw->items, rw->count);
+    rw->items = items;
+    rw->count = count;
+    if (rw->list != NULL)
+    {
+        ListView_SetItemCountEx(rw->list, (int)count, LVSICF_NOINVALIDATEALL);
+        ListView_RedrawItems(rw->list, 0, (int)count);
+        InvalidateRect(rw->list, NULL, TRUE);
+    }
+    if (rw->status != NULL)
+    {
+        wchar_t st[96];
+        StringCchPrintfW(st, ARRAYSIZE(st), L"%u rows — right-click to copy", count);
+        SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
+    }
+}
+
+typedef struct CvrOptData
+{
+    AppState *app;
+    HWND owner; /* CVR window the dialog is modal to / centered over */
+    BOOL merge;
+} CvrOptData;
+
+static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrOptData *d = (CvrOptData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            RECT owner;
+            int margin;
+            int btn_w;
+            int btn_h;
+            int gap;
+            int cx;
+            int cy;
+            int ow;
+            int oh;
+            int x = CW_USEDEFAULT;
+            int y = CW_USEDEFAULT;
+            HWND chk;
+            HWND ok;
+            HWND cancel;
+
+            d = (CvrOptData *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+            app = d->app;
+
+            cx = Scale(app, 320);
+            cy = Scale(app, 118);
+            rc.left = 0;
+            rc.top = 0;
+            rc.right = cx;
+            rc.bottom = cy;
+            AdjustWindowRectEx(&rc,
+                               (DWORD)GetWindowLongPtrW(dlg, GWL_STYLE),
+                               FALSE,
+                               (DWORD)GetWindowLongPtrW(dlg, GWL_EXSTYLE));
+            ow = rc.right - rc.left;
+            oh = rc.bottom - rc.top;
+            if (d->owner != NULL && GetWindowRect(d->owner, &owner))
+            {
+                x = owner.left + ((owner.right - owner.left) - ow) / 2;
+                y = owner.top + ((owner.bottom - owner.top) - oh) / 2;
+            }
+            SetWindowPos(dlg, NULL, x, y, ow, oh, SWP_NOZORDER | SWP_NOACTIVATE);
+
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 14);
+            btn_w = Scale(app, 84);
+            btn_h = Scale(app, 26);
+            gap = Scale(app, 8);
+
+            chk = CreateWindowExW(0,
+                                  L"BUTTON",
+                                  L"Merge image and text write-ins",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                  margin,
+                                  margin,
+                                  rc.right - 2 * margin,
+                                  Scale(app, 24),
+                                  dlg,
+                                  (HMENU)(INT_PTR)IDC_CVR_MERGE_WRITEINS,
+                                  app->instance,
+                                  NULL);
+            SendMessageW(chk, BM_SETCHECK, d->merge ? BST_CHECKED : BST_UNCHECKED, 0);
+            ok = CreateWindowExW(0,
+                                 L"BUTTON",
+                                 L"OK",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                 rc.right - margin - 2 * btn_w - gap,
+                                 rc.bottom - margin - btn_h,
+                                 btn_w,
+                                 btn_h,
+                                 dlg,
+                                 (HMENU)(INT_PTR)IDOK,
+                                 app->instance,
+                                 NULL);
+            cancel = CreateWindowExW(0,
+                                     L"BUTTON",
+                                     L"Cancel",
+                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                     rc.right - margin - btn_w,
+                                     rc.bottom - margin - btn_h,
+                                     btn_w,
+                                     btn_h,
+                                     dlg,
+                                     (HMENU)(INT_PTR)IDCANCEL,
+                                     app->instance,
+                                     NULL);
+            if (app->font_ui != NULL)
+            {
+                SendMessageW(chk, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+            SetFocus(chk);
+            return (INT_PTR)FALSE;
+        }
+
+        case WM_COMMAND:
+        {
+            WORD id = LOWORD(wParam);
+            if (id == IDOK)
+            {
+                if (d != NULL)
+                {
+                    d->merge = (SendMessageW(GetDlgItem(dlg, IDC_CVR_MERGE_WRITEINS),
+                                             BM_GETCHECK,
+                                             0,
+                                             0) == BST_CHECKED);
+                }
+                EndDialog(dlg, 1);
+                return (INT_PTR)TRUE;
+            }
+            if (id == IDCANCEL)
+            {
+                EndDialog(dlg, 0);
+                return (INT_PTR)TRUE;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+/* Edit -> Options… for a CVR window: toggle "Merge image and text write-ins",
+ * persist it, and re-tabulate an open report so the change shows immediately. */
+static void App_ShowCvrOptions(CvrWindow *cw)
+{
+    CvrOptData d;
+    DWORD buf[64]; /* DWORD-aligned for DLGTEMPLATE */
+    DLGTEMPLATE *dt = (DLGTEMPLATE *)buf;
+    BYTE *p;
+    static const wchar_t k_caption[] = L"CVR Report Options";
+    size_t clen = ARRAYSIZE(k_caption) - 1;
+
+    if (cw == NULL)
+    {
+        return;
+    }
+    d.app = cw->app;
+    d.owner = cw->hwnd;
+    d.merge = g_settings.cvr_merge_writeins;
+
+    ZeroMemory(buf, sizeof(buf));
+    dt->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME;
+    dt->cx = 200;
+    dt->cy = 80;
+    p = (BYTE *)buf + sizeof(DLGTEMPLATE);
+    *(WORD *)p = 0; /* no menu */
+    p += sizeof(WORD);
+    *(WORD *)p = 0; /* default dialog class */
+    p += sizeof(WORD);
+    memcpy(p, k_caption, clen * sizeof(WCHAR));
+    ((WCHAR *)p)[clen] = L'\0';
+
+    if (DialogBoxIndirectParamW(cw->app->instance, dt, cw->hwnd, CvrOptionsDlgProc, (LPARAM)&d) == 1)
+    {
+        if ((d.merge != 0) != (g_settings.cvr_merge_writeins != 0))
+        {
+            g_settings.cvr_merge_writeins = d.merge;
+            EeSettings_Save(&g_settings);
+            if (cw->report != NULL)
+            {
+                App_RefreshCvrReport(cw->report);
+            }
+        }
+    }
 }
 
 /* -------------------------------------------------------------------------- */

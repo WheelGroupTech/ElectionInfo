@@ -28,6 +28,7 @@ extern "C"
         int map_engine;               /**< Map provider (EeMapEngine value). */
         BOOL copy_prepend_normalized; /**< Prepend normalized fields on copy. */
         BOOL name_surname_first;      /**< Display names surname-first. */
+        BOOL cvr_merge_writeins;      /**< CVR report: merge image + text write-ins. */
     } EeSettings;
 
     /**

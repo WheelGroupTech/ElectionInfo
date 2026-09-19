@@ -147,29 +147,42 @@ uses a multi-select open dialog (`OFN_ALLOWMULTISELECT`), filtered to `.xlsx`.
 **Reports → Tabulate CVR Votes…** on the CVR window opens a report tallying every
 contest.
 
-- Core (GUI-free): `EeCvr_Tabulate(t, &items, &count)` in `ee_cvr.{c,h}`. It scans
-  the sparse entries once (O(entries), not rows×cols), skips the frozen key columns,
-  and aggregates each non-blank selection **by `(col_group, value)`** — so a
-  "vote for N" contest is summed across all of its columns under the contest's
-  title. Blank cells (contest not on the ballot) are not counted;
-  `undervote`/`overvote`/`[write-in]` are counted as the selections they are.
-  Output is an `EeCvrTally[]` of `{contest, selection, count}` grouped by contest
-  column; **within a contest the candidates come first (count descending, then
-  text), followed by the non-candidate outcomes in the fixed order write-in,
-  overvote, undervote** — even when a special out-counts a candidate.
-  `EeCvr_FreeTally` frees it.
+- Core (GUI-free): `EeCvr_Tabulate(t, merge_writeins, &items, &count)` in
+  `ee_cvr.{c,h}`. It scans the sparse entries once (O(entries), not rows×cols), skips
+  the frozen key columns, and aggregates each non-blank selection **by `(col_group,
+  value)`** — so a "vote for N" contest is summed across all of its columns under the
+  contest's title. Blank cells (contest not on the ballot) are not counted;
+  `undervote`/`overvote`/`[write-in]` are counted as the selections they are. Output
+  is an `EeCvrTally[]` of `{contest, selection, count}` grouped by contest column;
+  **within a contest the candidates come first (count descending, then text),
+  followed by the non-candidate outcomes in the fixed order write-in, overvote,
+  undervote** — even when a special out-counts a candidate. `EeCvr_FreeTally` frees
+  it.
+- **Write-in merge (`merge_writeins`):** some elections record write-ins two ways in
+  one contest — the scanned `[write-in]` image marker *and* a literal `Write-in`
+  text value (e.g. hand-marked paper vs. BMD ballots; both seen in Travis
+  `G24 CVR`). When `merge_writeins` is TRUE (the default) all write-in variants of a
+  contest collapse into one `write-in` row whose count is their sum (matching how
+  official results report a single "Write-in" line); when FALSE each variant is its
+  own row. The sort keeps a contest's write-in entries adjacent, so the merge is a
+  linear collapse of consecutive same-contest write-in rows. Controlled per user by
+  **Edit → Options… → "Merge image and text write-ins"** on the CVR window
+  (`g_settings.cvr_merge_writeins`, persisted in the registry; default on). Changing
+  it re-tabulates any open report in place.
 - UI: `CvrReportWindow` (class `k_CvrReportClassName`) — an owner-data three-column
   list (**Contest | Selection | Votes**); the contest name repeats on each of its
   selection rows. Bold/grey header via the shared `App_HeaderCustomDraw` (list
   subclass). Multi-select + **right-click → Copy** (and Ctrl+C) copy the rows as
   tab-separated UTF-8. It is an unowned top-level window (the CVR window can cover
   it), tracked in `CvrWindow.report`, one per CVR window, and closed when the CVR
-  window closes. Tabulation runs synchronously behind a wait cursor (fast: L26's
-  12,710 ballots × 91 columns tabulate instantly).
-- **Verified against official results:** tabulating `L26 CVR.xlsx` reproduces the
-  certified Travis County totals exactly (e.g. Bee Cave Mayor 871/369; Briarcliff
-  Alderman, a Vote-For-3, 239/233/167/120/76/75/61/26 across its three columns; the
-  two same-named Councilmember races counted separately at 830 and 826).
+  window closes. Tabulation runs synchronously behind a wait cursor.
+- **Verified against official results (four elections, exact):** `L26` (Bee Cave
+  Mayor 871/369; Briarcliff Alderman Vote-For-3 239/233/167/120/76/75/61/26; two
+  same-named Councilmember races 830 & 826), `P26` (Mar 2026 primary, 274,443
+  ballots, both parties), `PR26` (June 2026 runoff, 97,460 ballots), and **`G24`**
+  (Nov 2024 general, **6 files → 587,090 ballots**, ~35 s: President
+  Harris 398,968 / Trump 170,781 / …, and the merged **write-in 3,690** = 3,680
+  image + 10 text, matching the official combined Write-in total).
 
 ### Future Phase 2 polish
 

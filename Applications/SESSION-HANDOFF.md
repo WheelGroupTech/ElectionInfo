@@ -113,21 +113,29 @@ and design: `docs/cvr-design.md`.
     via list subclass), multi-select **right-click → Copy** + Ctrl+C (tab-separated
     UTF-8). Unowned top-level, tracked in `CvrWindow.report`, one per CVR window,
     closed when the CVR window closes. Runs synchronously behind a wait cursor.
-  - **Validated against official results (three elections, all exact):**
-    `L26 CVR.xlsx` (May 2026 local; Bee Cave Mayor 871/369; Briarcliff Alderman
-    Vote-For-3 239/233/167/120/76/75/61/26; two same-named Councilmember races 830 &
-    826; Ensenadas Director Vote-For-5 all 1);
-    `P26 CVR.xlsx` (Mar 2026 primary, 274,443 ballots, both parties — DEM & REP
-    Senator/Governor/AG/Railroad/Props all match; 127 MB tabulates in ~18 s);
-    `PR26 CVR.xlsx` (June 2026 runoff, 97,460 ballots, all 10 contests match). Result
-    pages under `results.enr.clarityelections.com/TX/Travis/{126203,125931,126357}`.
+  - **Write-in merge (`merge_writeins` param, default ON):** some contests record
+    write-ins two ways — the `[write-in]` image marker and a literal `Write-in` text
+    value (seen in G24). Merge ON collapses a contest's write-in variants into one
+    `write-in` row (summed), matching official "Write-in" totals; OFF keeps them
+    separate. Toggle via **Edit → Options… → "Merge image and text write-ins"** on
+    the CVR window (`App_ShowCvrOptions`/`CvrOptionsDlgProc`), persisted as
+    `g_settings.cvr_merge_writeins` (registry `CvrMergeWriteins`); changing it
+    re-tabulates the open report (`App_RefreshCvrReport`). Test `cvrmerge`.
   - **Selection whitespace normalization (`normalize_ws` in `ee_cvr.c`):** collapse
     space/tab runs to one space and trim ends before interning, so exporter quirks
     (e.g. `John   Cornyn` → `John Cornyn`) display cleanly and equivalent selections
     share one tally; UTF-8 safe; all-whitespace → blank; headers untouched. Test
     `cvrws`.
-  - Tests `test_cvr_tabulate` (tag `cvrtab`) + `test_cvr_whitespace` (tag `cvrws`).
-    Full suite green; app builds clean x64.
+  - **Validated against official results (four elections, all exact):**
+    `L26` (May 2026 local; Bee Cave Mayor 871/369; Briarcliff Alderman Vote-For-3
+    239/233/167/120/76/75/61/26; two same-named Councilmember races 830 & 826);
+    `P26` (Mar 2026 primary, 274,443 ballots, both parties; 127 MB, ~18 s);
+    `PR26` (June 2026 runoff, 97,460 ballots, all 10 contests); **`G24`** (Nov 2024
+    general, **6 files → 587,090 ballots**, ~35 s; President Harris 398,968 /
+    Trump 170,781; merged write-in 3,690 = 3,680 image + 10 text). Result pages under
+    `results.enr.clarityelections.com/TX/Travis/{126203,125931,126357,122432}`.
+  - Tests `test_cvr_tabulate` (`cvrtab`), `test_cvr_merge_writeins` (`cvrmerge`),
+    `test_cvr_whitespace` (`cvrws`). Full suite green; app builds clean x64.
 - **Click-test fix:** some ES&S files (Dallas P26) store the Cast Vote Record as a
   float (`1.0`), which displayed as `1.0` and sorted lexically. `xlsx.c` now
   normalizes integer-valued numeric cells (drops the trailing `.0`, no scientific

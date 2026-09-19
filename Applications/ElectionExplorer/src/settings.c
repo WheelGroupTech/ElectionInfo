@@ -16,6 +16,7 @@ static const wchar_t k_ValZoom[] = L"ZoomPercent";
 static const wchar_t k_ValMapEngine[] = L"MapEngine";
 static const wchar_t k_ValCopyPrepend[] = L"CopyPrependNormalized";
 static const wchar_t k_ValNameSurnameFirst[] = L"NameSurnameFirst";
+static const wchar_t k_ValCvrMergeWriteins[] = L"CvrMergeWriteins";
 
 void EeSettings_Defaults(EeSettings *out)
 {
@@ -27,6 +28,7 @@ void EeSettings_Defaults(EeSettings *out)
     out->map_engine = 0; /* EeMap_Google */
     out->copy_prepend_normalized = TRUE;
     out->name_surname_first = TRUE;
+    out->cvr_merge_writeins = TRUE;
 }
 
 /* Read one REG_DWORD into *value; leave it unchanged if the value is absent or
@@ -58,6 +60,7 @@ BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
     HKEY key = NULL;
     int prepend;
     int surname;
+    int merge_wi;
 
     if (subkey == NULL || out == NULL)
     {
@@ -76,6 +79,9 @@ BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
     surname = out->name_surname_first ? 1 : 0;
     read_dword(key, k_ValNameSurnameFirst, &surname);
     out->name_surname_first = (surname != 0);
+    merge_wi = out->cvr_merge_writeins ? 1 : 0;
+    read_dword(key, k_ValCvrMergeWriteins, &merge_wi);
+    out->cvr_merge_writeins = (merge_wi != 0);
     RegCloseKey(key);
     return TRUE;
 }
@@ -105,6 +111,7 @@ BOOL EeSettings_SaveTo(const wchar_t *subkey, const EeSettings *in)
     ok &= write_dword(key, k_ValMapEngine, in->map_engine);
     ok &= write_dword(key, k_ValCopyPrepend, in->copy_prepend_normalized ? 1 : 0);
     ok &= write_dword(key, k_ValNameSurnameFirst, in->name_surname_first ? 1 : 0);
+    ok &= write_dword(key, k_ValCvrMergeWriteins, in->cvr_merge_writeins ? 1 : 0);
     RegCloseKey(key);
     return ok;
 }

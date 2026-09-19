@@ -2563,9 +2563,15 @@ static int test_settings_roundtrip(void)
     }
     if (b.zoom_percent != a.zoom_percent || b.map_engine != a.map_engine ||
         b.copy_prepend_normalized != a.copy_prepend_normalized ||
-        b.name_surname_first != a.name_surname_first)
+        b.name_surname_first != a.name_surname_first ||
+        b.cvr_merge_writeins != a.cvr_merge_writeins)
     {
         wprintf(L"settings: absent key did not yield defaults\n");
+        rc = 1;
+    }
+    if (!a.cvr_merge_writeins)
+    {
+        wprintf(L"settings: cvr_merge_writeins default should be TRUE\n");
         rc = 1;
     }
 
@@ -2574,6 +2580,7 @@ static int test_settings_roundtrip(void)
     a.map_engine = 3;
     a.copy_prepend_normalized = FALSE;
     a.name_surname_first = FALSE;
+    a.cvr_merge_writeins = FALSE;
     if (!EeSettings_SaveTo(k_TestKey, &a))
     {
         wprintf(L"settings: SaveTo failed\n");
@@ -2586,13 +2593,14 @@ static int test_settings_roundtrip(void)
         rc = 1;
     }
     if (b.zoom_percent != 175 || b.map_engine != 3 || b.copy_prepend_normalized ||
-        b.name_surname_first)
+        b.name_surname_first || b.cvr_merge_writeins)
     {
-        wprintf(L"settings: round-trip mismatch (zoom=%d map=%d pre=%d sur=%d)\n",
+        wprintf(L"settings: round-trip mismatch (zoom=%d map=%d pre=%d sur=%d mrg=%d)\n",
                 b.zoom_percent,
                 b.map_engine,
                 (int)b.copy_prepend_normalized,
-                (int)b.name_surname_first);
+                (int)b.name_surname_first,
+                (int)b.cvr_merge_writeins);
         rc = 1;
     }
 
@@ -3298,7 +3306,7 @@ static int test_cvr_tabulate(void)
         wprintf(L"cvrtab: load s=%d err=%s\n", (int)s, err);
         goto done;
     }
-    if (!EeCvr_Tabulate(&t, &items, &count))
+    if (!EeCvr_Tabulate(&t, FALSE, &items, &count)) /* keep write-in variants separate */
     {
         wprintf(L"cvrtab: tabulate failed\n");
         goto done;
@@ -3351,6 +3359,116 @@ done:
     if (rc != 0)
     {
         wprintf(L"cvrtab test failed\n");
+    }
+    return rc;
+}
+
+/* Write-in merge option: a contest with both the [write-in] image marker and a
+ * literal "Write-in" text value tabulates as a single "write-in" row when merging is
+ * on, or as separate rows when off (tag: cvrmerge). */
+static int test_cvr_merge_writeins(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Mayor (10)</t></is></c></row>";
+/* Mayor selections: Alice x1, [write-in] x2, Write-in x1, undervote x1. */
+#define CVRMRG_ROW(n, sel)                                                                         \
+    "<row r=\"" n "\"><c r=\"A" n "\"><v>" n "</v></c>"                                             \
+    "<c r=\"B" n "\" t=\"inlineStr\"><is><t>P1</t></is></c>"                                        \
+    "<c r=\"C" n "\" t=\"inlineStr\"><is><t>" sel "</t></is></c></row>"
+    static const char *k_rows = CVRMRG_ROW("2", "Alice") CVRMRG_ROW("3", "[write-in]")
+        CVRMRG_ROW("4", "[write-in]") CVRMRG_ROW("5", "Write-in") CVRMRG_ROW("6", "undervote");
+#undef CVRMRG_ROW
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t count = 0;
+    EeLoadStatus s;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_merge.xlsx"))
+    {
+        wprintf(L"cvrmerge: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrmerge: write failed\n");
+        return 1;
+    }
+
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok)
+    {
+        wprintf(L"cvrmerge: load s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+
+    /* Merge ON: Alice 1, write-in 3 (2+1), undervote 1. */
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &count) || count != 3)
+    {
+        wprintf(L"cvrmerge: merged count=%u (want 3)\n", count);
+        goto done;
+    }
+    if (wcscmp(items[0].selection, L"Alice") != 0 || items[0].count != 1 ||
+        wcscmp(items[1].selection, L"write-in") != 0 || items[1].count != 3 ||
+        wcscmp(items[2].selection, L"undervote") != 0 || items[2].count != 1)
+    {
+        wprintf(L"cvrmerge: merged rows (%s=%u, %s=%u, %s=%u)\n",
+                items[0].selection,
+                items[0].count,
+                items[1].selection,
+                items[1].count,
+                items[2].selection,
+                items[2].count);
+        goto done;
+    }
+    EeCvr_FreeTally(items, count);
+    items = NULL;
+    count = 0;
+
+    /* Merge OFF: Alice 1, [write-in] 2, Write-in 1, undervote 1. */
+    if (!EeCvr_Tabulate(&t, FALSE, &items, &count) || count != 4)
+    {
+        wprintf(L"cvrmerge: unmerged count=%u (want 4)\n", count);
+        goto done;
+    }
+    if (wcscmp(items[0].selection, L"Alice") != 0 ||
+        wcscmp(items[1].selection, L"[write-in]") != 0 || items[1].count != 2 ||
+        wcscmp(items[2].selection, L"Write-in") != 0 || items[2].count != 1 ||
+        wcscmp(items[3].selection, L"undervote") != 0)
+    {
+        wprintf(L"cvrmerge: unmerged rows (%s, %s=%u, %s=%u, %s)\n",
+                items[0].selection,
+                items[1].selection,
+                items[1].count,
+                items[2].selection,
+                items[2].count,
+                items[3].selection);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"cvrmerge ok\n");
+
+done:
+    EeCvr_FreeTally(items, count);
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrmerge test failed\n");
     }
     return rc;
 }
@@ -3432,7 +3550,7 @@ static int test_cvr_whitespace(void)
         goto done;
     }
     /* The two Cornyn spellings tabulate as a single selection with count 2. */
-    if (!EeCvr_Tabulate(&t, &items, &count) || count != 2)
+    if (!EeCvr_Tabulate(&t, FALSE, &items, &count) || count != 2)
     {
         wprintf(L"cvrws: tabulate count=%u (want 2)\n", count);
         goto done;
@@ -3629,6 +3747,7 @@ int wmain(void)
     failed |= test_cvr();
     failed |= test_cvr_multiselect();
     failed |= test_cvr_tabulate();
+    failed |= test_cvr_merge_writeins();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

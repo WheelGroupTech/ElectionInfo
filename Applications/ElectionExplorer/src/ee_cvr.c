@@ -1012,11 +1012,30 @@ static int __cdecl agg_cmp(void *ctxv, const void *pa, const void *pb)
     return _stricmp(va, vb);
 }
 
-BOOL EeCvr_Tabulate(const EeCvrTable *t, EeCvrTally **out_items, uint32_t *out_count)
+/* Duplicate a wide string; returns NULL on OOM. */
+static wchar_t *wcs_dup(const wchar_t *s)
 {
+    size_t n = wcslen(s) + 1;
+    wchar_t *d = (wchar_t *)malloc(n * sizeof(wchar_t));
+    if (d != NULL)
+    {
+        memcpy(d, s, n * sizeof(wchar_t));
+    }
+    return d;
+}
+
+BOOL EeCvr_Tabulate(const EeCvrTable *t,
+                    BOOL merge_writeins,
+                    EeCvrTally **out_items,
+                    uint32_t *out_count)
+{
+    static const wchar_t k_writein_label[] = L"write-in";
     AggMap m;
     uint32_t r;
     uint32_t i;
+    uint32_t out_n = 0;
+    uint32_t prev_cc = 0;
+    int prev_is_wi = 0;
     EeCvrTally *items = NULL;
 
     if (out_items == NULL || out_count == NULL)
@@ -1068,28 +1087,39 @@ BOOL EeCvr_Tabulate(const EeCvrTable *t, EeCvrTally **out_items, uint32_t *out_c
     }
     for (i = 0; i < m.n; i++)
     {
-        const wchar_t *contest = t->col_titles[m.ents[i].contest_col];
-        size_t clen = wcslen(contest) + 1;
-        items[i].contest = (wchar_t *)malloc(clen * sizeof(wchar_t));
-        if (items[i].contest != NULL)
+        uint32_t cc = m.ents[i].contest_col;
+        const char *val = t->val_pool + t->val_off[m.ents[i].val_id];
+        int is_wi = (cvr_selection_rank(val) == 1);
+
+        /* Merge consecutive write-in variants of one contest into a single row.
+         * The sort keeps a contest's write-in entries adjacent, so this collapses
+         * the [write-in] image marker and any literal "Write-in" text together. */
+        if (merge_writeins && is_wi && prev_is_wi && out_n > 0 && prev_cc == cc)
         {
-            memcpy(items[i].contest, contest, clen * sizeof(wchar_t));
+            items[out_n - 1].count += m.ents[i].count;
+            continue;
         }
-        items[i].selection = utf8_to_wide_alloc(t->val_pool + t->val_off[m.ents[i].val_id]);
-        items[i].count = m.ents[i].count;
-        if (items[i].contest == NULL || items[i].selection == NULL)
+
+        items[out_n].contest = wcs_dup(t->col_titles[cc]);
+        items[out_n].selection =
+            (merge_writeins && is_wi) ? wcs_dup(k_writein_label) : utf8_to_wide_alloc(val);
+        items[out_n].count = m.ents[i].count;
+        if (items[out_n].contest == NULL || items[out_n].selection == NULL)
         {
-            EeCvr_FreeTally(items, i + 1);
+            EeCvr_FreeTally(items, out_n + 1);
             free(m.slots);
             free(m.ents);
             return FALSE;
         }
+        prev_cc = cc;
+        prev_is_wi = is_wi;
+        out_n++;
     }
 
     free(m.slots);
     free(m.ents);
     *out_items = items;
-    *out_count = m.n;
+    *out_count = out_n;
     return TRUE;
 }
 

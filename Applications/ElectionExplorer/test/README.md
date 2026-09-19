@@ -40,5 +40,7 @@ covers "vote for N" contests (blank-header continuation columns → derived
 `<contest> (2)` titles + `col_group`, incl. self-closed empty cells) and checks
 that a repeated identical title stays a *separate* race; `cvrtab` covers
 `EeCvr_Tabulate` (per-contest selection counts summed across a contest's columns,
-ordered by contest then count); `cvrws` covers whitespace normalization of
-selection values (`John   Cornyn` -> `John Cornyn`, trimmed ends, merged tally).)
+ordered by contest then count); `cvrmerge` covers the write-in merge option (image
+`[write-in]` + text `Write-in` collapse to one `write-in` row when on, separate when
+off); `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
+-> `John Cornyn`, trimmed ends, merged tally).)

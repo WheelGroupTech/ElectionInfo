@@ -124,9 +124,10 @@ extern "C"
      * the non-candidate outcomes in this fixed order: write-in, overvote, undervote.
      *
      * When @p merge_writeins is TRUE, all write-in variants in a contest (the scanned
-     * `[write-in]` image marker and any literal "Write-in" text) are combined into a
-     * single "write-in" tally row; when FALSE each distinct write-in value is its own
-     * row.
+     * `[write-in]` image marker, any literal "Write-in" text, and ES&S's
+     * "No image found" placeholder for a write-in whose image was not retrieved) are
+     * combined into a single "write-in" tally row; when FALSE each distinct write-in
+     * value is its own row.
      *
      * On success *out_items / *out_count receive a heap array the caller owns (free
      * with EeCvr_FreeTally). Returns FALSE on OOM or bad args.

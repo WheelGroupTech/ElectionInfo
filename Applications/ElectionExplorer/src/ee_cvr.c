@@ -977,8 +977,12 @@ static int cvr_selection_rank(const char *v)
         return 2;
     }
     if (_stricmp(v, "[write-in]") == 0 || _stricmp(v, "write-in") == 0 ||
-        _stricmp(v, "writein") == 0 || _stricmp(v, "write in") == 0)
+        _stricmp(v, "writein") == 0 || _stricmp(v, "write in") == 0 ||
+        _stricmp(v, "no image found") == 0)
     {
+        /* "No image found" is an ES&S write-in whose scanned image wasn't retrieved;
+         * official results count it in the write-in total, so treat it as a write-in
+         * variant (grouped after candidates, merged into "write-in" when merging). */
         return 1;
     }
     return 0;

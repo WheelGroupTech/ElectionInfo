@@ -158,13 +158,16 @@ contest.
   followed by the non-candidate outcomes in the fixed order write-in, overvote,
   undervote** — even when a special out-counts a candidate. `EeCvr_FreeTally` frees
   it.
-- **Write-in merge (`merge_writeins`):** some elections record write-ins two ways in
-  one contest — the scanned `[write-in]` image marker *and* a literal `Write-in`
-  text value (e.g. hand-marked paper vs. BMD ballots; both seen in Travis
-  `G24 CVR`). When `merge_writeins` is TRUE (the default) all write-in variants of a
-  contest collapse into one `write-in` row whose count is their sum (matching how
-  official results report a single "Write-in" line); when FALSE each variant is its
-  own row. The sort keeps a contest's write-in entries adjacent, so the merge is a
+- **Write-in merge (`merge_writeins`):** an election can record write-ins several
+  ways in one contest — the scanned `[write-in]` image marker, a literal `Write-in`
+  text value (e.g. hand-marked paper vs. BMD ballots; both seen in Travis `G24 CVR`),
+  and ES&S's **`No image found`** placeholder for a write-in whose scanned image was
+  not retrieved (seen in Dallas `G24 CVR`; official results fold it into the
+  Write-In total). `cvr_selection_rank` classifies all of these as the write-in
+  category. When `merge_writeins` is TRUE (the default) they collapse into one
+  `write-in` row whose count is their sum (matching how official results report a
+  single "Write-in" line — e.g. Dallas G24 President 4,578 + 8 = **4,586**); when
+  FALSE each variant is its own row. The sort keeps a contest's write-in entries adjacent, so the merge is a
   linear collapse of consecutive same-contest write-in rows. Controlled per user by
   **Edit → Options… → "Merge image and text write-ins"** on the CVR window
   (`g_settings.cvr_merge_writeins`, persisted in the registry; default on). Changing

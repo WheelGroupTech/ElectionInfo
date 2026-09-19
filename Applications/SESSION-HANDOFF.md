@@ -15,11 +15,16 @@ contest handling**, **Phase 2 vote tabulation** (Reports → Tabulate CVR Votes�
 a per-user **Edit → Options… "Merge image and text write-ins"** toggle, and
 **selection whitespace normalization**. Builds clean (x64 Debug+Release), full smoke
 suite passes (incl. `cvr`, `cvrmulti`, `cvrtab`, `cvrmerge`, `cvrws`, `writein`);
-tabulation validated exactly against official published results for **seven**
+tabulation validated exactly against official published results for **nine**
 elections across two counties — Travis (L26, P26, PR26, G24 = 6 files/587,090, G20 =
-7 files/612,696) and Dallas (P26 Rep = 2 files/103,818, P26 Dem = 3 files/280,326
-ballots). Dallas Dem revealed the CVR is **one row per ballot card** (multi-sheet
-ballots ⇒ more rows than ballots; contest tallies unaffected — all matched).
+7 files/612,696) and Dallas (P26 Rep = 2 files/103,818, P26 Dem = 3 files/280,326,
+P24 = Mar 2024 combined primary, 3 files/231,465 = Rep 105,410 + Dem 126,055, G24 =
+Nov 2024 general, 9 files/873,455 rows = 858,562 ballots + 14,893 continuation cards).
+Dallas P26 Dem / G24 revealed the CVR is **one row per ballot card** (multi-sheet
+ballots ⇒ more rows than ballots; contest tallies unaffected — all matched); Dallas
+P24 (single-card combined primary) confirms the multi-card detector does not
+false-positive on a real combined primary, and Dallas G24 confirms it flags a real
+multi-card general.
 
 **Uncommitted (this session):** CVR window status relabeled "N **ballot records**"
 (a record = a card/sheet) and, when detected, appends "(multi-card ballots
@@ -29,6 +34,13 @@ Senator, excl. Lieutenant Governor) and flags when a minority of rows carry none
 (continuation sheets). Flags Dallas-Dem only; not Dallas-Rep, Travis
 L26/PR26/P26/G24/G20, or combined-party primaries. Test `cvrmc`; full suite green;
 app builds clean x64.
+
+Also uncommitted: **`No image found`** (ES&S write-in whose scanned image wasn't
+retrieved) is now classified as a write-in variant (`cvr_selection_rank` in
+`ee_cvr.c`), so it groups after candidates and merges into `write-in` when merging is
+on — making merged write-in totals match official Write-In Totals (Dallas G24
+President 4,578 + 8 = 4,586; Senator 816 + 2 = 818). Test `cvrmerge` extended to all
+three variants.
 
 The app is being published via the **Microsoft Store**.
 

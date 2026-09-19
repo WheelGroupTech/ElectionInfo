@@ -3375,13 +3375,16 @@ static int test_cvr_merge_writeins(void)
         "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
         "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
         "<c r=\"C1\" t=\"inlineStr\"><is><t>Mayor (10)</t></is></c></row>";
-/* Mayor selections: Alice x1, [write-in] x2, Write-in x1, undervote x1. */
+/* Mayor selections: Alice x1, [write-in] x2, Write-in x1, No image found x1,
+ * undervote x1 -- three distinct write-in variants. */
 #define CVRMRG_ROW(n, sel)                                                                         \
     "<row r=\"" n "\"><c r=\"A" n "\"><v>" n "</v></c>"                                             \
     "<c r=\"B" n "\" t=\"inlineStr\"><is><t>P1</t></is></c>"                                        \
     "<c r=\"C" n "\" t=\"inlineStr\"><is><t>" sel "</t></is></c></row>"
-    static const char *k_rows = CVRMRG_ROW("2", "Alice") CVRMRG_ROW("3", "[write-in]")
-        CVRMRG_ROW("4", "[write-in]") CVRMRG_ROW("5", "Write-in") CVRMRG_ROW("6", "undervote");
+    static const char *k_rows =
+        CVRMRG_ROW("2", "Alice") CVRMRG_ROW("3", "[write-in]") CVRMRG_ROW("4", "[write-in]")
+            CVRMRG_ROW("5", "Write-in") CVRMRG_ROW("6", "No image found")
+                CVRMRG_ROW("7", "undervote");
 #undef CVRMRG_ROW
 
     wchar_t path[MAX_PATH];
@@ -3416,14 +3419,15 @@ static int test_cvr_merge_writeins(void)
         goto done;
     }
 
-    /* Merge ON: Alice 1, write-in 3 (2+1), undervote 1. */
+    /* Merge ON: Alice 1, write-in 4 ([write-in] 2 + Write-in 1 + No image found 1),
+     * undervote 1. */
     if (!EeCvr_Tabulate(&t, TRUE, &items, &count) || count != 3)
     {
         wprintf(L"cvrmerge: merged count=%u (want 3)\n", count);
         goto done;
     }
     if (wcscmp(items[0].selection, L"Alice") != 0 || items[0].count != 1 ||
-        wcscmp(items[1].selection, L"write-in") != 0 || items[1].count != 3 ||
+        wcscmp(items[1].selection, L"write-in") != 0 || items[1].count != 4 ||
         wcscmp(items[2].selection, L"undervote") != 0 || items[2].count != 1)
     {
         wprintf(L"cvrmerge: merged rows (%s=%u, %s=%u, %s=%u)\n",
@@ -3439,24 +3443,29 @@ static int test_cvr_merge_writeins(void)
     items = NULL;
     count = 0;
 
-    /* Merge OFF: Alice 1, [write-in] 2, Write-in 1, undervote 1. */
-    if (!EeCvr_Tabulate(&t, FALSE, &items, &count) || count != 4)
+    /* Merge OFF: Alice 1, then the write-in variants by count desc then name
+     * ([write-in] 2, then "No image found" 1 and "Write-in" 1 tie -> "No image
+     * found" sorts first), then undervote 1. */
+    if (!EeCvr_Tabulate(&t, FALSE, &items, &count) || count != 5)
     {
-        wprintf(L"cvrmerge: unmerged count=%u (want 4)\n", count);
+        wprintf(L"cvrmerge: unmerged count=%u (want 5)\n", count);
         goto done;
     }
     if (wcscmp(items[0].selection, L"Alice") != 0 ||
         wcscmp(items[1].selection, L"[write-in]") != 0 || items[1].count != 2 ||
-        wcscmp(items[2].selection, L"Write-in") != 0 || items[2].count != 1 ||
-        wcscmp(items[3].selection, L"undervote") != 0)
+        wcscmp(items[2].selection, L"No image found") != 0 || items[2].count != 1 ||
+        wcscmp(items[3].selection, L"Write-in") != 0 || items[3].count != 1 ||
+        wcscmp(items[4].selection, L"undervote") != 0)
     {
-        wprintf(L"cvrmerge: unmerged rows (%s, %s=%u, %s=%u, %s)\n",
+        wprintf(L"cvrmerge: unmerged rows (%s, %s=%u, %s=%u, %s=%u, %s)\n",
                 items[0].selection,
                 items[1].selection,
                 items[1].count,
                 items[2].selection,
                 items[2].count,
-                items[3].selection);
+                items[3].selection,
+                items[3].count,
+                items[4].selection);
         goto done;
     }
     rc = 0;

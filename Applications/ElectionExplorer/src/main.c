@@ -40,6 +40,7 @@ static const wchar_t k_ReportClassName[] = L"ElectionExplorerReport";
 static const wchar_t k_CompareClassName[] = L"ElectionExplorerCompare";
 static const wchar_t k_DiffClassName[] = L"ElectionExplorerDiff";
 static const wchar_t k_CvrClassName[] = L"ElectionExplorerCvr";
+static const wchar_t k_CvrReportClassName[] = L"ElectionExplorerCvrReport";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -8950,6 +8951,8 @@ static AppState *App_CreateViewer(HINSTANCE instance,
 /* Cast Vote Record viewer window                                             */
 /* -------------------------------------------------------------------------- */
 
+typedef struct CvrReportWindow CvrReportWindow;
+
 typedef struct CvrWindow
 {
     AppState *app;
@@ -8959,7 +8962,21 @@ typedef struct CvrWindow
     EeCvrTable table;
     int sort_col; /* -1 = unsorted */
     BOOL sort_asc;
+    CvrReportWindow *report; /* tabulation report tied to this window, or NULL */
 } CvrWindow;
+
+struct CvrReportWindow
+{
+    CvrWindow *owner;    /* the CVR window this report is tied to */
+    AppState *app;       /* for fonts / header brushes / DPI      */
+    HWND hwnd;           /* this report's top-level window         */
+    HWND list;           /* owner-data report list view           */
+    HWND status;         /* bottom status bar                     */
+    EeCvrTally *items;   /* tabulated (contest, selection, count) */
+    uint32_t count;
+};
+
+static void App_ShowCvrReport(CvrWindow *cw);
 
 static void Cvr_UpdateStatus(CvrWindow *cw)
 {
@@ -9003,7 +9020,8 @@ static HMENU App_CreateCvrMenu(void)
     HMENU menu = CreateMenu();
     HMENU file_menu = CreatePopupMenu();
     HMENU edit_menu = CreatePopupMenu();
-    if (menu == NULL || file_menu == NULL || edit_menu == NULL)
+    HMENU reports_menu = CreatePopupMenu();
+    if (menu == NULL || file_menu == NULL || edit_menu == NULL || reports_menu == NULL)
     {
         if (file_menu != NULL)
         {
@@ -9012,6 +9030,10 @@ static HMENU App_CreateCvrMenu(void)
         if (edit_menu != NULL)
         {
             DestroyMenu(edit_menu);
+        }
+        if (reports_menu != NULL)
+        {
+            DestroyMenu(reports_menu);
         }
         if (menu != NULL)
         {
@@ -9025,8 +9047,10 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate CVR Votes…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     return menu;
 }
 
@@ -9293,6 +9317,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 case IDM_EDIT_COPY: /* also Ctrl+C via the shared accelerator table */
                     Cvr_CopySelected(cw);
                     return 0;
+                case IDM_CVR_TABULATE:
+                    App_ShowCvrReport(cw);
+                    return 0;
                 case IDM_FILE_OPEN_VOTER_LIST:
                     App_BeginOpenVoterList(cw->app);
                     return 0;
@@ -9370,6 +9397,12 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case WM_DESTROY:
             if (cw != NULL)
             {
+                /* Close the tabulation report tied to this window (its WM_DESTROY
+                 * clears cw->report) before we free the table it reads from. */
+                if (cw->report != NULL)
+                {
+                    DestroyWindow(cw->report->hwnd);
+                }
                 EeCvr_Clear(&cw->table);
                 free(cw);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -9426,6 +9459,476 @@ static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t 
     }
     ShowWindow(h, SW_SHOWNORMAL);
     UpdateWindow(h);
+}
+
+/* -------------------------------------------------------------------------- */
+/* CVR tabulation report (Phase 2)                                            */
+/* -------------------------------------------------------------------------- */
+
+/* Subclass so the report list draws its header bold on the grey band. */
+static WNDPROC g_old_cvr_report_list_proc = NULL;
+
+static LRESULT CALLBACK CvrReportListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        CvrReportWindow *rw = (CvrReportWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (rw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(rw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_cvr_report_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static void CvrReport_Layout(CvrReportWindow *rw, int width, int height)
+{
+    int sb_h = 0;
+    int avail;
+    int count_w;
+    int sel_w;
+    int contest_w;
+    if (rw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(rw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(rw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (rw->list == NULL)
+    {
+        return;
+    }
+    height = (height > sb_h) ? height - sb_h : 0;
+    MoveWindow(rw->list, 0, 0, width, height, TRUE);
+
+    /* Fit the three columns inside the list's visible width. Reserve the vertical
+     * scrollbar so a horizontal scrollbar never appears (it would push the
+     * right-aligned Votes column out of view). Contest takes the slack, Selection is
+     * ~75% of an even split, and Votes stays a fixed narrow column. */
+    avail = width - GetSystemMetrics(SM_CXVSCROLL) - Scale(rw->app, 4);
+    if (avail < Scale(rw->app, 220))
+    {
+        avail = Scale(rw->app, 220);
+    }
+    count_w = Scale(rw->app, 90);
+    sel_w = ((avail - count_w) / 2) * 3 / 4; /* 75% of the previous even split */
+    if (sel_w < Scale(rw->app, 90))
+    {
+        sel_w = Scale(rw->app, 90);
+    }
+    contest_w = avail - count_w - sel_w;
+    if (contest_w < Scale(rw->app, 160))
+    {
+        contest_w = Scale(rw->app, 160);
+    }
+    ListView_SetColumnWidth(rw->list, 0, contest_w);
+    ListView_SetColumnWidth(rw->list, 1, sel_w);
+    ListView_SetColumnWidth(rw->list, 2, count_w);
+}
+
+/* Copy the selected rows as tab-separated UTF-8 (Contest, Selection, Count). */
+static void CvrReport_CopySelected(CvrReportWindow *rw)
+{
+    int i;
+    size_t total = 0;
+    wchar_t *buf;
+    wchar_t *p;
+    char *utf8 = NULL;
+    int u8len;
+
+    if (rw == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count)
+        {
+            wchar_t num[16];
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", rw->items[i].count);
+            total += wcslen(rw->items[i].contest) + wcslen(rw->items[i].selection) + wcslen(num) +
+                     4; /* 2 tabs + CR + LF */
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (total == 0)
+    {
+        return;
+    }
+    buf = (wchar_t *)malloc((total + 1) * sizeof(wchar_t));
+    if (buf == NULL)
+    {
+        return;
+    }
+    p = buf;
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count)
+        {
+            const wchar_t *fields[3];
+            wchar_t num[16];
+            int f;
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", rw->items[i].count);
+            fields[0] = rw->items[i].contest;
+            fields[1] = rw->items[i].selection;
+            fields[2] = num;
+            for (f = 0; f < 3; f++)
+            {
+                const wchar_t *s = fields[f];
+                while (*s)
+                {
+                    *p++ = *s++;
+                }
+                *p++ = (f < 2) ? L'\t' : L'\r';
+            }
+            *p++ = L'\n';
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    *p = L'\0';
+
+    u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+    if (u8len > 0)
+    {
+        utf8 = (char *)malloc((size_t)u8len);
+        if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+        {
+            App_SetClipboardUtf8(rw->hwnd, utf8);
+        }
+    }
+    free(utf8);
+    free(buf);
+}
+
+/* Right-click: select the row if needed, then a Copy menu. */
+static void CvrReport_OnContextMenu(CvrReportWindow *rw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+
+    if (rw == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    if (item >= 0 && !(ListView_GetItemState(rw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(rw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(rw->list,
+                              item,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    cmd = (UINT)
+        TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_EDIT_COPY)
+    {
+        CvrReport_CopySelected(rw);
+    }
+}
+
+static LRESULT CALLBACK CvrReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrReportWindow *rw = (CvrReportWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            LVCOLUMNW col;
+            RECT rc;
+            wchar_t st[96];
+            rw = (CvrReportWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)rw);
+            rw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            rw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       rw->app->instance,
+                                       NULL);
+            if (rw->list == NULL)
+            {
+                return -1;
+            }
+            {
+                WNDPROC old = (WNDPROC)SetWindowLongPtrW(rw->list,
+                                                         GWLP_WNDPROC,
+                                                         (LONG_PTR)CvrReportListSubclass);
+                if (g_old_cvr_report_list_proc == NULL)
+                {
+                    g_old_cvr_report_list_proc = old;
+                }
+            }
+            ListView_SetExtendedListViewStyle(rw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (rw->app->font_ui)
+            {
+                SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = LVCFMT_LEFT;
+            col.pszText = L"Contest";
+            col.cx = Scale(rw->app, 300);
+            ListView_InsertColumn(rw->list, 0, &col);
+            col.fmt = LVCFMT_LEFT;
+            col.pszText = L"Selection";
+            col.cx = Scale(rw->app, 240);
+            ListView_InsertColumn(rw->list, 1, &col);
+            col.fmt = LVCFMT_RIGHT;
+            col.pszText = L"Votes";
+            col.cx = Scale(rw->app, 90);
+            ListView_InsertColumn(rw->list, 2, &col);
+
+            rw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         rw->app->instance,
+                                         NULL);
+            if (rw->status != NULL)
+            {
+                if (rw->app->font_ui)
+                {
+                    SendMessageW(rw->status, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+                }
+                StringCchPrintfW(st, ARRAYSIZE(st), L"%u rows — right-click to copy", rw->count);
+                SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
+            }
+
+            ListView_SetItemCountEx(rw->list, (int)rw->count, LVSICF_NOINVALIDATEALL);
+            CvrReport_Layout(rw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (rw != NULL)
+            {
+                CvrReport_Layout(rw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (rw != NULL && rw->list != NULL)
+            {
+                SetFocus(rw->list);
+            }
+            return 0;
+
+        case WM_COMMAND:
+            /* Ctrl+C is routed here by the shared accelerator table. */
+            if (rw != NULL && LOWORD(wParam) == IDM_EDIT_COPY)
+            {
+                CvrReport_CopySelected(rw);
+                return 0;
+            }
+            break;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (rw == NULL || hdr->hwndFrom != rw->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_GETDISPINFOW)
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                int idx = di->item.iItem;
+                if ((di->item.mask & LVIF_TEXT) && idx >= 0 && (uint32_t)idx < rw->count)
+                {
+                    const wchar_t *text = L"";
+                    if (di->item.iSubItem == 0)
+                    {
+                        text = rw->items[idx].contest;
+                    }
+                    else if (di->item.iSubItem == 1)
+                    {
+                        text = rw->items[idx].selection;
+                    }
+                    if (di->item.iSubItem == 2)
+                    {
+                        StringCchPrintfW(di->item.pszText,
+                                         di->item.cchTextMax,
+                                         L"%u",
+                                         rw->items[idx].count);
+                    }
+                    else
+                    {
+                        StringCchCopyW(di->item.pszText, di->item.cchTextMax, text);
+                    }
+                }
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(rw->list, &screen);
+                CvrReport_OnContextMenu(rw, ia->iItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (rw != NULL)
+            {
+                if (rw->owner != NULL && rw->owner->report == rw)
+                {
+                    rw->owner->report = NULL;
+                }
+                EeCvr_FreeTally(rw->items, rw->count);
+                free(rw);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Tabulate the CVR and open (or re-focus) the report window tied to @p cw. */
+static void App_ShowCvrReport(CvrWindow *cw)
+{
+    EeCvrTally *items = NULL;
+    uint32_t count = 0;
+    CvrReportWindow *rw;
+    wchar_t title[MAX_PATH + 64];
+    wchar_t base[128];
+    HCURSOR old_cursor;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+
+    if (cw == NULL)
+    {
+        return;
+    }
+    if (cw->report != NULL)
+    {
+        SetForegroundWindow(cw->report->hwnd);
+        return;
+    }
+    if (cw->table.nrows == 0 || cw->table.ncols <= cw->table.frozen_count)
+    {
+        MessageBoxW(cw->hwnd,
+                    L"There are no contest columns to tabulate.",
+                    L"Tabulate CVR Votes",
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!EeCvr_Tabulate(&cw->table, &items, &count))
+    {
+        SetCursor(old_cursor);
+        MessageBoxW(cw->hwnd,
+                    L"Out of memory while tabulating the Cast Vote Records.",
+                    L"Tabulate CVR Votes",
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetCursor(old_cursor);
+    if (count == 0)
+    {
+        EeCvr_FreeTally(items, count);
+        MessageBoxW(cw->hwnd,
+                    L"No selections were found to tabulate.",
+                    L"Tabulate CVR Votes",
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    rw = (CvrReportWindow *)calloc(1, sizeof(CvrReportWindow));
+    if (rw == NULL)
+    {
+        EeCvr_FreeTally(items, count);
+        return;
+    }
+    rw->owner = cw;
+    rw->app = cw->app;
+    rw->items = items;
+    rw->count = count;
+
+    base[0] = L'\0';
+    GetWindowTextW(cw->hwnd, base, ARRAYSIZE(base));
+    if (base[0] != L'\0')
+    {
+        StringCchPrintfW(title, ARRAYSIZE(title), L"CVR Tabulation — %s", base);
+    }
+    else
+    {
+        StringCchCopyW(title, ARRAYSIZE(title), L"CVR Tabulation");
+    }
+
+    if (GetWindowRect(cw->hwnd, &pr))
+    {
+        x = pr.left + Scale(cw->app, 48);
+        y = pr.top + Scale(cw->app, 48);
+    }
+
+    /* Unowned top-level window (like the voter-list reports) so the CVR window can
+     * cover it; tracked in cw->report and closed when the CVR window closes. */
+    rw->hwnd = CreateWindowExW(0,
+                               k_CvrReportClassName,
+                               title,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                               x,
+                               y,
+                               Scale(cw->app, 680),
+                               Scale(cw->app, 600),
+                               NULL,
+                               NULL,
+                               cw->app->instance,
+                               rw);
+    if (rw->hwnd == NULL)
+    {
+        EeCvr_FreeTally(items, count);
+        free(rw);
+        return;
+    }
+    cw->report = rw;
+    ShowWindow(rw->hwnd, SW_SHOW);
+    SetForegroundWindow(rw->hwnd);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -9880,6 +10383,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         vc.hIcon = wc.hIcon;
         vc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&vc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW rcw;
+        ZeroMemory(&rcw, sizeof(rcw));
+        rcw.cbSize = sizeof(rcw);
+        rcw.lpfnWndProc = CvrReportWndProc;
+        rcw.hInstance = hInstance;
+        rcw.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        rcw.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        rcw.lpszClassName = k_CvrReportClassName;
+        rcw.hIcon = wc.hIcon;
+        rcw.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&rcw) == 0)
         {
             return 1;
         }

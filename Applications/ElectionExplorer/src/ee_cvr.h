@@ -102,6 +102,34 @@ extern "C"
     /** Reorder view_index by @p col (numeric-aware); @p ascending toggles order. */
     void EeCvr_SortByColumn(EeCvrTable *t, uint32_t col, BOOL ascending);
 
+    /**
+     * One tabulated (contest, selection, count) triple. @p contest and
+     * @p selection are owned wide strings; free via EeCvr_FreeTally.
+     */
+    typedef struct EeCvrTally
+    {
+        wchar_t *contest;   /* contest name (a contest's title-column header) */
+        wchar_t *selection; /* the selection: candidate, Yes/No, undervote, … */
+        uint32_t count;     /* number of ballots with that selection          */
+    } EeCvrTally;
+
+    /**
+     * Tabulate every contest in @p t: for each contest (all columns sharing a
+     * col_group beyond the frozen key columns), count how many ballots carry each
+     * non-blank selection across the contest's columns. Blank cells (contest not on
+     * the ballot) are not counted.
+     *
+     * Results are grouped by contest (in column order). Within a contest, real
+     * candidates come first (by count descending, then selection text), followed by
+     * the non-candidate outcomes in this fixed order: write-in, overvote, undervote.
+     * On success *out_items / *out_count receive a heap array the caller owns (free
+     * with EeCvr_FreeTally). Returns FALSE on OOM or bad args.
+     */
+    BOOL EeCvr_Tabulate(const EeCvrTable *t, EeCvrTally **out_items, uint32_t *out_count);
+
+    /** Free an array returned by EeCvr_Tabulate. */
+    void EeCvr_FreeTally(EeCvrTally *items, uint32_t count);
+
 #ifdef __cplusplus
 }
 #endif

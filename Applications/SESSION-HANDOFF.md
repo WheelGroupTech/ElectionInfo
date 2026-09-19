@@ -11,10 +11,13 @@ Phase 1** — the sparse Cast Vote Record engine + multi-file loader
 (`src/ee_cvr.{c,h}`) **and** the CVR viewer window + **File → Load Cast Vote
 Records…** in `main.c`, plus **write-in image detection** in `xlsx.c` (a contest
 cell whose only content is an anchored picture — ES&S write-ins — now reads
-`[write-in]` instead of blank). Builds clean (x64 Debug+Release), app launches,
-full smoke suite passes (incl. `cvr`, `writein`), loader + write-in detection
-verified on real ES&S files. Remaining for CVR: click-test the window UI, then the
-report feature (Phase 2). The app is being published via the **Microsoft Store**.
+`[write-in]` instead of blank), **"vote for N" multi-column contest handling**, and
+**Phase 2 CVR vote tabulation** (Reports → Tabulate CVR Votes…). Builds clean (x64
+Debug+Release), app launches, full smoke suite passes (incl. `cvr`, `cvrmulti`,
+`cvrtab`, `writein`); loader, write-in detection, and tabulation verified on real
+ES&S files (tabulation cross-checked against official published results). Remaining
+for CVR: click-test the window UI. The app is being published via the **Microsoft
+Store**.
 
 ---
 
@@ -95,6 +98,27 @@ and design: `docs/cvr-design.md`.
     `L26 CVR.xlsx` (91 cols): Briarcliff (3), Ensenadas Director (5), Ranch at
     Cypress Creek (2), Travis MUD 15 (3) grouped; Bee Cave stays two columns. Full
     suite green; app + tests build clean x64.
+- **Phase 2 — CVR vote tabulation (`ee_cvr.c`, `main.c`, this pass):** the CVR
+  window gains a **Reports** menu (after Edit) with **Tabulate CVR Votes…**
+  (`IDM_CVR_TABULATE`).
+  - Core: `EeCvr_Tabulate(t, &items, &count)` / `EeCvr_FreeTally` — scans the sparse
+    entries once (O(entries)), skips frozen key columns, aggregates each non-blank
+    selection by `(col_group, value)` so a "vote for N" contest is summed across its
+    columns under the contest title. Returns `EeCvrTally[]` `{contest, selection,
+    count}` grouped by contest; within a contest candidates first (count desc), then
+    write-in, overvote, undervote (fixed order, even if a special out-counts a
+    candidate). Blanks (not-on-ballot) omitted.
+  - UI: `CvrReportWindow` (class `k_CvrReportClassName`) — owner-data 3-column list
+    **Contest | Selection | Votes**, bold/grey header (shared `App_HeaderCustomDraw`
+    via list subclass), multi-select **right-click → Copy** + Ctrl+C (tab-separated
+    UTF-8). Unowned top-level, tracked in `CvrWindow.report`, one per CVR window,
+    closed when the CVR window closes. Runs synchronously behind a wait cursor.
+  - **Validated against official results:** tabulating real `L26 CVR.xlsx` reproduces
+    the certified Travis County totals exactly (Bee Cave Mayor 871/369; Briarcliff
+    Alderman Vote-For-3 239/233/167/120/76/75/61/26; the two same-named Councilmember
+    races counted separately 830 & 826; Ensenadas Director Vote-For-5 all 1).
+    Results page: `results.enr.clarityelections.com/TX/Travis/126203/web.345435`.
+  - Test `test_cvr_tabulate` (tag `cvrtab`). Full suite green; app builds clean x64.
 - **Click-test fix:** some ES&S files (Dallas P26) store the Cast Vote Record as a
   float (`1.0`), which displayed as `1.0` and sorted lexically. `xlsx.c` now
   normalizes integer-valued numeric cells (drops the trailing `.0`, no scientific
@@ -496,8 +520,10 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   `feat(explorer): load & view Cast Vote Records (.xlsx, sparse, sortable)`; the
   write-in detection could be its own commit,
   `feat(explorer): detect .xlsx write-in image cells as [write-in]`.
-- **CVR Phase 2 (next):** report/analysis over the loaded CVR data (per-contest
-  tallies, undervote/overvote rates, ballot-style breakdowns).
+- **CVR Phase 2 (tabulation done):** the per-contest selection tally report is
+  implemented (Reports → Tabulate CVR Votes…). Possible follow-ups: blank vs
+  undervote vs overvote rate summaries, ballot-style breakdowns, per-precinct
+  cross-tabs.
 - Possible CVR polish: freeze the leading key columns (a frozen/scroll split like
   the voter window); per-file byte progress instead of the marquee.
 - **Store:** submit the built

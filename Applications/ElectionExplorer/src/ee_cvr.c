@@ -799,3 +799,257 @@ void EeCvr_SortByColumn(EeCvrTable *t, uint32_t col, BOOL ascending)
     ctx.dir = ascending ? 1 : -1;
     qsort_s(t->view_index, t->nrows, sizeof(uint32_t), cvr_sort_cmp, &ctx);
 }
+
+/* -------------------------------------------------------------------------- */
+/* Tabulation (Phase 2): count each selection per contest                     */
+/* -------------------------------------------------------------------------- */
+
+/* One aggregated (contest, selection) bucket, keyed by contest title column +
+ * interned value id. */
+typedef struct AggEntry
+{
+    uint32_t contest_col; /* col_group of the contest (its title column) */
+    uint32_t val_id;      /* interned selection id                       */
+    uint32_t count;
+} AggEntry;
+
+typedef struct AggMap
+{
+    int32_t *slots; /* index+1 into ents, 0 = empty */
+    uint32_t cap;   /* power of two */
+    AggEntry *ents;
+    uint32_t n;
+    uint32_t ncap;
+} AggMap;
+
+static uint32_t agg_hash(uint32_t cc, uint32_t vid)
+{
+    uint64_t k = ((uint64_t)cc << 32) | vid;
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccdULL;
+    k ^= k >> 33;
+    return (uint32_t)k;
+}
+
+static BOOL agg_grow_slots(AggMap *m)
+{
+    uint32_t ncap = m->cap ? m->cap * 2 : 1024;
+    int32_t *ns = (int32_t *)calloc(ncap, sizeof(int32_t));
+    uint32_t i;
+    if (ns == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < m->n; i++)
+    {
+        uint32_t mask = ncap - 1;
+        uint32_t h = agg_hash(m->ents[i].contest_col, m->ents[i].val_id) & mask;
+        while (ns[h] != 0)
+        {
+            h = (h + 1) & mask;
+        }
+        ns[h] = (int32_t)(i + 1);
+    }
+    free(m->slots);
+    m->slots = ns;
+    m->cap = ncap;
+    return TRUE;
+}
+
+static BOOL agg_bump(AggMap *m, uint32_t cc, uint32_t vid)
+{
+    uint32_t mask;
+    uint32_t h;
+    if (m->cap == 0 || (uint64_t)(m->n + 1) * 4 >= (uint64_t)m->cap * 3)
+    {
+        if (!agg_grow_slots(m))
+        {
+            return FALSE;
+        }
+    }
+    mask = m->cap - 1;
+    h = agg_hash(cc, vid) & mask;
+    for (;;)
+    {
+        int32_t slot = m->slots[h];
+        if (slot == 0)
+        {
+            if (m->n == m->ncap)
+            {
+                uint32_t nc = m->ncap ? m->ncap * 2 : 256;
+                AggEntry *ne = (AggEntry *)realloc(m->ents, (size_t)nc * sizeof(AggEntry));
+                if (ne == NULL)
+                {
+                    return FALSE;
+                }
+                m->ents = ne;
+                m->ncap = nc;
+            }
+            m->ents[m->n].contest_col = cc;
+            m->ents[m->n].val_id = vid;
+            m->ents[m->n].count = 1;
+            m->slots[h] = (int32_t)(m->n + 1);
+            m->n++;
+            return TRUE;
+        }
+        else
+        {
+            AggEntry *e = &m->ents[slot - 1];
+            if (e->contest_col == cc && e->val_id == vid)
+            {
+                e->count++;
+                return TRUE;
+            }
+        }
+        h = (h + 1) & mask;
+    }
+}
+
+/* Rank a selection so real candidates sort ahead of the non-candidate outcomes,
+ * which are listed after the candidates in this fixed order: write-in, overvote,
+ * undervote. 0 = candidate, 1 = write-in, 2 = overvote, 3 = undervote. */
+static int cvr_selection_rank(const char *v)
+{
+    if (v == NULL || v[0] == '\0')
+    {
+        return 0;
+    }
+    if (_stricmp(v, "undervote") == 0)
+    {
+        return 3;
+    }
+    if (_stricmp(v, "overvote") == 0)
+    {
+        return 2;
+    }
+    if (_stricmp(v, "[write-in]") == 0 || _stricmp(v, "write-in") == 0 ||
+        _stricmp(v, "writein") == 0 || _stricmp(v, "write in") == 0)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+/* Sort: contest column asc; within a contest, candidates first (by count desc, then
+ * name), then the non-candidate outcomes write-in, overvote, undervote. */
+static int __cdecl agg_cmp(void *ctxv, const void *pa, const void *pb)
+{
+    const EeCvrTable *t = (const EeCvrTable *)ctxv;
+    const AggEntry *a = (const AggEntry *)pa;
+    const AggEntry *b = (const AggEntry *)pb;
+    const char *va = t->val_pool + t->val_off[a->val_id];
+    const char *vb = t->val_pool + t->val_off[b->val_id];
+    int ra;
+    int rb;
+    if (a->contest_col != b->contest_col)
+    {
+        return (a->contest_col < b->contest_col) ? -1 : 1;
+    }
+    ra = cvr_selection_rank(va);
+    rb = cvr_selection_rank(vb);
+    if (ra != rb)
+    {
+        return (ra < rb) ? -1 : 1; /* candidates (0) first, then write-in/over/under */
+    }
+    if (a->count != b->count)
+    {
+        return (a->count > b->count) ? -1 : 1; /* higher tally first */
+    }
+    return _stricmp(va, vb);
+}
+
+BOOL EeCvr_Tabulate(const EeCvrTable *t, EeCvrTally **out_items, uint32_t *out_count)
+{
+    AggMap m;
+    uint32_t r;
+    uint32_t i;
+    EeCvrTally *items = NULL;
+
+    if (out_items == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_items = NULL;
+    *out_count = 0;
+    if (t == NULL || t->nrows == 0 || t->ncols == 0)
+    {
+        return TRUE; /* nothing to tabulate */
+    }
+    ZeroMemory(&m, sizeof(m));
+
+    for (r = 0; r < t->nrows; r++)
+    {
+        uint32_t lo = t->row_start[r];
+        uint32_t hi = t->row_start[r + 1];
+        uint32_t k;
+        for (k = lo; k < hi; k++)
+        {
+            uint32_t c = t->ent_col[k];
+            uint32_t cc;
+            if (c < t->frozen_count)
+            {
+                continue; /* key columns are not contests */
+            }
+            cc = (t->col_group != NULL) ? t->col_group[c] : c;
+            if (!agg_bump(&m, cc, t->ent_val[k]))
+            {
+                free(m.slots);
+                free(m.ents);
+                return FALSE;
+            }
+        }
+    }
+
+    if (m.n > 1)
+    {
+        qsort_s(m.ents, m.n, sizeof(AggEntry), agg_cmp, (void *)t);
+    }
+
+    items = (EeCvrTally *)calloc(m.n ? m.n : 1, sizeof(EeCvrTally));
+    if (items == NULL)
+    {
+        free(m.slots);
+        free(m.ents);
+        return FALSE;
+    }
+    for (i = 0; i < m.n; i++)
+    {
+        const wchar_t *contest = t->col_titles[m.ents[i].contest_col];
+        size_t clen = wcslen(contest) + 1;
+        items[i].contest = (wchar_t *)malloc(clen * sizeof(wchar_t));
+        if (items[i].contest != NULL)
+        {
+            memcpy(items[i].contest, contest, clen * sizeof(wchar_t));
+        }
+        items[i].selection = utf8_to_wide_alloc(t->val_pool + t->val_off[m.ents[i].val_id]);
+        items[i].count = m.ents[i].count;
+        if (items[i].contest == NULL || items[i].selection == NULL)
+        {
+            EeCvr_FreeTally(items, i + 1);
+            free(m.slots);
+            free(m.ents);
+            return FALSE;
+        }
+    }
+
+    free(m.slots);
+    free(m.ents);
+    *out_items = items;
+    *out_count = m.n;
+    return TRUE;
+}
+
+void EeCvr_FreeTally(EeCvrTally *items, uint32_t count)
+{
+    uint32_t i;
+    if (items == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(items[i].contest);
+        free(items[i].selection);
+    }
+    free(items);
+}

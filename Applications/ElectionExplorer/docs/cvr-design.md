@@ -1,8 +1,9 @@
 # Design: Cast Vote Record (CVR) support
 
-**Status:** In progress. Phase 1a (data engine + loader) landing first; then the
-CVR viewer window + File menu; then Phase 2 (reports).
-**Date:** 2026-09-18
+**Status:** Phase 1 (data engine + loader + viewer window + File/Edit menus + copy)
+and Phase 2 (vote tabulation report) implemented. Verified on real ES&S files,
+including tabulation cross-checked against official published results.
+**Date:** 2026-09-18 (Phase 2 added 2026-09-19)
 
 ## Motivation
 
@@ -135,12 +136,42 @@ scroll) driven by `EeCvr_GetViewCellW`, header-click sorting on any column
 helpers where they are not `AppState`-coupled. **File → Load Cast Vote Records…**
 uses a multi-select open dialog (`OFN_ALLOWMULTISELECT`), filtered to `.xlsx`.
 
-## Phase 2 (later)
+## Phase 2 — vote tabulation (implemented)
 
-Report/analysis over the loaded CVR data (e.g. per-contest tallies,
-undervote/overvote rates, ballot-style breakdowns). Count **blank** (contest not
-on ballot) separately from **`undervote`** (on ballot, no selection) and
-**`overvote`** — do not lump them together.
+**Reports → Tabulate CVR Votes…** on the CVR window opens a report tallying every
+contest.
+
+- Core (GUI-free): `EeCvr_Tabulate(t, &items, &count)` in `ee_cvr.{c,h}`. It scans
+  the sparse entries once (O(entries), not rows×cols), skips the frozen key columns,
+  and aggregates each non-blank selection **by `(col_group, value)`** — so a
+  "vote for N" contest is summed across all of its columns under the contest's
+  title. Blank cells (contest not on the ballot) are not counted;
+  `undervote`/`overvote`/`[write-in]` are counted as the selections they are.
+  Output is an `EeCvrTally[]` of `{contest, selection, count}` grouped by contest
+  column; **within a contest the candidates come first (count descending, then
+  text), followed by the non-candidate outcomes in the fixed order write-in,
+  overvote, undervote** — even when a special out-counts a candidate.
+  `EeCvr_FreeTally` frees it.
+- UI: `CvrReportWindow` (class `k_CvrReportClassName`) — an owner-data three-column
+  list (**Contest | Selection | Votes**); the contest name repeats on each of its
+  selection rows. Bold/grey header via the shared `App_HeaderCustomDraw` (list
+  subclass). Multi-select + **right-click → Copy** (and Ctrl+C) copy the rows as
+  tab-separated UTF-8. It is an unowned top-level window (the CVR window can cover
+  it), tracked in `CvrWindow.report`, one per CVR window, and closed when the CVR
+  window closes. Tabulation runs synchronously behind a wait cursor (fast: L26's
+  12,710 ballots × 91 columns tabulate instantly).
+- **Verified against official results:** tabulating `L26 CVR.xlsx` reproduces the
+  certified Travis County totals exactly (e.g. Bee Cave Mayor 871/369; Briarcliff
+  Alderman, a Vote-For-3, 239/233/167/120/76/75/61/26 across its three columns; the
+  two same-named Councilmember races counted separately at 830 and 826).
+
+### Future Phase 2 polish
+
+Blank-vs-`undervote`-vs-`overvote` rate summaries, ballot-style breakdowns, and
+per-precinct cross-tabs. Count **blank** (contest not on ballot) separately from
+**`undervote`** (on ballot, no selection) and **`overvote`** — do not lump them
+together. (The current report already keeps `undervote`/`overvote` as distinct
+selections and simply omits blanks.)
 
 ## Testing
 

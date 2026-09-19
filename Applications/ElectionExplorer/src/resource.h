@@ -14,6 +14,7 @@
 #define IDM_FILE_CLOSE_CVR        40005
 #define IDM_EDIT_COPY             40010
 #define IDM_EDIT_OPTIONS          40011
+#define IDM_CVR_TABULATE          40012
 #define IDM_FILTER_EDIT           40020
 #define IDM_FILTER_RESET          40021
 #define IDM_FILTER_DUP_VOTER_IDS  40026

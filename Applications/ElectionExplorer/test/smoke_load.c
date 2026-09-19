@@ -3232,6 +3232,129 @@ done:
     return rc;
 }
 
+/* Phase 2 tabulation: EeCvr_Tabulate counts each selection per contest, summing a
+ * multi-column ("vote for N") contest across its columns. Within a contest,
+ * candidates come first (count desc), then write-in, overvote, undervote — even when
+ * a special outcome has a higher count than a candidate (tag: cvrtab). */
+static int test_cvr_tabulate(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* 3 key columns; a vote-for-2 "Council (10)" contest = D + blank continuation E. */
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+        "<c r=\"D1\" t=\"inlineStr\"><is><t>Council (10)</t></is></c>"
+        "<c r=\"E1\"/></row>";
+/* Author one ballot row: CVR number @n, Council selections @d (col D) and @e (col E). */
+#define CVRTAB_ROW(n, d, e)                                                                        \
+    "<row r=\"" n "\"><c r=\"A" n "\"><v>" n "</v></c>"                                             \
+    "<c r=\"B" n "\" t=\"inlineStr\"><is><t>P1</t></is></c>"                                        \
+    "<c r=\"C" n "\" t=\"inlineStr\"><is><t>X</t></is></c>"                                         \
+    "<c r=\"D" n "\" t=\"inlineStr\"><is><t>" d "</t></is></c>"                                     \
+    "<c r=\"E" n "\" t=\"inlineStr\"><is><t>" e "</t></is></c></row>"
+    /* Combined D+E tallies: Alice 6, Bob 4, [write-in] 1, overvote 2, undervote 3.
+     * Note undervote/overvote out-count [write-in] yet must still list after it. */
+    static const char *k_rows = CVRTAB_ROW("2", "Alice", "Bob")           /* Alice, Bob         */
+        CVRTAB_ROW("3", "Alice", "[write-in]")                            /* Alice, write-in    */
+        CVRTAB_ROW("4", "Alice", "undervote")                            /* Alice, undervote   */
+        CVRTAB_ROW("5", "Bob", "overvote")                               /* Bob, overvote      */
+        CVRTAB_ROW("6", "undervote", "undervote")                        /* undervote x2       */
+        CVRTAB_ROW("7", "Alice", "Bob")                                  /* Alice, Bob         */
+        CVRTAB_ROW("8", "Bob", "Alice")                                  /* Bob, Alice         */
+        CVRTAB_ROW("9", "overvote", "Alice");                            /* overvote, Alice    */
+#undef CVRTAB_ROW
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t count = 0;
+    EeLoadStatus s;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_tab.xlsx"))
+    {
+        wprintf(L"cvrtab: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrtab: write failed\n");
+        return 1;
+    }
+
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok)
+    {
+        wprintf(L"cvrtab: load s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, &items, &count))
+    {
+        wprintf(L"cvrtab: tabulate failed\n");
+        goto done;
+    }
+    /* Candidates first by count desc (Alice 6, Bob 4), then the specials in the
+     * fixed order write-in, overvote, undervote — regardless of their counts. */
+    if (count != 5)
+    {
+        wprintf(L"cvrtab: count=%u (want 5)\n", count);
+        goto done;
+    }
+    {
+        struct
+        {
+            const wchar_t *contest;
+            const wchar_t *sel;
+            uint32_t n;
+        } want[5] = {
+            {L"Council (10)", L"Alice", 6},
+            {L"Council (10)", L"Bob", 4},
+            {L"Council (10)", L"[write-in]", 1},
+            {L"Council (10)", L"overvote", 2},
+            {L"Council (10)", L"undervote", 3},
+        };
+        uint32_t i;
+        for (i = 0; i < 5; i++)
+        {
+            if (wcscmp(items[i].contest, want[i].contest) != 0 ||
+                wcscmp(items[i].selection, want[i].sel) != 0 || items[i].count != want[i].n)
+            {
+                wprintf(L"cvrtab: row %u = (%s | %s | %u), want (%s | %s | %u)\n",
+                        i,
+                        items[i].contest,
+                        items[i].selection,
+                        items[i].count,
+                        want[i].contest,
+                        want[i].sel,
+                        want[i].n);
+                goto done;
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"cvrtab ok\n");
+
+done:
+    EeCvr_FreeTally(items, count);
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrtab test failed\n");
+    }
+    return rc;
+}
+
 /* Write-in detection: a worksheet whose drawing anchors a picture onto an
  * otherwise-empty contest cell (ES&S write-in) must surface as "[write-in]",
  * while an ordinary selection is untouched (tag: writein). */
@@ -3399,6 +3522,7 @@ int wmain(void)
     failed |= test_xlsx_styles();
     failed |= test_cvr();
     failed |= test_cvr_multiselect();
+    failed |= test_cvr_tabulate();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;
 }

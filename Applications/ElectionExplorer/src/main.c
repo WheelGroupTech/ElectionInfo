@@ -41,6 +41,7 @@ static const wchar_t k_CompareClassName[] = L"ElectionExplorerCompare";
 static const wchar_t k_DiffClassName[] = L"ElectionExplorerDiff";
 static const wchar_t k_CvrClassName[] = L"ElectionExplorerCvr";
 static const wchar_t k_CvrReportClassName[] = L"ElectionExplorerCvrReport";
+static const wchar_t k_CvrFilterClassName[] = L"ElectionExplorerCvrFilter";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -398,9 +399,37 @@ static void App_ActivateViewer(AppState *app)
     SetForegroundWindow(app->hwnd_main);
 }
 
+/* Open CVR filter windows (modeless; need dialog-key routing like the voter one).
+ * CVR windows live outside g_viewers, so track their filter windows here. */
+#define EE_MAX_CVR_FILTERS 32
+static HWND g_cvr_filter_windows[EE_MAX_CVR_FILTERS];
+static int g_cvr_filter_count;
+
+static void CvrFilter_Register(HWND hwnd)
+{
+    if (hwnd != NULL && g_cvr_filter_count < EE_MAX_CVR_FILTERS)
+    {
+        g_cvr_filter_windows[g_cvr_filter_count++] = hwnd;
+    }
+}
+
+static void CvrFilter_Unregister(HWND hwnd)
+{
+    int i;
+    for (i = 0; i < g_cvr_filter_count; i++)
+    {
+        if (g_cvr_filter_windows[i] == hwnd)
+        {
+            g_cvr_filter_windows[i] = g_cvr_filter_windows[--g_cvr_filter_count];
+            return;
+        }
+    }
+}
+
 static BOOL App_RouteDialogMessage(MSG *msg)
 {
     AppState *p;
+    int i;
 
     for (p = g_viewers; p != NULL; p = p->next)
     {
@@ -413,6 +442,13 @@ static BOOL App_RouteDialogMessage(MSG *msg)
             return TRUE;
         }
         if (p->hwnd_filter != NULL && IsDialogMessageW(p->hwnd_filter, msg))
+        {
+            return TRUE;
+        }
+    }
+    for (i = 0; i < g_cvr_filter_count; i++)
+    {
+        if (IsDialogMessageW(g_cvr_filter_windows[i], msg))
         {
             return TRUE;
         }
@@ -8964,7 +9000,18 @@ typedef struct CvrWindow
     BOOL sort_asc;
     BOOL multi_card;         /* CVR looks like one row per ballot card/page */
     CvrReportWindow *report; /* tabulation report tied to this window, or NULL */
+    EeFilterSet filters;     /* applied filter rules (is / is not, include/exclude) */
+    uint32_t *disp;          /* filtered physical rows in sort order (when filtered) */
+    uint32_t disp_count;
+    BOOL filt_active;        /* a filter is narrowing the view */
+    HWND hwnd_filter;        /* open CVR filter window for this CVR window, or NULL */
 } CvrWindow;
+
+static void App_ShowCvrReport(CvrWindow *cw);
+static void App_ShowCvrOptions(CvrWindow *cw);
+static BOOL App_ShowCvrFilter(CvrWindow *cw);
+static void Cvr_ApplyFilter(CvrWindow *cw);
+static void Cvr_ResetFilter(CvrWindow *cw);
 
 struct CvrReportWindow
 {
@@ -8977,9 +9024,6 @@ struct CvrReportWindow
     uint32_t count;
 };
 
-static void App_ShowCvrReport(CvrWindow *cw);
-static void App_ShowCvrOptions(CvrWindow *cw);
-
 static void Cvr_UpdateStatus(CvrWindow *cw)
 {
     wchar_t buf[160];
@@ -8987,11 +9031,23 @@ static void Cvr_UpdateStatus(CvrWindow *cw)
     {
         return;
     }
-    StringCchPrintfW(buf,
-                     ARRAYSIZE(buf),
-                     L"%u ballot records  \x2022  %u columns",
-                     cw->table.nrows,
-                     cw->table.ncols);
+    if (cw->filt_active)
+    {
+        StringCchPrintfW(buf,
+                         ARRAYSIZE(buf),
+                         L"%u of %u ballot records  \x2022  %u columns  \x2022  filtered",
+                         cw->disp_count,
+                         cw->table.nrows,
+                         cw->table.ncols);
+    }
+    else
+    {
+        StringCchPrintfW(buf,
+                         ARRAYSIZE(buf),
+                         L"%u ballot records  \x2022  %u columns",
+                         cw->table.nrows,
+                         cw->table.ncols);
+    }
     if (cw->multi_card)
     {
         StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  (multi-card ballots detected)");
@@ -9026,8 +9082,10 @@ static HMENU App_CreateCvrMenu(void)
     HMENU menu = CreateMenu();
     HMENU file_menu = CreatePopupMenu();
     HMENU edit_menu = CreatePopupMenu();
+    HMENU filter_menu = CreatePopupMenu();
     HMENU reports_menu = CreatePopupMenu();
-    if (menu == NULL || file_menu == NULL || edit_menu == NULL || reports_menu == NULL)
+    if (menu == NULL || file_menu == NULL || edit_menu == NULL || filter_menu == NULL ||
+        reports_menu == NULL)
     {
         if (file_menu != NULL)
         {
@@ -9036,6 +9094,10 @@ static HMENU App_CreateCvrMenu(void)
         if (edit_menu != NULL)
         {
             DestroyMenu(edit_menu);
+        }
+        if (filter_menu != NULL)
+        {
+            DestroyMenu(filter_menu);
         }
         if (reports_menu != NULL)
         {
@@ -9055,9 +9117,12 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
     AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(edit_menu, MF_STRING, IDM_CVR_OPTIONS, L"&Options…");
+    AppendMenuW(filter_menu, MF_STRING, IDM_CVR_FILTER, L"&Filter…\tCtrl+L");
+    AppendMenuW(filter_menu, MF_STRING, IDM_CVR_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate CVR Votes…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     return menu;
 }
@@ -9131,11 +9196,14 @@ static void Cvr_CopySelected(CvrWindow *cw)
     while (i >= 0)
     {
         uint32_t c;
+        /* Map the selected display row to a physical row through the filter. */
+        uint32_t phys = cw->filt_active ? (((uint32_t)i < cw->disp_count) ? cw->disp[i] : 0)
+                                        : cw->table.view_index[i];
         for (c = 0; c < cw->table.ncols; c++)
         {
             size_t n;
             cell[0] = L'\0';
-            EeCvr_GetViewCellW(&cw->table, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            EeCvr_GetCellW(&cw->table, phys, c, cell, ARRAYSIZE(cell));
             n = wcslen(cell);
             if (!cvr_wbuf_reserve(&buf, &cap, len + n + 2))
             {
@@ -9216,6 +9284,145 @@ static void Cvr_OnContextMenu(CvrWindow *cw, int item, POINT screen)
     {
         Cvr_CopySelected(cw);
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* CVR filter (is / is not, include/exclude; value chosen from a list)         */
+/* -------------------------------------------------------------------------- */
+
+/* Match one "is"/"is not" rule against a physical CVR row (case-insensitive). */
+static BOOL Cvr_RuleMatches(const EeFilterRule *r, const EeCvrTable *t, uint32_t phys)
+{
+    wchar_t cell[EE_FILTER_VALUE_CCH];
+    BOOL eq;
+    EeCvr_GetCellW(t, phys, r->column, cell, ARRAYSIZE(cell));
+    eq = (CompareStringOrdinal(cell, -1, r->value, -1, TRUE) == CSTR_EQUAL);
+    return (r->relation == EeRel_IsNot) ? !eq : eq;
+}
+
+/* ProcMon visibility: same-column includes OR, different columns AND; any matching
+ * exclude hides the row. Mirrors EeFilter_AcceptsViewRow but for the CVR table. */
+static BOOL Cvr_FilterAccepts(const EeFilterSet *set, const EeCvrTable *t, uint32_t phys)
+{
+    uint32_t i;
+    uint32_t j;
+    BOOL any_include = FALSE;
+
+    if (set == NULL)
+    {
+        return TRUE;
+    }
+    for (i = 0; i < set->count; i++)
+    {
+        if (set->rules[i].enabled && set->rules[i].action == EeFilt_Exclude &&
+            Cvr_RuleMatches(&set->rules[i], t, phys))
+        {
+            return FALSE;
+        }
+        if (set->rules[i].enabled && set->rules[i].action == EeFilt_Include)
+        {
+            any_include = TRUE;
+        }
+    }
+    if (!any_include)
+    {
+        return TRUE;
+    }
+    for (i = 0; i < set->count; i++)
+    {
+        uint32_t col;
+        BOOL matched;
+        BOOL seen = FALSE;
+        if (!set->rules[i].enabled || set->rules[i].action != EeFilt_Include)
+        {
+            continue;
+        }
+        col = set->rules[i].column;
+        for (j = 0; j < i; j++)
+        {
+            if (set->rules[j].enabled && set->rules[j].action == EeFilt_Include &&
+                set->rules[j].column == col)
+            {
+                seen = TRUE;
+                break;
+            }
+        }
+        if (seen)
+        {
+            continue;
+        }
+        matched = FALSE;
+        for (j = i; j < set->count; j++)
+        {
+            if (set->rules[j].enabled && set->rules[j].action == EeFilt_Include &&
+                set->rules[j].column == col && Cvr_RuleMatches(&set->rules[j], t, phys))
+            {
+                matched = TRUE;
+                break;
+            }
+        }
+        if (!matched)
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* Rebuild the filtered display (physical rows in current sort order) and refresh. */
+static void Cvr_ApplyFilter(CvrWindow *cw)
+{
+    int count;
+    if (cw == NULL)
+    {
+        return;
+    }
+    free(cw->disp);
+    cw->disp = NULL;
+    cw->disp_count = 0;
+    cw->filt_active = FALSE;
+
+    if (EeFilter_HasEnabled(&cw->filters) && cw->table.nrows > 0)
+    {
+        uint32_t *map = (uint32_t *)malloc((size_t)cw->table.nrows * sizeof(uint32_t));
+        if (map != NULL)
+        {
+            uint32_t v;
+            uint32_t n = 0;
+            for (v = 0; v < cw->table.nrows; v++)
+            {
+                uint32_t phys = cw->table.view_index[v];
+                if (Cvr_FilterAccepts(&cw->filters, &cw->table, phys))
+                {
+                    map[n++] = phys;
+                }
+            }
+            cw->disp = map;
+            cw->disp_count = n;
+            cw->filt_active = TRUE;
+        }
+    }
+    if (cw->list != NULL)
+    {
+        count = cw->filt_active ? (int)cw->disp_count : (int)cw->table.nrows;
+        ListView_SetItemCountEx(cw->list, count, LVSICF_NOINVALIDATEALL);
+        if (count > 0)
+        {
+            ListView_RedrawItems(cw->list, 0, count);
+        }
+        InvalidateRect(cw->list, NULL, FALSE);
+    }
+    Cvr_UpdateStatus(cw);
+}
+
+static void Cvr_ResetFilter(CvrWindow *cw)
+{
+    if (cw == NULL)
+    {
+        return;
+    }
+    EeFilter_Clear(&cw->filters);
+    Cvr_ApplyFilter(cw);
 }
 
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -9331,6 +9538,13 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 case IDM_CVR_OPTIONS:
                     App_ShowCvrOptions(cw);
                     return 0;
+                case IDM_CVR_FILTER:
+                case IDM_FILTER_EDIT: /* Ctrl+L via the shared accelerator table */
+                    App_ShowCvrFilter(cw);
+                    return 0;
+                case IDM_CVR_FILTER_RESET:
+                    Cvr_ResetFilter(cw);
+                    return 0;
                 case IDM_FILE_OPEN_VOTER_LIST:
                     App_BeginOpenVoterList(cw->app);
                     return 0;
@@ -9368,15 +9582,30 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
                 if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0)
                 {
+                    uint32_t i = (uint32_t)di->item.iItem;
                     if (di->item.cchTextMax > 0)
                     {
                         di->item.pszText[0] = L'\0';
                     }
-                    EeCvr_GetViewCellW(&cw->table,
-                                       (uint32_t)di->item.iItem,
-                                       (uint32_t)di->item.iSubItem,
-                                       di->item.pszText,
-                                       (size_t)di->item.cchTextMax);
+                    if (cw->filt_active)
+                    {
+                        if (i < cw->disp_count)
+                        {
+                            EeCvr_GetCellW(&cw->table,
+                                           cw->disp[i],
+                                           (uint32_t)di->item.iSubItem,
+                                           di->item.pszText,
+                                           (size_t)di->item.cchTextMax);
+                        }
+                    }
+                    else
+                    {
+                        EeCvr_GetViewCellW(&cw->table,
+                                           i,
+                                           (uint32_t)di->item.iSubItem,
+                                           di->item.pszText,
+                                           (size_t)di->item.cchTextMax);
+                    }
                 }
                 return 0;
             }
@@ -9394,8 +9623,8 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     cw->sort_asc = TRUE;
                 }
                 EeCvr_SortByColumn(&cw->table, col, cw->sort_asc);
-                ListView_RedrawItems(cw->list, 0, (int)cw->table.nrows);
-                InvalidateRect(cw->list, NULL, FALSE);
+                /* Rebuild the filtered display in the new order (also redraws). */
+                Cvr_ApplyFilter(cw);
                 return 0;
             }
             break;
@@ -9408,12 +9637,19 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case WM_DESTROY:
             if (cw != NULL)
             {
-                /* Close the tabulation report tied to this window (its WM_DESTROY
-                 * clears cw->report) before we free the table it reads from. */
+                /* Close the tabulation report + filter window tied to this window
+                 * (their WM_DESTROY clears cw->report / cw->hwnd_filter) before we
+                 * free the table they read from. */
                 if (cw->report != NULL)
                 {
                     DestroyWindow(cw->report->hwnd);
                 }
+                if (cw->hwnd_filter != NULL)
+                {
+                    DestroyWindow(cw->hwnd_filter);
+                }
+                EeFilter_Clear(&cw->filters);
+                free(cw->disp);
                 EeCvr_Clear(&cw->table);
                 free(cw);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -10165,6 +10401,777 @@ static void App_ShowCvrOptions(CvrWindow *cw)
 }
 
 /* -------------------------------------------------------------------------- */
+/* CVR filter dialog ("Election Explorer CVR Filter")                          */
+/* -------------------------------------------------------------------------- */
+
+typedef struct CvrFilterState
+{
+    CvrWindow *cw;
+    EeFilterSet draft;
+    int edit_index;
+    BOOL refreshing;
+    BOOL values_ready;
+    uint32_t values_column;
+} CvrFilterState;
+
+/* Widen a combo's drop-down list (not the combo control) to fit its longest item
+ * plus the vertical scrollbar, so long contest names aren't clipped. Capped so the
+ * list never grows absurdly wide. */
+static void Combo_AutosizeDropdown(HWND combo, HFONT font, int max_width)
+{
+    HDC dc;
+    HFONT old = NULL;
+    int count;
+    int i;
+    int maxw = 0;
+    wchar_t buf[512];
+
+    if (combo == NULL)
+    {
+        return;
+    }
+    dc = GetDC(combo);
+    if (dc == NULL)
+    {
+        return;
+    }
+    if (font != NULL)
+    {
+        old = (HFONT)SelectObject(dc, font);
+    }
+    count = (int)SendMessageW(combo, CB_GETCOUNT, 0, 0);
+    for (i = 0; i < count; i++)
+    {
+        int len = (int)SendMessageW(combo, CB_GETLBTEXTLEN, (WPARAM)i, 0);
+        SIZE sz;
+        if (len <= 0 || len >= (int)ARRAYSIZE(buf))
+        {
+            continue;
+        }
+        buf[0] = L'\0';
+        SendMessageW(combo, CB_GETLBTEXT, (WPARAM)i, (LPARAM)buf);
+        if (GetTextExtentPoint32W(dc, buf, (int)wcslen(buf), &sz) && sz.cx > maxw)
+        {
+            maxw = sz.cx;
+        }
+    }
+    if (old != NULL)
+    {
+        SelectObject(dc, old);
+    }
+    ReleaseDC(combo, dc);
+    if (maxw > 0)
+    {
+        int want = maxw + GetSystemMetrics(SM_CXVSCROLL) + 4 * GetSystemMetrics(SM_CXEDGE) + 8;
+        RECT rc;
+        int cur = 0;
+        if (GetWindowRect(combo, &rc))
+        {
+            cur = rc.right - rc.left; /* never narrower than the combo itself */
+        }
+        if (want < cur)
+        {
+            want = cur;
+        }
+        if (max_width > 0 && want > max_width)
+        {
+            want = max_width;
+        }
+        SendMessageW(combo, CB_SETDROPPEDWIDTH, (WPARAM)want, 0);
+    }
+}
+
+static void CvrFilt_PopulateColumns(HWND combo, const EeCvrTable *t)
+{
+    uint32_t i;
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    if (t == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < t->ncols; i++)
+    {
+        const wchar_t *title = t->col_titles[i] ? t->col_titles[i] : L"";
+        int idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)title);
+        if (idx >= 0)
+        {
+            SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)i);
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+/* CVR relations are limited to "is" / "is not". */
+static void CvrFilt_PopulateRelations(HWND combo)
+{
+    int idx;
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)EeFilter_RelationText(EeRel_Is));
+    SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)EeRel_Is);
+    idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)EeFilter_RelationText(EeRel_IsNot));
+    SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)EeRel_IsNot);
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+/* TRUE if @p s is a (possibly signed) run of digits, e.g. a Cast Vote Record. */
+static BOOL cvr_wstr_is_number(const wchar_t *s)
+{
+    BOOL any = FALSE;
+    if (s == NULL)
+    {
+        return FALSE;
+    }
+    if (*s == L'-' || *s == L'+')
+    {
+        s++;
+    }
+    for (; *s != L'\0'; s++)
+    {
+        if (*s < L'0' || *s > L'9')
+        {
+            return FALSE;
+        }
+        any = TRUE;
+    }
+    return any;
+}
+
+/* TRUE if the value combo is currently the editable (CBS_DROPDOWN) kind. */
+static BOOL CvrFilt_ValueComboEditable(HWND hwnd)
+{
+    HWND combo = GetDlgItem(hwnd, IDC_FLT_VALUE);
+    if (combo == NULL)
+    {
+        return FALSE;
+    }
+    return ((DWORD)GetWindowLongPtrW(combo, GWL_STYLE) & 0x3u) == CBS_DROPDOWN;
+}
+
+/* Ensure the value combo is editable (typeable) or a fixed list, recreating it if
+ * the style must change. Numeric columns (e.g. Cast Vote Record) are editable so a
+ * value beyond the capped suggestion list can still be entered. Returns the combo. */
+static HWND CvrFilt_EnsureValueCombo(HWND hwnd, CvrFilterState *st, BOOL editable)
+{
+    HWND old = GetDlgItem(hwnd, IDC_FLT_VALUE);
+    AppState *app = st->cw->app;
+    HWND neww;
+    RECT r;
+    POINT tl;
+
+    if (old == NULL || app == NULL)
+    {
+        return old;
+    }
+    if ((((DWORD)GetWindowLongPtrW(old, GWL_STYLE) & 0x3u) == CBS_DROPDOWN) == (editable != 0))
+    {
+        return old; /* already the right kind */
+    }
+    GetWindowRect(old, &r);
+    tl.x = r.left;
+    tl.y = r.top;
+    ScreenToClient(hwnd, &tl);
+    DestroyWindow(old);
+    neww = CreateWindowExW(0, L"COMBOBOX", L"",
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | WS_VSCROLL |
+                               CBS_HASSTRINGS |
+                               (editable ? (CBS_DROPDOWN | CBS_AUTOHSCROLL) : CBS_DROPDOWNLIST),
+                           tl.x, tl.y, Scale(app, 180), Scale(app, 240), hwnd,
+                           (HMENU)(INT_PTR)IDC_FLT_VALUE, app->instance, NULL);
+    if (neww != NULL)
+    {
+        if (app->font_ui)
+        {
+            SendMessageW(neww, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        }
+        /* Restore tab order: place right after the Relation combo. */
+        SetWindowPos(neww, GetDlgItem(hwnd, IDC_FLT_RELATION), 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        FilterDlg_Layout(hwnd, app);
+    }
+    return neww;
+}
+
+/* Fill the value control with the distinct selections for the chosen column. If the
+ * column is numeric (all selections are numbers) the control becomes an editable
+ * combo so any value can be typed even when the suggestion list is capped; otherwise
+ * it is a fixed drop-down list defaulting to the first value. */
+static void CvrFilt_FillValues(HWND hwnd, CvrFilterState *st, BOOL force)
+{
+    HWND combo;
+    wchar_t **vals = NULL;
+    uint32_t n = 0;
+    uint32_t i;
+    uint32_t column;
+    BOOL numeric;
+    HCURSOR prev;
+
+    if (hwnd == NULL || st == NULL || st->cw == NULL)
+    {
+        return;
+    }
+    column = FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0);
+    if (!force && st->values_ready && st->values_column == column)
+    {
+        return;
+    }
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    EeCvr_CollectColumnValues(&st->cw->table, column, EE_FILTER_MAX_DISTINCT, &vals, &n);
+    numeric = (n > 0);
+    for (i = 0; i < n; i++)
+    {
+        if (!cvr_wstr_is_number(vals[i]))
+        {
+            numeric = FALSE;
+            break;
+        }
+    }
+    combo = CvrFilt_EnsureValueCombo(hwnd, st, numeric);
+    if (combo == NULL)
+    {
+        combo = GetDlgItem(hwnd, IDC_FLT_VALUE);
+    }
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    if (n > 0)
+    {
+        SendMessageW(combo, CB_INITSTORAGE, (WPARAM)n, (LPARAM)(n * 32u));
+    }
+    for (i = 0; i < n; i++)
+    {
+        SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)vals[i]);
+        free(vals[i]);
+    }
+    free(vals);
+    /* Fixed lists default to the first value; editable numeric boxes stay empty so
+     * the user knows to type (the list is just a capped suggestion set). */
+    if (n > 0 && !numeric)
+    {
+        SendMessageW(combo, CB_SETCURSEL, 0, 0);
+    }
+    Combo_AutosizeDropdown(combo, st->cw->app->font_ui, Scale(st->cw->app, 900));
+    SetCursor(prev);
+    st->values_ready = TRUE;
+    st->values_column = column;
+}
+
+static void CvrFilt_RefreshList(HWND list, CvrFilterState *st)
+{
+    uint32_t i;
+    if (list == NULL || st == NULL)
+    {
+        return;
+    }
+    st->refreshing = TRUE;
+    ListView_DeleteAllItems(list);
+    for (i = 0; i < st->draft.count; i++)
+    {
+        const EeFilterRule *r = &st->draft.rules[i];
+        LVITEMW it;
+        const wchar_t *colname = L"?";
+        ZeroMemory(&it, sizeof(it));
+        if (st->cw != NULL && r->column < st->cw->table.ncols &&
+            st->cw->table.col_titles[r->column] != NULL)
+        {
+            colname = st->cw->table.col_titles[r->column];
+        }
+        it.mask = LVIF_TEXT | LVIF_PARAM;
+        it.iItem = (int)i;
+        it.pszText = (LPWSTR)colname;
+        it.lParam = (LPARAM)i;
+        ListView_InsertItem(list, &it);
+        ListView_SetItemText(list, (int)i, 1, (LPWSTR)EeFilter_RelationText(r->relation));
+        ListView_SetItemText(list, (int)i, 2, (LPWSTR)r->value);
+        ListView_SetItemText(list, (int)i, 3, (LPWSTR)EeFilter_ActionText(r->action));
+        ListView_SetCheckState(list, (int)i, r->enabled);
+    }
+    st->refreshing = FALSE;
+}
+
+static void CvrFilt_LoadRuleToControls(HWND hwnd, CvrFilterState *st, const EeFilterRule *r)
+{
+    HWND col = GetDlgItem(hwnd, IDC_FLT_COLUMN);
+    HWND rel = GetDlgItem(hwnd, IDC_FLT_RELATION);
+    HWND act = GetDlgItem(hwnd, IDC_FLT_ACTION);
+    int i;
+    int n;
+
+    n = (int)SendMessageW(col, CB_GETCOUNT, 0, 0);
+    for (i = 0; i < n; i++)
+    {
+        if ((uint32_t)SendMessageW(col, CB_GETITEMDATA, (WPARAM)i, 0) == r->column)
+        {
+            SendMessageW(col, CB_SETCURSEL, (WPARAM)i, 0);
+            break;
+        }
+    }
+    st->values_ready = FALSE;
+    CvrFilt_FillValues(hwnd, st, TRUE); /* may swap the value combo's editability */
+    SendMessageW(rel, CB_SETCURSEL, (WPARAM)(r->relation == EeRel_IsNot ? 1 : 0), 0);
+    {
+        HWND val = GetDlgItem(hwnd, IDC_FLT_VALUE);
+        if (CvrFilt_ValueComboEditable(hwnd))
+        {
+            /* Editable (numeric) column: set the text directly — the value may be
+             * outside the capped suggestion list. */
+            SetWindowTextW(val, r->value);
+        }
+        else
+        {
+            int sel = (int)SendMessageW(val, CB_FINDSTRINGEXACT, (WPARAM)-1, (LPARAM)r->value);
+            if (sel >= 0)
+            {
+                SendMessageW(val, CB_SETCURSEL, (WPARAM)sel, 0);
+            }
+        }
+    }
+    SendMessageW(act, CB_SETCURSEL, (WPARAM)(r->action == EeFilt_Exclude ? 1 : 0), 0);
+}
+
+static void CvrFilt_EditSelected(HWND hwnd, CvrFilterState *st)
+{
+    HWND list;
+    int i;
+    if (st == NULL)
+    {
+        return;
+    }
+    list = GetDlgItem(hwnd, IDC_FLT_LIST);
+    i = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    if (i >= 0 && (uint32_t)i < st->draft.count)
+    {
+        st->edit_index = i;
+        CvrFilt_LoadRuleToControls(hwnd, st, &st->draft.rules[i]);
+        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Update");
+    }
+}
+
+static void CvrFilt_SetSelectedEnabled(HWND hwnd, CvrFilterState *st, BOOL enabled)
+{
+    HWND list;
+    int i;
+    if (st == NULL)
+    {
+        return;
+    }
+    list = GetDlgItem(hwnd, IDC_FLT_LIST);
+    for (i = 0; i < (int)st->draft.count; i++)
+    {
+        if (ListView_GetItemState(list, i, LVIS_SELECTED) & LVIS_SELECTED)
+        {
+            st->draft.rules[i].enabled = enabled;
+        }
+    }
+    CvrFilt_RefreshList(list, st);
+}
+
+static void CvrFilt_Apply(CvrFilterState *st)
+{
+    if (st == NULL || st->cw == NULL)
+    {
+        return;
+    }
+    if (!EeFilter_Copy(&st->cw->filters, &st->draft))
+    {
+        MessageBoxW(st->cw->hwnd, L"Could not apply the filter.", k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    Cvr_ApplyFilter(st->cw);
+}
+
+static void CvrFilt_Close(HWND hwnd, CvrFilterState *st)
+{
+    if (st != NULL && st->cw != NULL && st->cw->hwnd != NULL)
+    {
+        EnableWindow(st->cw->hwnd, TRUE);
+        SetForegroundWindow(st->cw->hwnd);
+    }
+    DestroyWindow(hwnd);
+}
+
+static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrFilterState *st = (CvrFilterState *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    AppState *app = (st != NULL && st->cw != NULL) ? st->cw->app : NULL;
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            st = (CvrFilterState *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)st);
+            return 0;
+        }
+        case WM_SIZE:
+            if (app != NULL)
+            {
+                FilterDlg_Layout(hwnd, app);
+            }
+            return 0;
+        case WM_GETMINMAXINFO:
+            if (app != NULL)
+            {
+                MINMAXINFO *mm = (MINMAXINFO *)lParam;
+                RECT wr;
+                DWORD style = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
+                DWORD ex_style = (DWORD)GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                wr.left = 0;
+                wr.top = 0;
+                wr.right = FilterDlg_MinClientWidth(app);
+                wr.bottom = FilterDlg_MinClientHeight(app);
+                if (!AdjustWindowRectExForDpi(&wr, style, FALSE, ex_style, app->dpi))
+                {
+                    wr.right += Scale(app, 16);
+                    wr.bottom += Scale(app, 40);
+                }
+                mm->ptMinTrackSize.x = wr.right - wr.left;
+                mm->ptMinTrackSize.y = wr.bottom - wr.top;
+                return 0;
+            }
+            break;
+        case WM_COMMAND:
+            if (st == NULL)
+            {
+                return 0;
+            }
+            switch (LOWORD(wParam))
+            {
+                case IDC_FLT_COLUMN:
+                    if (HIWORD(wParam) == CBN_SELCHANGE)
+                    {
+                        st->values_ready = FALSE;
+                        CvrFilt_FillValues(hwnd, st, TRUE);
+                    }
+                    return 0;
+                case IDC_FLT_VALUE:
+                    if (HIWORD(wParam) == CBN_DROPDOWN)
+                    {
+                        CvrFilt_FillValues(hwnd, st, FALSE);
+                    }
+                    return 0;
+                case IDC_FLT_ADD:
+                {
+                    EeFilterRule r;
+                    if (FilterDlg_ReadControls(hwnd, &r))
+                    {
+                        if (r.value[0] == L'\0')
+                        {
+                            MessageBoxW(hwnd, L"Choose a value to filter on.",
+                                        L"Election Explorer CVR Filter", MB_ICONINFORMATION | MB_OK);
+                            return 0;
+                        }
+                        if (st->edit_index >= 0 && (uint32_t)st->edit_index < st->draft.count)
+                        {
+                            EeFilter_Set(&st->draft, (uint32_t)st->edit_index, &r);
+                        }
+                        else
+                        {
+                            EeFilter_Add(&st->draft, &r);
+                        }
+                        st->edit_index = -1;
+                        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                        CvrFilt_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
+                    }
+                    return 0;
+                }
+                case IDC_FLT_REMOVE:
+                {
+                    HWND list = GetDlgItem(hwnd, IDC_FLT_LIST);
+                    int i;
+                    for (i = ListView_GetItemCount(list) - 1; i >= 0; i--)
+                    {
+                        if (ListView_GetItemState(list, i, LVIS_SELECTED) & LVIS_SELECTED)
+                        {
+                            EeFilter_Remove(&st->draft, (uint32_t)i);
+                        }
+                    }
+                    st->edit_index = -1;
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                    CvrFilt_RefreshList(list, st);
+                    return 0;
+                }
+                case IDC_FLT_EDIT:
+                    CvrFilt_EditSelected(hwnd, st);
+                    return 0;
+                case IDC_FLT_ENABLE:
+                    CvrFilt_SetSelectedEnabled(hwnd, st, TRUE);
+                    return 0;
+                case IDC_FLT_DISABLE:
+                    CvrFilt_SetSelectedEnabled(hwnd, st, FALSE);
+                    return 0;
+                case IDC_FLT_RESET:
+                    EeFilter_Clear(&st->draft);
+                    st->edit_index = -1;
+                    SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                    CvrFilt_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
+                    return 0;
+                case IDC_FLT_APPLY:
+                    CvrFilt_Apply(st);
+                    return 0;
+                case IDOK:
+                    CvrFilt_Apply(st);
+                    CvrFilt_Close(hwnd, st);
+                    return 0;
+                case IDCANCEL:
+                    CvrFilt_Close(hwnd, st);
+                    return 0;
+                default:
+                    break;
+            }
+            return 0;
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (st != NULL && hdr != NULL && hdr->idFrom == IDC_FLT_LIST)
+            {
+                if (hdr->code == LVN_ITEMCHANGED && !st->refreshing)
+                {
+                    NMLISTVIEW *lv = (NMLISTVIEW *)hdr;
+                    if (lv->uChanged & LVIF_STATE)
+                    {
+                        UINT ni = (lv->uNewState & LVIS_STATEIMAGEMASK) >> 12;
+                        UINT oi = (lv->uOldState & LVIS_STATEIMAGEMASK) >> 12;
+                        if (ni != oi && lv->iItem >= 0 && (uint32_t)lv->iItem < st->draft.count)
+                        {
+                            st->draft.rules[lv->iItem].enabled = (ni == 2);
+                        }
+                    }
+                }
+                if (hdr->code == NM_DBLCLK)
+                {
+                    CvrFilt_EditSelected(hwnd, st);
+                }
+                if (hdr->code == LVN_KEYDOWN)
+                {
+                    NMLVKEYDOWN *kd = (NMLVKEYDOWN *)hdr;
+                    if (kd->wVKey == VK_DELETE)
+                    {
+                        SendMessageW(hwnd, WM_COMMAND, IDC_FLT_REMOVE, 0);
+                    }
+                }
+            }
+            return 0;
+        }
+        case WM_CONTEXTMENU:
+            if (st != NULL)
+            {
+                POINT pt;
+                HMENU menu;
+                UINT cmd;
+                pt.x = GET_X_LPARAM(lParam);
+                pt.y = GET_Y_LPARAM(lParam);
+                if (pt.x == -1 && pt.y == -1)
+                {
+                    GetCursorPos(&pt);
+                }
+                menu = CreatePopupMenu();
+                if (menu)
+                {
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_EDIT, L"&Edit");
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_REMOVE, L"&Remove");
+                    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_ENABLE, L"E&nable");
+                    AppendMenuW(menu, MF_STRING, IDC_FLT_DISABLE, L"&Disable");
+                    cmd = (UINT)TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0,
+                                               hwnd, NULL);
+                    DestroyMenu(menu);
+                    if (cmd != 0)
+                    {
+                        SendMessageW(hwnd, WM_COMMAND, cmd, 0);
+                    }
+                }
+            }
+            return 0;
+        case WM_CLOSE:
+            CvrFilt_Close(hwnd, st);
+            return 0;
+        case WM_DESTROY:
+            CvrFilter_Unregister(hwnd);
+            if (st != NULL)
+            {
+                if (st->cw != NULL)
+                {
+                    if (st->cw->hwnd != NULL)
+                    {
+                        EnableWindow(st->cw->hwnd, TRUE);
+                    }
+                    st->cw->hwnd_filter = NULL;
+                }
+                EeFilter_Clear(&st->draft);
+                HeapFree(GetProcessHeap(), 0, st);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static BOOL App_ShowCvrFilter(CvrWindow *cw)
+{
+    CvrFilterState *st;
+    AppState *app;
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX |
+                        WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+    RECT rc_wnd;
+    RECT owner;
+    int client_w;
+    int client_h;
+    int outer_w;
+    int outer_h;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    HWND hwnd;
+    HWND list;
+    LVCOLUMNW col;
+    static const struct
+    {
+        const wchar_t *cls;
+        const wchar_t *text;
+        DWORD extra;
+        int id;
+    } k_ctrls[] = {
+        {L"STATIC", L"Display ballot records matching these conditions:",
+         SS_LEFT | SS_CENTERIMAGE, IDC_FLT_PROMPT},
+        {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_COLUMN},
+        {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_RELATION},
+        {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_VALUE},
+        {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_ACTION},
+        {L"BUTTON", L"Add", BS_PUSHBUTTON, IDC_FLT_ADD},
+        {L"BUTTON", L"Remove", BS_PUSHBUTTON, IDC_FLT_REMOVE},
+        {L"BUTTON", L"Reset", BS_PUSHBUTTON, IDC_FLT_RESET},
+        {L"BUTTON", L"Apply", BS_PUSHBUTTON, IDC_FLT_APPLY},
+        {L"BUTTON", L"OK", BS_DEFPUSHBUTTON, IDOK},
+        {L"BUTTON", L"Cancel", BS_PUSHBUTTON, IDCANCEL},
+    };
+    int i;
+
+    if (cw == NULL)
+    {
+        return FALSE;
+    }
+    app = cw->app;
+    if (cw->hwnd_filter != NULL)
+    {
+        SetForegroundWindow(cw->hwnd_filter);
+        return TRUE;
+    }
+    if (cw->table.nrows == 0 || cw->table.ncols == 0)
+    {
+        return TRUE;
+    }
+    st = (CvrFilterState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(CvrFilterState));
+    if (st == NULL)
+    {
+        return FALSE;
+    }
+    st->cw = cw;
+    st->edit_index = -1;
+    EeFilter_Init(&st->draft);
+    if (!EeFilter_Copy(&st->draft, &cw->filters))
+    {
+        HeapFree(GetProcessHeap(), 0, st);
+        return FALSE;
+    }
+
+    /* Default wider than the voter filter so long contest names fit in the rules
+     * list and the wide column drop-down has room. */
+    client_w = FilterDlg_MinClientWidth(app);
+    if (client_w < Scale(app, 940))
+    {
+        client_w = Scale(app, 940);
+    }
+    client_h = Scale(app, 480);
+    rc_wnd.left = 0;
+    rc_wnd.top = 0;
+    rc_wnd.right = client_w;
+    rc_wnd.bottom = client_h;
+    if (!AdjustWindowRectExForDpi(&rc_wnd, style, FALSE, ex_style, app->dpi))
+    {
+        rc_wnd.right = client_w + Scale(app, 16);
+        rc_wnd.bottom = client_h + Scale(app, 40);
+    }
+    outer_w = rc_wnd.right - rc_wnd.left;
+    outer_h = rc_wnd.bottom - rc_wnd.top;
+    if (GetWindowRect(cw->hwnd, &owner))
+    {
+        x = owner.left + ((owner.right - owner.left) - outer_w) / 2;
+        y = owner.top + ((owner.bottom - owner.top) - outer_h) / 2;
+    }
+
+    hwnd = CreateWindowExW(ex_style, k_CvrFilterClassName, L"Election Explorer CVR Filter", style, x,
+                           y, outer_w, outer_h, cw->hwnd, NULL, app->instance, st);
+    if (hwnd == NULL)
+    {
+        EeFilter_Clear(&st->draft);
+        HeapFree(GetProcessHeap(), 0, st);
+        return FALSE;
+    }
+    cw->hwnd_filter = hwnd;
+    CvrFilter_Register(hwnd);
+
+    for (i = 0; i < (int)ARRAYSIZE(k_ctrls); i++)
+    {
+        DWORD base = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+        if (k_ctrls[i].id != IDC_FLT_PROMPT)
+        {
+            base |= WS_TABSTOP;
+        }
+        CreateWindowExW(0, k_ctrls[i].cls, k_ctrls[i].text, base | k_ctrls[i].extra, 0, 0, 0, 0,
+                        hwnd, (HMENU)(INT_PTR)k_ctrls[i].id, app->instance, NULL);
+    }
+    list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                           WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | LVS_REPORT |
+                               LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS,
+                           0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)IDC_FLT_LIST, app->instance, NULL);
+
+    if (app->font_ui)
+    {
+        HWND child = GetWindow(hwnd, GW_CHILD);
+        while (child)
+        {
+            SendMessageW(child, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+    }
+
+    if (list != NULL)
+    {
+        ListView_SetExtendedListViewStyle(list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT |
+                                                    LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES);
+        ZeroMemory(&col, sizeof(col));
+        col.mask = LVCF_TEXT | LVCF_WIDTH;
+        col.pszText = L"Column";
+        col.cx = Scale(app, 340);
+        ListView_InsertColumn(list, 0, &col);
+        col.pszText = L"Relation";
+        col.cx = Scale(app, 80);
+        ListView_InsertColumn(list, 1, &col);
+        col.pszText = L"Value";
+        col.cx = Scale(app, 260);
+        ListView_InsertColumn(list, 2, &col);
+        col.pszText = L"Action";
+        col.cx = Scale(app, 90);
+        ListView_InsertColumn(list, 3, &col);
+    }
+
+    CvrFilt_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), &cw->table);
+    Combo_AutosizeDropdown(GetDlgItem(hwnd, IDC_FLT_COLUMN), app->font_ui, Scale(app, 900));
+    CvrFilt_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION));
+    FilterDlg_PopulateActions(GetDlgItem(hwnd, IDC_FLT_ACTION));
+    CvrFilt_FillValues(hwnd, st, TRUE);
+    CvrFilt_RefreshList(list, st);
+    FilterDlg_Layout(hwnd, app);
+
+    EnableWindow(cw->hwnd, FALSE);
+    ShowWindow(hwnd, SW_SHOW);
+    UpdateWindow(hwnd);
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
 /* CVR loading (worker thread behind a modal progress dialog)                 */
 /* -------------------------------------------------------------------------- */
 
@@ -10633,6 +11640,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         rcw.hIcon = wc.hIcon;
         rcw.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&rcw) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW cfc;
+        ZeroMemory(&cfc, sizeof(cfc));
+        cfc.cbSize = sizeof(cfc);
+        cfc.lpfnWndProc = CvrFilterWndProc;
+        cfc.hInstance = hInstance;
+        cfc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        cfc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        cfc.lpszClassName = k_CvrFilterClassName;
+        cfc.hIcon = wc.hIcon;
+        cfc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&cfc) == 0)
         {
             return 1;
         }

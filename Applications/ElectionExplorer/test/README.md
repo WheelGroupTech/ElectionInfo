@@ -44,5 +44,6 @@ ordered by contest then count); `cvrmerge` covers the write-in merge option (ima
 `[write-in]`, text `Write-in`, and `No image found` collapse to one `write-in` row
 when on, separate when off); `cvrmc` covers multi-card detection (`EeCvr_HasMultiCard`: a long ballot split
 across two cards is flagged; a clean per-ballot CVR and a combined-party primary are
-not); `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
+not); `cvrfilt` covers the CVR filter primitives (`EeCvr_CollectColumnValues` distinct
+sorted selections, blanks excluded; `EeCvr_GetCellW` physical-row access); `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

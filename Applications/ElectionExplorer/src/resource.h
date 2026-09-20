@@ -16,6 +16,8 @@
 #define IDM_EDIT_OPTIONS          40011
 #define IDM_CVR_TABULATE          40012
 #define IDM_CVR_OPTIONS           40013
+#define IDM_CVR_FILTER            40014
+#define IDM_CVR_FILTER_RESET      40015
 
 /* CVR options dialog child controls. */
 #define IDC_CVR_MERGE_WRITEINS 41400

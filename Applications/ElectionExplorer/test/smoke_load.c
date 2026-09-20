@@ -3660,6 +3660,116 @@ done:
     return rc;
 }
 
+/* CVR filter primitives: EeCvr_CollectColumnValues returns a column's distinct
+ * selections (sorted, blanks excluded) for the value dropdown, and EeCvr_GetCellW
+ * reads a physical-row cell (tag: cvrfilt). */
+static int test_cvr_filter_values(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Mayor (10)</t></is></c></row>";
+    /* Mayor: Bob, Alice, undervote, Alice, (blank). Distinct = Alice, Bob, undervote. */
+    static const char *k_rows =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>Bob</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>"
+        "<row r=\"4\"><c r=\"A4\"><v>3</v></c>"
+        "<c r=\"B4\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C4\" t=\"inlineStr\"><is><t>undervote</t></is></c></row>"
+        "<row r=\"5\"><c r=\"A5\"><v>4</v></c>"
+        "<c r=\"B5\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C5\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>"
+        "<row r=\"6\"><c r=\"A6\"><v>5</v></c>"
+        "<c r=\"B6\" t=\"inlineStr\"><is><t>P1</t></is></c></row>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[128];
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    wchar_t **vals = NULL;
+    uint32_t n = 0;
+    uint32_t r;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_filt.xlsx"))
+    {
+        wprintf(L"cvrfilt: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrfilt: write failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 5)
+    {
+        wprintf(L"cvrfilt: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    if (!EeCvr_CollectColumnValues(&t, 2, 100, &vals, &n) || n != 3)
+    {
+        wprintf(L"cvrfilt: distinct count=%u (want 3)\n", n);
+        goto done;
+    }
+    if (wcscmp(vals[0], L"Alice") != 0 || wcscmp(vals[1], L"Bob") != 0 ||
+        wcscmp(vals[2], L"undervote") != 0)
+    {
+        wprintf(L"cvrfilt: distinct order (%s, %s, %s)\n", vals[0], vals[1], vals[2]);
+        goto done;
+    }
+    /* EeCvr_GetCellW reads by physical row; find the blank Mayor cell (5th ballot). */
+    {
+        BOOL saw_blank = FALSE;
+        for (r = 0; r < t.nrows; r++)
+        {
+            EeCvr_GetCellW(&t, r, 2, buf, ARRAYSIZE(buf));
+            if (buf[0] == L'\0')
+            {
+                saw_blank = TRUE;
+            }
+        }
+        if (!saw_blank)
+        {
+            wprintf(L"cvrfilt: expected a blank Mayor cell\n");
+            goto done;
+        }
+    }
+    rc = 0;
+    wprintf(L"cvrfilt ok\n");
+
+done:
+    if (vals != NULL)
+    {
+        for (r = 0; r < n; r++)
+        {
+            free(vals[r]);
+        }
+        free(vals);
+    }
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrfilt test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -3936,6 +4046,7 @@ int wmain(void)
     failed |= test_cvr_tabulate();
     failed |= test_cvr_merge_writeins();
     failed |= test_cvr_multicard();
+    failed |= test_cvr_filter_values();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

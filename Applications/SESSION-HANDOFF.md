@@ -31,6 +31,28 @@ P24 (single-card combined primary) confirms the multi-card detector does not
 false-positive on a real combined primary, and Dallas G24 confirms it flags a real
 multi-card general.
 
+**Uncommitted (this session):** CVR window gains a **Filter** menu (between Edit and
+Reports) with **Filter…** and **Reset Filter**. Filter… opens a modeless window
+"**Election Explorer CVR Filter**" (`CvrFilterWndProc`, class `k_CvrFilterClassName`)
+modelled on the voter filter: column = any CVR column; relation limited to **is / is
+not**; value is a non-editable drop-down of the column's distinct selections
+(`EeCvr_CollectColumnValues`); Include/Exclude with the same ProcMon semantics. The
+Column/Value drop-down lists are widened to their longest item
+(`Combo_AutosizeDropdown` / `CB_SETDROPPEDWIDTH`) so long contest names aren't
+clipped, and the dialog defaults wider (940 DIP) with a roomy rules-list Column
+column. For an **all-numeric column (Cast Vote Record)** the value box becomes
+**editable** (`CBS_DROPDOWN`, recreated in place via `CvrFilt_EnsureValueCombo`) so
+any record number can be typed — the suggestion list is capped at 8000, so a 500k+
+ballot CVR would otherwise only list the first ~8000 numbers.
+Filtering is layered over sort via `CvrWindow.disp` (physical rows passing
+`Cvr_FilterAccepts`, in sort order); the status bar shows "X of N ballot records …
+filtered"; sort re-applies the filter; Copy maps through `disp`. New `EeCvr_GetCellW`
+(physical-row cell access) + `EeCvr_CollectColumnValues` in `ee_cvr.{c,h}`; new IDs
+`IDM_CVR_FILTER`/`IDM_CVR_FILTER_RESET`; Ctrl+L opens it in the CVR window. Reuses
+`EeFilterSet` + the voter dialog's table-agnostic layout helpers. Tabulation still
+counts all ballots (ignores the filter), like the voter reports. Test `cvrfilt`;
+full suite green (36); app builds clean x64.
+
 The app is being published via the **Microsoft Store**.
 
 ---

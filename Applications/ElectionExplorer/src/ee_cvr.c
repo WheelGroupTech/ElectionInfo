@@ -743,15 +743,10 @@ static const char *cvr_cell_utf8(const EeCvrTable *t, uint32_t row, uint32_t col
     return "";
 }
 
-BOOL EeCvr_GetViewCellW(const EeCvrTable *t,
-                        uint32_t view_row,
-                        uint32_t col,
-                        wchar_t *buf,
-                        size_t cch)
+BOOL EeCvr_GetCellW(const EeCvrTable *t, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
 {
-    uint32_t row;
     const char *v;
-    if (t == NULL || buf == NULL || cch == 0 || view_row >= t->nrows || col >= t->ncols)
+    if (t == NULL || buf == NULL || cch == 0 || row >= t->nrows || col >= t->ncols)
     {
         if (buf != NULL && cch > 0)
         {
@@ -759,7 +754,6 @@ BOOL EeCvr_GetViewCellW(const EeCvrTable *t,
         }
         return FALSE;
     }
-    row = t->view_index[view_row];
     v = cvr_cell_utf8(t, row, col);
     if (v[0] == '\0')
     {
@@ -770,6 +764,97 @@ BOOL EeCvr_GetViewCellW(const EeCvrTable *t,
     {
         buf[cch - 1] = L'\0';
     }
+    return TRUE;
+}
+
+BOOL EeCvr_GetViewCellW(const EeCvrTable *t,
+                        uint32_t view_row,
+                        uint32_t col,
+                        wchar_t *buf,
+                        size_t cch)
+{
+    if (t == NULL || view_row >= t->nrows)
+    {
+        if (buf != NULL && cch > 0)
+        {
+            buf[0] = L'\0';
+        }
+        return FALSE;
+    }
+    return EeCvr_GetCellW(t, t->view_index[view_row], col, buf, cch);
+}
+
+static int __cdecl cvr_wide_cmp(void *ctx, const void *a, const void *b)
+{
+    (void)ctx;
+    return _wcsicmp(*(const wchar_t *const *)a, *(const wchar_t *const *)b);
+}
+
+BOOL EeCvr_CollectColumnValues(const EeCvrTable *t,
+                               uint32_t col,
+                               uint32_t max_values,
+                               wchar_t ***out_values,
+                               uint32_t *out_count)
+{
+    unsigned char *seen;
+    wchar_t **vals;
+    uint32_t n = 0;
+    size_t k;
+
+    if (out_values == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    *out_values = NULL;
+    *out_count = 0;
+    if (t == NULL || col >= t->ncols || t->val_count == 0 || max_values == 0)
+    {
+        return TRUE;
+    }
+    seen = (unsigned char *)calloc(t->val_count, 1);
+    vals = (wchar_t **)calloc(max_values, sizeof(wchar_t *));
+    if (seen == NULL || vals == NULL)
+    {
+        free(seen);
+        free(vals);
+        return FALSE;
+    }
+    /* One interned value id per distinct selection in this column, across all rows.
+     * ent_col/ent_val are the flat CSR entry arrays. */
+    for (k = 0; k < t->nent && n < max_values; k++)
+    {
+        uint32_t vid;
+        if (t->ent_col[k] != col)
+        {
+            continue;
+        }
+        vid = t->ent_val[k];
+        if (vid >= t->val_count || seen[vid])
+        {
+            continue;
+        }
+        seen[vid] = 1;
+        vals[n] = utf8_to_wide_alloc(t->val_pool + t->val_off[vid]);
+        if (vals[n] == NULL)
+        {
+            uint32_t i;
+            for (i = 0; i < n; i++)
+            {
+                free(vals[i]);
+            }
+            free(vals);
+            free(seen);
+            return FALSE;
+        }
+        n++;
+    }
+    free(seen);
+    if (n > 1)
+    {
+        qsort_s(vals, n, sizeof(wchar_t *), cvr_wide_cmp, NULL);
+    }
+    *out_values = vals;
+    *out_count = n;
     return TRUE;
 }
 

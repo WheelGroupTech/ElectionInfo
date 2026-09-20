@@ -99,6 +99,30 @@ extern "C"
                             wchar_t *buf,
                             size_t cch);
 
+    /**
+     * Copy the cell at PHYSICAL row @p row, column @p col into @p buf ("" if blank).
+     * Unlike EeCvr_GetViewCellW this does not go through the sort/view index, so it
+     * is suitable for filtering and for a caller-maintained display map.
+     */
+    BOOL EeCvr_GetCellW(const EeCvrTable *t,
+                        uint32_t row,
+                        uint32_t col,
+                        wchar_t *buf,
+                        size_t cch);
+
+    /**
+     * Collect the distinct selection values that appear in column @p col (candidate
+     * names, "undervote", "overvote", write-in variants, …), case-insensitively
+     * sorted, stopping after @p max_values uniques. On success *out_values is a heap
+     * array of @p *out_count owned wide strings (caller frees each string then the
+     * array). Blank cells are not included.
+     */
+    BOOL EeCvr_CollectColumnValues(const EeCvrTable *t,
+                                   uint32_t col,
+                                   uint32_t max_values,
+                                   wchar_t ***out_values,
+                                   uint32_t *out_count);
+
     /** Reorder view_index by @p col (numeric-aware); @p ascending toggles order. */
     void EeCvr_SortByColumn(EeCvrTable *t, uint32_t col, BOOL ascending);
 

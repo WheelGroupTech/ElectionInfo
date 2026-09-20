@@ -210,6 +210,48 @@ another, so cards are *not* a fixed column range.
   Travis elections, or **combined-party primaries** (each party's ballot carries its
   own top race, so no row lacks a reference contest). Test `cvrmc`.
 
+## Filtering (CVR window)
+
+The CVR window has a **Filter** menu (between Edit and Reports) with **Filter…** and
+**Reset Filter**. Filter… opens a modeless window titled **"Election Explorer CVR
+Filter"**, modelled on the voter-list filter but adapted to CVR data:
+
+- **Column** — any CVR column (key columns and every contest column).
+- **Relation** — limited to **is** / **is not**.
+- **Value** — for a normal column, a non-editable drop-down (`CBS_DROPDOWNLIST`) of
+  the distinct selections that appear in the chosen column (`EeCvr_CollectColumnValues`),
+  sorted case-insensitively; blanks are not offered. **For an all-numeric column
+  (e.g. Cast Vote Record) the value box becomes editable** (`CBS_DROPDOWN`) so any
+  number can be typed — necessary because the suggestion list is capped
+  (`EE_FILTER_MAX_DISTINCT` = 8000) and a CVR with 500k+ ballots would otherwise only
+  offer the first ~8000 record numbers. Numeric-ness is decided from the collected
+  values (`cvr_wstr_is_number`); the value combo is recreated in place
+  (`CvrFilt_EnsureValueCombo`) when the kind must change, and editing an existing
+  rule sets the text directly so out-of-list values survive. Populated eagerly on
+  column change and lazily on drop-down (wait cursor).
+
+Long contest names would otherwise be clipped by the combo width (and the drop-down
+scrollbar), so both the Column and Value drop-down *lists* are widened to their
+longest item via `CB_SETDROPPEDWIDTH` (`Combo_AutosizeDropdown`, capped ~900 DIP,
+scrollbar allowance included) without widening the combo controls. The dialog also
+defaults wider (940 DIP) with a roomy "Column" column in the rules list so applied
+rules read cleanly.
+- **Action** — Include / Exclude, same ProcMon semantics as the voter filter
+  (same-column includes OR, different columns AND; any matching exclude hides the
+  row).
+
+Filtering is non-destructive and layered over sorting: `Cvr_ApplyFilter` rebuilds a
+display map (`CvrWindow.disp` — physical rows in current sort order that pass
+`Cvr_FilterAccepts`), the owner-data list shows `disp_count` rows, and the status bar
+reads "X of N ballot records … filtered". Header-click sort re-applies the filter in
+the new order; Copy maps the selection through `disp`. Reset Filter clears the rules.
+Filter rules reuse `EeFilterSet`/`EeFilterRule` (relation restricted to is/is-not),
+and matching uses `EeCvr_GetCellW` (physical-row access). The reusable primitive
+`EeCvr_CollectColumnValues` is covered by test `cvrfilt`.
+
+Tabulation (Reports → Tabulate CVR Votes…) still counts **all** ballots, not the
+filtered subset — consistent with the voter-list reports, which ignore filters.
+
 ### Future Phase 2 polish
 
 Blank-vs-`undervote`-vs-`overvote` rate summaries, ballot-style breakdowns, and

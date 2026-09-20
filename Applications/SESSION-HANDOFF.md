@@ -12,10 +12,15 @@ viewer window + **File → Load Cast Vote Records…** (`main.c`), **write-in im
 detection** in `xlsx.c` (a contest cell whose only content is an anchored picture —
 ES&S write-ins — reads `[write-in]` instead of blank), **"vote for N" multi-column
 contest handling**, **Phase 2 vote tabulation** (Reports → Tabulate CVR Votes…) with
-a per-user **Edit → Options… "Merge image and text write-ins"** toggle, and
-**selection whitespace normalization**. Builds clean (x64 Debug+Release), full smoke
-suite passes (incl. `cvr`, `cvrmulti`, `cvrtab`, `cvrmerge`, `cvrws`, `writein`);
-tabulation validated exactly against official published results for **nine**
+a per-user **Edit → Options… "Merge image and text write-ins"** toggle,
+**selection whitespace normalization**, **multi-card/multi-page detection**
+(`EeCvr_HasMultiCard`; status bar reads "N ballot records" and appends "(multi-card
+ballots detected)" when a minority of rows lack a top-of-ballot reference contest —
+President/Governor/U.S. Senator, excl. Lt. Governor), and treating ES&S's
+**`No image found`** placeholder as a write-in variant. Builds clean (x64
+Debug+Release), full smoke suite passes (incl. `cvr`, `cvrmulti`, `cvrtab`,
+`cvrmerge`, `cvrmc`, `cvrws`, `writein`); tabulation validated exactly against
+official published results for **nine**
 elections across two counties — Travis (L26, P26, PR26, G24 = 6 files/587,090, G20 =
 7 files/612,696) and Dallas (P26 Rep = 2 files/103,818, P26 Dem = 3 files/280,326,
 P24 = Mar 2024 combined primary, 3 files/231,465 = Rep 105,410 + Dem 126,055, G24 =
@@ -25,22 +30,6 @@ ballots ⇒ more rows than ballots; contest tallies unaffected — all matched);
 P24 (single-card combined primary) confirms the multi-card detector does not
 false-positive on a real combined primary, and Dallas G24 confirms it flags a real
 multi-card general.
-
-**Uncommitted (this session):** CVR window status relabeled "N **ballot records**"
-(a record = a card/sheet) and, when detected, appends "(multi-card ballots
-detected)" via new `EeCvr_HasMultiCard` (`ee_cvr.{c,h}`, `main.c`). Detection is
-threshold-free — gates on a top-of-ballot reference contest (President/Governor/U.S.
-Senator, excl. Lieutenant Governor) and flags when a minority of rows carry none
-(continuation sheets). Flags Dallas-Dem only; not Dallas-Rep, Travis
-L26/PR26/P26/G24/G20, or combined-party primaries. Test `cvrmc`; full suite green;
-app builds clean x64.
-
-Also uncommitted: **`No image found`** (ES&S write-in whose scanned image wasn't
-retrieved) is now classified as a write-in variant (`cvr_selection_rank` in
-`ee_cvr.c`), so it groups after candidates and merges into `write-in` when merging is
-on — making merged write-in totals match official Write-In Totals (Dallas G24
-President 4,578 + 8 = 4,586; Senator 816 + 2 = 818). Test `cvrmerge` extended to all
-three variants.
 
 The app is being published via the **Microsoft Store**.
 
@@ -547,11 +536,13 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **CVR is complete and committed** (Phases 1 & 2, click-tested, validated against
-  five official Travis elections). Possible follow-ups: blank vs undervote vs
-  overvote rate summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze
-  the leading key columns in the CVR grid (a frozen/scroll split like the voter
-  window); per-file byte progress instead of the marquee.
+- **CVR is complete and committed** (Phases 1 & 2 — load/view/tabulate, write-in
+  image + `No image found` variants, "vote for N" contests, multi-card detection —
+  click-tested and validated exactly against nine official elections across Travis &
+  Dallas counties). Possible follow-ups: blank vs undervote vs overvote rate
+  summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze the leading key
+  columns in the CVR grid (a frozen/scroll split like the voter window); per-file
+  byte progress instead of the marquee.
 - **Store:** submit the built
   `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
   Partner Center; enable **GitHub Pages** so the privacy URL resolves

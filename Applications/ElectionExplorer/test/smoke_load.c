@@ -3941,6 +3941,143 @@ done:
     return rc;
 }
 
+/* Per-column value reports: EeCvr_FindColumnByTitle locates a key column by header,
+ * EeCvr_ColumnHasReportableData is FALSE for an all-redacted column, and
+ * EeCvr_CollectColumnCounts returns per-value ballot-record counts + a blank tally
+ * (tag: cvrcnt). */
+static int test_cvr_colcounts(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* A=Cast Vote Record, B=Batch, C=Precinct, D=Ballot Style (all key), E=Mayor. */
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Batch</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"D1\" t=\"inlineStr\"><is><t>Ballot Style</t></is></c>"
+        "<c r=\"E1\" t=\"inlineStr\"><is><t>Mayor (10)</t></is></c></row>";
+    /* Batch is entirely redacted (mixed spellings). Precinct: P1 x3, P2 x1, blank x1.
+     * Every row has a Mayor selection so none is dropped as an empty ballot. */
+    static const char *k_rows =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>&lt;Redacted&gt;</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"D2\" t=\"inlineStr\"><is><t>S1</t></is></c>"
+        "<c r=\"E2\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>&lt;REDACTED&gt;</t></is></c>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"D3\" t=\"inlineStr\"><is><t>S1</t></is></c>"
+        "<c r=\"E3\" t=\"inlineStr\"><is><t>Bob</t></is></c></row>"
+        "<row r=\"4\"><c r=\"A4\"><v>3</v></c>"
+        "<c r=\"B4\" t=\"inlineStr\"><is><t>&lt;Redact&gt;</t></is></c>"
+        "<c r=\"C4\" t=\"inlineStr\"><is><t>P2</t></is></c>"
+        "<c r=\"D4\" t=\"inlineStr\"><is><t>S2</t></is></c>"
+        "<c r=\"E4\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>"
+        "<row r=\"5\"><c r=\"A5\"><v>4</v></c>"
+        "<c r=\"B5\" t=\"inlineStr\"><is><t>&lt;Redacted&gt;</t></is></c>"
+        "<c r=\"D5\" t=\"inlineStr\"><is><t>S2</t></is></c>"
+        "<c r=\"E5\" t=\"inlineStr\"><is><t>Bob</t></is></c></row>"
+        "<row r=\"6\"><c r=\"A6\"><v>5</v></c>"
+        "<c r=\"B6\" t=\"inlineStr\"><is><t>&lt;Redacted&gt;</t></is></c>"
+        "<c r=\"C6\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"D6\" t=\"inlineStr\"><is><t>S1</t></is></c>"
+        "<c r=\"E6\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[6144];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    EeCvrValueCount *items = NULL;
+    uint32_t count = 0;
+    uint32_t blank = 0;
+    uint32_t colBatch = 99, colPrec = 99, colStyle = 99, colBogus = 99;
+    uint32_t p1 = 0, p2 = 0;
+    uint32_t i;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_cnt.xlsx"))
+    {
+        wprintf(L"cvrcnt: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrcnt: write failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 5)
+    {
+        wprintf(L"cvrcnt: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    if (!EeCvr_FindColumnByTitle(&t, L"Batch", &colBatch) ||
+        !EeCvr_FindColumnByTitle(&t, L"Precinct", &colPrec) ||
+        !EeCvr_FindColumnByTitle(&t, L"Ballot Style", &colStyle) ||
+        colBatch != 1 || colPrec != 2 || colStyle != 3)
+    {
+        wprintf(L"cvrcnt: find columns batch=%u prec=%u style=%u\n", colBatch, colPrec, colStyle);
+        goto done;
+    }
+    if (EeCvr_FindColumnByTitle(&t, L"Nonexistent", &colBogus))
+    {
+        wprintf(L"cvrcnt: found a nonexistent column\n");
+        goto done;
+    }
+    /* Redacted Batch is not reportable; Precinct and Ballot Style are. */
+    if (EeCvr_ColumnHasReportableData(&t, colBatch) ||
+        !EeCvr_ColumnHasReportableData(&t, colPrec) ||
+        !EeCvr_ColumnHasReportableData(&t, colStyle))
+    {
+        wprintf(L"cvrcnt: reportable batch=%d prec=%d style=%d\n",
+                EeCvr_ColumnHasReportableData(&t, colBatch),
+                EeCvr_ColumnHasReportableData(&t, colPrec),
+                EeCvr_ColumnHasReportableData(&t, colStyle));
+        goto done;
+    }
+    if (!EeCvr_CollectColumnCounts(&t, colPrec, &items, &count, &blank) || count != 2 || blank != 1)
+    {
+        wprintf(L"cvrcnt: precinct count=%u blank=%u (want 2,1)\n", count, blank);
+        goto done;
+    }
+    for (i = 0; i < count; i++)
+    {
+        if (wcscmp(items[i].value, L"P1") == 0)
+        {
+            p1 = items[i].count;
+        }
+        else if (wcscmp(items[i].value, L"P2") == 0)
+        {
+            p2 = items[i].count;
+        }
+    }
+    if (p1 != 3 || p2 != 1)
+    {
+        wprintf(L"cvrcnt: precinct P1=%u P2=%u (want 3,1)\n", p1, p2);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"cvrcnt ok\n");
+
+done:
+    EeCvr_FreeColumnCounts(items, count);
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrcnt test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -4219,6 +4356,7 @@ int wmain(void)
     failed |= test_cvr_multicard();
     failed |= test_cvr_filter_values();
     failed |= test_cvr_delimited();
+    failed |= test_cvr_colcounts();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

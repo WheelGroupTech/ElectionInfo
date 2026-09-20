@@ -41,6 +41,7 @@ static const wchar_t k_CompareClassName[] = L"ElectionExplorerCompare";
 static const wchar_t k_DiffClassName[] = L"ElectionExplorerDiff";
 static const wchar_t k_CvrClassName[] = L"ElectionExplorerCvr";
 static const wchar_t k_CvrReportClassName[] = L"ElectionExplorerCvrReport";
+static const wchar_t k_CvrValueReportClassName[] = L"ElectionExplorerCvrValueReport";
 static const wchar_t k_CvrFilterClassName[] = L"ElectionExplorerCvrFilter";
 
 static const int k_DefaultWidth = 1100;
@@ -8988,6 +8989,17 @@ static AppState *App_CreateViewer(HINSTANCE instance,
 /* -------------------------------------------------------------------------- */
 
 typedef struct CvrReportWindow CvrReportWindow;
+typedef struct CvrValueReportWindow CvrValueReportWindow;
+
+/* Per-column value reports opened from the CVR Reports menu (Batch / Precinct /
+ * Ballot Style). Indexed by these kinds; one window of each kind per CVR window. */
+enum
+{
+    EE_CVRREP_BATCH = 0,
+    EE_CVRREP_PRECINCT = 1,
+    EE_CVRREP_BALLOTSTYLE = 2,
+    EE_CVRREP_COUNT = 3
+};
 
 typedef struct CvrWindow
 {
@@ -9005,9 +9017,15 @@ typedef struct CvrWindow
     uint32_t disp_count;
     BOOL filt_active;        /* a filter is narrowing the view */
     HWND hwnd_filter;        /* open CVR filter window for this CVR window, or NULL */
+    CvrValueReportWindow *vreports[EE_CVRREP_COUNT]; /* Batch/Precinct/Ballot Style reports */
+    /* Per-column report availability, computed once at load (the data never changes
+     * afterward) so WM_INITMENUPOPUP need not re-scan the table on every menu open. */
+    BOOL vreport_avail[EE_CVRREP_COUNT];
+    uint32_t vreport_col[EE_CVRREP_COUNT];
 } CvrWindow;
 
 static void App_ShowCvrReport(CvrWindow *cw);
+static void App_ShowCvrValueReport(CvrWindow *cw, int kind);
 static void App_ShowCvrOptions(CvrWindow *cw);
 static BOOL App_ShowCvrFilter(CvrWindow *cw);
 static void Cvr_ApplyFilter(CvrWindow *cw);
@@ -9022,6 +9040,26 @@ struct CvrReportWindow
     HWND status;         /* bottom status bar                     */
     EeCvrTally *items;   /* tabulated (contest, selection, count) */
     uint32_t count;
+};
+
+/* Per-column value report (Batch / Precinct / Ballot Style): one value per row with
+ * its ballot-record count, like the voter-list Precinct/Address reports. */
+struct CvrValueReportWindow
+{
+    CvrWindow *owner;        /* CVR window (owns the table + filters) */
+    AppState *app;
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    int kind;                /* EE_CVRREP_* (slot in owner->vreports)  */
+    uint32_t column;         /* source CVR column                      */
+    const wchar_t *label;    /* "Batch" / "Precinct" / "Ballot Style"  */
+    EeCvrValueCount *items;  /* value + count, in current sort order    */
+    uint32_t count;
+    BOOL has_blank;          /* a "(blank)" row is present in items      */
+    BOOL numeric;            /* sort the value column numerically        */
+    int sort_col;            /* 0 = value, 1 = count                     */
+    BOOL sort_asc;
 };
 
 static void Cvr_UpdateStatus(CvrWindow *cw)
@@ -9120,6 +9158,11 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(filter_menu, MF_STRING, IDM_CVR_FILTER, L"&Filter…\tCtrl+L");
     AppendMenuW(filter_menu, MF_STRING, IDM_CVR_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate CVR Votes…");
+    AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_BATCH, L"Display &Batch Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_PRECINCT, L"Display &Precinct Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_BALLOTSTYLE,
+                L"Display Ballot &Style Report…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
@@ -9425,6 +9468,27 @@ static void Cvr_ResetFilter(CvrWindow *cw)
     Cvr_ApplyFilter(cw);
 }
 
+/* Header title (and display label) of the CVR column a value-report kind reports on. */
+static const wchar_t *Cvr_ReportColumnTitle(int kind)
+{
+    switch (kind)
+    {
+        case EE_CVRREP_BATCH:
+            return L"Batch";
+        case EE_CVRREP_PRECINCT:
+            return L"Precinct";
+        case EE_CVRREP_BALLOTSTYLE:
+            return L"Ballot Style";
+        default:
+            return L"";
+    }
+}
+
+/* Command IDs for the three CVR value reports, indexed by EE_CVRREP_*. */
+static const int k_CvrReportIds[EE_CVRREP_COUNT] = {IDM_CVR_REPORT_BATCH,
+                                                    IDM_CVR_REPORT_PRECINCT,
+                                                    IDM_CVR_REPORT_BALLOTSTYLE};
+
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     CvrWindow *cw = (CvrWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
@@ -9522,6 +9586,23 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             }
             return 0;
 
+        case WM_INITMENUPOPUP:
+            /* Grey a per-column report unless its column exists and holds real
+             * (non-blank, non-redacted) data. Availability is cached at load, so this
+             * is O(1) per menu open. Enabling by command on other popups is harmless
+             * (the items are not present there). */
+            if (cw != NULL)
+            {
+                int k;
+                for (k = 0; k < EE_CVRREP_COUNT; k++)
+                {
+                    EnableMenuItem((HMENU)wParam,
+                                   (UINT)k_CvrReportIds[k],
+                                   MF_BYCOMMAND | (cw->vreport_avail[k] ? MF_ENABLED : MF_GRAYED));
+                }
+            }
+            break;
+
         case WM_COMMAND:
             if (cw == NULL)
             {
@@ -9534,6 +9615,15 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_CVR_TABULATE:
                     App_ShowCvrReport(cw);
+                    return 0;
+                case IDM_CVR_REPORT_BATCH:
+                    App_ShowCvrValueReport(cw, EE_CVRREP_BATCH);
+                    return 0;
+                case IDM_CVR_REPORT_PRECINCT:
+                    App_ShowCvrValueReport(cw, EE_CVRREP_PRECINCT);
+                    return 0;
+                case IDM_CVR_REPORT_BALLOTSTYLE:
+                    App_ShowCvrValueReport(cw, EE_CVRREP_BALLOTSTYLE);
                     return 0;
                 case IDM_CVR_OPTIONS:
                     App_ShowCvrOptions(cw);
@@ -9648,6 +9738,16 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 {
                     DestroyWindow(cw->hwnd_filter);
                 }
+                {
+                    int k;
+                    for (k = 0; k < EE_CVRREP_COUNT; k++)
+                    {
+                        if (cw->vreports[k] != NULL)
+                        {
+                            DestroyWindow(cw->vreports[k]->hwnd);
+                        }
+                    }
+                }
                 EeFilter_Clear(&cw->filters);
                 free(cw->disp);
                 EeCvr_Clear(&cw->table);
@@ -9680,6 +9780,19 @@ static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t 
     cw->sort_col = -1;
     cw->sort_asc = TRUE;
     cw->multi_card = EeCvr_HasMultiCard(&cw->table);
+
+    /* Resolve which per-column reports are available once, up front. */
+    {
+        int k;
+        for (k = 0; k < EE_CVRREP_COUNT; k++)
+        {
+            uint32_t col = 0;
+            cw->vreport_avail[k] =
+                EeCvr_FindColumnByTitle(&cw->table, Cvr_ReportColumnTitle(k), &col) &&
+                EeCvr_ColumnHasReportableData(&cw->table, col);
+            cw->vreport_col[k] = col;
+        }
+    }
 
     /* Independent top-level window (owner NULL) so the voter list can overlap it,
      * rather than the CVR window always staying above its opener. */
@@ -10212,6 +10325,660 @@ static void App_RefreshCvrReport(CvrReportWindow *rw)
         StringCchPrintfW(st, ARRAYSIZE(st), L"%u rows — right-click to copy", count);
         SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* CVR per-column value reports (Batch / Precinct / Ballot Style)             */
+/* -------------------------------------------------------------------------- */
+
+static WNDPROC g_old_cvr_vreport_list_proc = NULL;
+
+/* Draw the report list header bold on the grey band, like the other windows. */
+static LRESULT CALLBACK CvrValueReportListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        CvrValueReportWindow *rw =
+            (CvrValueReportWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (rw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(rw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_cvr_vreport_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static void CvrValueReport_Layout(CvrValueReportWindow *rw, int width, int height)
+{
+    int sb_h = 0;
+    int avail;
+    int count_w;
+    int value_w;
+    if (rw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(rw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(rw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (rw->list == NULL)
+    {
+        return;
+    }
+    height = (height > sb_h) ? height - sb_h : 0;
+    MoveWindow(rw->list, 0, 0, width, height, TRUE);
+
+    /* Reserve the vertical scrollbar so no horizontal scrollbar hides the count. */
+    avail = width - GetSystemMetrics(SM_CXVSCROLL) - Scale(rw->app, 4);
+    if (avail < Scale(rw->app, 240))
+    {
+        avail = Scale(rw->app, 240);
+    }
+    count_w = Scale(rw->app, 170);
+    value_w = avail - count_w;
+    if (value_w < Scale(rw->app, 140))
+    {
+        value_w = Scale(rw->app, 140);
+    }
+    ListView_SetColumnWidth(rw->list, 0, value_w);
+    ListView_SetColumnWidth(rw->list, 1, count_w);
+}
+
+typedef struct CvrValueSortCtx
+{
+    int sort_col;
+    BOOL asc;
+    BOOL numeric;
+} CvrValueSortCtx;
+
+static int __cdecl cvr_vreport_sort_cmp(void *ctxv, const void *a, const void *b)
+{
+    const CvrValueSortCtx *ctx = (const CvrValueSortCtx *)ctxv;
+    const EeCvrValueCount *pa = (const EeCvrValueCount *)a;
+    const EeCvrValueCount *pb = (const EeCvrValueCount *)b;
+    const wchar_t *va = pa->value ? pa->value : L"";
+    const wchar_t *vb = pb->value ? pb->value : L"";
+    int c;
+
+    if (ctx->sort_col == 1)
+    {
+        c = (pa->count < pb->count) ? -1 : (pa->count > pb->count ? 1 : 0);
+        if (c == 0)
+        {
+            c = _wcsicmp(va, vb);
+        }
+    }
+    else if (ctx->numeric)
+    {
+        unsigned long na = wcstoul(va, NULL, 10);
+        unsigned long nb = wcstoul(vb, NULL, 10);
+        c = (na < nb) ? -1 : (na > nb ? 1 : 0);
+        if (c == 0)
+        {
+            c = _wcsicmp(va, vb);
+        }
+    }
+    else
+    {
+        c = _wcsicmp(va, vb);
+    }
+    return ctx->asc ? c : -c;
+}
+
+static void CvrValueReport_Sort(CvrValueReportWindow *rw)
+{
+    CvrValueSortCtx ctx;
+    ctx.sort_col = rw->sort_col;
+    ctx.asc = rw->sort_asc;
+    ctx.numeric = rw->numeric;
+    if (rw->items != NULL && rw->count > 1)
+    {
+        qsort_s(rw->items, rw->count, sizeof(EeCvrValueCount), cvr_vreport_sort_cmp, &ctx);
+    }
+    if (rw->list != NULL)
+    {
+        ListView_RedrawItems(rw->list, 0, (int)rw->count);
+        InvalidateRect(rw->list, NULL, FALSE);
+    }
+}
+
+/* Copy the selected rows as tab-separated UTF-8 (value, count). */
+static void CvrValueReport_CopySelected(CvrValueReportWindow *rw)
+{
+    int i;
+    size_t total = 0;
+    wchar_t *buf;
+    wchar_t *p;
+    char *utf8 = NULL;
+    int u8len;
+
+    if (rw == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count)
+        {
+            const wchar_t *v = report_display_value(rw->items[i].value);
+            wchar_t num[16];
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", rw->items[i].count);
+            total += wcslen(v) + wcslen(num) + 3; /* tab + CR + LF */
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (total == 0)
+    {
+        return;
+    }
+    buf = (wchar_t *)malloc((total + 1) * sizeof(wchar_t));
+    if (buf == NULL)
+    {
+        return;
+    }
+    p = buf;
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count)
+        {
+            const wchar_t *v = report_display_value(rw->items[i].value);
+            const wchar_t *n;
+            wchar_t num[16];
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", rw->items[i].count);
+            while (*v)
+            {
+                *p++ = *v++;
+            }
+            *p++ = L'\t';
+            for (n = num; *n; n++)
+            {
+                *p++ = *n;
+            }
+            *p++ = L'\r';
+            *p++ = L'\n';
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    *p = L'\0';
+
+    u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+    if (u8len > 0)
+    {
+        utf8 = (char *)malloc((size_t)u8len);
+        if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+        {
+            App_SetClipboardUtf8(rw->hwnd, utf8);
+        }
+    }
+    free(utf8);
+    free(buf);
+}
+
+/* Add an "is" Include/Exclude rule for each selected value to the CVR window's
+ * filter, then re-apply it (matches the voter report's Include/Exclude). */
+static void CvrValueReport_FilterSelected(CvrValueReportWindow *rw, EeFilterAction action)
+{
+    int i;
+    BOOL any = FALSE;
+
+    if (rw == NULL || rw->list == NULL || rw->owner == NULL)
+    {
+        return;
+    }
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < rw->count && rw->items[i].value != NULL)
+        {
+            EeFilterRule r;
+            ZeroMemory(&r, sizeof(r));
+            r.column = rw->column;
+            r.relation = EeRel_Is;
+            r.action = action;
+            r.enabled = TRUE;
+            /* Empty value -> "is (blank)"; Cvr_RuleMatches compares against "". */
+            StringCchCopyW(r.value, ARRAYSIZE(r.value), rw->items[i].value);
+            if (EeFilter_Add(&rw->owner->filters, &r))
+            {
+                any = TRUE;
+            }
+        }
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (any)
+    {
+        Cvr_ApplyFilter(rw->owner);
+    }
+}
+
+static void CvrValueReport_OnContextMenu(CvrValueReportWindow *rw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+
+    if (rw == NULL || rw->list == NULL || item < 0 || (uint32_t)item >= rw->count)
+    {
+        return;
+    }
+    if (!(ListView_GetItemState(rw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(rw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(rw->list,
+                              item,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    {
+        wchar_t shown[48];
+        wchar_t inc[96];
+        wchar_t exc[96];
+        const wchar_t *val = report_display_value(rw->items[item].value);
+        StringCchCopyW(shown, ARRAYSIZE(shown), val);
+        if (wcslen(val) >= 40)
+        {
+            shown[36] = L'.';
+            shown[37] = L'.';
+            shown[38] = L'.';
+            shown[39] = L'\0';
+        }
+        StringCchPrintfW(inc, ARRAYSIZE(inc), L"&Include \"%s\"", shown);
+        StringCchPrintfW(exc, ARRAYSIZE(exc), L"&Exclude \"%s\"", shown);
+        AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, IDM_FILTER_INCLUDE, inc);
+        AppendMenuW(m, MF_STRING, IDM_FILTER_EXCLUDE, exc);
+    }
+    cmd = (UINT)
+        TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
+    DestroyMenu(m);
+    switch (cmd)
+    {
+        case IDM_EDIT_COPY:
+            CvrValueReport_CopySelected(rw);
+            break;
+        case IDM_FILTER_INCLUDE:
+            CvrValueReport_FilterSelected(rw, EeFilt_Include);
+            break;
+        case IDM_FILTER_EXCLUDE:
+            CvrValueReport_FilterSelected(rw, EeFilt_Exclude);
+            break;
+        default:
+            break;
+    }
+}
+
+static LRESULT CALLBACK CvrValueReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrValueReportWindow *rw = (CvrValueReportWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            LVCOLUMNW col;
+            RECT rc;
+            wchar_t hdr[64];
+            wchar_t st[96];
+            rw = (CvrValueReportWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)rw);
+            rw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            rw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       rw->app->instance,
+                                       NULL);
+            if (rw->list == NULL)
+            {
+                return -1;
+            }
+            {
+                WNDPROC old = (WNDPROC)SetWindowLongPtrW(rw->list,
+                                                         GWLP_WNDPROC,
+                                                         (LONG_PTR)CvrValueReportListSubclass);
+                if (g_old_cvr_vreport_list_proc == NULL)
+                {
+                    g_old_cvr_vreport_list_proc = old;
+                }
+            }
+            ListView_SetExtendedListViewStyle(rw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (rw->app->font_ui)
+            {
+                SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = LVCFMT_LEFT;
+            StringCchCopyW(hdr, ARRAYSIZE(hdr), rw->label);
+            col.pszText = hdr;
+            col.cx = Scale(rw->app, 260);
+            ListView_InsertColumn(rw->list, 0, &col);
+            col.fmt = LVCFMT_RIGHT;
+            col.pszText = L"Number of Ballot Records";
+            col.cx = Scale(rw->app, 170);
+            ListView_InsertColumn(rw->list, 1, &col);
+
+            rw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         rw->app->instance,
+                                         NULL);
+            if (rw->status != NULL)
+            {
+                if (rw->app->font_ui)
+                {
+                    SendMessageW(rw->status, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+                }
+                StringCchPrintfW(st,
+                                 ARRAYSIZE(st),
+                                 L"%u rows — right-click to Copy or Include/Exclude",
+                                 rw->count);
+                SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
+            }
+
+            ListView_SetItemCountEx(rw->list, (int)rw->count, LVSICF_NOINVALIDATEALL);
+            CvrValueReport_Sort(rw); /* initial ascending by value */
+            CvrValueReport_Layout(rw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (rw != NULL)
+            {
+                CvrValueReport_Layout(rw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (rw != NULL && rw->list != NULL)
+            {
+                SetFocus(rw->list);
+            }
+            return 0;
+
+        case WM_COMMAND:
+            /* Ctrl+C is routed here by the shared accelerator table. */
+            if (rw != NULL && LOWORD(wParam) == IDM_EDIT_COPY)
+            {
+                CvrValueReport_CopySelected(rw);
+                return 0;
+            }
+            break;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (rw == NULL || hdr->hwndFrom != rw->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_GETDISPINFOW)
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                int idx = di->item.iItem;
+                if ((di->item.mask & LVIF_TEXT) && idx >= 0 && (uint32_t)idx < rw->count)
+                {
+                    if (di->item.iSubItem == 1)
+                    {
+                        StringCchPrintfW(di->item.pszText,
+                                         di->item.cchTextMax,
+                                         L"%u",
+                                         rw->items[idx].count);
+                    }
+                    else
+                    {
+                        StringCchCopyW(di->item.pszText,
+                                       di->item.cchTextMax,
+                                       report_display_value(rw->items[idx].value));
+                    }
+                }
+                return 0;
+            }
+            if (hdr->code == LVN_COLUMNCLICK)
+            {
+                NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+                if (nlv->iSubItem == rw->sort_col)
+                {
+                    rw->sort_asc = !rw->sort_asc;
+                }
+                else
+                {
+                    rw->sort_col = nlv->iSubItem;
+                    rw->sort_asc = TRUE;
+                }
+                CvrValueReport_Sort(rw);
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(rw->list, &screen);
+                CvrValueReport_OnContextMenu(rw, ia->iItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (rw != NULL)
+            {
+                if (rw->owner != NULL && rw->kind >= 0 && rw->kind < EE_CVRREP_COUNT &&
+                    rw->owner->vreports[rw->kind] == rw)
+                {
+                    rw->owner->vreports[rw->kind] = NULL;
+                }
+                EeCvr_FreeColumnCounts(rw->items, rw->count);
+                free(rw);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Open (or re-focus) the Batch/Precinct/Ballot Style value report for @p cw. */
+static void App_ShowCvrValueReport(CvrWindow *cw, int kind)
+{
+    const wchar_t *label;
+    uint32_t column = 0;
+    EeCvrValueCount *items = NULL;
+    uint32_t count = 0;
+    uint32_t blank = 0;
+    CvrValueReportWindow *rw;
+    wchar_t title[MAX_PATH + 64];
+    wchar_t base[192];
+    wchar_t none_msg[96];
+    HCURSOR old_cursor;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    uint32_t i;
+    BOOL numeric;
+
+    if (cw == NULL || kind < 0 || kind >= EE_CVRREP_COUNT)
+    {
+        return;
+    }
+    if (cw->vreports[kind] != NULL)
+    {
+        SetForegroundWindow(cw->vreports[kind]->hwnd);
+        return;
+    }
+    label = Cvr_ReportColumnTitle(kind);
+    if (!cw->vreport_avail[kind])
+    {
+        return; /* menu is greyed in this case; guard anyway */
+    }
+    column = cw->vreport_col[kind];
+
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!EeCvr_CollectColumnCounts(&cw->table, column, &items, &count, &blank))
+    {
+        SetCursor(old_cursor);
+        MessageBoxW(cw->hwnd,
+                    L"Out of memory while building the report.",
+                    L"Report",
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetCursor(old_cursor);
+    if (count == 0)
+    {
+        EeCvr_FreeColumnCounts(items, count);
+        StringCchPrintfW(none_msg, ARRAYSIZE(none_msg), L"No %s information available.", label);
+        MessageBoxW(cw->hwnd, none_msg, L"Report", MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+
+    /* Append a "(blank)" row for records with no value in this column. */
+    if (blank > 0)
+    {
+        EeCvrValueCount *grown =
+            (EeCvrValueCount *)realloc(items, ((size_t)count + 1) * sizeof(EeCvrValueCount));
+        wchar_t *empty = (grown != NULL) ? (wchar_t *)calloc(1, sizeof(wchar_t)) : NULL;
+        if (grown != NULL && empty != NULL)
+        {
+            grown[count].value = empty;
+            grown[count].count = blank;
+            items = grown;
+            count++;
+        }
+        else if (grown != NULL)
+        {
+            items = grown; /* keep the resized buffer; just no blank row */
+        }
+    }
+
+    /* Numeric sort when every non-blank value is a run of digits (typical for
+     * Batch / Precinct / Ballot Style codes). */
+    numeric = TRUE;
+    for (i = 0; i < count; i++)
+    {
+        const wchar_t *v = items[i].value;
+        if (v == NULL || v[0] == L'\0')
+        {
+            continue; /* blank row does not disqualify numeric sort */
+        }
+        for (; *v != L'\0'; v++)
+        {
+            if (*v < L'0' || *v > L'9')
+            {
+                numeric = FALSE;
+                break;
+            }
+        }
+        if (!numeric)
+        {
+            break;
+        }
+    }
+
+    rw = (CvrValueReportWindow *)calloc(1, sizeof(CvrValueReportWindow));
+    if (rw == NULL)
+    {
+        EeCvr_FreeColumnCounts(items, count);
+        return;
+    }
+    rw->owner = cw;
+    rw->app = cw->app;
+    rw->kind = kind;
+    rw->column = column;
+    rw->label = label;
+    rw->items = items;
+    rw->count = count;
+    rw->has_blank = (blank > 0);
+    rw->numeric = numeric;
+    rw->sort_col = 0;
+    rw->sort_asc = TRUE;
+
+    /* Title "<label> Report - <filename>": derive the filename from the CVR window
+     * title by stripping its " — Cast Vote Records" suffix. */
+    base[0] = L'\0';
+    GetWindowTextW(cw->hwnd, base, ARRAYSIZE(base));
+    {
+        wchar_t *suffix = wcsstr(base, L" \x2014 Cast Vote Records");
+        if (suffix != NULL)
+        {
+            *suffix = L'\0';
+        }
+    }
+    if (base[0] != L'\0')
+    {
+        StringCchPrintfW(title, ARRAYSIZE(title), L"%s Report - %s", label, base);
+    }
+    else
+    {
+        StringCchPrintfW(title, ARRAYSIZE(title), L"%s Report", label);
+    }
+
+    if (GetWindowRect(cw->hwnd, &pr))
+    {
+        x = pr.left + Scale(cw->app, 48);
+        y = pr.top + Scale(cw->app, 48);
+    }
+
+    /* Unowned top-level window (like the voter-list reports) so the CVR window can
+     * cover it; tracked in cw->vreports[kind] and closed when the CVR window closes. */
+    rw->hwnd = CreateWindowExW(0,
+                               k_CvrValueReportClassName,
+                               title,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                               x,
+                               y,
+                               Scale(cw->app, 440),
+                               Scale(cw->app, 600),
+                               NULL,
+                               NULL,
+                               cw->app->instance,
+                               rw);
+    if (rw->hwnd == NULL)
+    {
+        EeCvr_FreeColumnCounts(items, count);
+        free(rw);
+        return;
+    }
+    cw->vreports[kind] = rw;
+    ShowWindow(rw->hwnd, SW_SHOW);
+    SetForegroundWindow(rw->hwnd);
 }
 
 typedef struct CvrOptData
@@ -11643,6 +12410,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         rcw.hIcon = wc.hIcon;
         rcw.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&rcw) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW vrc;
+        ZeroMemory(&vrc, sizeof(vrc));
+        vrc.cbSize = sizeof(vrc);
+        vrc.lpfnWndProc = CvrValueReportWndProc;
+        vrc.hInstance = hInstance;
+        vrc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        vrc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        vrc.lpszClassName = k_CvrValueReportClassName;
+        vrc.hIcon = wc.hIcon;
+        vrc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&vrc) == 0)
         {
             return 1;
         }

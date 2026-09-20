@@ -51,5 +51,8 @@ header/value with embedded commas, a blank contest cell, tab-delimited `.tsv`, a
 UTF-16LE BOM export, concatenating a `.csv` with a same-schema `.tsv`, and the
 empty-ballot skip that drops export-artifact rows — a lone id line and a trailing
 `,,,,` line);
+`cvrcnt` covers the per-column value reports (`EeCvr_FindColumnByTitle` locates a key
+column by header; `EeCvr_ColumnHasReportableData` is FALSE for an all-redacted column;
+`EeCvr_CollectColumnCounts` returns per-value ballot-record counts plus a blank tally);
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

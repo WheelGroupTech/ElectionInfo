@@ -127,6 +127,43 @@ extern "C"
     void EeCvr_SortByColumn(EeCvrTable *t, uint32_t col, BOOL ascending);
 
     /**
+     * Find the column whose header equals @p title (trimmed, case-insensitive), e.g.
+     * L"Batch", L"Precinct", L"Ballot Style". On success sets *out_col and returns
+     * TRUE; returns FALSE if no such column exists.
+     */
+    BOOL EeCvr_FindColumnByTitle(const EeCvrTable *t, const wchar_t *title, uint32_t *out_col);
+
+    /**
+     * TRUE if column @p col holds at least one non-blank value that is not a
+     * redaction placeholder (e.g. "<Redacted>"). Used to decide whether a per-column
+     * value report is meaningful: a column that is entirely blank or entirely
+     * redacted has nothing to report.
+     */
+    BOOL EeCvr_ColumnHasReportableData(const EeCvrTable *t, uint32_t col);
+
+    /** One (value, ballot-record count) pair; @p value is an owned wide string. */
+    typedef struct EeCvrValueCount
+    {
+        wchar_t *value;
+        uint32_t count;
+    } EeCvrValueCount;
+
+    /**
+     * Count the ballot records carrying each distinct value in column @p col. Blank
+     * cells are tallied into *out_blank (not included in the returned array). On
+     * success *out_items is a heap array of *out_count owned entries (free with
+     * EeCvr_FreeColumnCounts). The array is unsorted. Returns FALSE on OOM/bad args.
+     */
+    BOOL EeCvr_CollectColumnCounts(const EeCvrTable *t,
+                                   uint32_t col,
+                                   EeCvrValueCount **out_items,
+                                   uint32_t *out_count,
+                                   uint32_t *out_blank);
+
+    /** Free an array returned by EeCvr_CollectColumnCounts. */
+    void EeCvr_FreeColumnCounts(EeCvrValueCount *items, uint32_t count);
+
+    /**
      * One tabulated (contest, selection, count) triple. @p contest and
      * @p selection are owned wide strings; free via EeCvr_FreeTally.
      */

@@ -223,6 +223,39 @@ contest.
   Harris 398,968 / Trump 170,781 / …, and the merged **write-in 3,690** = 3,680
   image + 10 text, matching the official combined Write-in total).
 
+## Per-column value reports (Batch / Precinct / Ballot Style)
+
+**Reports → Display Batch Report… / Display Precinct Report… / Display Ballot Style
+Report…** on the CVR window each open a two-column report — the distinct
+**Batch / Precinct / Ballot Style** values on the left and the **number of ballot
+records** carrying each on the right — modeled on the voter-list Precinct/Address
+reports.
+
+- **Menu gating (`CvrWndProc` `WM_INITMENUPOPUP`):** each item is greyed unless the
+  CVR actually has that column *and* the column holds real data. `EeCvr_FindColumnByTitle`
+  matches a key column by its header (trimmed, case-insensitive: `Batch`, `Precinct`,
+  `Ballot Style`); `EeCvr_ColumnHasReportableData` returns FALSE when the column is
+  entirely blank or entirely a **redaction placeholder** (`cvr_is_redaction_marker`:
+  a value that begins with `<` and contains `redact`, matching `<Redacted>` /
+  `<REDACTED>` / `<Redact>`). So a CVR whose Precinct is redacted greys the Precinct
+  report.
+- **Core (GUI-free):** `EeCvr_CollectColumnCounts(t, col, &items, &count, &blank)` in
+  `ee_cvr.{c,h}` scans the sparse entries once, counting the ballot records per
+  distinct value in `col`; blank cells are tallied into `*blank` (not in the array).
+  Returns `EeCvrValueCount[]` `{value, count}` (unsorted); `EeCvr_FreeColumnCounts`
+  frees it.
+- **UI:** `CvrValueReportWindow` (class `k_CvrValueReportClassName`) — owner-data
+  two-column list (**`<label>` | Number of Ballot Records**), bold/grey header via the
+  shared `App_HeaderCustomDraw`, header-click sort on either column (the value column
+  sorts numerically when every value is a digit run — typical for these codes). A
+  `(blank)` row is appended for records with no value in the column. Multi-select +
+  **right-click → Copy** (and Ctrl+C) copy as tab-separated UTF-8; **right-click →
+  Include/Exclude** adds an `is` rule for that value to the CVR window's own filter
+  (`EeFilterSet` + `Cvr_ApplyFilter`, same ProcMon semantics as the CVR filter). The
+  window title is `<label> Report - <filename>`. It is an unowned top-level window
+  (the CVR window can cover it), one of each kind per CVR window (tracked in
+  `CvrWindow.vreports[]`), closed when the CVR window closes.
+
 ### Multi-card / multi-page ballots
 
 Some counties (e.g. Dallas) export **one row per ballot card/sheet**, not per

@@ -32,37 +32,45 @@ P24 (single-card combined primary) confirms the multi-card detector does not
 false-positive on a real combined primary, and Dallas G24 confirms it flags a real
 multi-card general.
 
-**Uncommitted (this session):** **CVR CSV/TSV loading.** The CVR loader now accepts
-delimited-text exports as well as `.xlsx`. New **`src/csv_sheet.{c,h}`**
-(`EeCsv_ReadSheet`) — a delimited-text reader with the same row-sink contract as
-`EeXlsx_ReadSheet`, so everything downstream is format-agnostic. It handles UTF-8
-(BOM or not), UTF-16LE and UTF-16BE (BOM); RFC-4180 quoting (double-quoted fields,
-`""` escapes, delimiters **and** newlines inside quotes); and CRLF/LF/CR endings.
-Delimiter = extension's (`.tsv`→tab, `.csv`→comma) or, for `.txt`/unknown, sniffed
-from the first line. `EeCvr_LoadFromFiles` dispatches per file by extension
-(`path_has_ext`): `.xlsx`→XLSX reader, else the CSV reader — so **mixed-format files
-with identical headers concatenate**. The File→Load dialog filter is now
-`*.xlsx;*.csv;*.tsv;*.txt` (with per-format + all-files alternatives). **Encoding:** a
-UTF-8/UTF-16 BOM is honored; a BOM-less file is UTF-8 when well-formed, else decoded
-as the **system ANSI code page** (what Excel's CSV/Text exports use — e.g. `Peña`).
-**Empty-ballot skip (`append_data_row`):** a row with no non-blank *contest* cell
-(nothing beyond the frozen key columns) is dropped — never a real ballot — which
-absorbs two Excel export artifacts (the trailing `,,,,` line, and a record Excel
-occasionally breaks with a spurious unquoted newline after the first field). Caveat:
-Excel drops embedded write-in **images** when saving to CSV/TSV, so image-based ES&S
-write-ins are lost from a text export (text write-in variants survive). New/updated
-tests `cvrcsv` (quoted header/value w/ embedded commas, blank contest cell, `.tsv`,
-UTF-16LE BOM, `.csv`+`.tsv` concat, artifact-row skip) and `cvrfilt` (2nd contest
-col). `ee_cvr.c`, `csv_sheet.{c,h}`, `main.c`, `.vcxproj`/`.filters`,
-`docs/cvr-design.md`, `test/README.md` updated. Full suite green (37); app builds
-clean x64 Debug+Release.
+**CVR CSV/TSV loading (committed).** The CVR loader accepts delimited-text exports as
+well as `.xlsx`: `src/csv_sheet.{c,h}` (`EeCsv_ReadSheet`, same row-sink contract as
+`EeXlsx_ReadSheet`) handles UTF-8 (BOM or not; BOM-less falls back to the system ANSI
+code page when not valid UTF-8), UTF-16LE/BE (BOM), RFC-4180 quoting, and CRLF/LF/CR.
+`EeCvr_LoadFromFiles` dispatches per file by extension (`.xlsx`→XLSX, else CSV), so
+mixed-format same-header files concatenate; the File→Load filter is
+`*.xlsx;*.csv;*.tsv;*.txt`. `append_data_row` drops a row with no contest cell (never a
+real ballot), absorbing Excel's trailing `,,,,` line and the odd record it breaks with
+a spurious unquoted newline. Caveat: Excel drops write-in **images** when saving to
+CSV/TSV (text variants survive). Validated byte-identical across formats for Travis L26
+& P26; Travis G24 and Dallas G24 match every candidate/undervote/overvote count (only
+image write-in rows differ). Tests `cvrcsv`.
 
-**Validated against real Excel exports (Travis):** L26 (12,710 ballots) and P26
-(274,443) tabulate **byte-identical** across `.xlsx` / UTF-8 / UTF-8-BOM / ANSI. G24
-(6 files, 587,090) matches on **every** candidate/undervote/overvote count; the only
-differences are write-in rows, from the dropped write-in images (President write-in
-3,690→10, etc.). GUI click-tested by the user (CSV/TSV load); the ANSI + empty-row
-fixes were validated via a tabulation diff harness.
+**Uncommitted (this session): CVR per-column value reports.** The CVR **Reports** menu
+gains **Display Batch Report… / Display Precinct Report… / Display Ballot Style
+Report…**, each opening a two-column report (value | number of ballot records) modeled
+on the voter-list Precinct/Address reports. New window `CvrValueReportWindow` (class
+`k_CvrValueReportClassName`): owner-data list, bold/grey header, header-click sort
+(value column numeric when all-digit), a `(blank)` row for empty cells, multi-select
+**right-click → Copy** (+Ctrl+C) and **Include/Exclude** (adds an `is` rule to the CVR
+window's own `EeFilterSet` and re-applies `Cvr_ApplyFilter`). Title
+`<label> Report - <filename>`; one of each kind per CVR window (`CvrWindow.vreports[]`),
+closed with the CVR window. **Menu gating** (`CvrWndProc` `WM_INITMENUPOPUP`): an item
+greys unless the column exists and holds real data — new `ee_cvr` helpers
+`EeCvr_FindColumnByTitle` (trimmed CI header match), `EeCvr_ColumnHasReportableData`
+(FALSE when the column is all-blank or all-redacted; `cvr_is_redaction_marker` matches
+`<Redacted>` / `<REDACTED>` / `<Redact>`), `EeCvr_CollectColumnCounts` /
+`EeCvr_FreeColumnCounts` (+ `EeCvrValueCount`). New IDs `IDM_CVR_REPORT_BATCH/PRECINCT/
+BALLOTSTYLE`. Files: `ee_cvr.{c,h}`, `main.c`, `resource.h`, `docs/cvr-design.md`,
+`test/README.md`, `test/smoke_load.c`. Test `cvrcnt`. Full suite green (38); app builds
+clean x64 Debug+Release. Report-column availability is resolved **once at load**
+(`CvrWindow.vreport_avail/col`), so `WM_INITMENUPOPUP` is O(1) rather than re-scanning
+the table each menu open (a full O(entries) scan for a fully-blank/redacted column —
+notably heavy for redacted Dallas data). **GUI click-tested (Travis/Dallas).** One
+non-reproducible one-off hang was reported opening the G20 Precinct/Ballot Style report
+(cleared on restart); the engine path (`EeCvr_CollectColumnCounts`) was verified fast
+and correct on the exact G20 files (Precinct 237 distinct/31 ms, Ballot Style 1538/16 ms)
+and the window code mirrors the working voter/tabulation reports — no reproducible defect
+found; watch for recurrence.
 
 The app is being published via the **Microsoft Store**.
 

@@ -906,6 +906,234 @@ BOOL EeCvr_CollectColumnValues(const EeCvrTable *t,
     return TRUE;
 }
 
+/* TRUE if an interned (UTF-8, non-blank) value is a redaction placeholder such as
+ * "<Redacted>" / "<REDACTED>" / "<Redact>": leading '<' (after any spaces) plus the
+ * ASCII substring "redact" (case-insensitive). Redaction markers are ASCII, so a
+ * byte-wise scan is sufficient. */
+static BOOL cvr_is_redaction_marker(const char *s)
+{
+    const char *p = s;
+    const char *q;
+    if (s == NULL)
+    {
+        return FALSE;
+    }
+    while (*p == ' ' || *p == '\t')
+    {
+        p++;
+    }
+    if (*p != '<')
+    {
+        return FALSE;
+    }
+    for (q = p; *q != '\0'; q++)
+    {
+        if ((q[0] == 'r' || q[0] == 'R') && (q[1] == 'e' || q[1] == 'E') &&
+            (q[2] == 'd' || q[2] == 'D') && (q[3] == 'a' || q[3] == 'A') &&
+            (q[4] == 'c' || q[4] == 'C') && (q[5] == 't' || q[5] == 'T'))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Case-insensitive compare of @p s (with leading/trailing ASCII spaces/tabs
+ * trimmed) against @p key. Unlike wcieq_trimmed, both sides are case-folded, so the
+ * key need not be pre-lowercased. */
+static BOOL wcieq_trimmed_both(const wchar_t *s, const wchar_t *key)
+{
+    const wchar_t *end;
+    while (*s == L' ' || *s == L'\t')
+    {
+        s++;
+    }
+    end = s;
+    while (*end != L'\0')
+    {
+        end++;
+    }
+    while (end > s && (end[-1] == L' ' || end[-1] == L'\t'))
+    {
+        end--;
+    }
+    for (; s < end; s++, key++)
+    {
+        wchar_t a = *s;
+        wchar_t b = *key;
+        if (b == L'\0')
+        {
+            return FALSE;
+        }
+        if (a >= L'A' && a <= L'Z')
+        {
+            a = (wchar_t)(a - L'A' + L'a');
+        }
+        if (b >= L'A' && b <= L'Z')
+        {
+            b = (wchar_t)(b - L'A' + L'a');
+        }
+        if (a != b)
+        {
+            return FALSE;
+        }
+    }
+    return *key == L'\0';
+}
+
+BOOL EeCvr_FindColumnByTitle(const EeCvrTable *t, const wchar_t *title, uint32_t *out_col)
+{
+    uint32_t c;
+    if (out_col != NULL)
+    {
+        *out_col = 0;
+    }
+    if (t == NULL || title == NULL || t->col_titles == NULL)
+    {
+        return FALSE;
+    }
+    for (c = 0; c < t->ncols; c++)
+    {
+        if (t->col_titles[c] != NULL && wcieq_trimmed_both(t->col_titles[c], title))
+        {
+            if (out_col != NULL)
+            {
+                *out_col = c;
+            }
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+BOOL EeCvr_ColumnHasReportableData(const EeCvrTable *t, uint32_t col)
+{
+    size_t k;
+    if (t == NULL || col >= t->ncols)
+    {
+        return FALSE;
+    }
+    for (k = 0; k < t->nent; k++)
+    {
+        if (t->ent_col[k] != col)
+        {
+            continue;
+        }
+        /* Interned values are never blank; a column is reportable once any of its
+         * values is real (not a redaction placeholder). */
+        if (!cvr_is_redaction_marker(t->val_pool + t->val_off[t->ent_val[k]]))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+BOOL EeCvr_CollectColumnCounts(const EeCvrTable *t,
+                               uint32_t col,
+                               EeCvrValueCount **out_items,
+                               uint32_t *out_count,
+                               uint32_t *out_blank)
+{
+    uint32_t *counts;
+    EeCvrValueCount *items;
+    uint32_t n = 0;
+    uint32_t nonblank = 0;
+    size_t k;
+    uint32_t vid;
+
+    if (out_items == NULL || out_count == NULL || out_blank == NULL)
+    {
+        return FALSE;
+    }
+    *out_items = NULL;
+    *out_count = 0;
+    *out_blank = 0;
+    if (t == NULL || col >= t->ncols)
+    {
+        return FALSE;
+    }
+    if (t->val_count == 0 || t->nent == 0)
+    {
+        *out_blank = t->nrows; /* every row is blank in this column */
+        return TRUE;
+    }
+    counts = (uint32_t *)calloc(t->val_count, sizeof(uint32_t));
+    if (counts == NULL)
+    {
+        return FALSE;
+    }
+    for (k = 0; k < t->nent; k++)
+    {
+        if (t->ent_col[k] != col)
+        {
+            continue;
+        }
+        vid = t->ent_val[k];
+        if (vid < t->val_count)
+        {
+            if (counts[vid] == 0)
+            {
+                n++;
+            }
+            counts[vid]++;
+            nonblank++;
+        }
+    }
+    *out_blank = (t->nrows > nonblank) ? (t->nrows - nonblank) : 0;
+    if (n == 0)
+    {
+        free(counts);
+        return TRUE;
+    }
+    items = (EeCvrValueCount *)calloc(n, sizeof(EeCvrValueCount));
+    if (items == NULL)
+    {
+        free(counts);
+        return FALSE;
+    }
+    n = 0;
+    for (vid = 0; vid < t->val_count; vid++)
+    {
+        if (counts[vid] == 0)
+        {
+            continue;
+        }
+        items[n].value = utf8_to_wide_alloc(t->val_pool + t->val_off[vid]);
+        if (items[n].value == NULL)
+        {
+            uint32_t i;
+            for (i = 0; i < n; i++)
+            {
+                free(items[i].value);
+            }
+            free(items);
+            free(counts);
+            return FALSE;
+        }
+        items[n].count = counts[vid];
+        n++;
+    }
+    free(counts);
+    *out_items = items;
+    *out_count = n;
+    return TRUE;
+}
+
+void EeCvr_FreeColumnCounts(EeCvrValueCount *items, uint32_t count)
+{
+    uint32_t i;
+    if (items == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(items[i].value);
+    }
+    free(items);
+}
+
 static BOOL all_digits(const char *s)
 {
     if (*s == '\0')

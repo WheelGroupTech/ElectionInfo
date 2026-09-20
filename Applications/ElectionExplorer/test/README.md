@@ -26,7 +26,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\ee_cvr.c ^
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c ^
   src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
 test\smoke_load.exe
 ```
@@ -45,5 +45,11 @@ ordered by contest then count); `cvrmerge` covers the write-in merge option (ima
 when on, separate when off); `cvrmc` covers multi-card detection (`EeCvr_HasMultiCard`: a long ballot split
 across two cards is flagged; a clean per-ballot CVR and a combined-party primary are
 not); `cvrfilt` covers the CVR filter primitives (`EeCvr_CollectColumnValues` distinct
-sorted selections, blanks excluded; `EeCvr_GetCellW` physical-row access); `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
+sorted selections, blanks excluded; `EeCvr_GetCellW` physical-row access);
+`cvrcsv` covers delimited-text loading via `EeCsv_ReadSheet` (RFC-4180 quoted
+header/value with embedded commas, a blank contest cell, tab-delimited `.tsv`, a
+UTF-16LE BOM export, concatenating a `.csv` with a same-schema `.tsv`, and the
+empty-ballot skip that drops export-artifact rows — a lone id line and a trailing
+`,,,,` line);
+`cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

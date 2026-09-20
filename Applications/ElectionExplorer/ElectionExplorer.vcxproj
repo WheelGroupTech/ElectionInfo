@@ -170,6 +170,7 @@
     <ClCompile Include="src\filter.c" />
     <ClCompile Include="src\settings.c" />
     <ClCompile Include="src\xlsx.c" />
+    <ClCompile Include="src\csv_sheet.c" />
     <ClCompile Include="src\ee_cvr.c" />
     <!-- Vendored third-party: build quietly (its warnings are not ours to fix). -->
     <ClCompile Include="src\third_party\miniz\miniz.c">
@@ -185,6 +186,7 @@
     <ClInclude Include="src\filter.h" />
     <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\xlsx.h" />
+    <ClInclude Include="src\csv_sheet.h" />
     <ClInclude Include="src\ee_cvr.h" />
     <ClInclude Include="src\third_party\miniz\miniz.h" />
     <ClInclude Include="src\resource.h" />

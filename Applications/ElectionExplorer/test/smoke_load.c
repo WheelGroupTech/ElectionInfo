@@ -3671,23 +3671,32 @@ static int test_cvr_filter_values(void)
     static const char *k_hdr =
         "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
         "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
-        "<c r=\"C1\" t=\"inlineStr\"><is><t>Mayor (10)</t></is></c></row>";
-    /* Mayor: Bob, Alice, undervote, Alice, (blank). Distinct = Alice, Bob, undervote. */
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Mayor (10)</t></is></c>"
+        "<c r=\"D1\" t=\"inlineStr\"><is><t>Council (11)</t></is></c></row>";
+    /* Mayor: Bob, Alice, undervote, Alice, (blank). Distinct = Alice, Bob, undervote.
+     * A second contest (Council) is filled on every ballot so the last ballot, which
+     * is blank in Mayor, is still a real ballot (a row with no contest at all is
+     * dropped as export padding), letting us exercise a genuine blank contest cell. */
     static const char *k_rows =
         "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
         "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
-        "<c r=\"C2\" t=\"inlineStr\"><is><t>Bob</t></is></c></row>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>Bob</t></is></c>"
+        "<c r=\"D2\" t=\"inlineStr\"><is><t>Yes</t></is></c></row>"
         "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
         "<c r=\"B3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
-        "<c r=\"C3\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+        "<c r=\"D3\" t=\"inlineStr\"><is><t>Yes</t></is></c></row>"
         "<row r=\"4\"><c r=\"A4\"><v>3</v></c>"
         "<c r=\"B4\" t=\"inlineStr\"><is><t>P1</t></is></c>"
-        "<c r=\"C4\" t=\"inlineStr\"><is><t>undervote</t></is></c></row>"
+        "<c r=\"C4\" t=\"inlineStr\"><is><t>undervote</t></is></c>"
+        "<c r=\"D4\" t=\"inlineStr\"><is><t>No</t></is></c></row>"
         "<row r=\"5\"><c r=\"A5\"><v>4</v></c>"
         "<c r=\"B5\" t=\"inlineStr\"><is><t>P1</t></is></c>"
-        "<c r=\"C5\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>"
+        "<c r=\"C5\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+        "<c r=\"D5\" t=\"inlineStr\"><is><t>Yes</t></is></c></row>"
         "<row r=\"6\"><c r=\"A6\"><v>5</v></c>"
-        "<c r=\"B6\" t=\"inlineStr\"><is><t>P1</t></is></c></row>";
+        "<c r=\"B6\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"D6\" t=\"inlineStr\"><is><t>No</t></is></c></row>";
 
     wchar_t path[MAX_PATH];
     wchar_t err[512] = L"";
@@ -3766,6 +3775,168 @@ done:
     if (rc != 0)
     {
         wprintf(L"cvrfilt test failed\n");
+    }
+    return rc;
+}
+
+/* Write raw bytes to a file (returns TRUE on success). */
+static BOOL cvr_write_bytes(const wchar_t *path, const void *data, size_t len)
+{
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD wrote = 0;
+    BOOL ok;
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        return FALSE;
+    }
+    ok = WriteFile(h, data, (DWORD)len, &wrote, NULL) && wrote == (DWORD)len;
+    CloseHandle(h);
+    return ok;
+}
+
+/* CSV / TSV loading: the CVR loader accepts delimited-text exports as well as
+ * .xlsx. Covers RFC-4180 quoting (a contest name and a selection each carrying a
+ * comma), a sparse blank contest cell, tab-delimited .tsv, a UTF-16LE (BOM)
+ * export, and concatenating a .csv with a .tsv of identical schema (tag: cvrcsv). */
+static int test_cvr_delimited(void)
+{
+    /* Header quotes a contest name that contains a comma; row 2 quotes a value that
+     * contains a comma; row 3 is blank in Mayor. A second contest (Prop A) is filled
+     * on every ballot so the Mayor-blank ballot is still a real ballot -- a row with
+     * no contest selection at all is dropped as export padding. */
+    static const char *k_csv =
+        "Cast Vote Record,Precinct,\"Mayor, City of X (10)\",Prop A (11)\r\n"
+        "1,P1,Alice,Yes\r\n"
+        "2,P1,\"Bob, Jr.\",Yes\r\n"
+        "3,P1,,No\r\n"
+        /* Export artifacts that must be dropped (no contest selection): a lone
+         * Cast-Vote-Record-id line (Excel occasionally breaks a record with a
+         * spurious newline after the first field) and the trailing all-empty line
+         * Excel appends when saving a sheet as CSV. Neither is a countable ballot. */
+        "98\r\n"
+        ",,,\r\n";
+    /* Same schema, tab-delimited, two more ballots (no quoting needed). */
+    static const char *k_tsv =
+        "Cast Vote Record\tPrecinct\tMayor, City of X (10)\tProp A (11)\n"
+        "4\tP2\tAlice\tYes\n"
+        "5\tP2\tundervote\tNo\n";
+
+    wchar_t pcsv[MAX_PATH];
+    wchar_t ptsv[MAX_PATH];
+    wchar_t pu16[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[128];
+    const wchar_t *pair[2];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    uint32_t r;
+    int rc = 1;
+    BOOL saw_bobjr = FALSE, saw_blank = FALSE;
+
+    if (!cvr_temp_path(pcsv, ARRAYSIZE(pcsv), L"ee_cvr_d.csv") ||
+        !cvr_temp_path(ptsv, ARRAYSIZE(ptsv), L"ee_cvr_d.tsv") ||
+        !cvr_temp_path(pu16, ARRAYSIZE(pu16), L"ee_cvr_u16.csv"))
+    {
+        wprintf(L"cvrcsv: temp path failed\n");
+        return 1;
+    }
+    if (!cvr_write_bytes(pcsv, k_csv, strlen(k_csv)) ||
+        !cvr_write_bytes(ptsv, k_tsv, strlen(k_tsv)))
+    {
+        wprintf(L"cvrcsv: write failed\n");
+        return 1;
+    }
+
+    /* --- CSV + TSV concatenation (identical schema) --- */
+    EeCvr_Init(&t);
+    pair[0] = pcsv;
+    pair[1] = ptsv;
+    s = EeCvr_LoadFromFiles(pair, 2, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.ncols != 4 || t.nrows != 5)
+    {
+        wprintf(L"cvrcsv: load s=%d cols=%u rows=%u err=%s\n", (int)s, t.ncols, t.nrows,
+                err);
+        goto done;
+    }
+    if (wcscmp(t.col_titles[2], L"Mayor, City of X (10)") != 0)
+    {
+        wprintf(L"cvrcsv: quoted header parsed as \"%s\"\n", t.col_titles[2]);
+        goto done;
+    }
+    for (r = 0; r < t.nrows; r++)
+    {
+        EeCvr_GetCellW(&t, r, 2, buf, ARRAYSIZE(buf));
+        if (wcscmp(buf, L"Bob, Jr.") == 0)
+        {
+            saw_bobjr = TRUE; /* quoted value with an embedded comma survived */
+        }
+        if (buf[0] == L'\0')
+        {
+            saw_blank = TRUE; /* blank Mayor cell stayed sparse */
+        }
+    }
+    if (!saw_bobjr || !saw_blank)
+    {
+        wprintf(L"cvrcsv: quoted-comma=%d blank=%d\n", saw_bobjr, saw_blank);
+        goto done;
+    }
+    EeCvr_Clear(&t);
+
+    /* --- UTF-16LE (BOM) export decodes correctly --- */
+    {
+        /* Build a UTF-16LE byte image with a BOM from a wide literal. */
+        static const wchar_t k_w[] =
+            L"Cast Vote Record,Precinct,Mayor\r\n"
+            L"1,P1,Ren\x00e9\r\n"; /* René exercises non-ASCII transcoding */
+        size_t nwch = ARRAYSIZE(k_w) - 1; /* drop the terminating NUL */
+        size_t nbytes = 2 + nwch * 2;
+        unsigned char *img = (unsigned char *)malloc(nbytes);
+        BOOL wrote_ok;
+        if (img == NULL)
+        {
+            wprintf(L"cvrcsv: oom\n");
+            goto done;
+        }
+        img[0] = 0xFF;
+        img[1] = 0xFE;
+        memcpy(img + 2, k_w, nwch * 2);
+        wrote_ok = cvr_write_bytes(pu16, img, nbytes);
+        free(img);
+        if (!wrote_ok)
+        {
+            wprintf(L"cvrcsv: u16 write failed\n");
+            goto done;
+        }
+    }
+    EeCvr_Init(&t);
+    one[0] = pu16;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.ncols != 3 || t.nrows != 1)
+    {
+        wprintf(L"cvrcsv: u16 load s=%d cols=%u rows=%u err=%s\n", (int)s, t.ncols,
+                t.nrows, err);
+        goto done;
+    }
+    EeCvr_GetCellW(&t, 0, 2, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Ren\x00e9") != 0)
+    {
+        wprintf(L"cvrcsv: u16 value \"%s\"\n", buf);
+        goto done;
+    }
+
+    rc = 0;
+    wprintf(L"cvrcsv ok\n");
+
+done:
+    EeCvr_Clear(&t);
+    DeleteFileW(pcsv);
+    DeleteFileW(ptsv);
+    DeleteFileW(pu16);
+    if (rc != 0)
+    {
+        wprintf(L"cvrcsv test failed\n");
     }
     return rc;
 }
@@ -4047,6 +4218,7 @@ int wmain(void)
     failed |= test_cvr_merge_writeins();
     failed |= test_cvr_multicard();
     failed |= test_cvr_filter_values();
+    failed |= test_cvr_delimited();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

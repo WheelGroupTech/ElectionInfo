@@ -11366,7 +11366,10 @@ static void App_BeginOpenCvr(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Excel workbooks (*.xlsx)\0*.xlsx\0All files (*.*)\0*.*\0";
+    ofn.lpstrFilter = L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
+                      L"Excel workbooks (*.xlsx)\0*.xlsx\0"
+                      L"Delimited text (*.csv;*.tsv;*.txt)\0*.csv;*.tsv;*.txt\0"
+                      L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 32768;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;

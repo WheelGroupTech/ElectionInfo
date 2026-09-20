@@ -30,6 +30,9 @@
     <ClCompile Include="src\xlsx.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\csv_sheet.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\ee_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -51,6 +54,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\xlsx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\csv_sheet.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ee_cvr.h">

@@ -6,6 +6,7 @@
 
 #include "ee_cvr.h"
 #include "xlsx.h"
+#include "csv_sheet.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -536,12 +537,15 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
     EeCvrTable *t = ctx->t;
     uint32_t c;
     uint32_t limit = (ncells < t->ncols) ? ncells : t->ncols;
+    size_t row_start_ent;
+    BOOL saw_contest = FALSE;
 
     if (!ensure_rows(t))
     {
         cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
         return FALSE;
     }
+    row_start_ent = t->nent;
     for (c = 0; c < limit; c++)
     {
         const char *v = cells[c];
@@ -584,6 +588,27 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
         t->ent_col[t->nent] = c;
         t->ent_val[t->nent] = id;
         t->nent++;
+        if (c >= t->frozen_count)
+        {
+            saw_contest = TRUE;
+        }
+    }
+    /* Drop a row that carries no contest selection (no non-blank cell beyond the
+     * frozen key columns). A real ballot always records a value -- a candidate,
+     * `undervote`, or `overvote` -- in every contest on its style, and a
+     * continuation card in a multi-card CVR carries its own page's contests, so a
+     * row with only key columns (or none) filled is never a countable ballot.
+     * This absorbs export artifacts that would otherwise inflate the ballot-record
+     * count and trip the multi-card heuristic: the trailing `,,,,` line Excel
+     * appends when saving a sheet as CSV, and the occasional record Excel breaks
+     * with a spurious unquoted newline after the first field (leaving a lone
+     * Cast-Vote-Record-id line plus a headless row whose contests are still
+     * column-aligned and tally correctly). Keeps `.xlsx` and delimited-text
+     * exports of the same election consistent. */
+    if (!saw_contest)
+    {
+        t->nent = row_start_ent; /* discard any key-only entries */
+        return TRUE;
     }
     t->row_start[t->nrows + 1] = (uint32_t)t->nent;
     t->view_index[t->nrows] = t->nrows;
@@ -634,6 +659,14 @@ static BOOL cvr_row_sink(void *vctx, const char *const *cells, uint32_t ncells)
     return TRUE;
 }
 
+/* TRUE if @p path ends (case-insensitively) with @p ext (which includes the dot). */
+static BOOL path_has_ext(const wchar_t *path, const wchar_t *ext)
+{
+    size_t pl = wcslen(path);
+    size_t el = wcslen(ext);
+    return pl >= el && _wcsicmp(path + (pl - el), ext) == 0;
+}
+
 static const wchar_t *path_leaf(const wchar_t *path)
 {
     const wchar_t *leaf = path;
@@ -678,15 +711,30 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
         ctx.err = error_message;
         ctx.errcch = error_cch;
 
-        s = EeXlsx_ReadSheet(paths[f],
-                             0,
-                             cvr_row_sink,
-                             &ctx,
-                             cancel_flag,
-                             progress_fn,
-                             progress_user,
-                             error_message,
-                             error_cch);
+        if (path_has_ext(paths[f], L".xlsx"))
+        {
+            s = EeXlsx_ReadSheet(paths[f],
+                                 0,
+                                 cvr_row_sink,
+                                 &ctx,
+                                 cancel_flag,
+                                 progress_fn,
+                                 progress_user,
+                                 error_message,
+                                 error_cch);
+        }
+        else
+        {
+            /* .csv / .tsv / .txt (or anything else): delimited text. */
+            s = EeCsv_ReadSheet(paths[f],
+                                cvr_row_sink,
+                                &ctx,
+                                cancel_flag,
+                                progress_fn,
+                                progress_user,
+                                error_message,
+                                error_cch);
+        }
         if (ctx.failed)
         {
             EeCvr_Clear(out);

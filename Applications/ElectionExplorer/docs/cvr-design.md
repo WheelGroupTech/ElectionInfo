@@ -9,9 +9,10 @@ including tabulation cross-checked against official published results.
 
 Cast Vote Record exports (one row per ballot, one column per contest, the cell
 holding the chosen candidate/selection) are a primary election-audit artifact.
-ES&S and other systems export them as Excel `.xlsx`. This adds a **File → Load
-Cast Vote Records…** flow that opens one or more `.xlsx` files and shows the
-ballots in a sortable grid like the voter-list window.
+ES&S and other systems export them as Excel `.xlsx` or as delimited text
+(`.csv` / `.tsv`). This adds a **File → Load Cast Vote Records…** flow that opens
+one or more of those files and shows the ballots in a sortable grid like the
+voter-list window.
 
 ## Data shape (from real samples)
 
@@ -82,8 +83,32 @@ Rough memory: ~100 filled cells/ballot × 1M ballots ≈ 100M entries ≈ 800 MB
 ## Loader
 
 `EeCvr_LoadFromFiles(paths[], count, out, cancel, progress, err)`:
-- For each file, read the first worksheet via `EeXlsx_ReadSheet` (the existing
-  reader) with a row sink.
+- For each file, read rows via a **row sink** whose signature is shared by both
+  readers. The reader is chosen per file by extension:
+  - `.xlsx` → `EeXlsx_ReadSheet` (first worksheet), as before.
+  - `.csv` / `.tsv` / `.txt` (or anything else) → `EeCsv_ReadSheet`
+    (`csv_sheet.c`): a delimited-text reader. Encoding: a UTF-8 or UTF-16 (LE/BE)
+    **BOM** is honored; a BOM-less file is used as UTF-8 when it is well-formed
+    UTF-8 (covers plain ASCII), and otherwise decoded as the **system ANSI code
+    page** — which is what Excel's "CSV (Comma delimited)" / "Text (Tab delimited)"
+    exports produce (e.g. `Peña` as a single `0xF1` byte). RFC-4180 quoting
+    (double-quoted fields, `""` escapes, delimiters **and** newlines inside quotes);
+    CRLF/LF/CR line endings. The delimiter is the extension's (`.tsv`→tab,
+    `.csv`→comma) or, for `.txt`/unknown, sniffed from the first line (tab if it has
+    more tabs than commas, else comma). Cells are delivered as UTF-8, exactly as the
+    XLSX reader delivers them, so everything downstream (header logic, sparse
+    storage, tabulation) is identical regardless of source format.
+  - Because both readers feed the same sink, files of **different formats but
+    identical headers concatenate** (e.g. a `.csv` plus a `.tsv`).
+  - **Write-in note:** in `.xlsx`, an ES&S write-in is an embedded image over an
+    otherwise text-empty cell, scanned to the `[write-in]` marker. Delimited exports
+    carry no images, so those cells export **blank** and their write-ins are lost
+    from a CSV/TSV. Text write-in variants (`Write-in`, a typed name, `No image
+    found`) do survive. Validated on Travis: L26 and P26 tabulate **identically**
+    across `.xlsx`, UTF-8, UTF-8-BOM and ANSI exports; G24 (which has ~3,680
+    image write-ins) matches on every candidate/undervote/overvote count, differing
+    only on the write-in rows Excel could not export. So counts match exactly for
+    CVRs without image write-ins; for ES&S image write-ins, prefer the `.xlsx`.
 - First row of the first file → establish `col_titles` + `frozen_count`
   (leading run of columns whose trimmed, case-insensitive title is one of the
   known keys; else freeze column 0).
@@ -97,6 +122,16 @@ Rough memory: ~100 filled cells/ballot × 1M ballots ≈ 100M entries ≈ 800 MB
   value and one tally. UTF-8 safe (only ASCII space/tab are touched). A value that
   is only whitespace becomes blank (not stored). Header/contest titles are left
   as-is.
+- **Empty-ballot rows are dropped.** A row with no non-blank cell in any *contest*
+  column (nothing beyond the frozen key columns) is not a countable ballot: a real
+  ballot records a value — a candidate, `undervote`, or `overvote` — in every
+  contest on its style, and a continuation card in a multi-card CVR carries its own
+  page's contests. Skipping such rows keeps the ballot-record count and the
+  multi-card heuristic consistent across formats and absorbs two Excel CSV/TSV
+  export artifacts: the trailing all-empty (`,,,,`) line Excel appends, and the
+  occasional record Excel breaks with a spurious **unquoted** newline after the
+  first field (which otherwise leaves a lone Cast-Vote-Record-id line plus a
+  headless row — whose contest cells are still column-aligned and tally correctly).
 - Honors cancel + progress (by rows).
 
 ## Multi-column contests (vote for N)
@@ -140,7 +175,8 @@ A dedicated CVR window (own class + state) with two virtual list views (frozen +
 scroll) driven by `EeCvr_GetViewCellW`, header-click sorting on any column
 (numeric-aware for `Cast Vote Record`), reusing the voter grid's rendering
 helpers where they are not `AppState`-coupled. **File → Load Cast Vote Records…**
-uses a multi-select open dialog (`OFN_ALLOWMULTISELECT`), filtered to `.xlsx`.
+uses a multi-select open dialog (`OFN_ALLOWMULTISELECT`), filtered to
+`*.xlsx;*.csv;*.tsv;*.txt` (with per-format and all-files alternatives).
 
 ## Phase 2 — vote tabulation (implemented)
 

@@ -379,6 +379,26 @@ extern "C"
                                      size_t *out_len);
 
     /**
+ * @brief Format selected view rows as delimited UTF-8 text for file export.
+ *
+ * Like EeVoterTable_FormatCopyUtf8 but with an explicit @p delim (',' or '\t')
+ * and an optional header row of column titles. Rows are emitted in the order of
+ * @p view_rows; fields are RFC-4180 quoted when they contain the delimiter, a
+ * quote, or a newline.
+ *
+ * @param delim           Field delimiter (',' for CSV, '\t' for TSV).
+ * @param include_header  If TRUE, emit a leading row of column titles.
+ */
+    BOOL EeVoterTable_FormatDelimitedUtf8(const EeVoterTable *table,
+                                          const uint32_t *view_rows,
+                                          uint32_t n_rows,
+                                          BOOL prepend_normalized,
+                                          char delim,
+                                          BOOL include_header,
+                                          char **out_text,
+                                          size_t *out_len);
+
+    /**
  * @brief Load a CSV (comma) or TXT (tab) voter roster into @p out_table.
  *
  * @param path           Wide path to file.

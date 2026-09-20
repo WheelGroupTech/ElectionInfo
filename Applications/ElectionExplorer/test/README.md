@@ -54,5 +54,9 @@ empty-ballot skip that drops export-artifact rows — a lone id line and a trail
 `cvrcnt` covers the per-column value reports (`EeCvr_FindColumnByTitle` locates a key
 column by header; `EeCvr_ColumnHasReportableData` is FALSE for an all-redacted column;
 `EeCvr_CollectColumnCounts` returns per-value ballot-record counts plus a blank tally);
+`vexport` covers voter delimited export (`EeVoterTable_FormatDelimitedUtf8` emits a
+header row of column titles and honors an explicit CSV/TSV delimiter);
+`cvrexp` covers CVR delimited export (`EeCvr_FormatDelimitedUtf8` header row +
+RFC-4180 quoting: a comma-bearing contest name/value is quoted for CSV, not for TSV);
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

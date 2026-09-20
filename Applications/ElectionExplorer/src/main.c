@@ -270,6 +270,8 @@ static void App_ResetFilter(AppState *app);
 static void App_ClearMarks(AppState *app);
 static void App_ShowReport(AppState *app, int kind);
 static void App_CloseReports(AppState *app);
+static void App_ExportVoters(AppState *app, BOOL selection_only);
+static void App_ExportVoterReport(ReportWindow *rw, BOOL selection_only);
 static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_BeginOpenCvr(AppState *app);
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -2602,6 +2604,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter List");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter List…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
@@ -3013,6 +3016,8 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…");
+        AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(menu, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
 
         cmd = (UINT)TrackPopupMenu(menu,
                                    TPM_RIGHTBUTTON | TPM_RETURNCMD,
@@ -3025,6 +3030,10 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
         if (cmd == IDM_EDIT_COPY)
         {
             App_CopySelection(app);
+        }
+        else if (cmd == IDM_EXPORT_SELECTED)
+        {
+            App_ExportVoters(app, TRUE);
         }
         else if (cmd == IDM_FILTER_INCLUDE && have_cell)
         {
@@ -5440,6 +5449,9 @@ static void Report_OnContextMenu(ReportWindow *rw, int iItem, int iSubItem, POIN
             AppendMenuW(m, MF_STRING, IDM_SHOW_IN_MAPS, L"Show in &Maps…");
         }
     }
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
 
     cmd = (UINT)
         TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
@@ -5449,6 +5461,12 @@ static void Report_OnContextMenu(ReportWindow *rw, int iItem, int iSubItem, POIN
     {
         case IDM_EDIT_COPY:
             Report_CopySelected(rw);
+            break;
+        case IDM_EXPORT_SELECTED:
+            App_ExportVoterReport(rw, TRUE);
+            break;
+        case IDM_EXPORT_ALL:
+            App_ExportVoterReport(rw, FALSE);
             break;
         case IDM_FILTER_INCLUDE:
             Report_FilterSelected(rw, EeFilt_Include);
@@ -5717,6 +5735,730 @@ static const wchar_t *App_PathBaseName(const wchar_t *path)
         }
     }
     return base;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Delimited-text export (CSV / TSV)                                          */
+/* -------------------------------------------------------------------------- */
+
+/* Small growable UTF-8 buffer for building export text from wide strings. */
+typedef struct Utf8Export
+{
+    char *data;
+    size_t len;
+    size_t cap;
+} Utf8Export;
+
+static BOOL Utf8Export_Append(Utf8Export *b, const char *s, size_t n)
+{
+    if (n == 0)
+    {
+        return TRUE;
+    }
+    if (b->len + n + 1 > b->cap)
+    {
+        size_t nc = (b->cap == 0) ? 4096 : b->cap;
+        char *nb;
+        while (nc < b->len + n + 1)
+        {
+            if (nc > (size_t)-1 / 2)
+            {
+                nc = b->len + n + 1;
+                break;
+            }
+            nc *= 2;
+        }
+        nb = (char *)realloc(b->data, nc);
+        if (nb == NULL)
+        {
+            return FALSE;
+        }
+        b->data = nb;
+        b->cap = nc;
+    }
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+    return TRUE;
+}
+
+static BOOL Utf8Export_AppendChar(Utf8Export *b, char c)
+{
+    return Utf8Export_Append(b, &c, 1);
+}
+
+/* Append a wide string as one RFC-4180 field (quoted when it contains @p delim, a
+ * quote, or a newline). */
+static BOOL Utf8Export_AppendFieldW(Utf8Export *b, const wchar_t *w, char delim)
+{
+    char stackbuf[1024];
+    char *heap = NULL;
+    char *u8 = stackbuf;
+    int need;
+    const char *p;
+    BOOL quote = FALSE;
+    BOOL ok = TRUE;
+
+    if (w == NULL)
+    {
+        w = L"";
+    }
+    need = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (need <= 0)
+    {
+        return TRUE; /* nothing to write */
+    }
+    if ((size_t)need > sizeof(stackbuf))
+    {
+        heap = (char *)malloc((size_t)need);
+        if (heap == NULL)
+        {
+            return FALSE;
+        }
+        u8 = heap;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, u8, need, NULL, NULL);
+    for (p = u8; *p != '\0'; p++)
+    {
+        if (*p == delim || *p == '"' || *p == '\n' || *p == '\r')
+        {
+            quote = TRUE;
+            break;
+        }
+    }
+    if (!quote)
+    {
+        ok = Utf8Export_Append(b, u8, strlen(u8));
+    }
+    else
+    {
+        ok = Utf8Export_Append(b, "\"", 1);
+        for (p = u8; *p != '\0' && ok; p++)
+        {
+            if (*p == '"')
+            {
+                ok = Utf8Export_Append(b, "\"\"", 2);
+            }
+            else
+            {
+                ok = Utf8Export_Append(b, p, 1);
+            }
+        }
+        ok = ok && Utf8Export_Append(b, "\"", 1);
+    }
+    free(heap);
+    return ok;
+}
+
+/* Copy the file's base name without its extension into @p out (e.g.
+ * "C:\x\L26 CVR.xlsx" -> "L26 CVR"). */
+static void App_BaseNameNoExt(const wchar_t *path, wchar_t *out, size_t cch)
+{
+    const wchar_t *base = App_PathBaseName(path);
+    const wchar_t *dot;
+    size_t n;
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    dot = NULL;
+    {
+        const wchar_t *p;
+        for (p = base; *p != L'\0'; p++)
+        {
+            if (*p == L'.')
+            {
+                dot = p;
+            }
+        }
+    }
+    n = (dot != NULL) ? (size_t)(dot - base) : wcslen(base);
+    if (n >= cch)
+    {
+        n = cch - 1;
+    }
+    memcpy(out, base, n * sizeof(wchar_t));
+    out[n] = L'\0';
+}
+
+/* Prompt for an export path. @p base is the suggested file name (no extension);
+ * the Save dialog defaults to UTF-8 CSV, with UTF-8 TSV as the alternative. On OK,
+ * writes the full path to @p path and the field delimiter (',' or '\t') to
+ * *out_delim, and returns TRUE. */
+static BOOL App_PromptExportPath(HWND owner,
+                                 const wchar_t *base,
+                                 wchar_t *path,
+                                 size_t cch,
+                                 char *out_delim)
+{
+    OPENFILENAMEW ofn;
+    wchar_t file[MAX_PATH];
+
+    if (path == NULL || cch == 0 || out_delim == NULL)
+    {
+        return FALSE;
+    }
+    file[0] = L'\0';
+    if (base != NULL && base[0] != L'\0')
+    {
+        StringCchCopyW(file, ARRAYSIZE(file), base);
+        StringCchCatW(file, ARRAYSIZE(file), L".csv");
+    }
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = L"UTF-8 CSV (*.csv)\0*.csv\0UTF-8 TSV (*.tsv)\0*.tsv\0";
+    ofn.nFilterIndex = 1; /* CSV is the default */
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = ARRAYSIZE(file);
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOREADONLYRETURN | OFN_EXPLORER;
+    ofn.lpstrTitle = L"Export";
+
+    if (!GetSaveFileNameW(&ofn))
+    {
+        return FALSE;
+    }
+    /* Honor an explicitly-typed .csv/.tsv extension; otherwise take the type from the
+     * chosen filter and append the matching extension so the name matches the format. */
+    {
+        size_t len = wcslen(file);
+        if (len >= 4 && _wcsicmp(file + (len - 4), L".tsv") == 0)
+        {
+            *out_delim = '\t';
+        }
+        else if (len >= 4 && _wcsicmp(file + (len - 4), L".csv") == 0)
+        {
+            *out_delim = ',';
+        }
+        else if (ofn.nFilterIndex == 2)
+        {
+            *out_delim = '\t';
+            StringCchCatW(file, ARRAYSIZE(file), L".tsv");
+        }
+        else
+        {
+            *out_delim = ',';
+            StringCchCatW(file, ARRAYSIZE(file), L".csv");
+        }
+    }
+    StringCchCopyW(path, cch, file);
+    return TRUE;
+}
+
+/* Write a UTF-8 byte buffer to @p path preceded by a UTF-8 BOM (so Excel opens it
+ * as UTF-8). Shows an error box and returns FALSE on failure. */
+static BOOL App_WriteExportUtf8(HWND owner, const wchar_t *path, const char *utf8, size_t len)
+{
+    HANDLE h;
+    static const unsigned char kBom[3] = {0xEF, 0xBB, 0xBF};
+    DWORD wrote = 0;
+    BOOL ok = TRUE;
+
+    h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        MessageBoxW(owner, L"Could not create the export file.", L"Export", MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    if (!WriteFile(h, kBom, sizeof(kBom), &wrote, NULL) || wrote != sizeof(kBom))
+    {
+        ok = FALSE;
+    }
+    if (ok && len > 0)
+    {
+        size_t off = 0;
+        while (off < len)
+        {
+            DWORD want = (DWORD)((len - off > 0x1000000u) ? 0x1000000u : (len - off));
+            if (!WriteFile(h, utf8 + off, want, &wrote, NULL) || wrote == 0)
+            {
+                ok = FALSE;
+                break;
+            }
+            off += wrote;
+        }
+    }
+    CloseHandle(h);
+    if (!ok)
+    {
+        MessageBoxW(owner, L"Could not write the export file.", L"Export", MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* Collect the selected list-view item indices (those below @p count) into a malloc'd
+ * array in display order; sets *out_n. Returns NULL with *out_n == 0 when nothing is
+ * selected or on OOM. */
+static uint32_t *App_CollectSelectedIndices(HWND list, uint32_t count, uint32_t *out_n)
+{
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    uint32_t cap = 0;
+    int i;
+
+    *out_n = 0;
+    if (list == NULL)
+    {
+        return NULL;
+    }
+    i = ListView_GetNextItem(list, -1, LVNI_SELECTED);
+    while (i >= 0)
+    {
+        if ((uint32_t)i < count)
+        {
+            if (n == cap)
+            {
+                uint32_t nc = cap ? cap * 2u : 64u;
+                uint32_t *g = (uint32_t *)realloc(idx, (size_t)nc * sizeof(uint32_t));
+                if (g == NULL)
+                {
+                    free(idx);
+                    return NULL;
+                }
+                idx = g;
+                cap = nc;
+            }
+            idx[n++] = (uint32_t)i;
+        }
+        i = ListView_GetNextItem(list, i, LVNI_SELECTED);
+    }
+    *out_n = n;
+    return idx;
+}
+
+/* Report-window exporter: build delimited UTF-8 from a small in-memory model via a
+ * cell callback, then prompt + write. @p base already includes the window-specific
+ * suffix (e.g. "L26-Selected_Precincts"). Used by the (small) report windows. */
+typedef void (*EeExportCellFn)(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch);
+
+static BOOL App_ExportReportModel(HWND owner,
+                                  const wchar_t *base,
+                                  uint32_t ncols,
+                                  const wchar_t *const *headers,
+                                  uint32_t nrows,
+                                  EeExportCellFn get_cell,
+                                  void *user)
+{
+    wchar_t path[MAX_PATH];
+    char delim = ',';
+    Utf8Export ex;
+    uint32_t r;
+    uint32_t c;
+    BOOL ok = TRUE;
+
+    if (get_cell == NULL || ncols == 0)
+    {
+        return FALSE;
+    }
+    if (!App_PromptExportPath(owner, base, path, ARRAYSIZE(path), &delim))
+    {
+        return FALSE; /* user cancelled */
+    }
+    ZeroMemory(&ex, sizeof(ex));
+    if (headers != NULL)
+    {
+        for (c = 0; c < ncols && ok; c++)
+        {
+            if (c > 0)
+            {
+                ok = Utf8Export_AppendChar(&ex, delim);
+            }
+            ok = ok && Utf8Export_AppendFieldW(&ex, headers[c], delim);
+        }
+        ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+    }
+    for (r = 0; r < nrows && ok; r++)
+    {
+        for (c = 0; c < ncols && ok; c++)
+        {
+            wchar_t cell[1024];
+            cell[0] = L'\0';
+            get_cell(user, r, c, cell, ARRAYSIZE(cell));
+            if (c > 0)
+            {
+                ok = Utf8Export_AppendChar(&ex, delim);
+            }
+            ok = ok && Utf8Export_AppendFieldW(&ex, cell, delim);
+        }
+        ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+    }
+    if (!ok)
+    {
+        free(ex.data);
+        MessageBoxW(owner, L"Out of memory building the export.", L"Export", MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    ok = App_WriteExportUtf8(owner, path, ex.data ? ex.data : "", ex.len);
+    free(ex.data);
+    return ok;
+}
+
+/* Small modal: one checkbox "Include normalized data fields" (default off). */
+typedef struct ExportOptData
+{
+    AppState *app;
+    HWND owner;
+    BOOL include_normalized;
+} ExportOptData;
+
+static INT_PTR CALLBACK ExportOptDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ExportOptData *d = (ExportOptData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            RECT owner;
+            int margin;
+            int btn_w;
+            int btn_h;
+            int gap;
+            int cx;
+            int cy;
+            int ow;
+            int oh;
+            int x = CW_USEDEFAULT;
+            int y = CW_USEDEFAULT;
+            HWND chk;
+            HWND ok;
+            HWND cancel;
+
+            d = (ExportOptData *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+            app = d->app;
+
+            cx = Scale(app, 300);
+            cy = Scale(app, 112);
+            rc.left = 0;
+            rc.top = 0;
+            rc.right = cx;
+            rc.bottom = cy;
+            AdjustWindowRectEx(&rc,
+                               (DWORD)GetWindowLongPtrW(dlg, GWL_STYLE),
+                               FALSE,
+                               (DWORD)GetWindowLongPtrW(dlg, GWL_EXSTYLE));
+            ow = rc.right - rc.left;
+            oh = rc.bottom - rc.top;
+            if (d->owner != NULL && GetWindowRect(d->owner, &owner))
+            {
+                x = owner.left + ((owner.right - owner.left) - ow) / 2;
+                y = owner.top + ((owner.bottom - owner.top) - oh) / 2;
+            }
+            SetWindowPos(dlg, NULL, x, y, ow, oh, SWP_NOZORDER | SWP_NOACTIVATE);
+
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 14);
+            btn_w = Scale(app, 84);
+            btn_h = Scale(app, 26);
+            gap = Scale(app, 8);
+            chk = CreateWindowExW(0,
+                                  L"BUTTON",
+                                  L"Include normalized data fields",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                                  margin,
+                                  margin,
+                                  rc.right - 2 * margin,
+                                  Scale(app, 24),
+                                  dlg,
+                                  (HMENU)(INT_PTR)IDC_EXPORT_NORMALIZED,
+                                  app->instance,
+                                  NULL);
+            SendMessageW(chk, BM_SETCHECK, d->include_normalized ? BST_CHECKED : BST_UNCHECKED, 0);
+            ok = CreateWindowExW(0,
+                                 L"BUTTON",
+                                 L"OK",
+                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                                 rc.right - margin - 2 * btn_w - gap,
+                                 rc.bottom - margin - btn_h,
+                                 btn_w,
+                                 btn_h,
+                                 dlg,
+                                 (HMENU)(INT_PTR)IDOK,
+                                 app->instance,
+                                 NULL);
+            cancel = CreateWindowExW(0,
+                                     L"BUTTON",
+                                     L"Cancel",
+                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                     rc.right - margin - btn_w,
+                                     rc.bottom - margin - btn_h,
+                                     btn_w,
+                                     btn_h,
+                                     dlg,
+                                     (HMENU)(INT_PTR)IDCANCEL,
+                                     app->instance,
+                                     NULL);
+            if (app->font_ui != NULL)
+            {
+                SendMessageW(chk, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+            SetFocus(ok);
+            return (INT_PTR)FALSE;
+        }
+
+        case WM_COMMAND:
+        {
+            WORD id = LOWORD(wParam);
+            if (id == IDOK)
+            {
+                if (d != NULL)
+                {
+                    d->include_normalized = (SendMessageW(GetDlgItem(dlg, IDC_EXPORT_NORMALIZED),
+                                                          BM_GETCHECK,
+                                                          0,
+                                                          0) == BST_CHECKED);
+                }
+                EndDialog(dlg, 1);
+                return (INT_PTR)TRUE;
+            }
+            if (id == IDCANCEL)
+            {
+                EndDialog(dlg, 0);
+                return (INT_PTR)TRUE;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+/* Ask whether to include normalized fields in a voter export. Returns TRUE if the
+ * user confirmed (result in *out_include); FALSE if cancelled. */
+static BOOL App_AskExportNormalized(AppState *app, HWND owner, BOOL *out_include)
+{
+    ExportOptData d;
+    DWORD buf[64]; /* DWORD-aligned for DLGTEMPLATE */
+    DLGTEMPLATE *dt = (DLGTEMPLATE *)buf;
+    BYTE *p;
+    static const wchar_t k_caption[] = L"Export Options";
+    size_t clen = ARRAYSIZE(k_caption) - 1;
+
+    if (app == NULL || out_include == NULL)
+    {
+        return FALSE;
+    }
+    d.app = app;
+    d.owner = owner;
+    d.include_normalized = FALSE; /* default off */
+
+    ZeroMemory(buf, sizeof(buf));
+    dt->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME;
+    dt->cx = 190;
+    dt->cy = 74;
+    p = (BYTE *)buf + sizeof(DLGTEMPLATE);
+    *(WORD *)p = 0;
+    p += sizeof(WORD);
+    *(WORD *)p = 0;
+    p += sizeof(WORD);
+    memcpy(p, k_caption, clen * sizeof(WCHAR));
+    ((WCHAR *)p)[clen] = L'\0';
+
+    if (DialogBoxIndirectParamW(app->instance, dt, owner, ExportOptDlgProc, (LPARAM)&d) == 1)
+    {
+        *out_include = d.include_normalized;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Export voter rows (all visible, or just the selected ones) as CSV/TSV, in the
+ * current display order, with a header row. */
+static void App_ExportVoters(AppState *app, BOOL selection_only)
+{
+    uint32_t *rows = NULL;
+    uint32_t n = 0;
+    BOOL filtered;
+    BOOL include_normalized = FALSE;
+    wchar_t base[192];
+    wchar_t suggested[256];
+    wchar_t path[MAX_PATH];
+    char delim = ',';
+    char *text = NULL;
+    size_t len = 0;
+
+    if (app == NULL || app->loading || app->table.row_count == 0)
+    {
+        return;
+    }
+    filtered = (app->mark_active || EeFilter_HasEnabled(&app->filters));
+
+    if (selection_only)
+    {
+        int i = ListView_GetNextItem(app->hwnd_frozen, -1, LVNI_SELECTED);
+        uint32_t cap = 0;
+        while (i >= 0)
+        {
+            if (n == cap)
+            {
+                uint32_t nc = cap ? cap * 2u : 64u;
+                uint32_t *g = (uint32_t *)realloc(rows, (size_t)nc * sizeof(uint32_t));
+                if (g == NULL)
+                {
+                    free(rows);
+                    return;
+                }
+                rows = g;
+                cap = nc;
+            }
+            rows[n++] = App_ViewRowFromDisplay(app, (uint32_t)i);
+            i = ListView_GetNextItem(app->hwnd_frozen, i, LVNI_SELECTED);
+        }
+        if (n == 0)
+        {
+            App_SetStatus(app, L"Nothing selected to export.");
+            return;
+        }
+    }
+    else
+    {
+        uint32_t vis = App_VisibleCount(app);
+        uint32_t d;
+        if (vis == 0)
+        {
+            App_SetStatus(app, L"Nothing to export.");
+            return;
+        }
+        rows = (uint32_t *)malloc((size_t)vis * sizeof(uint32_t));
+        if (rows == NULL)
+        {
+            return;
+        }
+        for (d = 0; d < vis; d++)
+        {
+            rows[d] = App_ViewRowFromDisplay(app, d);
+        }
+        n = vis;
+    }
+
+    if (!App_AskExportNormalized(app, app->hwnd_main, &include_normalized))
+    {
+        free(rows);
+        return;
+    }
+
+    App_BaseNameNoExt(app->load_path, base, ARRAYSIZE(base));
+    StringCchPrintfW(suggested,
+                     ARRAYSIZE(suggested),
+                     L"%s%s",
+                     base,
+                     selection_only ? L"-Selected_Voters"
+                                     : (filtered ? L"-Filtered_Voters" : L"-All_Voters"));
+
+    if (!App_PromptExportPath(app->hwnd_main, suggested, path, ARRAYSIZE(path), &delim))
+    {
+        free(rows);
+        return;
+    }
+    if (!EeVoterTable_FormatDelimitedUtf8(&app->table,
+                                          rows,
+                                          n,
+                                          include_normalized,
+                                          delim,
+                                          TRUE,
+                                          &text,
+                                          &len))
+    {
+        free(rows);
+        MessageBoxW(app->hwnd_main, L"Out of memory building the export.", L"Export",
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    if (App_WriteExportUtf8(app->hwnd_main, path, text, len))
+    {
+        wchar_t st[96];
+        StringCchPrintfW(st, ARRAYSIZE(st), L"Exported %u row%s.", n, n == 1u ? L"" : L"s");
+        App_SetStatus(app, st);
+    }
+    free(text);
+    free(rows);
+}
+
+/* Cell provider for a voter Precinct/Address report export. */
+typedef struct ReportExportCtx
+{
+    ReportWindow *rw;
+    const uint32_t *idx; /* export row -> item index, or NULL for identity */
+} ReportExportCtx;
+
+static void Report_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    ReportExportCtx *c = (ReportExportCtx *)user;
+    uint32_t item = (c->idx != NULL) ? c->idx[row] : row;
+    if (item >= c->rw->count)
+    {
+        buf[0] = L'\0';
+        return;
+    }
+    if (col == 0)
+    {
+        StringCchCopyW(buf, cch, report_display_value(c->rw->items[item].value));
+    }
+    else
+    {
+        StringCchPrintfW(buf, cch, L"%u", c->rw->items[item].count);
+    }
+}
+
+static void App_ExportVoterReport(ReportWindow *rw, BOOL selection_only)
+{
+    const wchar_t *headers[2];
+    const wchar_t *label;
+    const wchar_t *plural;
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    ReportExportCtx ctx;
+    wchar_t base[192];
+    wchar_t suggested[256];
+
+    if (rw == NULL || rw->app == NULL || rw->count == 0)
+    {
+        return;
+    }
+    label = (rw->kind == EE_REPORT_ADDRESS) ? L"Address" : L"Precinct";
+    plural = (rw->kind == EE_REPORT_ADDRESS) ? L"Addresses" : L"Precincts";
+    headers[0] = label;
+    headers[1] = L"Number of Voters";
+
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(rw->list, rw->count, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = rw->count;
+    }
+
+    ctx.rw = rw;
+    ctx.idx = idx;
+
+    App_BaseNameNoExt(rw->app->load_path, base, ARRAYSIZE(base));
+    StringCchPrintfW(suggested,
+                     ARRAYSIZE(suggested),
+                     L"%s-%s_%s",
+                     base,
+                     selection_only ? L"Selected" : L"All",
+                     plural);
+
+    App_ExportReportModel(rw->hwnd, suggested, 2, headers, n, Report_ExportCell, &ctx);
+    free(idx);
 }
 
 static void App_ShowReport(AppState *app, int kind)
@@ -8492,6 +9234,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 IDM_REPORT_ADDRESS,
                 MF_BYCOMMAND |
                     ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(
+                (HMENU)wParam,
+                IDM_FILE_EXPORT_VOTERS,
+                MF_BYCOMMAND |
+                    ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
             {
                 HMENU bar = GetMenu(hwnd);
                 if (bar != NULL && (HMENU)wParam == GetSubMenu(bar, k_CompareMenuPos))
@@ -8512,6 +9259,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 case IDM_FILE_CLOSE_VOTER_LIST:
                     App_RequestClose(app);
+                    return 0;
+                case IDM_FILE_EXPORT_VOTERS:
+                    App_ExportVoters(app, FALSE);
                     return 0;
                 case IDM_FILE_EXIT:
                     App_ExitAll();
@@ -9022,6 +9772,7 @@ typedef struct CvrWindow
      * afterward) so WM_INITMENUPOPUP need not re-scan the table on every menu open. */
     BOOL vreport_avail[EE_CVRREP_COUNT];
     uint32_t vreport_col[EE_CVRREP_COUNT];
+    wchar_t base_name[192]; /* initial CVR file base name (no extension), for exports */
 } CvrWindow;
 
 static void App_ShowCvrReport(CvrWindow *cw);
@@ -9030,6 +9781,9 @@ static void App_ShowCvrOptions(CvrWindow *cw);
 static BOOL App_ShowCvrFilter(CvrWindow *cw);
 static void Cvr_ApplyFilter(CvrWindow *cw);
 static void Cvr_ResetFilter(CvrWindow *cw);
+static void App_ExportCvrWindow(CvrWindow *cw, BOOL selection_only);
+static void App_ExportCvrTabReport(CvrReportWindow *rw, BOOL selection_only);
+static void App_ExportCvrValueReport(CvrValueReportWindow *rw, BOOL selection_only);
 
 struct CvrReportWindow
 {
@@ -9150,6 +9904,7 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_CVR, L"&Close Cast Vote Records");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_CVR, L"&Export Cast Vote Records…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
@@ -9320,12 +10075,18 @@ static void Cvr_OnContextMenu(CvrWindow *cw, int item, POINT screen)
         return;
     }
     AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
     cmd = (UINT)
         TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, cw->hwnd, NULL);
     DestroyMenu(m);
     if (cmd == IDM_EDIT_COPY)
     {
         Cvr_CopySelected(cw);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED)
+    {
+        App_ExportCvrWindow(cw, TRUE);
     }
 }
 
@@ -9644,6 +10405,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 case IDM_FILE_CLOSE_CVR:
                     DestroyWindow(hwnd);
                     return 0;
+                case IDM_FILE_EXPORT_CVR:
+                    App_ExportCvrWindow(cw, FALSE);
+                    return 0;
                 case IDM_FILE_EXIT:
                     App_ExitAll();
                     return 0;
@@ -9764,7 +10528,10 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
 
 /* Create a CVR window, taking ownership of @p table (moved; the source is reset
  * to empty). */
-static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t *title)
+static void App_CreateCvrWindow(AppState *app,
+                                EeCvrTable *table,
+                                const wchar_t *title,
+                                const wchar_t *first_path)
 {
     CvrWindow *cw = (CvrWindow *)calloc(1, sizeof(CvrWindow));
     HWND h;
@@ -9780,6 +10547,7 @@ static void App_CreateCvrWindow(AppState *app, EeCvrTable *table, const wchar_t 
     cw->sort_col = -1;
     cw->sort_asc = TRUE;
     cw->multi_card = EeCvr_HasMultiCard(&cw->table);
+    App_BaseNameNoExt(first_path, cw->base_name, ARRAYSIZE(cw->base_name));
 
     /* Resolve which per-column reports are available once, up front. */
     {
@@ -9993,12 +10761,23 @@ static void CvrReport_OnContextMenu(CvrReportWindow *rw, int item, POINT screen)
         return;
     }
     AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
     cmd = (UINT)
         TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
     DestroyMenu(m);
     if (cmd == IDM_EDIT_COPY)
     {
         CvrReport_CopySelected(rw);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED)
+    {
+        App_ExportCvrTabReport(rw, TRUE);
+    }
+    else if (cmd == IDM_EXPORT_ALL)
+    {
+        App_ExportCvrTabReport(rw, FALSE);
     }
 }
 
@@ -10599,6 +11378,9 @@ static void CvrValueReport_OnContextMenu(CvrValueReportWindow *rw, int item, POI
         AppendMenuW(m, MF_SEPARATOR, 0, NULL);
         AppendMenuW(m, MF_STRING, IDM_FILTER_INCLUDE, inc);
         AppendMenuW(m, MF_STRING, IDM_FILTER_EXCLUDE, exc);
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+        AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
     }
     cmd = (UINT)
         TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
@@ -10607,6 +11389,12 @@ static void CvrValueReport_OnContextMenu(CvrValueReportWindow *rw, int item, POI
     {
         case IDM_EDIT_COPY:
             CvrValueReport_CopySelected(rw);
+            break;
+        case IDM_EXPORT_SELECTED:
+            App_ExportCvrValueReport(rw, TRUE);
+            break;
+        case IDM_EXPORT_ALL:
+            App_ExportCvrValueReport(rw, FALSE);
             break;
         case IDM_FILTER_INCLUDE:
             CvrValueReport_FilterSelected(rw, EeFilt_Include);
@@ -10979,6 +11767,244 @@ static void App_ShowCvrValueReport(CvrWindow *cw, int kind)
     cw->vreports[kind] = rw;
     ShowWindow(rw->hwnd, SW_SHOW);
     SetForegroundWindow(rw->hwnd);
+}
+
+/* Export CVR ballot rows (all visible/filtered, or just selected) as CSV/TSV, in the
+ * current display order, with a header row of column titles. */
+static void App_ExportCvrWindow(CvrWindow *cw, BOOL selection_only)
+{
+    uint32_t *rows = NULL;
+    uint32_t n = 0;
+    BOOL filtered;
+    wchar_t suggested[256];
+    wchar_t path[MAX_PATH];
+    char delim = ',';
+    char *text = NULL;
+    size_t len = 0;
+
+    if (cw == NULL || cw->table.nrows == 0 || cw->table.ncols == 0)
+    {
+        return;
+    }
+    filtered = cw->filt_active;
+
+    if (selection_only)
+    {
+        int i = ListView_GetNextItem(cw->list, -1, LVNI_SELECTED);
+        uint32_t cap = 0;
+        while (i >= 0)
+        {
+            uint32_t phys = cw->filt_active
+                                ? (((uint32_t)i < cw->disp_count) ? cw->disp[i] : 0)
+                                : cw->table.view_index[i];
+            if (n == cap)
+            {
+                uint32_t nc = cap ? cap * 2u : 64u;
+                uint32_t *g = (uint32_t *)realloc(rows, (size_t)nc * sizeof(uint32_t));
+                if (g == NULL)
+                {
+                    free(rows);
+                    return;
+                }
+                rows = g;
+                cap = nc;
+            }
+            rows[n++] = phys;
+            i = ListView_GetNextItem(cw->list, i, LVNI_SELECTED);
+        }
+        if (n == 0)
+        {
+            return;
+        }
+    }
+    else
+    {
+        uint32_t total = cw->filt_active ? cw->disp_count : cw->table.nrows;
+        uint32_t d;
+        if (total == 0)
+        {
+            return;
+        }
+        rows = (uint32_t *)malloc((size_t)total * sizeof(uint32_t));
+        if (rows == NULL)
+        {
+            return;
+        }
+        for (d = 0; d < total; d++)
+        {
+            rows[d] = cw->filt_active ? cw->disp[d] : cw->table.view_index[d];
+        }
+        n = total;
+    }
+
+    StringCchPrintfW(suggested,
+                     ARRAYSIZE(suggested),
+                     L"%s%s",
+                     cw->base_name,
+                     selection_only ? L"-Selected_Records"
+                                     : (filtered ? L"-Filtered_Records" : L"-All_Records"));
+    if (!App_PromptExportPath(cw->hwnd, suggested, path, ARRAYSIZE(path), &delim))
+    {
+        free(rows);
+        return;
+    }
+    if (!EeCvr_FormatDelimitedUtf8(&cw->table, rows, n, delim, TRUE, &text, &len))
+    {
+        free(rows);
+        MessageBoxW(cw->hwnd, L"Out of memory building the export.", L"Export",
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    App_WriteExportUtf8(cw->hwnd, path, text, len);
+    free(text);
+    free(rows);
+}
+
+/* Cell provider for the CVR tabulation report export (Contest | Selection | Votes). */
+typedef struct CvrTabExportCtx
+{
+    CvrReportWindow *rw;
+    const uint32_t *idx;
+} CvrTabExportCtx;
+
+static void CvrTab_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    CvrTabExportCtx *c = (CvrTabExportCtx *)user;
+    uint32_t item = (c->idx != NULL) ? c->idx[row] : row;
+    if (item >= c->rw->count)
+    {
+        buf[0] = L'\0';
+        return;
+    }
+    if (col == 0)
+    {
+        StringCchCopyW(buf, cch, c->rw->items[item].contest);
+    }
+    else if (col == 1)
+    {
+        StringCchCopyW(buf, cch, c->rw->items[item].selection);
+    }
+    else
+    {
+        StringCchPrintfW(buf, cch, L"%u", c->rw->items[item].count);
+    }
+}
+
+static void App_ExportCvrTabReport(CvrReportWindow *rw, BOOL selection_only)
+{
+    const wchar_t *headers[3] = {L"Contest", L"Selection", L"Votes"};
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    CvrTabExportCtx ctx;
+    wchar_t suggested[256];
+    const wchar_t *base;
+
+    if (rw == NULL || rw->owner == NULL || rw->count == 0)
+    {
+        return;
+    }
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(rw->list, rw->count, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = rw->count;
+    }
+    ctx.rw = rw;
+    ctx.idx = idx;
+    base = rw->owner->base_name;
+    StringCchPrintfW(suggested,
+                     ARRAYSIZE(suggested),
+                     L"%s-%s_Contests",
+                     base,
+                     selection_only ? L"Selected" : L"All");
+    App_ExportReportModel(rw->hwnd, suggested, 3, headers, n, CvrTab_ExportCell, &ctx);
+    free(idx);
+}
+
+/* Cell provider for a CVR value report export (value | Number of Ballot Records). */
+typedef struct CvrValExportCtx
+{
+    CvrValueReportWindow *rw;
+    const uint32_t *idx;
+} CvrValExportCtx;
+
+static void CvrVal_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    CvrValExportCtx *c = (CvrValExportCtx *)user;
+    uint32_t item = (c->idx != NULL) ? c->idx[row] : row;
+    if (item >= c->rw->count)
+    {
+        buf[0] = L'\0';
+        return;
+    }
+    if (col == 0)
+    {
+        StringCchCopyW(buf, cch, report_display_value(c->rw->items[item].value));
+    }
+    else
+    {
+        StringCchPrintfW(buf, cch, L"%u", c->rw->items[item].count);
+    }
+}
+
+static void App_ExportCvrValueReport(CvrValueReportWindow *rw, BOOL selection_only)
+{
+    const wchar_t *headers[2];
+    const wchar_t *plural;
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    CvrValExportCtx ctx;
+    wchar_t suggested[256];
+
+    if (rw == NULL || rw->owner == NULL || rw->count == 0)
+    {
+        return;
+    }
+    switch (rw->kind)
+    {
+        case EE_CVRREP_BATCH:
+            plural = L"Batches";
+            break;
+        case EE_CVRREP_BALLOTSTYLE:
+            plural = L"Ballot_Styles";
+            break;
+        default:
+            plural = L"Precincts";
+            break;
+    }
+    headers[0] = rw->label;
+    headers[1] = L"Number of Ballot Records";
+
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(rw->list, rw->count, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = rw->count;
+    }
+    ctx.rw = rw;
+    ctx.idx = idx;
+    StringCchPrintfW(suggested,
+                     ARRAYSIZE(suggested),
+                     L"%s-%s_%s",
+                     rw->owner->base_name,
+                     selection_only ? L"Selected" : L"All",
+                     plural);
+    App_ExportReportModel(rw->hwnd, suggested, 2, headers, n, CvrVal_ExportCell, &ctx);
+    free(idx);
 }
 
 typedef struct CvrOptData
@@ -12213,7 +13239,7 @@ static void App_BeginOpenCvr(AppState *app)
         {
             StringCchPrintfW(title, ARRAYSIZE(title), L"%s — Cast Vote Records", leaf);
         }
-        App_CreateCvrWindow(app, &table, title);
+        App_CreateCvrWindow(app, &table, title, paths[0]);
     }
     else
     {

@@ -45,32 +45,42 @@ CSV/TSV (text variants survive). Validated byte-identical across formats for Tra
 & P26; Travis G24 and Dallas G24 match every candidate/undervote/overvote count (only
 image write-in rows differ). Tests `cvrcsv`.
 
-**Uncommitted (this session): CVR per-column value reports.** The CVR **Reports** menu
-gains **Display Batch Report… / Display Precinct Report… / Display Ballot Style
-Report…**, each opening a two-column report (value | number of ballot records) modeled
-on the voter-list Precinct/Address reports. New window `CvrValueReportWindow` (class
-`k_CvrValueReportClassName`): owner-data list, bold/grey header, header-click sort
-(value column numeric when all-digit), a `(blank)` row for empty cells, multi-select
-**right-click → Copy** (+Ctrl+C) and **Include/Exclude** (adds an `is` rule to the CVR
-window's own `EeFilterSet` and re-applies `Cvr_ApplyFilter`). Title
-`<label> Report - <filename>`; one of each kind per CVR window (`CvrWindow.vreports[]`),
-closed with the CVR window. **Menu gating** (`CvrWndProc` `WM_INITMENUPOPUP`): an item
-greys unless the column exists and holds real data — new `ee_cvr` helpers
-`EeCvr_FindColumnByTitle` (trimmed CI header match), `EeCvr_ColumnHasReportableData`
-(FALSE when the column is all-blank or all-redacted; `cvr_is_redaction_marker` matches
-`<Redacted>` / `<REDACTED>` / `<Redact>`), `EeCvr_CollectColumnCounts` /
-`EeCvr_FreeColumnCounts` (+ `EeCvrValueCount`). New IDs `IDM_CVR_REPORT_BATCH/PRECINCT/
-BALLOTSTYLE`. Files: `ee_cvr.{c,h}`, `main.c`, `resource.h`, `docs/cvr-design.md`,
-`test/README.md`, `test/smoke_load.c`. Test `cvrcnt`. Full suite green (38); app builds
-clean x64 Debug+Release. Report-column availability is resolved **once at load**
-(`CvrWindow.vreport_avail/col`), so `WM_INITMENUPOPUP` is O(1) rather than re-scanning
-the table each menu open (a full O(entries) scan for a fully-blank/redacted column —
-notably heavy for redacted Dallas data). **GUI click-tested (Travis/Dallas).** One
-non-reproducible one-off hang was reported opening the G20 Precinct/Ballot Style report
-(cleared on restart); the engine path (`EeCvr_CollectColumnCounts`) was verified fast
-and correct on the exact G20 files (Precinct 237 distinct/31 ms, Ballot Style 1538/16 ms)
-and the window code mirrors the working voter/tabulation reports — no reproducible defect
-found; watch for recurrence.
+**CVR per-column value reports (committed).** CVR **Reports** → **Display Batch /
+Precinct / Ballot Style Report…**, two-column (value | number of ballot records)
+reports modeled on the voter Precinct/Address reports. `CvrValueReportWindow`
+(`k_CvrValueReportClassName`): bold/grey header, header-click sort, `(blank)` row,
+right-click Copy + Include/Exclude (into the CVR window's `EeFilterSet`). Menu-gated by
+`CvrWindow.vreport_avail[]` (resolved once at load) via new `ee_cvr` helpers
+`EeCvr_FindColumnByTitle` / `EeCvr_ColumnHasReportableData` (FALSE for an all-blank or
+all-redacted column) / `EeCvr_CollectColumnCounts`. Test `cvrcnt`.
+
+**Uncommitted (this session): CSV/TSV export.** Every voter/CVR view and report can
+export to **UTF-8 CSV (default) or UTF-8 TSV** (BOM-prefixed so Excel reads UTF-8), in
+the window's current display order, with a header row. Shared plumbing in `main.c`:
+`App_PromptExportPath` (Save dialog; CSV filter 1 / TSV filter 2; typed `.csv`/`.tsv`
+wins else extension appended → delimiter), `App_WriteExportUtf8` (BOM + bytes),
+`App_ExportReportModel` (wide-cell callback for the small reports),
+`App_CollectSelectedIndices`, and a `Utf8Export` field builder. Suggested name =
+source file base name (no ext) + a window suffix.
+- **Voter window:** File → **Export Voter List…** (visible/filtered rows,
+  `-Filtered_Voters`/`-All_Voters`) and right-click → **Export Selected…**
+  (`-Selected_Voters`), each with an **Include normalized data fields** option
+  (default off, `App_AskExportNormalized` modal). Efficient UTF-8 via new
+  `EeVoterTable_FormatDelimitedUtf8` (delim + header; old `FormatCopyUtf8` now delegates).
+- **Voter Precinct/Address reports:** right-click → **Export Selected…**/**Export
+  All…** → `-…_Precincts` / `-…_Addresses`.
+- **CVR window:** File → **Export Cast Vote Records…**
+  (`-Filtered_Records`/`-All_Records`) and right-click → **Export Selected…**
+  (`-Selected_Records`). Efficient UTF-8 via new `EeCvr_FormatDelimitedUtf8`
+  (interned values, RFC-4180 quoting, header).
+- **CVR reports:** right-click Export Selected/All on Tabulation
+  (`-…_Contests`), Batch (`-…_Batches`), Precinct (`-…_Precincts`), Ballot Style
+  (`-…_Ballot_Styles`). CVR base name stored in `CvrWindow.base_name`.
+New IDs `IDM_FILE_EXPORT_VOTERS/_CVR`, `IDM_EXPORT_SELECTED/_ALL`,
+`IDC_EXPORT_NORMALIZED`. Files: `main.c`, `resource.h`, `voter_table.{c,h}`,
+`ee_cvr.{c,h}`, `docs/cvr-design.md`, `test/README.md`, `test/smoke_load.c`. Tests
+`vexport`, `cvrexp`. Full suite green (40); app builds clean x64 Debug+Release.
+**Not yet GUI click-tested.**
 
 The app is being published via the **Microsoft Store**.
 

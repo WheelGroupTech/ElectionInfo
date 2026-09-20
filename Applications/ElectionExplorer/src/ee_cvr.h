@@ -127,6 +127,21 @@ extern "C"
     void EeCvr_SortByColumn(EeCvrTable *t, uint32_t col, BOOL ascending);
 
     /**
+     * Format the given PHYSICAL rows (in the order provided) as delimited UTF-8 text
+     * for file export: every column, @p delim between fields ('\t' or ','), CR/LF
+     * between rows, RFC-4180 quoting. When @p include_header is TRUE a leading row of
+     * column titles is emitted. *out_text is a heap buffer the caller frees (never
+     * NULL on success). Returns FALSE on OOM/bad args.
+     */
+    BOOL EeCvr_FormatDelimitedUtf8(const EeCvrTable *t,
+                                   const uint32_t *rows,
+                                   uint32_t n_rows,
+                                   char delim,
+                                   BOOL include_header,
+                                   char **out_text,
+                                   size_t *out_len);
+
+    /**
      * Find the column whose header equals @p title (trimmed, case-insensitive), e.g.
      * L"Batch", L"Precinct", L"Ballot Style". On success sets *out_col and returns
      * TRUE; returns FALSE if no such column exists.

@@ -12,6 +12,8 @@
 #define IDM_FILE_CLOSE_VOTER_LIST 40003
 #define IDM_FILE_OPEN_CVR         40004
 #define IDM_FILE_CLOSE_CVR        40005
+#define IDM_FILE_EXPORT_VOTERS    40006
+#define IDM_FILE_EXPORT_CVR       40007
 #define IDM_EDIT_COPY             40010
 #define IDM_EDIT_OPTIONS          40011
 #define IDM_CVR_TABULATE          40012
@@ -21,9 +23,15 @@
 #define IDM_CVR_REPORT_BATCH      40016
 #define IDM_CVR_REPORT_PRECINCT   40017
 #define IDM_CVR_REPORT_BALLOTSTYLE 40018
+#define IDM_EXPORT_SELECTED       40019
+/* Export "All" for report context menus. */
+#define IDM_EXPORT_ALL            40072
 
 /* CVR options dialog child controls. */
 #define IDC_CVR_MERGE_WRITEINS 41400
+
+/* Export options dialog child control. */
+#define IDC_EXPORT_NORMALIZED 41500
 #define IDM_FILTER_EDIT           40020
 #define IDM_FILTER_RESET          40021
 #define IDM_FILTER_DUP_VOTER_IDS  40026

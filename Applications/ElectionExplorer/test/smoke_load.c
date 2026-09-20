@@ -270,6 +270,66 @@ done:
     return rc;
 }
 
+/* Voter delimited export: EeVoterTable_FormatDelimitedUtf8 emits a header row of
+ * column titles and honors an explicit delimiter (tag: vexport). */
+static int test_voter_export(void)
+{
+    EeVoterTable t;
+    wchar_t err[256];
+    char *text = NULL;
+    uint32_t rows[1];
+    int rc = 1;
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    if (EeVoterTable_LoadFromFile(L"test\\sample_voters.csv", &t, NULL, NULL, NULL, err,
+                                  ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"vexport: load failed %s\n", err);
+        goto done;
+    }
+    rows[0] = 0;
+    /* With header + normalized columns, comma delimiter. */
+    if (!EeVoterTable_FormatDelimitedUtf8(&t, rows, 1, TRUE, ',', TRUE, &text, NULL) ||
+        text == NULL)
+    {
+        wprintf(L"vexport: csv format failed\n");
+        goto done;
+    }
+    /* First line is a header (starts with the normalized Voter ID column title, not a
+     * data value), and the data row for voter 100001 follows on the next line. */
+    if (strstr(text, "100001,101,") == NULL || strstr(text, "\r\n100001,101,") == NULL)
+    {
+        wprintf(L"vexport: expected header + data row:\n%hs\n", text);
+        goto done;
+    }
+    free(text);
+    text = NULL;
+    /* Tab delimiter, no header, source columns only: first field is the raw Voter ID. */
+    if (!EeVoterTable_FormatDelimitedUtf8(&t, rows, 1, FALSE, '\t', FALSE, &text, NULL) ||
+        text == NULL)
+    {
+        wprintf(L"vexport: tsv format failed\n");
+        goto done;
+    }
+    if (strncmp(text, "100001\t", 7) != 0)
+    {
+        wprintf(L"vexport: tsv prefix mismatch:\n%hs\n", text);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"vexport ok\n");
+
+done:
+    free(text);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"vexport test failed\n");
+    }
+    return rc;
+}
+
 static int test_zip4_omits_zeros(void)
 {
     wchar_t path[MAX_PATH];
@@ -4078,6 +4138,106 @@ done:
     return rc;
 }
 
+/* CVR delimited export: EeCvr_FormatDelimitedUtf8 emits a header row + rows with the
+ * requested delimiter and RFC-4180 quoting (a comma-bearing contest name/value is
+ * quoted for CSV but not for TSV) (tag: cvrexp). */
+static int test_cvr_export(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* Contest header carries a comma so CSV must quote it. */
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Mayor, City X (10)</t></is></c></row>";
+    static const char *k_rows =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>Bob, Jr.</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>Alice</t></is></c></row>";
+
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    uint32_t rows[8];
+    uint32_t i;
+    char *text = NULL;
+    size_t len = 0;
+    int rc = 1;
+
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_cvr_exp.xlsx"))
+    {
+        wprintf(L"cvrexp: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(path, sheet))
+    {
+        wprintf(L"cvrexp: write failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = path;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"cvrexp: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    for (i = 0; i < t.nrows; i++)
+    {
+        rows[i] = i;
+    }
+
+    /* CSV: comma-bearing fields are quoted, header present. */
+    if (!EeCvr_FormatDelimitedUtf8(&t, rows, t.nrows, ',', TRUE, &text, &len))
+    {
+        wprintf(L"cvrexp: csv format failed\n");
+        goto done;
+    }
+    if (strstr(text, "Cast Vote Record,Precinct,\"Mayor, City X (10)\"\r\n") == NULL ||
+        strstr(text, "1,P1,\"Bob, Jr.\"\r\n") == NULL ||
+        strstr(text, "2,P1,Alice\r\n") == NULL)
+    {
+        wprintf(L"cvrexp: csv content unexpected:\n%hs\n", text);
+        goto done;
+    }
+    free(text);
+    text = NULL;
+
+    /* TSV: no comma quoting needed (fields hold no tab). */
+    if (!EeCvr_FormatDelimitedUtf8(&t, rows, t.nrows, '\t', TRUE, &text, &len))
+    {
+        wprintf(L"cvrexp: tsv format failed\n");
+        goto done;
+    }
+    if (strstr(text, "Cast Vote Record\tPrecinct\tMayor, City X (10)\r\n") == NULL ||
+        strstr(text, "1\tP1\tBob, Jr.\r\n") == NULL)
+    {
+        wprintf(L"cvrexp: tsv content unexpected:\n%hs\n", text);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"cvrexp ok\n");
+
+done:
+    free(text);
+    EeCvr_Clear(&t);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"cvrexp test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -4322,6 +4482,7 @@ int wmain(void)
     failed |= load_sample(L"test\\sample_voters.txt", L"txt");
     failed |= load_wide_history();
     failed |= test_copy_format();
+    failed |= test_voter_export();
     failed |= test_zip4_omits_zeros();
     failed |= test_res_addr_fields();
     failed |= test_res_addr_no_duplicate_city_state_zip();
@@ -4357,6 +4518,7 @@ int wmain(void)
     failed |= test_cvr_filter_values();
     failed |= test_cvr_delimited();
     failed |= test_cvr_colcounts();
+    failed |= test_cvr_export();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

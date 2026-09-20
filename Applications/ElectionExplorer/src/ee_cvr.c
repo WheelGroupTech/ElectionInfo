@@ -832,6 +832,230 @@ BOOL EeCvr_GetViewCellW(const EeCvrTable *t,
     return EeCvr_GetCellW(t, t->view_index[view_row], col, buf, cch);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Delimited-text export                                                      */
+/* -------------------------------------------------------------------------- */
+
+typedef struct CvrTextBuf
+{
+    char *data;
+    size_t len;
+    size_t cap;
+} CvrTextBuf;
+
+static BOOL cvr_tb_reserve(CvrTextBuf *b, size_t extra)
+{
+    if (b->len + extra + 1 > b->cap)
+    {
+        size_t nc = (b->cap == 0) ? 8192 : b->cap;
+        char *nb;
+        while (nc < b->len + extra + 1)
+        {
+            if (nc > (size_t)-1 / 2)
+            {
+                nc = b->len + extra + 1;
+                break;
+            }
+            nc *= 2;
+        }
+        nb = (char *)realloc(b->data, nc);
+        if (nb == NULL)
+        {
+            return FALSE;
+        }
+        b->data = nb;
+        b->cap = nc;
+    }
+    return TRUE;
+}
+
+static BOOL cvr_tb_append(CvrTextBuf *b, const char *s, size_t n)
+{
+    if (n == 0)
+    {
+        return TRUE;
+    }
+    if (!cvr_tb_reserve(b, n))
+    {
+        return FALSE;
+    }
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+    return TRUE;
+}
+
+/* Append one UTF-8 field, RFC-4180 quoted when it contains the delimiter, a quote,
+ * or a newline. */
+static BOOL cvr_tb_append_field(CvrTextBuf *b, const char *s, char delim)
+{
+    const char *p;
+    BOOL quote = FALSE;
+    if (s == NULL)
+    {
+        s = "";
+    }
+    for (p = s; *p != '\0'; p++)
+    {
+        if (*p == delim || *p == '"' || *p == '\n' || *p == '\r')
+        {
+            quote = TRUE;
+            break;
+        }
+    }
+    if (!quote)
+    {
+        return cvr_tb_append(b, s, strlen(s));
+    }
+    if (!cvr_tb_append(b, "\"", 1))
+    {
+        return FALSE;
+    }
+    for (p = s; *p != '\0'; p++)
+    {
+        if (*p == '"')
+        {
+            if (!cvr_tb_append(b, "\"\"", 2))
+            {
+                return FALSE;
+            }
+        }
+        else if (!cvr_tb_append(b, p, 1))
+        {
+            return FALSE;
+        }
+    }
+    return cvr_tb_append(b, "\"", 1);
+}
+
+/* Append a wide column title as a UTF-8 field. */
+static BOOL cvr_tb_append_wide_field(CvrTextBuf *b, const wchar_t *w, char delim)
+{
+    char stackbuf[512];
+    char *heap = NULL;
+    char *u8 = stackbuf;
+    int need;
+    BOOL ok;
+    if (w == NULL)
+    {
+        w = L"";
+    }
+    need = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (need <= 0)
+    {
+        return cvr_tb_append_field(b, "", delim);
+    }
+    if ((size_t)need > sizeof(stackbuf))
+    {
+        heap = (char *)malloc((size_t)need);
+        if (heap == NULL)
+        {
+            return FALSE;
+        }
+        u8 = heap;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, u8, need, NULL, NULL);
+    ok = cvr_tb_append_field(b, u8, delim);
+    free(heap);
+    return ok;
+}
+
+BOOL EeCvr_FormatDelimitedUtf8(const EeCvrTable *t,
+                               const uint32_t *rows,
+                               uint32_t n_rows,
+                               char delim,
+                               BOOL include_header,
+                               char **out_text,
+                               size_t *out_len)
+{
+    CvrTextBuf b;
+    uint32_t r;
+    uint32_t c;
+
+    ZeroMemory(&b, sizeof(b));
+    if (out_text == NULL)
+    {
+        return FALSE;
+    }
+    *out_text = NULL;
+    if (out_len != NULL)
+    {
+        *out_len = 0;
+    }
+    if (t == NULL || (n_rows > 0 && rows == NULL))
+    {
+        return FALSE;
+    }
+    if (delim == '\0')
+    {
+        delim = ',';
+    }
+
+    if (include_header)
+    {
+        for (c = 0; c < t->ncols; c++)
+        {
+            if (c > 0 && !cvr_tb_append(&b, &delim, 1))
+            {
+                goto fail;
+            }
+            if (!cvr_tb_append_wide_field(&b, t->col_titles[c], delim))
+            {
+                goto fail;
+            }
+        }
+        if (!cvr_tb_append(&b, "\r\n", 2))
+        {
+            goto fail;
+        }
+    }
+
+    for (r = 0; r < n_rows; r++)
+    {
+        uint32_t phys = rows[r];
+        if (phys >= t->nrows)
+        {
+            continue;
+        }
+        for (c = 0; c < t->ncols; c++)
+        {
+            if (c > 0 && !cvr_tb_append(&b, &delim, 1))
+            {
+                goto fail;
+            }
+            if (!cvr_tb_append_field(&b, cvr_cell_utf8(t, phys, c), delim))
+            {
+                goto fail;
+            }
+        }
+        if (!cvr_tb_append(&b, "\r\n", 2))
+        {
+            goto fail;
+        }
+    }
+
+    if (b.data == NULL)
+    {
+        b.data = (char *)malloc(1);
+        if (b.data == NULL)
+        {
+            return FALSE;
+        }
+        b.data[0] = '\0';
+        b.len = 0;
+    }
+    *out_text = b.data;
+    if (out_len != NULL)
+    {
+        *out_len = b.len;
+    }
+    return TRUE;
+
+fail:
+    free(b.data);
+    return FALSE;
+}
+
 static int __cdecl cvr_wide_cmp(void *ctx, const void *a, const void *b)
 {
     (void)ctx;

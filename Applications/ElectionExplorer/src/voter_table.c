@@ -2348,16 +2348,50 @@ static BOOL utf8buf_append_field(Utf8Buf *buf, const char *s, char delim)
     return utf8buf_append(buf, "\"", 1);
 }
 
-BOOL EeVoterTable_FormatCopyUtf8(const EeVoterTable *table,
-                                 const uint32_t *view_rows,
-                                 uint32_t n_rows,
-                                 BOOL prepend_normalized,
-                                 char **out_text,
-                                 size_t *out_len)
+/* Append a wide string as one delimited (RFC-4180 quoted) UTF-8 field. */
+static BOOL utf8buf_append_wide_field(Utf8Buf *buf, const wchar_t *w, char delim)
+{
+    char stackbuf[512];
+    char *heap = NULL;
+    char *u8 = stackbuf;
+    int need;
+    BOOL ok;
+
+    if (w == NULL)
+    {
+        w = L"";
+    }
+    need = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (need <= 0)
+    {
+        return utf8buf_append_field(buf, "", delim);
+    }
+    if ((size_t)need > sizeof(stackbuf))
+    {
+        heap = (char *)malloc((size_t)need);
+        if (heap == NULL)
+        {
+            return FALSE;
+        }
+        u8 = heap;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, u8, need, NULL, NULL);
+    ok = utf8buf_append_field(buf, u8, delim);
+    free(heap);
+    return ok;
+}
+
+BOOL EeVoterTable_FormatDelimitedUtf8(const EeVoterTable *table,
+                                      const uint32_t *view_rows,
+                                      uint32_t n_rows,
+                                      BOOL prepend_normalized,
+                                      char delim,
+                                      BOOL include_header,
+                                      char **out_text,
+                                      size_t *out_len)
 {
     Utf8Buf buf;
     uint32_t r;
-    char delim;
     uint32_t start_col;
 
     ZeroMemory(&buf, sizeof(buf));
@@ -2374,9 +2408,38 @@ BOOL EeVoterTable_FormatCopyUtf8(const EeVoterTable *table,
     {
         return FALSE;
     }
-
-    delim = table->delimiter != '\0' ? table->delimiter : ',';
+    if (delim == '\0')
+    {
+        delim = ',';
+    }
     start_col = prepend_normalized ? 0u : (uint32_t)EE_FROZEN_COLUMN_COUNT;
+
+    if (include_header)
+    {
+        uint32_t c;
+        BOOL first = TRUE;
+        for (c = start_col; c < table->column_count; c++)
+        {
+            if (!first)
+            {
+                char d[1];
+                d[0] = delim;
+                if (!utf8buf_append(&buf, d, 1))
+                {
+                    goto fail;
+                }
+            }
+            first = FALSE;
+            if (!utf8buf_append_wide_field(&buf, table->column_titles[c], delim))
+            {
+                goto fail;
+            }
+        }
+        if (!utf8buf_append(&buf, "\r\n", 2))
+        {
+            goto fail;
+        }
+    }
 
     for (r = 0; r < n_rows; r++)
     {
@@ -2427,6 +2490,24 @@ BOOL EeVoterTable_FormatCopyUtf8(const EeVoterTable *table,
 fail:
     free(buf.data);
     return FALSE;
+}
+
+BOOL EeVoterTable_FormatCopyUtf8(const EeVoterTable *table,
+                                 const uint32_t *view_rows,
+                                 uint32_t n_rows,
+                                 BOOL prepend_normalized,
+                                 char **out_text,
+                                 size_t *out_len)
+{
+    char delim = (table != NULL && table->delimiter != '\0') ? table->delimiter : ',';
+    return EeVoterTable_FormatDelimitedUtf8(table,
+                                            view_rows,
+                                            n_rows,
+                                            prepend_normalized,
+                                            delim,
+                                            FALSE, /* clipboard copy: no header row */
+                                            out_text,
+                                            out_len);
 }
 
 /* -------------------------------------------------------------------------- */

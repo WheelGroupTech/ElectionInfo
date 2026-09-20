@@ -329,9 +329,41 @@ per-precinct cross-tabs. Count **blank** (contest not on ballot) separately from
 together. (The current report already keeps `undervote`/`overvote` as distinct
 selections and simply omits blanks.)
 
+## Delimited-text export (CSV / TSV)
+
+Every CVR view and report can export to **UTF-8 CSV (default) or UTF-8 TSV**. A
+shared exporter in `main.c` handles the Save dialog (`App_PromptExportPath` — CSV is
+filter 1, TSV filter 2; an explicitly-typed `.csv`/`.tsv` wins, else the extension is
+appended to match the chosen type) and writes the file with a **UTF-8 BOM** so Excel
+opens it as UTF-8 (`App_WriteExportUtf8`). The suggested file name is the initial CVR
+file's base name (no extension, stored in `CvrWindow.base_name`) plus a
+window-specific suffix. All exports emit a **header row** and follow the window's
+current sort/filter (display order).
+
+- **CVR window** — File → **Export Cast Vote Records…** (all visible rows, suffix
+  `-Filtered_Records` / `-All_Records` by `cw->filt_active`) and right-click →
+  **Export Selected…** (selected rows, suffix `-Selected_Records`). Physical rows are
+  gathered in display order (`cw->disp` when filtered, else `view_index`) and written
+  by the efficient `EeCvr_FormatDelimitedUtf8` (interned UTF-8, RFC-4180 quoting).
+- **CVR reports** — right-click → **Export Selected…** / **Export All…** on the
+  Tabulation (`-Selected_Contests`/`-All_Contests`), Batch (`-…_Batches`), Precinct
+  (`-…_Precincts`), and Ballot Style (`-…_Ballot_Styles`) reports. These small
+  reports build the file from their in-memory items via `App_ExportReportModel` (a
+  wide-cell callback).
+
+The voter-list window mirrors this: File → **Export Voter List…**
+(`-Filtered_Voters`/`-All_Voters`) and right-click → **Export Selected…**
+(`-Selected_Voters`), with an **Include normalized data fields** option (default off;
+`App_AskExportNormalized`); the voter
+Precinct/Address reports gain **Export Selected…**/**Export All…**
+(`-…_Precincts`/`-…_Addresses`). Voter rows use the efficient
+`EeVoterTable_FormatDelimitedUtf8` (delim + header added to the former copy path).
+
 ## Testing
 
 Author small `.xlsx` files with miniz's writer (as the XLSX tests do): two files
 with the same header → concatenated row count; a third with a different header →
 load rejected with an error. Sparse round-trip: blank cells read back as "",
-non-blank cells preserved; frozen-count detection.
+non-blank cells preserved; frozen-count detection. Export: `cvrexp` checks
+`EeCvr_FormatDelimitedUtf8` header + CSV quoting vs. TSV; `vexport` checks the voter
+formatter's header row and delimiter.

@@ -54,7 +54,7 @@ right-click Copy + Include/Exclude (into the CVR window's `EeFilterSet`). Menu-g
 `EeCvr_FindColumnByTitle` / `EeCvr_ColumnHasReportableData` (FALSE for an all-blank or
 all-redacted column) / `EeCvr_CollectColumnCounts`. Test `cvrcnt`.
 
-**Uncommitted (this session): CSV/TSV export.** Every voter/CVR view and report can
+**CSV/TSV export (committed).** Every voter/CVR view and report can
 export to **UTF-8 CSV (default) or UTF-8 TSV** (BOM-prefixed so Excel reads UTF-8), in
 the window's current display order, with a header row. Shared plumbing in `main.c`:
 `App_PromptExportPath` (Save dialog; CSV filter 1 / TSV filter 2; typed `.csv`/`.tsv`
@@ -79,8 +79,22 @@ source file base name (no ext) + a window suffix.
 New IDs `IDM_FILE_EXPORT_VOTERS/_CVR`, `IDM_EXPORT_SELECTED/_ALL`,
 `IDC_EXPORT_NORMALIZED`. Files: `main.c`, `resource.h`, `voter_table.{c,h}`,
 `ee_cvr.{c,h}`, `docs/cvr-design.md`, `test/README.md`, `test/smoke_load.c`. Tests
-`vexport`, `cvrexp`. Full suite green (40); app builds clean x64 Debug+Release.
-**Not yet GUI click-tested.**
+`vexport`, `cvrexp`.
+
+**Uncommitted (this session): Help menus + version 1.1.0.0.** Voter-list **Help** menu
+gains an **Export** topic (`IDM_HELP_EXPORT` → `k_HelpExport`) between Reports and
+Compare. The **CVR window** gets a new **Help** menu (after Reports) mirroring the
+voter layout — Options / Filters / Reports / Export / (sep) / About — reusing the
+`IDM_HELP_*` command IDs but with CVR-specific bodies (`k_CvrHelpOptions/Filters/
+Reports/Export`) handled in `CvrWndProc`; About reuses `App_ShowAbout(cw->app)`.
+**Version bumped 1.0.1.0 → 1.1.0.0** in `res/ElectionExplorer.rc`
+(FILEVERSION/PRODUCTVERSION + the FileVersion/ProductVersion strings), `res/app.manifest`,
+and `ElectionExplorer.Package/Package.appxmanifest` (the About dialog reads it from the
+binary; verified the built EXE reports 1.1.0.0). Files: `main.c`, `resource.h`,
+`res/ElectionExplorer.rc`, `res/app.manifest`, `Package.appxmanifest`. App builds clean
+x64 Debug+Release; smoke suite unaffected (40). **Not yet GUI click-tested.** Note: the
+Store `.msixupload` will now build as `…_1.1.0.0_…` — rebuild the bundle before the next
+submission.
 
 The app is being published via the **Microsoft Store**.
 
@@ -594,8 +608,8 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze the leading key
   columns in the CVR grid (a frozen/scroll split like the voter window); per-file
   byte progress instead of the marquee.
-- **Store:** submit the built
-  `Build/msix/ElectionExplorer.Package_1.0.1.0_x64_arm64_bundle.msixupload` in
+- **Store:** rebuild and submit
+  `Build/msix/ElectionExplorer.Package_1.1.0.0_x64_arm64_bundle.msixupload` in
   Partner Center; enable **GitHub Pages** so the privacy URL resolves
   (`https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`).
 - Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a

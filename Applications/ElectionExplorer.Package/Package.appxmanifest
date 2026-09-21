@@ -16,7 +16,7 @@
   <Identity
     Name="WheelGroupTech.ElectionExplorer"
     Publisher="CN=19C9DED9-26A0-4883-97F5-C2A81BF980D6"
-    Version="1.0.1.0" />
+    Version="1.1.0.0" />
   <!-- Identity assigned by the Microsoft Store (Partner Center). -->
 
   <Properties>

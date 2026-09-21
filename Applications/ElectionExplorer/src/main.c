@@ -2627,6 +2627,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
@@ -8194,6 +8195,88 @@ static const wchar_t k_HelpCompare[] =
     L"differing fields — Voter ID, the field (Name / Address / Precinct), and its "
     L"value in each file.";
 
+static const wchar_t k_HelpExport[] =
+    L"Export writes rows to a UTF-8 file — CSV by default, or TSV — with a header "
+    L"row of column titles. Rows are exported in the order and sort currently shown, "
+    L"and the suggested file name is the loaded list's name plus a description of "
+    L"what was exported.\r\n\r\n"
+    L"•  File → Export Voter List — every currently visible row (all rows, or the "
+    L"filtered/duplicates view if one is active). The name ends \"-Filtered_Voters\" "
+    L"or \"-All_Voters\".\r\n\r\n"
+    L"•  Right-click → Export Selected — only the selected rows "
+    L"(\"-Selected_Voters\").\r\n\r\n"
+    L"Both ask whether to Include normalized data fields (Voter ID, Precinct, Name, "
+    L"Address); it is off by default, so only the original source columns are "
+    L"written.\r\n\r\n"
+    L"•  In a Precinct or Address report, right-click → Export Selected or Export "
+    L"All to save that summary (\"-Selected_Precincts\"/\"-All_Precincts\", or the "
+    L"Addresses equivalents).\r\n\r\n"
+    L"Choose CSV or TSV in the Save dialog's file-type list. Files are written with a "
+    L"byte-order mark so Excel opens them as UTF-8; fields containing a comma, tab, "
+    L"quote, or line break are quoted automatically.";
+
+/* CVR-window help topics (parallel to the voter-list topics above). */
+static const wchar_t k_CvrHelpOptions[] =
+    L"Options (Edit → Options) control how the Cast Vote Records are tabulated. The "
+    L"setting is saved and applies to future windows.\r\n\r\n"
+    L"•  Merge image and text write-ins — a contest can record write-ins several "
+    L"ways: a scanned write-in image (shown as \"[write-in]\"), the literal text "
+    L"\"Write-in\", and the placeholder \"No image found\". When this is on (the "
+    L"default), all of these are combined into a single \"write-in\" tally row, "
+    L"matching how official results report one Write-in total; when off, each variant "
+    L"is counted on its own row.";
+
+static const wchar_t k_CvrHelpFilters[] =
+    L"Filters (Filter menu, or Ctrl+L) narrow the visible ballot records. Each rule "
+    L"targets one CVR column and tests it with \"is\" or \"is not\", and is either an "
+    L"Include or an Exclude.\r\n\r\n"
+    L"The value is chosen from the list of selections that actually appear in that "
+    L"column. For the numeric Cast Vote Record column you can type a record number "
+    L"directly, because the suggestion list is capped for very large CVRs.\r\n\r\n"
+    L"How multiple rules combine:\r\n\r\n"
+    L"•  Exclude wins — a record matching any enabled Exclude rule is hidden.\r\n\r\n"
+    L"•  Includes on the SAME column are OR'd; Includes on DIFFERENT columns are "
+    L"AND'd.\r\n\r\n"
+    L"•  With no Include rules, every record is shown except those removed by "
+    L"Exclude rules.\r\n\r\n"
+    L"Right-click a cell (or a report row) and choose Include/Exclude to add a rule "
+    L"for that value. The status bar shows how many records are shown; Reset Filter "
+    L"clears all rules. Filtering never changes the tabulation, which always counts "
+    L"every ballot record.";
+
+static const wchar_t k_CvrHelpReports[] =
+    L"Reports (Reports menu) summarize the loaded Cast Vote Records.\r\n\r\n"
+    L"•  Tabulate CVR Votes — counts every contest: one row per selection "
+    L"(candidate, Yes/No, and then write-in, overvote, and undervote), with the "
+    L"contest name repeated on each of its rows. \"Vote for N\" contests are summed "
+    L"across all of their columns.\r\n\r\n"
+    L"•  Display Batch / Precinct / Ballot Style Report — one row per distinct value "
+    L"in that column with the number of ballot records carrying it. A report is "
+    L"unavailable (greyed) when the CVR has no such column or its data is "
+    L"redacted.\r\n\r\n"
+    L"Each report opens in its own window; empty values group into a \"(blank)\" row. "
+    L"Reports count ALL ballot records and ignore any active filter. Click a header "
+    L"to sort; right-click a row to Copy it, to Include or Exclude that value in the "
+    L"CVR window's filter, or to Export the selection.";
+
+static const wchar_t k_CvrHelpExport[] =
+    L"Export writes ballot records to a UTF-8 file — CSV by default, or TSV — with a "
+    L"header row of column titles, in the order and sort currently shown. The "
+    L"suggested file name is the first CVR file's name plus a description of what was "
+    L"exported.\r\n\r\n"
+    L"•  File → Export Cast Vote Records — every currently visible record (all "
+    L"records, or the filtered view if a filter is active). The name ends "
+    L"\"-Filtered_Records\" or \"-All_Records\".\r\n\r\n"
+    L"•  Right-click → Export Selected — only the selected records "
+    L"(\"-Selected_Records\").\r\n\r\n"
+    L"•  In a report window, right-click → Export Selected or Export All to save that "
+    L"summary (for example \"-All_Contests\", \"-Selected_Batches\", "
+    L"\"-All_Ballot_Styles\").\r\n\r\n"
+    L"Choose CSV or TSV in the Save dialog's file-type list. Files are written with a "
+    L"byte-order mark so Excel opens them as UTF-8; fields containing a comma, tab, "
+    L"quote, or line break are quoted automatically. (Write-in images are not stored "
+    L"in a text export — export to .xlsx is unaffected.)";
+
 static const wchar_t k_RepoUrl[] = L"https://github.com/WheelGroupTech/ElectionInfo";
 static const wchar_t k_PrivacyUrl[] =
     L"https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY";
@@ -9315,6 +9398,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_HELP_REPORTS:
                     App_ShowHelpTopic(app, L"Help — Reports", k_HelpReports);
                     return 0;
+                case IDM_HELP_EXPORT:
+                    App_ShowHelpTopic(app, L"Help — Export", k_HelpExport);
+                    return 0;
                 case IDM_HELP_COMPARE:
                     App_ShowHelpTopic(app, L"Help — Compare", k_HelpCompare);
                     return 0;
@@ -9876,8 +9962,9 @@ static HMENU App_CreateCvrMenu(void)
     HMENU edit_menu = CreatePopupMenu();
     HMENU filter_menu = CreatePopupMenu();
     HMENU reports_menu = CreatePopupMenu();
+    HMENU help_menu = CreatePopupMenu();
     if (menu == NULL || file_menu == NULL || edit_menu == NULL || filter_menu == NULL ||
-        reports_menu == NULL)
+        reports_menu == NULL || help_menu == NULL)
     {
         if (file_menu != NULL)
         {
@@ -9894,6 +9981,10 @@ static HMENU App_CreateCvrMenu(void)
         if (reports_menu != NULL)
         {
             DestroyMenu(reports_menu);
+        }
+        if (help_menu != NULL)
+        {
+            DestroyMenu(help_menu);
         }
         if (menu != NULL)
         {
@@ -9918,10 +10009,17 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_PRECINCT, L"Display &Precinct Report…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_BALLOTSTYLE,
                 L"Display Ballot &Style Report…");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
+    AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
 
@@ -10410,6 +10508,21 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_FILE_EXIT:
                     App_ExitAll();
+                    return 0;
+                case IDM_HELP_OPTIONS:
+                    App_ShowHelpTopic(cw->app, L"Help — Options", k_CvrHelpOptions);
+                    return 0;
+                case IDM_HELP_FILTERS:
+                    App_ShowHelpTopic(cw->app, L"Help — Filters", k_CvrHelpFilters);
+                    return 0;
+                case IDM_HELP_REPORTS:
+                    App_ShowHelpTopic(cw->app, L"Help — Reports", k_CvrHelpReports);
+                    return 0;
+                case IDM_HELP_EXPORT:
+                    App_ShowHelpTopic(cw->app, L"Help — Export", k_CvrHelpExport);
+                    return 0;
+                case IDM_HELP_ABOUT:
+                    App_ShowAbout(cw->app);
                     return 0;
                 default:
                     break;

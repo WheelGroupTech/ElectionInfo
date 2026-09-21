@@ -1,7 +1,7 @@
 # Applications
 
 Compiled election tools live under this directory. Analysis scripts (Python)
-remain in sibling top-level folders of the repository (`ES&S/`,
+live under the repository's [`Scripts/`](../Scripts/) folder (`ES&S/`,
 `Travis_County_Elections/`, and so on).
 
 Agent policy for native Windows code is in [`AGENTS.md`](AGENTS.md).
@@ -56,8 +56,8 @@ Applications/
    (`ElectionExplorer`, not `election_explorer` or `ee`).
 3. **Project file lives with the app**, not under `Build/` and not at the
    solution root (except shared props / targets).
-4. **Do not place production compiled-tool source** in the root Python folders
-   (`ES&S/`, `Results_Tapes/`, `Travis_County_*`, etc.).
+4. **Do not place production compiled-tool source** in the Python script folders
+   (`Scripts/ES&S/`, `Scripts/Results_Tapes/`, `Scripts/Travis_County_*`, etc.).
 5. **Do not place source or project files under `Build/`.** That tree is
    output-only.
 

@@ -37,9 +37,10 @@ These guidelines apply to:
 - Automated CI/CD agents that open pull requests, apply patches, or run
   scripts affecting `Applications/`.
 
-These guidelines do **not** replace conventions for top-level Python analysis
-folders (`ES&S/`, `Results_Tapes/`, `Travis_County_*`, etc.). Agents MUST NOT
-implement new compiled production tools in those Python folders.
+These guidelines do **not** replace conventions for the Python analysis folders
+under `Scripts/` (`Scripts/ES&S/`, `Scripts/Results_Tapes/`,
+`Scripts/Travis_County_*`, etc.). Agents MUST NOT implement new compiled
+production tools in those Python folders.
 
 Human contributors are encouraged (but not required) to follow the same
 conventions when working alongside agents.

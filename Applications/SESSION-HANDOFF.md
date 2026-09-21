@@ -81,20 +81,38 @@ New IDs `IDM_FILE_EXPORT_VOTERS/_CVR`, `IDM_EXPORT_SELECTED/_ALL`,
 `ee_cvr.{c,h}`, `docs/cvr-design.md`, `test/README.md`, `test/smoke_load.c`. Tests
 `vexport`, `cvrexp`.
 
-**Uncommitted (this session): Help menus + version 1.1.0.0.** Voter-list **Help** menu
-gains an **Export** topic (`IDM_HELP_EXPORT` → `k_HelpExport`) between Reports and
-Compare. The **CVR window** gets a new **Help** menu (after Reports) mirroring the
-voter layout — Options / Filters / Reports / Export / (sep) / About — reusing the
-`IDM_HELP_*` command IDs but with CVR-specific bodies (`k_CvrHelpOptions/Filters/
-Reports/Export`) handled in `CvrWndProc`; About reuses `App_ShowAbout(cw->app)`.
-**Version bumped 1.0.1.0 → 1.1.0.0** in `res/ElectionExplorer.rc`
-(FILEVERSION/PRODUCTVERSION + the FileVersion/ProductVersion strings), `res/app.manifest`,
-and `ElectionExplorer.Package/Package.appxmanifest` (the About dialog reads it from the
-binary; verified the built EXE reports 1.1.0.0). Files: `main.c`, `resource.h`,
-`res/ElectionExplorer.rc`, `res/app.manifest`, `Package.appxmanifest`. App builds clean
-x64 Debug+Release; smoke suite unaffected (40). **Not yet GUI click-tested.** Note: the
-Store `.msixupload` will now build as `…_1.1.0.0_…` — rebuild the bundle before the next
-submission.
+**Help menus + version 1.1.0.0 (committed).** Voter-list **Help** menu gained an
+**Export** topic (`k_HelpExport`); the **CVR window** gained a **Help** menu after
+Reports mirroring the voter layout (Options / Filters / Reports / Export / About) with
+CVR-specific bodies (`k_CvrHelp*`) in `CvrWndProc`. App **version 1.0.1.0 → 1.1.0.0** in
+`res/ElectionExplorer.rc`, `res/app.manifest`, and `Package.appxmanifest` (About reads it
+from the binary; EXE verified 1.1.0.0). The Store `.msixupload` will now build as
+`…_1.1.0.0_…` — rebuild the bundle before the next submission.
+
+**Uncommitted (this session): CVR window promoted to a standalone top-level window.**
+Each CVR window now owns its
+**own resource-only `AppState`** (`cw->app`, new `AppState.is_cvr_ui`, `hwnd_main` = the
+CVR window), built in `App_CreateCvrWindow` via `App_InitViewerState` +
+`App_UpdateDpiMetrics` and freed by new `App_FreeCvrUi` in `WM_DESTROY` — so it no
+longer borrows the launching voter window's `AppState`. All `cw->app->…` /
+`Scale(cw->app,…)` / `App_HeaderCustomDraw(cw->app,…)` calls are unchanged (they now use
+the window's own resources). App lifetime: new `g_cvr_windows[]`/`g_cvr_window_count`
+(register/unregister) + `App_MaybeQuit` quit only when BOTH voter and CVR window counts
+are zero, so **closing the voter list leaves an open CVR window running as the only
+window**; `App_ExitAll` now also closes CVR windows. From a lone CVR window, **Load Voter
+List…** forces a fresh viewer (`is_cvr_ui` branch in `App_BeginOpenVoterList`) and **Load
+Cast Vote Records…** opens another standalone CVR window. Modals now own to/center on the
+launching window: `App_CenterModalClient` centers on the dialog's `GW_OWNER` (falls back
+to `hwnd_main`), new `App_RunModalDialogOwned` + `App_ShowHelpTopicOn`/`App_ShowAboutOn`,
+and the CVR Help/About handlers pass `cw->hwnd` — so CVR Help/About center on the CVR
+window.
+
+Files this session: `main.c`, `resource.h`, `res/ElectionExplorer.rc`, `res/app.manifest`,
+`Package.appxmanifest`, `docs/cvr-design.md`. App builds clean x64 Debug+Release; smoke
+suite unaffected (40). **Not yet GUI click-tested** — verify: open a CVR window, close
+the voter list → CVR stays and the app keeps running; Help/About from the CVR window
+center on it; Exit from the CVR window quits; Load Voter List from a lone CVR window
+opens a new voter window; no leak/crash closing windows in various orders.
 
 The app is being published via the **Microsoft Store**.
 

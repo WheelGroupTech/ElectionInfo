@@ -130,6 +130,9 @@ typedef struct AppState
     COLORREF header_bg;
     COLORREF header_line;
     EeVoterTable table;
+    BOOL is_cvr_ui; /* TRUE for the resource-only AppState a CVR window owns (not a
+                     * voter viewer): keeps it out of the voter-window behaviors and
+                     * makes "Load Voter List" from a CVR window open a fresh viewer. */
     BOOL loading;
     BOOL close_pending;
     volatile LONG load_cancel;
@@ -274,6 +277,7 @@ static void App_ExportVoters(AppState *app, BOOL selection_only);
 static void App_ExportVoterReport(ReportWindow *rw, BOOL selection_only);
 static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_BeginOpenCvr(AppState *app);
+static void App_FreeCvrUi(AppState *ui);
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_StartDuplicateScan(AppState *app, int kind);
 static void App_OnScanFinished(AppState *app);
@@ -426,6 +430,43 @@ static void CvrFilter_Unregister(HWND hwnd)
             g_cvr_filter_windows[i] = g_cvr_filter_windows[--g_cvr_filter_count];
             return;
         }
+    }
+}
+
+/* Open CVR viewer windows. They are first-class top-level windows (each owns its own
+ * resource-only AppState) that live outside g_viewers, so track them here to keep the
+ * app alive while any is open and to close them on Exit. */
+#define EE_MAX_CVR_WINDOWS 64
+static HWND g_cvr_windows[EE_MAX_CVR_WINDOWS];
+static int g_cvr_window_count;
+
+static void CvrWindow_Register(HWND hwnd)
+{
+    if (hwnd != NULL && g_cvr_window_count < EE_MAX_CVR_WINDOWS)
+    {
+        g_cvr_windows[g_cvr_window_count++] = hwnd;
+    }
+}
+
+static void CvrWindow_Unregister(HWND hwnd)
+{
+    int i;
+    for (i = 0; i < g_cvr_window_count; i++)
+    {
+        if (g_cvr_windows[i] == hwnd)
+        {
+            g_cvr_windows[i] = g_cvr_windows[--g_cvr_window_count];
+            return;
+        }
+    }
+}
+
+/* PostQuitMessage only once no voter window and no CVR window remain. */
+static void App_MaybeQuit(void)
+{
+    if (g_viewer_count <= 0 && g_cvr_window_count <= 0)
+    {
+        PostQuitMessage(0);
     }
 }
 
@@ -2031,7 +2072,9 @@ static void App_BeginOpenVoterList(AppState *app)
             }
         }
 
-        if (app->load_path[0] != L'\0' || app->table.row_count > 0)
+        /* From a CVR window (a resource-only AppState) always open a fresh viewer,
+         * as its "window" is the CVR grid, not an empty voter list. */
+        if (app->is_cvr_ui || app->load_path[0] != L'\0' || app->table.row_count > 0)
         {
             AppState *created = App_CreateViewer(app->instance, SW_SHOWNORMAL, app->hwnd_main, app);
             if (created == NULL)
@@ -8336,7 +8379,12 @@ static BOOL App_GetVersionString(wchar_t *out, size_t cch)
 
 /* Build a control-less modal dialog template (controls are created in
  * WM_INITDIALOG) with @p caption and run it modally, owned by the main window. */
-static INT_PTR App_RunModalDialog(AppState *app, const wchar_t *caption, DLGPROC proc, LPARAM param)
+/* Run an app modal dialog owned by (and centered over) @p owner. */
+static INT_PTR App_RunModalDialogOwned(AppState *app,
+                                       HWND owner,
+                                       const wchar_t *caption,
+                                       DLGPROC proc,
+                                       LPARAM param)
 {
     DWORD buf[128]; /* DWORD-aligned as DLGTEMPLATE requires */
     DLGTEMPLATE *dt = (DLGTEMPLATE *)buf;
@@ -8361,7 +8409,16 @@ static INT_PTR App_RunModalDialog(AppState *app, const wchar_t *caption, DLGPROC
         memcpy(p, caption, clen * sizeof(WCHAR));
     }
     ((WCHAR *)p)[clen] = L'\0';
-    return DialogBoxIndirectParamW(app->instance, dt, app->hwnd_main, proc, param);
+    return DialogBoxIndirectParamW(app->instance,
+                                   dt,
+                                   (owner != NULL) ? owner : app->hwnd_main,
+                                   proc,
+                                   param);
+}
+
+static INT_PTR App_RunModalDialog(AppState *app, const wchar_t *caption, DLGPROC proc, LPARAM param)
+{
+    return App_RunModalDialogOwned(app, app->hwnd_main, caption, proc, param);
 }
 
 /* Center a modal dialog of the given client size over the main window and return
@@ -8370,6 +8427,7 @@ static void App_CenterModalClient(HWND dlg, AppState *app, int client_w, int cli
 {
     RECT rc;
     RECT owner;
+    HWND owner_hwnd;
     int outer_w;
     int outer_h;
     int x = CW_USEDEFAULT;
@@ -8385,7 +8443,15 @@ static void App_CenterModalClient(HWND dlg, AppState *app, int client_w, int cli
                        (DWORD)GetWindowLongPtrW(dlg, GWL_EXSTYLE));
     outer_w = rc.right - rc.left;
     outer_h = rc.bottom - rc.top;
-    if (app->hwnd_main != NULL && GetWindowRect(app->hwnd_main, &owner))
+    /* Center over the window that owns this dialog (the window the user acted in) —
+     * that is the voter window for voter-launched dialogs and the CVR window for
+     * CVR-launched ones. Fall back to the app's main window. */
+    owner_hwnd = GetWindow(dlg, GW_OWNER);
+    if (owner_hwnd == NULL)
+    {
+        owner_hwnd = app->hwnd_main;
+    }
+    if (owner_hwnd != NULL && GetWindowRect(owner_hwnd, &owner))
     {
         x = owner.left + ((owner.right - owner.left) - outer_w) / 2;
         y = owner.top + ((owner.bottom - owner.top) - outer_h) / 2;
@@ -8902,7 +8968,9 @@ static INT_PTR CALLBACK AboutDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM l
     return (INT_PTR)FALSE;
 }
 
-static void App_ShowHelpTopic(AppState *app, const wchar_t *caption, const wchar_t *body)
+/* Help topic modal owned by (and centered over) @p owner; NULL uses the main window. */
+static void App_ShowHelpTopicOn(AppState *app, HWND owner, const wchar_t *caption,
+                                const wchar_t *body)
 {
     HelpDlgData d;
     if (app == NULL)
@@ -8911,10 +8979,15 @@ static void App_ShowHelpTopic(AppState *app, const wchar_t *caption, const wchar
     }
     d.app = app;
     d.body = body;
-    App_RunModalDialog(app, caption, HelpTextDlgProc, (LPARAM)&d);
+    App_RunModalDialogOwned(app, owner, caption, HelpTextDlgProc, (LPARAM)&d);
 }
 
-static void App_ShowAbout(AppState *app)
+static void App_ShowHelpTopic(AppState *app, const wchar_t *caption, const wchar_t *body)
+{
+    App_ShowHelpTopicOn(app, (app != NULL) ? app->hwnd_main : NULL, caption, body);
+}
+
+static void App_ShowAboutOn(AppState *app, HWND owner)
 {
     AboutDlgData d;
     if (app == NULL)
@@ -8923,7 +8996,12 @@ static void App_ShowAbout(AppState *app)
     }
     d.app = app;
     d.icon = NULL;
-    App_RunModalDialog(app, L"About Election Explorer", AboutDlgProc, (LPARAM)&d);
+    App_RunModalDialogOwned(app, owner, L"About Election Explorer", AboutDlgProc, (LPARAM)&d);
+}
+
+static void App_ShowAbout(AppState *app)
+{
+    App_ShowAboutOn(app, (app != NULL) ? app->hwnd_main : NULL);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -9576,10 +9654,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             App_UnlinkViewer(app);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             HeapFree(GetProcessHeap(), 0, app);
-            if (g_viewer_count <= 0)
-            {
-                PostQuitMessage(0);
-            }
+            App_MaybeQuit();
             return 0;
 
         default:
@@ -9745,6 +9820,23 @@ static void App_ExitAll(void)
         if (hwnds[i] != NULL && IsWindow(hwnds[i]))
         {
             SendMessageW(hwnds[i], WM_CLOSE, 0, 0);
+        }
+    }
+    /* Close standalone CVR windows too (snapshot first — each close mutates the list). */
+    {
+        HWND cvr[EE_MAX_CVR_WINDOWS];
+        int c = 0;
+        int k;
+        for (k = 0; k < g_cvr_window_count && c < (int)ARRAYSIZE(cvr); k++)
+        {
+            cvr[c++] = g_cvr_windows[k];
+        }
+        for (k = 0; k < c; k++)
+        {
+            if (cvr[k] != NULL && IsWindow(cvr[k]))
+            {
+                SendMessageW(cvr[k], WM_CLOSE, 0, 0);
+            }
         }
     }
 }
@@ -10510,19 +10602,19 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     App_ExitAll();
                     return 0;
                 case IDM_HELP_OPTIONS:
-                    App_ShowHelpTopic(cw->app, L"Help — Options", k_CvrHelpOptions);
+                    App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Options", k_CvrHelpOptions);
                     return 0;
                 case IDM_HELP_FILTERS:
-                    App_ShowHelpTopic(cw->app, L"Help — Filters", k_CvrHelpFilters);
+                    App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Filters", k_CvrHelpFilters);
                     return 0;
                 case IDM_HELP_REPORTS:
-                    App_ShowHelpTopic(cw->app, L"Help — Reports", k_CvrHelpReports);
+                    App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Reports", k_CvrHelpReports);
                     return 0;
                 case IDM_HELP_EXPORT:
-                    App_ShowHelpTopic(cw->app, L"Help — Export", k_CvrHelpExport);
+                    App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Export", k_CvrHelpExport);
                     return 0;
                 case IDM_HELP_ABOUT:
-                    App_ShowAbout(cw->app);
+                    App_ShowAboutOn(cw->app, hwnd);
                     return 0;
                 default:
                     break;
@@ -10628,8 +10720,14 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 EeFilter_Clear(&cw->filters);
                 free(cw->disp);
                 EeCvr_Clear(&cw->table);
+                /* Release this window's own resource-only AppState (fonts/brushes),
+                 * created in App_CreateCvrWindow. Sub-windows above have already
+                 * closed, so nothing references it any more. */
+                App_FreeCvrUi(cw->app);
                 free(cw);
+                CvrWindow_Unregister(hwnd);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                App_MaybeQuit();
             }
             return 0;
 
@@ -10639,14 +10737,50 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+/* Free a CVR window's resource-only AppState (created in App_CreateCvrWindow). */
+static void App_FreeCvrUi(AppState *ui)
+{
+    if (ui == NULL)
+    {
+        return;
+    }
+    if (ui->font_ui)
+    {
+        DeleteObject(ui->font_ui);
+    }
+    if (ui->font_grid)
+    {
+        DeleteObject(ui->font_grid);
+    }
+    if (ui->font_header)
+    {
+        DeleteObject(ui->font_header);
+    }
+    if (ui->brush_header)
+    {
+        DeleteObject(ui->brush_header);
+    }
+    if (ui->pen_header_line)
+    {
+        DeleteObject(ui->pen_header_line);
+    }
+    EeFilter_Clear(&ui->filters);
+    EeVoterTable_Clear(&ui->table);
+    DeleteCriticalSection(&ui->progress_lock);
+    HeapFree(GetProcessHeap(), 0, ui);
+}
+
 /* Create a CVR window, taking ownership of @p table (moved; the source is reset
- * to empty). */
+ * to empty). The window is a first-class top-level window that owns its own
+ * resource-only AppState (@p app is only used to seed it and for its instance), so
+ * it survives the voter window that launched it and keeps the app alive on its own. */
 static void App_CreateCvrWindow(AppState *app,
                                 EeCvrTable *table,
                                 const wchar_t *title,
                                 const wchar_t *first_path)
 {
     CvrWindow *cw = (CvrWindow *)calloc(1, sizeof(CvrWindow));
+    AppState *ui;
     HWND h;
     if (cw == NULL)
     {
@@ -10654,7 +10788,21 @@ static void App_CreateCvrWindow(AppState *app,
         MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
         return;
     }
-    cw->app = app;
+    /* This window's own resources (fonts, header brush, DPI, instance), independent
+     * of the launching voter window's AppState so it can outlive it. */
+    ui = (AppState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AppState));
+    if (ui == NULL)
+    {
+        EeCvr_Clear(table);
+        free(cw);
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    App_InitViewerState(ui, app->instance, app); /* seed zoom/map prefs from launcher */
+    ui->is_cvr_ui = TRUE;
+    App_UpdateDpiMetrics(ui, app->dpi ? app->dpi : 96u); /* build fonts/brushes now */
+
+    cw->app = ui;
     cw->table = *table; /* move */
     EeCvr_Init(table);
     cw->sort_col = -1;
@@ -10683,15 +10831,16 @@ static void App_CreateCvrWindow(AppState *app,
                         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                         CW_USEDEFAULT,
                         CW_USEDEFAULT,
-                        Scale(app, 900),
-                        Scale(app, 560),
+                        Scale(ui, 900),
+                        Scale(ui, 560),
                         NULL,
                         App_CreateCvrMenu(),
-                        app->instance,
+                        ui->instance,
                         cw);
     if (h == NULL)
     {
         EeCvr_Clear(&cw->table);
+        App_FreeCvrUi(ui);
         free(cw);
         MessageBoxW(app->hwnd_main,
                     L"Could not create the CVR window.",
@@ -10699,6 +10848,8 @@ static void App_CreateCvrWindow(AppState *app,
                     MB_ICONERROR | MB_OK);
         return;
     }
+    ui->hwnd_main = h; /* the CVR window is this AppState's "main" window */
+    CvrWindow_Register(h);
     ShowWindow(h, SW_SHOWNORMAL);
     UpdateWindow(h);
 }

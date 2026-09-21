@@ -329,6 +329,26 @@ per-precinct cross-tabs. Count **blank** (contest not on ballot) separately from
 together. (The current report already keeps `undervote`/`overvote` as distinct
 selections and simply omits blanks.)
 
+## Standalone CVR window
+
+A CVR window is a **first-class top-level window**, not a satellite of the voter list
+that launched it. Each CVR window owns its **own resource-only `AppState`** (`cw->app`,
+`is_cvr_ui = TRUE`) holding its fonts, header brush, DPI and instance, with its
+`hwnd_main` set to the CVR window itself. Because the window no longer borrows the
+launching voter window's `AppState`, it survives that window closing, and its own
+dialogs (Help, About, Options, and the Load progress modal) own to and center on the
+CVR window.
+
+App lifetime counts CVR windows: `App_CreateCvrWindow` registers each in
+`g_cvr_windows[]` (`g_cvr_window_count`), and the process quits (`App_MaybeQuit`) only
+once **both** `g_viewer_count` and `g_cvr_window_count` reach zero. So closing the last
+voter list leaves an open CVR window running as the only window, and **Exit**
+(`App_ExitAll`) closes CVR windows too. From a lone CVR window, **File → Load Voter
+List…** always opens a fresh voter window (`is_cvr_ui` forces the new-window path), and
+**File → Load Cast Vote Records…** opens another standalone CVR window. The CVR window's
+`AppState` is released in its `WM_DESTROY` via `App_FreeCvrUi` after its child report/
+filter windows have closed.
+
 ## Delimited-text export (CSV / TSV)
 
 Every CVR view and report can export to **UTF-8 CSV (default) or UTF-8 TSV**. A

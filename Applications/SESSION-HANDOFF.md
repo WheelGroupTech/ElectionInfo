@@ -4,10 +4,10 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-20
-**Branch:** main — Store prep, the Travis address fix, the full
-**XLSX import** feature, and the complete **CVR support** (incl. the CVR **Filter**
-menu) are committed in `main`. CVR =
+**Last updated:** 2026-09-21
+**Branch:** main — **all work below is committed; working tree clean.** Store prep, the
+Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
+(incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR
 viewer window + **File → Load Cast Vote Records…** (`main.c`), **write-in image
 detection** in `xlsx.c` (a contest cell whose only content is an anchored picture —
@@ -89,7 +89,7 @@ CVR-specific bodies (`k_CvrHelp*`) in `CvrWndProc`. App **version 1.0.1.0 → 1.
 from the binary; EXE verified 1.1.0.0). The Store `.msixupload` will now build as
 `…_1.1.0.0_…` — rebuild the bundle before the next submission.
 
-**Uncommitted (this session): CVR window promoted to a standalone top-level window.**
+**CVR window promoted to a standalone top-level window (committed, click-tested).**
 Each CVR window now owns its
 **own resource-only `AppState`** (`cw->app`, new `AppState.is_cvr_ui`, `hwnd_main` = the
 CVR window), built in `App_CreateCvrWindow` via `App_InitViewerState` +
@@ -107,12 +107,19 @@ to `hwnd_main`), new `App_RunModalDialogOwned` + `App_ShowHelpTopicOn`/`App_Show
 and the CVR Help/About handlers pass `cw->hwnd` — so CVR Help/About center on the CVR
 window.
 
-Files this session: `main.c`, `resource.h`, `res/ElectionExplorer.rc`, `res/app.manifest`,
-`Package.appxmanifest`, `docs/cvr-design.md`. App builds clean x64 Debug+Release; smoke
-suite unaffected (40). **Not yet GUI click-tested** — verify: open a CVR window, close
-the voter list → CVR stays and the app keeps running; Help/About from the CVR window
-center on it; Exit from the CVR window quits; Load Voter List from a lone CVR window
-opens a new voter window; no leak/crash closing windows in various orders.
+App builds clean x64 Debug+Release; smoke suite unaffected (40); **GUI click-tested**
+(CVR survives closing the voter list; Help/About center on the CVR window; Exit from a
+lone CVR window quits; Load Voter List from a lone CVR window opens a new viewer).
+
+**Store MSIX 1.1.0.0 built.** Ran the packaging build; the upload bundle is at
+`Build/msix/ElectionExplorer.Package_1.1.0.0_x64_arm64_bundle.msixupload` (x64+ARM64;
+verified inner Identity `WheelGroupTech.ElectionExplorer`, Publisher `CN=19C9DED9-…980D6`,
+Version `1.1.0.0`). Ready to upload in Partner Center. (`Build/` is gitignored.)
+
+**Repo reorganization (committed).** Analysis/processing Python scripts moved under a new
+top-level `Scripts/` tree (e.g. `Scripts/ES&S/…`, `Scripts/Travis_County_*/…`), with a
+`Scripts/README.md`; repo-root and `Applications/` READMEs updated. No `Applications/`
+(ElectionExplorer) source moved.
 
 The app is being published via the **Microsoft Store**.
 
@@ -626,8 +633,8 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze the leading key
   columns in the CVR grid (a frozen/scroll split like the voter window); per-file
   byte progress instead of the marquee.
-- **Store:** rebuild and submit
-  `Build/msix/ElectionExplorer.Package_1.1.0.0_x64_arm64_bundle.msixupload` in
+- **Store:** the 1.1.0.0 upload bundle is already built at
+  `Build/msix/ElectionExplorer.Package_1.1.0.0_x64_arm64_bundle.msixupload` — submit it in
   Partner Center; enable **GitHub Pages** so the privacy URL resolves
   (`https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`).
 - Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a

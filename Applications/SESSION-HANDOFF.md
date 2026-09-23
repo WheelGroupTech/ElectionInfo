@@ -121,16 +121,29 @@ top-level `Scripts/` tree (e.g. `Scripts/ES&S/…`, `Scripts/Travis_County_*/…
 `Scripts/README.md`; repo-root and `Applications/` READMEs updated. No `Applications/`
 (ElectionExplorer) source moved.
 
-**Uncommitted (this session): "State ID" recognized as Voter ID.** Dallas County
-in-person rosters (`…/Voter Rosters/*-In-Person-Roster.csv`, header
-`Name,State ID,Address,…`) label the statewide VUID "State ID", which normalizes to
-`STATEID`. `classify_field` (`voter_table.c`) didn't list it as a Voter ID, so it fell
-through to the residence-`STATE` address rule and was misclassified as the address State
-column (not normalized as Voter ID, and leaking into Address). Added `STATEID`,
-`STATEIDNUMBER`, `STATEVOTERID`, `STATEVOTERIDNUMBER` to the `Role_Vuid` match (checked
-before the address rules). Extended `idvoter` test (roster-style header → Voter ID maps,
-no leak into Address). Builds clean x64 Debug; full suite green (40). Files:
-`src/voter_table.c`, `test/smoke_load.c`.
+**"State ID" recognized as Voter ID (committed).** Dallas County in-person rosters
+(`…/Voter Rosters/*-In-Person-Roster.csv`, header `Name,State ID,Address,…`) label the
+statewide VUID "State ID", which normalizes to `STATEID`. `classify_field`
+(`voter_table.c`) didn't list it as a Voter ID, so it fell through to the residence-`STATE`
+address rule and was misclassified as the address State column (not normalized as Voter
+ID, and leaking into Address). Added `STATEID`, `STATEIDNUMBER`, `STATEVOTERID`,
+`STATEVOTERIDNUMBER` to the `Role_Vuid` match (checked before the address rules). Extended
+`idvoter` test (roster-style header → Voter ID maps, no leak into Address).
+
+**Uncommitted (this session): wide "…With_History" tables — header desync / can't sort
+far-right columns.** On a Travis `Registered_Voters_With_History.csv` (389 columns; e.g.
+`PR06PARTY`) the scroll pane built 385 columns at `ScaleDisplay(120)` ≈ 120 px each
+(~46,000 px total), past the Win32 report-ListView **32,767 px** header limit: the body
+scrolls but the header freezes at the boundary and header hit-testing breaks, so columns
+past ~32 k px (PR06PARTY sits ~32,400 px) can't be sorted and their titles misalign.
+Fix in `App_RebuildColumns` (`main.c`): clamp the scroll-pane column width so all scroll
+columns fit under the limit — `cap = 32000 / scroll_cols` (device px, DPI/zoom-independent;
+a `ScaleDisplay(20)` floor unless the cap is smaller). For this file → 83 px/col ≈ 31,955
+px total, so the header stays in sync and every column sorts. Columns just get narrower as
+count grows (user can still widen individual ones; manually widening many could re-cross
+the limit — the real removal would be column virtualization, a larger future change).
+Debug x64 builds clean; **Release link needs the running instance closed** (the running
+build locks the .exe — not a code error). File: `src/main.c`. **Not yet GUI click-tested.**
 
 The app is being published via the **Microsoft Store**.
 

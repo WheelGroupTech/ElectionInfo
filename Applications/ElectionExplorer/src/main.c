@@ -1488,6 +1488,31 @@ static void App_RebuildColumns(AppState *app)
 
     col_width = ScaleDisplay(app, 120);
 
+    /* A report-mode ListView header desyncs and stops hit-testing once the
+     * cumulative column width passes the Win32 16-bit limit (32,767 px): the body
+     * keeps scrolling but the header freezes, so far-right columns (e.g. the ~385
+     * voter-history columns in a Travis "…With_History" file) can't be sorted and
+     * their titles no longer line up. Clamp the scroll-pane column width so all
+     * scroll columns fit under that limit; with many columns they simply get
+     * narrower (the user can still widen individual ones). Computed in device
+     * pixels so it holds regardless of DPI/zoom. */
+    {
+        int scroll_cols = (int)app->table.column_count - EE_FROZEN_COLUMN_COUNT;
+        if (scroll_cols > 0)
+        {
+            int cap = 32000 / scroll_cols; /* margin under the 32,767 px header limit */
+            int floor_w = ScaleDisplay(app, 20);
+            if (col_width < floor_w)
+            {
+                col_width = floor_w; /* keep columns minimally usable when possible */
+            }
+            if (col_width > cap)
+            {
+                col_width = cap; /* but the limit always wins */
+            }
+        }
+    }
+
     /* Frozen: Voter ID (center) + Precinct + Name + Address (left) */
     for (i = 0; i < EE_FROZEN_COLUMN_COUNT && i < app->table.column_count; i++)
     {

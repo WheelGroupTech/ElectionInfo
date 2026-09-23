@@ -2317,6 +2317,31 @@ static int test_id_voter_header(void)
                 EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID));
         goto done;
     }
+    EeVoterTable_Clear(&t);
+
+    /* Dallas County in-person roster style: "State ID" is Texas's statewide voter ID
+     * (VUID), not the residence State column. It must map to Voter ID, and must not
+     * leak into the normalized Address. */
+    if (!cmp_write_and_load(L"ee_stateid.csv",
+                            "Name,State ID,Address,Polling Place,Date,Precinct,Split,Party\n"
+                            "\"Hudson, Bertha\",1002114877,100 MAIN ST,Site 3,03/03/2026,358,A,REP\n",
+                            &t))
+    {
+        wprintf(L"idvoter: State ID load failed\n");
+        return 1;
+    }
+    if (strcmp(EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID), "1002114877") != 0)
+    {
+        wprintf(L"idvoter: 'State ID' not mapped to Voter ID (got '%S')\n",
+                EeVoterTable_GetCellUtf8(&t, 0, EE_COL_VOTER_ID));
+        goto done;
+    }
+    if (strstr(EeVoterTable_GetCellUtf8(&t, 0, EE_COL_ADDRESS), "1002114877") != NULL)
+    {
+        wprintf(L"idvoter: 'State ID' leaked into Address ('%S')\n",
+                EeVoterTable_GetCellUtf8(&t, 0, EE_COL_ADDRESS));
+        goto done;
+    }
 
     rc = 0;
     wprintf(L"idvoter ok\n");

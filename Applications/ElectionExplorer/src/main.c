@@ -9638,6 +9638,16 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 CloseHandle(app->scan_thread);
                 app->scan_thread = NULL;
             }
+            /* A close during load is deferred until App_OnLoadFinished (which closes
+             * the handle), so load_thread is normally NULL here; clean up defensively
+             * anyway so the handle can never outlive the window. */
+            if (app->load_thread != NULL)
+            {
+                InterlockedExchange(&app->load_cancel, 1);
+                WaitForSingleObject(app->load_thread, INFINITE);
+                CloseHandle(app->load_thread);
+                app->load_thread = NULL;
+            }
             free(app->scan_marks);
             app->scan_marks = NULL;
             free(app->cmp_class_a);
@@ -10849,19 +10859,27 @@ static void App_CreateCvrWindow(AppState *app,
     }
 
     /* Independent top-level window (owner NULL) so the voter list can overlap it,
-     * rather than the CVR window always staying above its opener. */
-    h = CreateWindowExW(0,
-                        k_CvrClassName,
-                        (title != NULL) ? title : L"Cast Vote Records",
-                        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                        CW_USEDEFAULT,
-                        CW_USEDEFAULT,
-                        Scale(ui, 900),
-                        Scale(ui, 560),
-                        NULL,
-                        App_CreateCvrMenu(),
-                        ui->instance,
-                        cw);
+     * rather than the CVR window always staying above its opener. A live window owns
+     * (and destroys) its menu; if creation fails we must destroy it ourselves. */
+    {
+        HMENU menu = App_CreateCvrMenu();
+        h = CreateWindowExW(0,
+                            k_CvrClassName,
+                            (title != NULL) ? title : L"Cast Vote Records",
+                            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                            CW_USEDEFAULT,
+                            CW_USEDEFAULT,
+                            Scale(ui, 900),
+                            Scale(ui, 560),
+                            NULL,
+                            menu,
+                            ui->instance,
+                            cw);
+        if (h == NULL && menu != NULL)
+        {
+            DestroyMenu(menu);
+        }
+    }
     if (h == NULL)
     {
         EeCvr_Clear(&cw->table);

@@ -145,6 +145,24 @@ the limit — the real removal would be column virtualization, a larger future c
 Debug x64 builds clean; **Release link needs the running instance closed** (the running
 build locks the .exe — not a code error). File: `src/main.c`. **Not yet GUI click-tested.**
 
+**Uncommitted (this session): code-review hardening.** Reviewed an external code-review of
+ElectionExplorer; applied the legitimate items and rejected the rest as false
+positives / non-applicable (the review cited C++/WIL and `CHECK_WIN32` patterns this C
+project doesn't use). Applied: (1) defensive `load_thread` wait+close in the voter
+`WM_DESTROY` (mirrors the existing `scan_thread` cleanup; normally NULL there because a
+close during load is deferred to `App_OnLoadFinished`, but now the handle can never
+outlive the window); (2) `App_CreateCvrWindow` now captures the menu handle and
+`DestroyMenu`s it if `CreateWindowExW` fails (previously leaked on that rare path);
+(3) a comment on the `classify_field` CITY/STATE heuristic pointing at the `distcode`
+guard/test. Rejected/verified-fine: the "settings.c registry HKEY leak" (no early return
+between `RegCreateKeyExW` and `RegCloseKey` — already always closed); the "CVR
+handle/GDI accumulation on repeated loads" (each CVR window fully frees its own
+`AppState`+table via `App_FreeCvrUi` on close — no accumulation). Deferred (optional, not
+bugs): per-window `EnableNonClientDpiScaling`/`SetThreadDpiAwarenessContext` for mixed-DPI
+polish (needs mixed-DPI hardware to validate); streaming XLSX ZIP extraction (kept
+full-in-memory for v1, as the review itself recommends). Debug x64 + smoke suite (40)
+clean. Files: `src/main.c`, `src/voter_table.c`.
+
 The app is being published via the **Microsoft Store**.
 
 ---

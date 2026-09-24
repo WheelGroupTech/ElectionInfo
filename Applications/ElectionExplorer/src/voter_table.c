@@ -2780,6 +2780,12 @@ static FieldRole classify_field(const char *norm)
     {
         return Role_AddrZip;
     }
+    /* Loose substring matching: a county jurisdiction column literally named "CITY"
+     * or "STATE BOARD OF EDUCATION" can be classified as residence city/state here.
+     * `compose_address` guards the visible impact by not appending a city/state/ZIP
+     * tail when the address already ends with its own ZIP (see
+     * test_district_codes_not_appended / tag `distcode`). A stricter exact-match
+     * header map is a possible v2 improvement. */
     if (header_contains(norm, "CITY"))
     {
         return Role_AddrCity;

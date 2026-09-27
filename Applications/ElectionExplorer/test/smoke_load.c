@@ -4263,6 +4263,147 @@ done:
     return rc;
 }
 
+/* Export round-trip fidelity for a "vote for N" contest: a contest's blank
+ * continuation columns must export with BLANK headers (not their derived "(2)"
+ * display titles), so re-importing the exported CSV regroups the columns into one
+ * contest and tabulation is unchanged (tag: cvrrt). */
+static int test_cvr_roundtrip(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* Column C is a titled 2-seat contest; column D is its BLANK continuation. */
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Council 2 Seats (10)</t></is></c>"
+        "<c r=\"D1\"/>"
+        "<c r=\"E1\" t=\"inlineStr\"><is><t>Mayor (11)</t></is></c></row>";
+    static const char *k_rows =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+        "<c r=\"D2\" t=\"inlineStr\"><is><t>Bob</t></is></c>"
+        "<c r=\"E2\" t=\"inlineStr\"><is><t>Xavier</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>Bob</t></is></c>"
+        "<c r=\"D3\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+        "<c r=\"E3\" t=\"inlineStr\"><is><t>Yolanda</t></is></c></row>";
+
+    wchar_t xpath[MAX_PATH];
+    wchar_t cpath[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    EeCvrTally *ta = NULL;
+    EeCvrTally *tb = NULL;
+    uint32_t na = 0, nb = 0, i;
+    uint32_t *rows = NULL;
+    char *csv = NULL;
+    size_t csvlen = 0;
+    int rc = 1;
+
+    if (!cvr_temp_path(xpath, ARRAYSIZE(xpath), L"ee_cvr_rt.xlsx") ||
+        !cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_cvr_rt.csv"))
+    {
+        wprintf(L"cvrrt: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(xpath, sheet))
+    {
+        wprintf(L"cvrrt: write xlsx failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = xpath;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"cvrrt: xlsx load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Baseline tally from the .xlsx (Council summed across C+D: Alice 2, Bob 2). */
+    if (!EeCvr_Tabulate(&t, TRUE, &ta, &na))
+    {
+        wprintf(L"cvrrt: baseline tabulate failed\n");
+        goto done;
+    }
+    /* Export all rows as CSV. */
+    rows = (uint32_t *)malloc((size_t)t.nrows * sizeof(uint32_t));
+    for (i = 0; i < t.nrows; i++)
+    {
+        rows[i] = i;
+    }
+    if (!EeCvr_FormatDelimitedUtf8(&t, rows, t.nrows, ',', TRUE, &csv, &csvlen))
+    {
+        wprintf(L"cvrrt: export failed\n");
+        goto done;
+    }
+    /* The continuation column's header must be blank in the export. */
+    if (strstr(csv, "Council 2 Seats (10),,Mayor (11)") == NULL)
+    {
+        wprintf(L"cvrrt: continuation header not blank in export:\n%hs\n", csv);
+        goto done;
+    }
+    if (!cvr_write_bytes(cpath, csv, csvlen))
+    {
+        wprintf(L"cvrrt: write csv failed\n");
+        goto done;
+    }
+    EeCvr_Clear(&t);
+    EeCvr_Init(&t);
+    one[0] = cpath;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok)
+    {
+        wprintf(L"cvrrt: csv reload s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &tb, &nb))
+    {
+        wprintf(L"cvrrt: reloaded tabulate failed\n");
+        goto done;
+    }
+    /* Tallies must be identical: same contest count and per-row values (no split
+     * "Council 2 Seats (10) (2)" contest). */
+    if (na != nb)
+    {
+        wprintf(L"cvrrt: tally count differs baseline=%u reloaded=%u\n", na, nb);
+        goto done;
+    }
+    for (i = 0; i < na; i++)
+    {
+        if (wcscmp(ta[i].contest, tb[i].contest) != 0 ||
+            wcscmp(ta[i].selection, tb[i].selection) != 0 || ta[i].count != tb[i].count)
+        {
+            wprintf(L"cvrrt: row %u differs (%s/%s/%u vs %s/%s/%u)\n", i, ta[i].contest,
+                    ta[i].selection, ta[i].count, tb[i].contest, tb[i].selection, tb[i].count);
+            goto done;
+        }
+    }
+    rc = 0;
+    wprintf(L"cvrrt ok\n");
+
+done:
+    EeCvr_FreeTally(ta, na);
+    EeCvr_FreeTally(tb, nb);
+    free(rows);
+    free(csv);
+    EeCvr_Clear(&t);
+    DeleteFileW(xpath);
+    DeleteFileW(cpath);
+    if (rc != 0)
+    {
+        wprintf(L"cvrrt test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -4544,6 +4685,7 @@ int wmain(void)
     failed |= test_cvr_delimited();
     failed |= test_cvr_colcounts();
     failed |= test_cvr_export();
+    failed |= test_cvr_roundtrip();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

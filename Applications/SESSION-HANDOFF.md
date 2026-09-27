@@ -163,6 +163,19 @@ polish (needs mixed-DPI hardware to validate); streaming XLSX ZIP extraction (ke
 full-in-memory for v1, as the review itself recommends). Debug x64 + smoke suite (40)
 clean. Files: `src/main.c`, `src/voter_table.c`.
 
+**Uncommitted (this session): export round-trip fidelity for "vote for N" contests.**
+Exporting a CVR to CSV/TSV then re-importing split multi-seat contests into N separate
+single-seat races, so a re-tabulation differed from the original (seen on Travis G24:
+Mustang Ridge / Rollingwood / The Hills / Volente council races). Cause: `EeCvr_Format
+DelimitedUtf8` wrote the header from `col_titles`, which holds the *derived* continuation
+titles (`<contest> (2)`, `(3)`) rather than the BLANK headers the source uses to group a
+vote-for-N contest; on re-import those distinct titles read as separate races. Fix
+(`ee_cvr.c`): export a **blank header for continuation columns** (`col_group[c] != c`),
+reproducing the source layout so a re-import regroups them. Verified with a load→tabulate
+→export→reload→tabulate harness on the real Travis G24 (6 files, 587,090 rows): baseline
+and reloaded tallies now **byte-identical**. New test `cvrrt`. Debug x64 + smoke suite
+(41) clean. File: `src/ee_cvr.c`.
+
 The app is being published via the **Microsoft Store**.
 
 ---

@@ -995,11 +995,23 @@ BOOL EeCvr_FormatDelimitedUtf8(const EeCvrTable *t,
     {
         for (c = 0; c < t->ncols; c++)
         {
+            /* A "vote for N" contest occupies several columns; only the first is
+             * titled and the continuation columns carry a BLANK header in the source
+             * (that is how the loader regroups them via col_group). col_titles holds
+             * derived display titles ("<contest> (2)", "(3)") for those columns, so
+             * write a blank header for them here instead — otherwise a re-import would
+             * see distinct non-blank titles and split the race into N separate
+             * single-seat contests, changing the tabulation. */
+            const wchar_t *title = t->col_titles[c];
+            if (t->col_group != NULL && t->col_group[c] != c)
+            {
+                title = L"";
+            }
             if (c > 0 && !cvr_tb_append(&b, &delim, 1))
             {
                 goto fail;
             }
-            if (!cvr_tb_append_wide_field(&b, t->col_titles[c], delim))
+            if (!cvr_tb_append_wide_field(&b, title, delim))
             {
                 goto fail;
             }

@@ -130,8 +130,8 @@ ID, and leaking into Address). Added `STATEID`, `STATEIDNUMBER`, `STATEVOTERID`,
 `STATEVOTERIDNUMBER` to the `Role_Vuid` match (checked before the address rules). Extended
 `idvoter` test (roster-style header → Voter ID maps, no leak into Address).
 
-**Uncommitted (this session): wide "…With_History" tables — header desync / can't sort
-far-right columns.** On a Travis `Registered_Voters_With_History.csv` (389 columns; e.g.
+**Wide "…With_History" tables — header desync / can't sort far-right columns (committed
+`a82e8b8`).** On a Travis `Registered_Voters_With_History.csv` (389 columns; e.g.
 `PR06PARTY`) the scroll pane built 385 columns at `ScaleDisplay(120)` ≈ 120 px each
 (~46,000 px total), past the Win32 report-ListView **32,767 px** header limit: the body
 scrolls but the header freezes at the boundary and header hit-testing breaks, so columns
@@ -145,7 +145,7 @@ the limit — the real removal would be column virtualization, a larger future c
 Debug x64 builds clean; **Release link needs the running instance closed** (the running
 build locks the .exe — not a code error). File: `src/main.c`. **Not yet GUI click-tested.**
 
-**Uncommitted (this session): code-review hardening.** Reviewed an external code-review of
+**Code-review hardening (committed `8764f81`).** Reviewed an external code-review of
 ElectionExplorer; applied the legitimate items and rejected the rest as false
 positives / non-applicable (the review cited C++/WIL and `CHECK_WIN32` patterns this C
 project doesn't use). Applied: (1) defensive `load_thread` wait+close in the voter
@@ -163,7 +163,7 @@ polish (needs mixed-DPI hardware to validate); streaming XLSX ZIP extraction (ke
 full-in-memory for v1, as the review itself recommends). Debug x64 + smoke suite (40)
 clean. Files: `src/main.c`, `src/voter_table.c`.
 
-**Uncommitted (this session): export round-trip fidelity for "vote for N" contests.**
+**Export round-trip fidelity for "vote for N" contests (committed `1e951d5`).**
 Exporting a CVR to CSV/TSV then re-importing split multi-seat contests into N separate
 single-seat races, so a re-tabulation differed from the original (seen on Travis G24:
 Mustang Ridge / Rollingwood / The Hills / Volente council races). Cause: `EeCvr_Format
@@ -175,6 +175,35 @@ reproducing the source layout so a re-import regroups them. Verified with a load
 →export→reload→tabulate harness on the real Travis G24 (6 files, 587,090 rows): baseline
 and reloaded tallies now **byte-identical**. New test `cvrrt`. Debug x64 + smoke suite
 (41) clean. File: `src/ee_cvr.c`.
+
+**Uncommitted (this session): Hart voting-system CVR support.** New `src/hart_cvr.c`
+(`EeCvr_LoadFromHartZips`) reads Hart CVRs: a `.zip` of one XML per ballot sheet
+(`1_<guid>.xml` = sheet 1, `<guid>.xml` = later sheets; each XML is one row — sheets
+can't be linked). Custom flat XML scanner (no third-party) + streaming zip iteration via
+vendored miniz (`mz_zip_reader_init_cfile` on a wide `FILE*`, entry-by-entry so a 2.2 GB
+export isn't held in memory; non-`.xml` write-in `.png` images ignored). Two passes:
+discover contests/seat-counts/category/party, then fill rows via new shared builder
+`EeCvr_BuildBegin`/`EeCvr_BuildAppendRow` (refactored `append_data_row` → `cvr_store_row`;
+builder keeps blank sheets). Frozen keys: CvrGuid, Sheet Number, Batch Sequence, Batch
+Number, Precinct, Party (primary only), Is Blank. Vote-for-N expands to N columns (blank
+continuation headers → col_group); write-in→"Write-in", unfilled→undervote, over-marked→
+overvote (seat count from non-overvoted ballots only). Contests ordered Federal→State→
+County→City→ISD→Other→MUD (Hart only; keyword classifier; cosmetic). Multi-card via
+`SheetNumber>=2` (exact; `EeCvr_HasMultiCard` now checks the Sheet Number column first).
+Loader dispatch keys on `.zip` (first selection) in `CvrLoadThreadProc`; open-dialog
+filter adds `*.zip` (ES&S / Hart filter groups). Files: `hart_cvr.c` (new), `ee_cvr.{c,h}`,
+`main.c`, `.vcxproj`/`.filters`, `docs/cvr-design.md`, `test/README.md`,
+`test/smoke_load.c`. Test `hart`; full suite green (42); app builds clean x64 Debug.
+**Validated against official Clarity results** for Tarrant G24 (single 2.2 GB zip,
+**828,544 ballot sheets, ~1m40s**): Railroad Commissioner exact on all 4 candidates
+(418,535 / 342,948 / 20,791 / 20,248); President Trump 426,609 / Harris 384,484 and
+Senator Allred 401,738 / Cruz 399,918 within a handful of the certified totals (certified
+adds cured/provisional ballots after the CVR snapshot); named write-ins fold into the
+generic "Write-in" per the chosen design. Also loads the P26 primary zips (Party column
+present). **Not yet GUI click-tested.** Design decision noted: for a primary, same-named
+Dem/Rep contests merge under one heading (candidates disjoint, so per-candidate totals
+stay correct; use the Party filter to separate) — revisit if per-party split is wanted.
+**Release relink needs the running app instance closed** (file lock, not a code error).
 
 The app is being published via the **Microsoft Store**.
 

@@ -379,6 +379,46 @@ Precinct/Address reports gain **Export Selected…**/**Export All…**
 (`-…_Precincts`/`-…_Addresses`). Voter rows use the efficient
 `EeVoterTable_FormatDelimitedUtf8` (delim + header added to the former copy path).
 
+## Hart voting-system CVRs (`hart_cvr.c`)
+
+Hart exports a CVR as one or more **`.zip`** files, each holding **one XML per ballot
+sheet** (`1_<guid>.xml` = first/only sheet; `<guid>.xml` = later sheets). Each XML's
+`CvrGuid` is its own filename guid and there is no shared ballot id, so the sheets of a
+multi-sheet ballot cannot be linked — each XML is one row. `EeCvr_LoadFromHartZips`
+(dispatched from the loader when the first selection ends in `.zip`) produces the same
+`EeCvrTable` the ES&S path does, so tabulation, reports, filtering and export all work
+unchanged.
+
+- **XML** (custom scanner, no third-party): `<Cvr><Contests><Contest><Name/><Id/>
+  <Options><Option><Name/><Id/><Value/>[<WriteInData><OriginalText/>…]</Option>…</Options>
+  [<Undervotes>n</Undervotes>][<Overvoted/>]</Contest>…</Contests>` then metadata
+  `BatchSequence, SheetNumber, PrecinctSplit{Name}, Party{Name} (primary only),
+  BatchNumber, CvrGuid, IsBlank`. Entities are decoded; a UTF-8 BOM is skipped.
+- **ZIP**: iterated entry-by-entry with the vendored **miniz** (`mz_zip_reader_init_cfile`
+  on a wide-opened `FILE*`), so a multi-GB export is never held in memory at once.
+  Non-`.xml` entries (Hart stores scanned write-in images as `.png`) are ignored.
+- **Columns**: frozen keys `CvrGuid, Sheet Number, Batch Sequence, Batch Number,
+  Precinct, Party (only if any ballot has one), Is Blank`, then contests. Each contest
+  is one column, or several ("vote for N") with blank continuation headers so
+  `col_group` sums the race. A selected candidate is its name; a write-in is the marker
+  **"Write-in"** (generic — the handwritten text and `.png` image are not used, matching
+  the merge-write-ins behavior); an unfilled seat is `undervote`; an over-marked contest
+  fills every seat with `overvote`. Seat count comes only from non-overvoted ballots (an
+  overvoted vote-for-1 is one `overvote`, not two).
+- **Contest order** (Hart only): a keyword classifier ranks each contest
+  Federal → State → County → City → ISD → Other → MUD (with the office sub-orders inside
+  Federal/State/County); ties keep first-seen order. Cosmetic — it does not affect
+  tallies.
+- **Multi-card**: exact here — flagged when any row's `Sheet Number` >= 2 (no heuristic).
+- **Two passes** over the zip(s): pass 1 discovers the contest set, each contest's seat
+  count and category, and party presence; pass 2 fills rows via `EeCvr_BuildBegin` +
+  `EeCvr_BuildAppendRow` (the shared table builder, which keeps blank sheets).
+- **Validated** against official Clarity results for **Tarrant County G24** (single
+  2.2 GB zip, 828,544 ballot sheets, ~1m40s): Railroad Commissioner matches on all four
+  candidates exactly (418,535 / 342,948 / 20,791 / 20,248); President/US Senator match
+  within a handful of votes (certified totals add cured/provisional ballots after the
+  election-night CVR snapshot). Test `hart`.
+
 ## Testing
 
 Author small `.xlsx` files with miniz's writer (as the XLSX tests do): two files

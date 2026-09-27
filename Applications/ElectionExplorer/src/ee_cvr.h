@@ -90,6 +90,36 @@ extern "C"
                                      size_t error_cch);
 
     /**
+     * Load one or more Hart CVR `.zip` files (each holds one XML per ballot sheet)
+     * into @p out. See hart_cvr.c. Column layout, contest ordering, and multi-card
+     * handling are described there. Same status/cancel/progress contract as
+     * EeCvr_LoadFromFiles.
+     */
+    EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
+                                        int count,
+                                        EeCvrTable *out,
+                                        volatile LONG *cancel_flag,
+                                        EeLoadProgressFn progress_fn,
+                                        void *progress_user,
+                                        wchar_t *error_message,
+                                        size_t error_cch);
+
+    /* --- Table builder (used by the Hart loader; layout is caller-computed) ------ */
+
+    /** Clear @p t and establish a column layout from UTF-8 @p header_cells (blank ""
+     *  cells become "vote for N" continuation columns) with an explicit frozen count.
+     *  Returns FALSE on OOM/bad args. */
+    BOOL EeCvr_BuildBegin(EeCvrTable *t,
+                          const char *const *header_cells,
+                          uint32_t ncells,
+                          uint32_t frozen_count);
+
+    /** Append one physical row from UTF-8 @p cells (indexed by column; "" = blank).
+     *  Unlike the file loader this keeps every row (a blank ballot sheet is a real
+     *  record). Returns FALSE only on OOM. */
+    BOOL EeCvr_BuildAppendRow(EeCvrTable *t, const char *const *cells, uint32_t ncells);
+
+    /**
      * Copy the cell at display row @p view_row, column @p col into @p buf as a
      * wide string ("" for a blank cell). Returns FALSE on invalid indices.
      */

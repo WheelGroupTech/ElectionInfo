@@ -13290,17 +13290,40 @@ typedef struct CvrLoadJob
     HANDLE thread;
 } CvrLoadJob;
 
+/* TRUE if @p path ends (case-insensitively) with ".zip". */
+static BOOL path_is_zip(const wchar_t *path)
+{
+    size_t n = (path != NULL) ? wcslen(path) : 0;
+    return n >= 4 && _wcsicmp(path + (n - 4), L".zip") == 0;
+}
+
 static DWORD WINAPI CvrLoadThreadProc(void *param)
 {
     CvrLoadJob *j = (CvrLoadJob *)param;
-    j->status = EeCvr_LoadFromFiles(j->paths,
-                                    j->count,
-                                    j->table,
-                                    &j->cancel,
-                                    NULL,
-                                    NULL,
-                                    j->err,
-                                    ARRAYSIZE(j->err));
+    /* Hart CVRs come as .zip (one XML per ballot sheet); ES&S come as .xlsx/.csv/.tsv.
+     * Key on the first selection. */
+    if (j->count > 0 && path_is_zip(j->paths[0]))
+    {
+        j->status = EeCvr_LoadFromHartZips(j->paths,
+                                           j->count,
+                                           j->table,
+                                           &j->cancel,
+                                           NULL,
+                                           NULL,
+                                           j->err,
+                                           ARRAYSIZE(j->err));
+    }
+    else
+    {
+        j->status = EeCvr_LoadFromFiles(j->paths,
+                                        j->count,
+                                        j->table,
+                                        &j->cancel,
+                                        NULL,
+                                        NULL,
+                                        j->err,
+                                        ARRAYSIZE(j->err));
+    }
     PostMessageW(j->dlg, EEM_CVR_LOAD_DONE, 0, 0);
     return 0;
 }
@@ -13466,10 +13489,11 @@ static void App_BeginOpenCvr(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
-                      L"Excel workbooks (*.xlsx)\0*.xlsx\0"
-                      L"Delimited text (*.csv;*.tsv;*.txt)\0*.csv;*.tsv;*.txt\0"
-                      L"All files (*.*)\0*.*\0";
+    ofn.lpstrFilter =
+        L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt;*.zip)\0*.xlsx;*.csv;*.tsv;*.txt;*.zip\0"
+        L"ES&S (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
+        L"Hart (*.zip)\0*.zip\0"
+        L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 32768;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;

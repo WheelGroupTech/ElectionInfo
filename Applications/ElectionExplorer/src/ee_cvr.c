@@ -496,6 +496,38 @@ static BOOL establish_header(CvrLoadCtx *ctx, const char *const *cells, uint32_t
     return TRUE;
 }
 
+/* Public builder entry used by the Hart loader: establish a caller-computed column
+ * layout from UTF-8 @p header_cells (blank "" cells become "vote for N" continuation
+ * columns, exactly as in a loaded header) with an explicit @p frozen_count. The table
+ * is cleared first. Follow with EeCvr_BuildAppendRow per ballot sheet. */
+BOOL EeCvr_BuildBegin(EeCvrTable *t,
+                      const char *const *header_cells,
+                      uint32_t ncells,
+                      uint32_t frozen_count)
+{
+    if (t == NULL || ncells == 0)
+    {
+        return FALSE;
+    }
+    EeCvr_Clear(t);
+    if (!cvr_build_titles(header_cells, ncells, &t->col_titles, &t->col_group))
+    {
+        return FALSE;
+    }
+    t->ncols = ncells;
+    t->frozen_count = (frozen_count < ncells) ? frozen_count : ncells;
+    if (t->frozen_count == 0)
+    {
+        t->frozen_count = 1;
+    }
+    if (!ensure_rows(t))
+    {
+        return FALSE;
+    }
+    t->row_start[0] = 0;
+    return TRUE;
+}
+
 /* Confirm a later file's header matches the established schema exactly. */
 static BOOL header_matches(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
 {
@@ -532,9 +564,17 @@ static BOOL header_matches(CvrLoadCtx *ctx, const char *const *cells, uint32_t n
     return ok;
 }
 
-static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
+/* Intern @p cells into a new physical row. When @p skip_if_no_contest is TRUE a row
+ * with no non-blank cell beyond the frozen key columns is discarded (ES&S export
+ * artifact guard); when FALSE every row is kept (the Hart builder, where a blank
+ * ballot sheet is still a real record). Returns FALSE only on OOM. */
+static BOOL cvr_store_row(EeCvrTable *t,
+                          const char *const *cells,
+                          uint32_t ncells,
+                          BOOL skip_if_no_contest,
+                          wchar_t *err,
+                          size_t errcch)
 {
-    EeCvrTable *t = ctx->t;
     uint32_t c;
     uint32_t limit = (ncells < t->ncols) ? ncells : t->ncols;
     size_t row_start_ent;
@@ -542,7 +582,7 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
 
     if (!ensure_rows(t))
     {
-        cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+        cvr_set_err(err, errcch, L"Out of memory loading ballots.");
         return FALSE;
     }
     row_start_ent = t->nent;
@@ -564,7 +604,7 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
         dst = (vlen < sizeof(stackbuf)) ? stackbuf : (heapbuf = (char *)malloc(vlen + 1));
         if (dst == NULL)
         {
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+            cvr_set_err(err, errcch, L"Out of memory loading ballots.");
             return FALSE;
         }
         vlen = normalize_ws(v, dst);
@@ -576,13 +616,13 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
         if (!val_intern(t, dst, vlen, &id))
         {
             free(heapbuf);
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory interning values.");
+            cvr_set_err(err, errcch, L"Out of memory interning values.");
             return FALSE;
         }
         free(heapbuf);
         if (!ensure_ent(t, 1))
         {
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+            cvr_set_err(err, errcch, L"Out of memory loading ballots.");
             return FALSE;
         }
         t->ent_col[t->nent] = c;
@@ -605,7 +645,7 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
      * Cast-Vote-Record-id line plus a headless row whose contests are still
      * column-aligned and tally correctly). Keeps `.xlsx` and delimited-text
      * exports of the same election consistent. */
-    if (!saw_contest)
+    if (skip_if_no_contest && !saw_contest)
     {
         t->nent = row_start_ent; /* discard any key-only entries */
         return TRUE;
@@ -614,6 +654,21 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
     t->view_index[t->nrows] = t->nrows;
     t->nrows++;
     return TRUE;
+}
+
+static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
+{
+    return cvr_store_row(ctx->t, cells, ncells, TRUE, ctx->err, ctx->errcch);
+}
+
+/* Public builder entry used by the Hart loader: appends a row, keeping blank sheets. */
+BOOL EeCvr_BuildAppendRow(EeCvrTable *t, const char *const *cells, uint32_t ncells)
+{
+    if (t == NULL)
+    {
+        return FALSE;
+    }
+    return cvr_store_row(t, cells, ncells, FALSE, NULL, 0);
 }
 
 static BOOL cvr_row_sink(void *vctx, const char *const *cells, uint32_t ncells)
@@ -1790,7 +1845,31 @@ BOOL EeCvr_HasMultiCard(const EeCvrTable *t)
     uint32_t nref = 0;
     uint32_t extra = 0;
 
-    if (t == NULL || t->nrows == 0 || t->ncols <= t->frozen_count)
+    if (t == NULL || t->nrows == 0 || t->ncols == 0)
+    {
+        return FALSE;
+    }
+    /* Hart CVRs record one row per ballot SHEET with an explicit "Sheet Number" key
+     * column, so multi-card is exact: any sheet numbered >= 2 means multi-card. */
+    for (c = 0; c < t->frozen_count && c < t->ncols; c++)
+    {
+        const wchar_t *title = t->col_titles[c];
+        if (title != NULL && (wcs_contains_ci(title, L"sheet number") ||
+                              wcs_contains_ci(title, L"sheetnumber")))
+        {
+            wchar_t buf[32];
+            for (r = 0; r < t->nrows; r++)
+            {
+                EeCvr_GetCellW(t, r, c, buf, ARRAYSIZE(buf));
+                if (buf[0] != L'\0' && _wtoi(buf) >= 2)
+                {
+                    return TRUE;
+                }
+            }
+            return FALSE;
+        }
+    }
+    if (t->ncols <= t->frozen_count)
     {
         return FALSE;
     }

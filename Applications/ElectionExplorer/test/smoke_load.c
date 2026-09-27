@@ -4404,6 +4404,184 @@ done:
     return rc;
 }
 
+/* Author a zip of (name, xml) entries at @p path. */
+static BOOL hart_write_zip(const wchar_t *path, const char *const *names,
+                           const char *const *xmls, int n)
+{
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    FILE *fp = NULL;
+    int i;
+    BOOL ok = TRUE;
+    memset(&zip, 0, sizeof(zip));
+    if (!mz_zip_writer_init_heap(&zip, 0, 0))
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n && ok; i++)
+    {
+        ok = mz_zip_writer_add_mem(&zip, names[i], xmls[i], strlen(xmls[i]),
+                                   MZ_DEFAULT_COMPRESSION);
+    }
+    ok = ok && mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize);
+    if (ok)
+    {
+        ok = (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL &&
+              fwrite(zbuf, 1, zsize, fp) == zsize);
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    mz_free(zbuf);
+    mz_zip_writer_end(&zip);
+    return ok;
+}
+
+/* Find a tabulation entry's count by (contest, selection); -1 if absent. */
+static long hart_find_count(EeCvrTally *items, uint32_t n, const wchar_t *contest,
+                            const wchar_t *sel)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+    {
+        if (wcscmp(items[i].contest, contest) == 0 && wcscmp(items[i].selection, sel) == 0)
+        {
+            return (long)items[i].count;
+        }
+    }
+    return -1;
+}
+
+/* Hart CVR loader: a zip of per-sheet XML files -> one row each; category-ordered
+ * contests; vote-for-N expansion; write-in/overvote/undervote; multi-card via
+ * SheetNumber (tag: hart). */
+static int test_hart_cvr(void)
+{
+    /* Sheet 1: Governor listed BEFORE President (to prove federal-first reordering);
+     * a write-in Senator, a vote-for-2 City Council, and an overvoted Attorney
+     * General. Sheet 2: a proposition (SheetNumber 2 -> multi-card). */
+    static const char *k_sheet1 =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Cvr xmlns=\"http://tempuri.org/CVRDesign.xsd\"><Contests>"
+        "<Contest><Name>Governor</Name><Id>g1</Id><Options /><Undervotes>1</Undervotes></Contest>"
+        "<Contest><Name>President</Name><Id>p1</Id><Options><Option><Name>Alice</Name><Id>a1</Id>"
+        "<Value>1</Value></Option></Options></Contest>"
+        "<Contest><Name>United States Senator</Name><Id>s1</Id><Options><Option><Name /><Id>w1</Id>"
+        "<Value>1</Value><WriteInData><OriginalText>ZZ</OriginalText>"
+        "<WriteInDataStatus>Unresolved</WriteInDataStatus></WriteInData></Option></Options></Contest>"
+        "<Contest><Name>City Council</Name><Id>c1</Id><Options>"
+        "<Option><Name>Bob</Name><Id>b1</Id><Value>1</Value></Option>"
+        "<Option><Name>Carol</Name><Id>c2</Id><Value>1</Value></Option></Options></Contest>"
+        "<Contest><Name>Attorney General</Name><Id>ag1</Id><Options>"
+        "<Option><Name>Dan</Name><Id>d1</Id><Value>1</Value></Option>"
+        "<Option><Name>Eve</Name><Id>e1</Id><Value>1</Value></Option></Options><Overvoted /></Contest>"
+        "</Contests><SheetNumber>1</SheetNumber>"
+        "<PrecinctSplit><Name>101</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
+        "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
+        "<CvrGuid>AAA</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    static const char *k_sheet2 =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Cvr xmlns=\"http://tempuri.org/CVRDesign.xsd\"><Contests>"
+        "<Contest><Name>Proposition 1</Name><Id>pr1</Id><Options>"
+        "<Option><Name>Yes</Name><Id>yy</Id><Value>1</Value></Option></Options></Contest>"
+        "</Contests><SheetNumber>2</SheetNumber>"
+        "<PrecinctSplit><Name>101</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
+        "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
+        "<CvrGuid>BBB</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    const char *names[2] = {"1_AAA.xml", "BBB.xml"};
+    const char *xmls[2];
+    wchar_t zpath[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0;
+    uint32_t colPres = 0, colGov = 0;
+    int rc = 1;
+
+    xmls[0] = k_sheet1;
+    xmls[1] = k_sheet2;
+
+    if (!cvr_temp_path(zpath, ARRAYSIZE(zpath), L"ee_hart.zip"))
+    {
+        wprintf(L"hart: temp path failed\n");
+        return 1;
+    }
+    if (!hart_write_zip(zpath, names, xmls, 2))
+    {
+        wprintf(L"hart: write zip failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = zpath;
+    s = EeCvr_LoadFromHartZips(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"hart: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Frozen keys: CvrGuid, Sheet Number, Batch Sequence, Batch Number, Precinct,
+     * Party, Is Blank -> 7 (Party present). */
+    if (t.frozen_count != 7)
+    {
+        wprintf(L"hart: frozen=%u (want 7)\n", t.frozen_count);
+        goto done;
+    }
+    if (!EeCvr_HasMultiCard(&t))
+    {
+        wprintf(L"hart: multi-card not detected\n");
+        goto done;
+    }
+    /* Federal (President) must sort before State (Governor) despite XML order. */
+    if (!EeCvr_FindColumnByTitle(&t, L"President", &colPres) ||
+        !EeCvr_FindColumnByTitle(&t, L"Governor", &colGov) || !(colPres < colGov))
+    {
+        wprintf(L"hart: ordering President=%u Governor=%u\n", colPres, colGov);
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt))
+    {
+        wprintf(L"hart: tabulate failed\n");
+        goto done;
+    }
+    if (hart_find_count(items, nt, L"President", L"Alice") != 1 ||
+        hart_find_count(items, nt, L"United States Senator", L"write-in") != 1 ||
+        hart_find_count(items, nt, L"Governor", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"Attorney General", L"overvote") != 1 ||
+        hart_find_count(items, nt, L"City Council", L"Bob") != 1 ||
+        hart_find_count(items, nt, L"City Council", L"Carol") != 1 ||
+        hart_find_count(items, nt, L"Proposition 1", L"Yes") != 1)
+    {
+        wprintf(L"hart: tally mismatch (Pres/Alice=%ld Sen/wi=%ld Gov/uv=%ld AG/ov=%ld "
+                L"CC/Bob=%ld CC/Carol=%ld Prop/Yes=%ld)\n",
+                hart_find_count(items, nt, L"President", L"Alice"),
+                hart_find_count(items, nt, L"United States Senator", L"write-in"),
+                hart_find_count(items, nt, L"Governor", L"undervote"),
+                hart_find_count(items, nt, L"Attorney General", L"overvote"),
+                hart_find_count(items, nt, L"City Council", L"Bob"),
+                hart_find_count(items, nt, L"City Council", L"Carol"),
+                hart_find_count(items, nt, L"Proposition 1", L"Yes"));
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"hart ok\n");
+
+done:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    DeleteFileW(zpath);
+    if (rc != 0)
+    {
+        wprintf(L"hart test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -4686,6 +4864,7 @@ int wmain(void)
     failed |= test_cvr_colcounts();
     failed |= test_cvr_export();
     failed |= test_cvr_roundtrip();
+    failed |= test_hart_cvr();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

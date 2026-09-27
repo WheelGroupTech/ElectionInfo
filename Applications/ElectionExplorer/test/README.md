@@ -26,7 +26,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c ^
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c ^
   src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
 test\smoke_load.exe
 ```
@@ -58,5 +58,12 @@ column by header; `EeCvr_ColumnHasReportableData` is FALSE for an all-redacted c
 header row of column titles and honors an explicit CSV/TSV delimiter);
 `cvrexp` covers CVR delimited export (`EeCvr_FormatDelimitedUtf8` header row +
 RFC-4180 quoting: a comma-bearing contest name/value is quoted for CSV, not for TSV);
+`cvrrt` covers export round-trip fidelity (a "vote for N" contest's continuation
+columns export with blank headers so a re-import regroups the race unchanged);
+`hart` covers the Hart loader (`EeCvr_LoadFromHartZips`, needs `src\hart_cvr.c`):
+authors a zip of per-sheet XML files and checks one row per sheet, the frozen key
+columns, category ordering (federal President sorts before state Governor despite XML
+order), vote-for-N expansion, write-in/overvote/undervote mapping, and multi-card via
+`SheetNumber >= 2`;
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

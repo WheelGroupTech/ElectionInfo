@@ -61,9 +61,15 @@ RFC-4180 quoting: a comma-bearing contest name/value is quoted for CSV, not for 
 `cvrrt` covers export round-trip fidelity (a "vote for N" contest's continuation
 columns export with blank headers so a re-import regroups the race unchanged);
 `hart` covers the Hart loader (`EeCvr_LoadFromHartZips`, needs `src\hart_cvr.c`):
-authors a zip of per-sheet XML files and checks one row per sheet, the frozen key
-columns, category ordering (federal President sorts before state Governor despite XML
-order), vote-for-N expansion, write-in/overvote/undervote mapping, and multi-card via
-`SheetNumber >= 2`;
+authors a zip of per-sheet XML files (two DEM sheets — one a continuation — and one
+REP sheet) and checks one row per sheet, the frozen key columns, category ordering
+(federal President sorts before state Governor despite XML order), vote-for-N
+expansion, write-in/overvote/undervote mapping, multi-card via `SheetNumber >= 2`,
+the primary per-party contest split (titles prefixed `DEM `/`REP `, so each party's
+race tallies separately), and `EeCvr_ReorderTallyByParty` (REP-first vs DEM-first
+grouping of the tabulation output). It also round-trips the loaded table through a CSV
+export + reload (`EeCvr_LoadFromFiles`) and checks the Hart key columns stay frozen
+(primary → 7 incl. `Party`; a general-election header with no `Party` → 6) rather than
+being tabulated as contests;
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

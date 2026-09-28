@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-21
+**Last updated:** 2026-09-27
 **Branch:** main — **all work below is committed; working tree clean.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
@@ -176,13 +176,13 @@ reproducing the source layout so a re-import regroups them. Verified with a load
 and reloaded tallies now **byte-identical**. New test `cvrrt`. Debug x64 + smoke suite
 (41) clean. File: `src/ee_cvr.c`.
 
-**Uncommitted (this session): Hart voting-system CVR support.** New `src/hart_cvr.c`
+**Hart voting-system CVR support (committed `a98837c`).** New `src/hart_cvr.c`
 (`EeCvr_LoadFromHartZips`) reads Hart CVRs: a `.zip` of one XML per ballot sheet
 (`1_<guid>.xml` = sheet 1, `<guid>.xml` = later sheets; each XML is one row — sheets
 can't be linked). Custom flat XML scanner (no third-party) + streaming zip iteration via
 vendored miniz (`mz_zip_reader_init_cfile` on a wide `FILE*`, entry-by-entry so a 2.2 GB
 export isn't held in memory; non-`.xml` write-in `.png` images ignored). Two passes:
-discover contests/seat-counts/category/party, then fill rows via new shared builder
+discover contests/seat-counts/category/party, then fill rows via shared builder
 `EeCvr_BuildBegin`/`EeCvr_BuildAppendRow` (refactored `append_data_row` → `cvr_store_row`;
 builder keeps blank sheets). Frozen keys: CvrGuid, Sheet Number, Batch Sequence, Batch
 Number, Precinct, Party (primary only), Is Blank. Vote-for-N expands to N columns (blank
@@ -191,18 +191,64 @@ overvote (seat count from non-overvoted ballots only). Contests ordered Federal�
 County→City→ISD→Other→MUD (Hart only; keyword classifier; cosmetic). Multi-card via
 `SheetNumber>=2` (exact; `EeCvr_HasMultiCard` now checks the Sheet Number column first).
 Loader dispatch keys on `.zip` (first selection) in `CvrLoadThreadProc`; open-dialog
-filter adds `*.zip` (ES&S / Hart filter groups). Files: `hart_cvr.c` (new), `ee_cvr.{c,h}`,
-`main.c`, `.vcxproj`/`.filters`, `docs/cvr-design.md`, `test/README.md`,
-`test/smoke_load.c`. Test `hart`; full suite green (42); app builds clean x64 Debug.
-**Validated against official Clarity results** for Tarrant G24 (single 2.2 GB zip,
-**828,544 ballot sheets, ~1m40s**): Railroad Commissioner exact on all 4 candidates
-(418,535 / 342,948 / 20,791 / 20,248); President Trump 426,609 / Harris 384,484 and
-Senator Allred 401,738 / Cruz 399,918 within a handful of the certified totals (certified
-adds cured/provisional ballots after the CVR snapshot); named write-ins fold into the
-generic "Write-in" per the chosen design. Also loads the P26 primary zips (Party column
-present). **Not yet GUI click-tested.** Design decision noted: for a primary, same-named
-Dem/Rep contests merge under one heading (candidates disjoint, so per-candidate totals
-stay correct; use the Party filter to separate) — revisit if per-party split is wanted.
+filter adds `*.zip` (ES&S / Hart filter groups). **Validated against official Clarity
+results** for Tarrant G24 (single 2.2 GB zip, **828,544 ballot sheets, ~1m40s**):
+Railroad Commissioner exact on all 4 candidates (418,535 / 342,948 / 20,791 / 20,248);
+President/Senator within a handful of the certified totals (certified adds
+cured/provisional ballots after the CVR snapshot).
+
+**Uncommitted (this session): primary per-party split, party-first tabulation order,
+filtered tabulation, load count.** Follow-ups on the Hart base, all requested by the user:
+- **Per-party split for primaries.** `hart_cvr.c` now prefixes a primary contest's title
+  with its party abbreviation (`party_abbr` → `REP`/`DEM`/`LIB`/`GRN` via
+  `contest_display_name`), e.g. `DEM United States Senator` vs. `REP United States Senator`,
+  mirroring the ES&S convention — so each party's copy of a race interns as a distinct
+  contest and tallies separately (replaces the earlier merge-under-one-heading behavior).
+  General elections (no Party) are unaffected.
+- **Tabulation party-first ordering.** New `EeCvr_ReorderTallyByParty(items, count,
+  party_first)` (`ee_cvr.{c,h}`) stably regroups whole contest blocks so one party's
+  contests print first, then the other, then non-partisan — overriding the
+  Federal/State/County order *between* parties, preserving it within each. Controlled by
+  the new **Edit → Options… → "Party to display first for tabulation"** radio (Republican
+  default / Democratic), persisted as `g_settings.cvr_tab_party_first` (registry
+  `CvrTabPartyFirst`; `EE_TAB_PARTY_REP`=0 / `EE_TAB_PARTY_DEM`=1, `settings.{c,h}`,
+  `IDC_CVR_PARTY_REP/_DEM`). No-op on a general election; never reorders CVR columns or
+  changes a count. Changing it re-tabulates the open report in place.
+- **Filtered tabulation.** Reports menu: **Tabulate CVR Votes…** renamed **Tabulate All
+  CVR Votes…**; new **Tabulate Filtered CVR Votes…** (`IDM_CVR_TABULATE_FILTERED`) tallies
+  only the filtered `cw->disp` subset, greyed via `WM_INITMENUPOPUP` when no filter is
+  active. New core `EeCvr_TabulateRows(t, rows, nrows, …)` shares one `cvr_tabulate_core`
+  with `EeCvr_Tabulate` (rows==NULL = all). `CvrReportWindow.filtered` remembers the mode;
+  title reads `CVR Tabulation` or `CVR Tabulation (Filtered)`; `App_ShowCvrReport(cw,
+  filtered)`.
+- **Load ballot-record count.** The CVR load dialog now shows "N ballot records" above the
+  progress bar (like the voter list). Worker thread posts counts via
+  `CvrLoadProgressCb` → `EEM_CVR_LOAD_PROGRESS`; Hart pass 2 reports the running row count
+  (pass 1, still discovering, reports 0), ES&S reports its row count too.
+- **Help/docs updated** (`k_CvrHelpOptions`/`k_CvrHelpReports`, `docs/cvr-design.md`,
+  `test/README.md`).
+- **Export round-trip fix (`ee_cvr.c`).** Exporting a Hart CVR to CSV and reloading it
+  tabulated the Hart key columns (Sheet Number, Batch Sequence, Batch Number, Party, Is
+  Blank) as if they were contests: `cvr_is_key_header` only knew the ES&S key names, so
+  the contiguous frozen-column scan stopped at `CvrGuid` and defaulted `frozen_count` to
+  1. Added the Hart key names to `cvr_is_key_header`, so a reloaded Hart export freezes
+  the same leading columns (primary → 7 incl. Party; general → 6). Verified on real
+  Tarrant data: P26 reload frozen=7 with no key-column contests, and a full **G24**
+  load→export→reload→tabulate round-trip (828,544 rows) is now **byte-identical**
+  (frozen=6, no Party). `hart` test extended with a CSV round-trip + a general-election
+  reload check.
+- **Validated against official Clarity results:** Tarrant **P26 primary** (6 zips,
+  488,862 ballot sheets, ~1m20s) — with the per-party split, U.S. Senator matches the
+  certified totals **exactly for both parties** (DEM Crockett 103,743 / Talarico 83,233 /
+  Hassan 2,060 = 189,036 cast; REP Cornyn 65,621 / Paxton 55,341 / Hunt 19,729 / … =
+  145,798 cast).
+
+Files (uncommitted): `hart_cvr.{c,h}`, `ee_cvr.{c,h}`, `settings.{c,h}`, `main.c`,
+`resource.h`, `test/smoke_load.c`, `docs/cvr-design.md`, `test/README.md`. Test `hart`
+extended (3-sheet zip: 2 DEM incl. a continuation + 1 REP; checks party-prefixed names,
+category order, vote-for-N/write-in/overvote/undervote, and `EeCvr_ReorderTallyByParty`
+REP-first vs DEM-first). Full smoke suite green; app builds clean x64 Debug. **Not yet
+GUI click-tested** (party-first radio, Tabulate Filtered greying, load count display).
 **Release relink needs the running app instance closed** (file lock, not a code error).
 
 The app is being published via the **Microsoft Store**.

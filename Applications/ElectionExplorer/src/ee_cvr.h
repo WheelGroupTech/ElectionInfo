@@ -243,6 +243,22 @@ extern "C"
                         EeCvrTally **out_items,
                         uint32_t *out_count);
 
+    /** Like EeCvr_Tabulate but counts only the @p nrows physical rows in @p rows
+     *  (used to tabulate the currently-filtered subset). */
+    BOOL EeCvr_TabulateRows(const EeCvrTable *t,
+                            const uint32_t *rows,
+                            uint32_t nrows,
+                            BOOL merge_writeins,
+                            EeCvrTally **out_items,
+                            uint32_t *out_count);
+
+    /** Reorder tabulation output so a primary's contests group by party: the
+     *  display-first party (@p party_first: 0 = Republican, 1 = Democratic) first,
+     *  then the other party, then non-partisan contests; category order is preserved
+     *  within each block. Partisan contests are recognized by a "REP "/"DEM " title
+     *  prefix. No-op for a general election (no prefixes). */
+    void EeCvr_ReorderTallyByParty(EeCvrTally *items, uint32_t count, int party_first);
+
     /** Free an array returned by EeCvr_Tabulate. */
     void EeCvr_FreeTally(EeCvrTally *items, uint32_t count);
 

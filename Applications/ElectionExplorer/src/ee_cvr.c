@@ -279,9 +279,21 @@ static BOOL wcieq_trimmed(const wchar_t *s, const wchar_t *key)
 
 static BOOL cvr_is_key_header(const wchar_t *s)
 {
-    return wcieq_trimmed(s, L"cast vote record") || wcieq_trimmed(s, L"batch") ||
-           wcieq_trimmed(s, L"ballot status") || wcieq_trimmed(s, L"precinct") ||
-           wcieq_trimmed(s, L"ballot style");
+    /* ES&S key columns. */
+    if (wcieq_trimmed(s, L"cast vote record") || wcieq_trimmed(s, L"batch") ||
+        wcieq_trimmed(s, L"ballot status") || wcieq_trimmed(s, L"precinct") ||
+        wcieq_trimmed(s, L"ballot style"))
+    {
+        return TRUE;
+    }
+    /* Hart key columns (see hart_cvr.c). Recognized here so a Hart CVR exported to
+     * CSV/TSV and reloaded through EeCvr_LoadFromFiles freezes the same leading
+     * columns the Hart loader did -- otherwise the scan stops at "CvrGuid" and the
+     * remaining key columns (Sheet Number, Batch Sequence, Batch Number, Party,
+     * Is Blank) would be tabulated as if they were contests. */
+    return wcieq_trimmed(s, L"cvrguid") || wcieq_trimmed(s, L"sheet number") ||
+           wcieq_trimmed(s, L"batch sequence") || wcieq_trimmed(s, L"batch number") ||
+           wcieq_trimmed(s, L"party") || wcieq_trimmed(s, L"is blank");
 }
 
 /* True if a header cell is blank (empty or only whitespace). */
@@ -1680,14 +1692,19 @@ static wchar_t *wcs_dup(const wchar_t *s)
     return d;
 }
 
-BOOL EeCvr_Tabulate(const EeCvrTable *t,
-                    BOOL merge_writeins,
-                    EeCvrTally **out_items,
-                    uint32_t *out_count)
+/* Tabulate over @p rows (an array of @p nrows physical row indices) when @p rows is
+ * non-NULL, else over all rows. See EeCvr_Tabulate / EeCvr_TabulateRows. */
+static BOOL cvr_tabulate_core(const EeCvrTable *t,
+                              const uint32_t *rows,
+                              uint32_t nrows,
+                              BOOL merge_writeins,
+                              EeCvrTally **out_items,
+                              uint32_t *out_count)
 {
     static const wchar_t k_writein_label[] = L"write-in";
     AggMap m;
-    uint32_t r;
+    uint32_t rr;
+    uint32_t iter_n;
     uint32_t i;
     uint32_t out_n = 0;
     uint32_t prev_cc = 0;
@@ -1704,13 +1721,21 @@ BOOL EeCvr_Tabulate(const EeCvrTable *t,
     {
         return TRUE; /* nothing to tabulate */
     }
+    iter_n = (rows != NULL) ? nrows : t->nrows;
     ZeroMemory(&m, sizeof(m));
 
-    for (r = 0; r < t->nrows; r++)
+    for (rr = 0; rr < iter_n; rr++)
     {
-        uint32_t lo = t->row_start[r];
-        uint32_t hi = t->row_start[r + 1];
+        uint32_t r = (rows != NULL) ? rows[rr] : rr;
+        uint32_t lo;
+        uint32_t hi;
         uint32_t k;
+        if (r >= t->nrows)
+        {
+            continue;
+        }
+        lo = t->row_start[r];
+        hi = t->row_start[r + 1];
         for (k = lo; k < hi; k++)
         {
             uint32_t c = t->ent_col[k];
@@ -1777,6 +1802,88 @@ BOOL EeCvr_Tabulate(const EeCvrTable *t,
     *out_items = items;
     *out_count = out_n;
     return TRUE;
+}
+
+BOOL EeCvr_Tabulate(const EeCvrTable *t,
+                    BOOL merge_writeins,
+                    EeCvrTally **out_items,
+                    uint32_t *out_count)
+{
+    return cvr_tabulate_core(t, NULL, 0, merge_writeins, out_items, out_count);
+}
+
+BOOL EeCvr_TabulateRows(const EeCvrTable *t,
+                        const uint32_t *rows,
+                        uint32_t nrows,
+                        BOOL merge_writeins,
+                        EeCvrTally **out_items,
+                        uint32_t *out_count)
+{
+    return cvr_tabulate_core(t, rows, nrows, merge_writeins, out_items, out_count);
+}
+
+/* Party rank for a tabulation contest name from its "REP "/"DEM " prefix:
+ * 0 = the display-first party, 1 = the other party, 2 = non-partisan. */
+static int cvr_tally_party_rank(const wchar_t *contest, int party_first)
+{
+    BOOL rep = (wcsncmp(contest, L"REP ", 4) == 0);
+    BOOL dem = (wcsncmp(contest, L"DEM ", 4) == 0);
+    if (!rep && !dem)
+    {
+        return 2;
+    }
+    /* party_first: 0 = REP first, 1 = DEM first. */
+    if (party_first == 1)
+    {
+        return dem ? 0 : 1;
+    }
+    return rep ? 0 : 1;
+}
+
+void EeCvr_ReorderTallyByParty(EeCvrTally *items, uint32_t count, int party_first)
+{
+    /* Stable-partition whole contest groups (consecutive rows sharing a contest) so
+     * the display-first party's contests come first, then the other party's, then
+     * non-partisan contests -- preserving the category order within each block. Used
+     * for primaries where tabulation is grouped by party. */
+    EeCvrTally *tmp;
+    uint32_t i;
+    uint32_t out = 0;
+    int pass;
+
+    if (items == NULL || count < 2)
+    {
+        return;
+    }
+    tmp = (EeCvrTally *)malloc((size_t)count * sizeof(EeCvrTally));
+    if (tmp == NULL)
+    {
+        return; /* leave order unchanged on OOM */
+    }
+    for (pass = 0; pass < 3; pass++)
+    {
+        i = 0;
+        while (i < count)
+        {
+            /* extent of this contest group */
+            uint32_t j = i + 1;
+            while (j < count && wcscmp(items[j].contest, items[i].contest) == 0)
+            {
+                j++;
+            }
+            if (cvr_tally_party_rank(items[i].contest, party_first) == pass)
+            {
+                uint32_t k;
+                for (k = i; k < j; k++)
+                {
+                    tmp[out++] = items[k];
+                }
+            }
+            i = j;
+        }
+    }
+    memcpy(items, tmp, (size_t)count * sizeof(EeCvrTally));
+    free(tmp);
 }
 
 void EeCvr_FreeTally(EeCvrTally *items, uint32_t count)

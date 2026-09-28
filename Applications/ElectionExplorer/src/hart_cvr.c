@@ -619,6 +619,40 @@ static BOOL parse_sheet(HartSheet *s, char *xml)
     return TRUE;
 }
 
+/* Party ballot name -> short prefix ("REP"/"DEM"/"LIB"/"GRN"), or NULL. In a
+ * primary each party's copy of a contest is a distinct race, so we prefix the
+ * contest name (ES&S-style "REP United States Senator") to keep them separate. */
+static const char *party_abbr(const char *party_name)
+{
+    if (party_name == NULL || party_name[0] == '\0')
+    {
+        return NULL;
+    }
+    if (contains_ci(party_name, "Republican"))
+        return "REP";
+    if (contains_ci(party_name, "Democratic") || contains_ci(party_name, "Democrat"))
+        return "DEM";
+    if (contains_ci(party_name, "Libertarian"))
+        return "LIB";
+    if (contains_ci(party_name, "Green"))
+        return "GRN";
+    return NULL;
+}
+
+/* Build the effective contest name (party-prefixed for a primary) into @p out. */
+static void contest_display_name(char *out, size_t cap, const char *party_name, const char *base)
+{
+    const char *ab = party_abbr(party_name);
+    if (ab != NULL)
+    {
+        StringCchPrintfA(out, cap, "%s %s", ab, base);
+    }
+    else
+    {
+        StringCchCopyA(out, cap, base);
+    }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Contest dictionary                                                         */
 /* -------------------------------------------------------------------------- */
@@ -769,6 +803,7 @@ static EeLoadStatus hart_iterate_zip(const wchar_t *path,
                                      volatile LONG *cancel_flag,
                                      uint64_t *done_entries,
                                      uint64_t total_entries,
+                                     const uint32_t *rows_ptr, /* ballot records so far, or NULL */
                                      EeLoadProgressFn progress_fn,
                                      void *progress_user,
                                      uint32_t *last_pct,
@@ -880,7 +915,7 @@ static EeLoadStatus hart_iterate_zip(const wchar_t *path,
                     EeLoadProgress pr;
                     *last_pct = pct;
                     pr.percent = pct;
-                    pr.rows_loaded = (uint32_t)*done_entries;
+                    pr.rows_loaded = (rows_ptr != NULL) ? *rows_ptr : 0u;
                     pr.bytes_read = *done_entries;
                     pr.bytes_total = total_entries;
                     if (!progress_fn(&pr, progress_user) && cancel_flag != NULL)
@@ -968,9 +1003,12 @@ static BOOL pass1_entry(void *vctx, char *xml)
     for (i = 0; i < p->sheet->nct; i++)
     {
         HartContest *hc = &p->sheet->ct[i];
-        const char *name = p->sheet->arena + hc->name_off;
-        uint32_t idx = dict_intern(p->dict, name);
+        char name[384];
+        uint32_t idx;
         ContestInfo *ci;
+        contest_display_name(name, sizeof(name), p->sheet->party,
+                             p->sheet->arena + hc->name_off);
+        idx = dict_intern(p->dict, name);
         if (idx == (uint32_t)-1)
         {
             return FALSE;
@@ -1037,10 +1075,13 @@ static BOOL pass2_entry(void *vctx, char *xml)
     for (i = 0; i < p->sheet->nct; i++)
     {
         HartContest *hc = &p->sheet->ct[i];
-        const char *name = p->sheet->arena + hc->name_off;
-        uint32_t idx = dict_intern(p->dict, name); /* already present */
+        char name[384];
+        uint32_t idx;
         ContestInfo *ci;
         uint32_t base;
+        contest_display_name(name, sizeof(name), p->sheet->party,
+                             p->sheet->arena + hc->name_off);
+        idx = dict_intern(p->dict, name); /* already present */
         int n, slot = 0, k;
         if (idx == (uint32_t)-1)
         {
@@ -1113,7 +1154,7 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
     for (f = 0; f < count && s == EeLoadStatus_Ok; f++)
     {
         s = hart_iterate_zip(paths[f], &buf, &buf_cap, pass1_entry, &p1, cancel_flag, &done, total,
-                             progress_fn, progress_user, &last_pct, error_message, error_cch);
+                             NULL, progress_fn, progress_user, &last_pct, error_message, error_cch);
     }
     if (s != EeLoadStatus_Ok)
     {
@@ -1202,7 +1243,8 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
     for (f = 0; f < count && s == EeLoadStatus_Ok; f++)
     {
         s = hart_iterate_zip(paths[f], &buf, &buf_cap, pass2_entry, &p2, cancel_flag, &done, total,
-                             progress_fn, progress_user, &last_pct, error_message, error_cch);
+                             &out->nrows, progress_fn, progress_user, &last_pct, error_message,
+                             error_cch);
     }
     free((void *)p2.cells);
 

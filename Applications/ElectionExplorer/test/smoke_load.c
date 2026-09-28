@@ -4454,6 +4454,154 @@ static long hart_find_count(EeCvrTally *items, uint32_t n, const wchar_t *contes
     return -1;
 }
 
+/* Export @p src to a CSV, reload it through the file loader, and verify the reloaded
+ * table freezes @p want_frozen leading key columns and tabulates identically to @p src.
+ * Guards the round-trip bug where a Hart export's key columns (Sheet Number, Batch
+ * Sequence, Party, Is Blank, ...) were re-tabulated as contests because the CSV frozen-
+ * column detector only knew the ES&S key names. Returns TRUE on success. */
+static BOOL hart_csv_roundtrip_ok(const EeCvrTable *src, uint32_t want_frozen)
+{
+    wchar_t cpath[MAX_PATH] = L"";
+    wchar_t err[512] = L"";
+    const wchar_t *one[1];
+    EeCvrTable t2;
+    EeCvrTally *ba = NULL, *rb = NULL;
+    uint32_t nba = 0, nrb = 0, i;
+    uint32_t *rows = NULL;
+    char *csv = NULL;
+    size_t csvlen = 0;
+    BOOL ok = FALSE;
+
+    EeCvr_Init(&t2);
+    if (!EeCvr_Tabulate(src, TRUE, &ba, &nba))
+    {
+        wprintf(L"hart-rt: baseline tabulate failed\n");
+        goto out;
+    }
+    rows = (uint32_t *)malloc((size_t)src->nrows * sizeof(uint32_t));
+    if (rows == NULL)
+    {
+        goto out;
+    }
+    for (i = 0; i < src->nrows; i++)
+    {
+        rows[i] = i;
+    }
+    if (!EeCvr_FormatDelimitedUtf8(src, rows, src->nrows, ',', TRUE, &csv, &csvlen))
+    {
+        wprintf(L"hart-rt: export failed\n");
+        goto out;
+    }
+    if (!cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_hart_rt.csv") ||
+        !cvr_write_bytes(cpath, csv, csvlen))
+    {
+        wprintf(L"hart-rt: write csv failed\n");
+        goto out;
+    }
+    one[0] = cpath;
+    if (EeCvr_LoadFromFiles(one, 1, &t2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"hart-rt: csv reload failed: %s\n", err);
+        goto out;
+    }
+    if (t2.frozen_count != want_frozen)
+    {
+        wprintf(L"hart-rt: reloaded frozen=%u (want %u)\n", t2.frozen_count, want_frozen);
+        goto out;
+    }
+    if (!EeCvr_Tabulate(&t2, TRUE, &rb, &nrb))
+    {
+        wprintf(L"hart-rt: reloaded tabulate failed\n");
+        goto out;
+    }
+    if (nba != nrb)
+    {
+        wprintf(L"hart-rt: tally count differs baseline=%u reloaded=%u\n", nba, nrb);
+        goto out;
+    }
+    for (i = 0; i < nba; i++)
+    {
+        if (wcscmp(ba[i].contest, rb[i].contest) != 0 ||
+            wcscmp(ba[i].selection, rb[i].selection) != 0 || ba[i].count != rb[i].count)
+        {
+            wprintf(L"hart-rt: row %u differs (%s/%s/%u vs %s/%s/%u)\n", i, ba[i].contest,
+                    ba[i].selection, ba[i].count, rb[i].contest, rb[i].selection, rb[i].count);
+            goto out;
+        }
+    }
+    ok = TRUE;
+
+out:
+    EeCvr_FreeTally(ba, nba);
+    EeCvr_FreeTally(rb, nrb);
+    free(rows);
+    free(csv);
+    EeCvr_Clear(&t2);
+    DeleteFileW(cpath);
+    return ok;
+}
+
+/* A Hart GENERAL-election export has no Party column, so its key block is 6 columns
+ * (CvrGuid, Sheet Number, Batch Sequence, Batch Number, Precinct, Is Blank). Verify a
+ * CSV with that header reloads with frozen_count == 6 and that the key columns are not
+ * tabulated as contests. Returns TRUE on success. */
+static BOOL hart_ge_reload_ok(void)
+{
+    static const char *k_csv =
+        "CvrGuid,Sheet Number,Batch Sequence,Batch Number,Precinct,Is Blank,"
+        "President,United States Senator\r\n"
+        "AAA,1,1,1,101,false,Alice,Bob\r\n"
+        "BBB,1,2,1,101,false,Alice,Carol\r\n";
+    wchar_t cpath[MAX_PATH] = L"";
+    wchar_t err[512] = L"";
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0;
+    BOOL ok = FALSE;
+
+    EeCvr_Init(&t);
+    if (!cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_hart_ge.csv") ||
+        !cvr_write_bytes(cpath, k_csv, strlen(k_csv)))
+    {
+        wprintf(L"hart-ge: write csv failed\n");
+        goto out;
+    }
+    one[0] = cpath;
+    if (EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"hart-ge: load failed: %s\n", err);
+        goto out;
+    }
+    if (t.frozen_count != 6)
+    {
+        wprintf(L"hart-ge: frozen=%u (want 6)\n", t.frozen_count);
+        goto out;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt))
+    {
+        wprintf(L"hart-ge: tabulate failed\n");
+        goto out;
+    }
+    /* Real contests are counted; key columns are not. */
+    if (hart_find_count(items, nt, L"President", L"Alice") != 2 ||
+        hart_find_count(items, nt, L"United States Senator", L"Bob") != 1 ||
+        hart_find_count(items, nt, L"Sheet Number", L"1") != -1 ||
+        hart_find_count(items, nt, L"Is Blank", L"false") != -1 ||
+        hart_find_count(items, nt, L"Batch Sequence", L"1") != -1)
+    {
+        wprintf(L"hart-ge: key column tabulated as a contest\n");
+        goto out;
+    }
+    ok = TRUE;
+
+out:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    DeleteFileW(cpath);
+    return ok;
+}
+
 /* Hart CVR loader: a zip of per-sheet XML files -> one row each; category-ordered
  * contests; vote-for-N expansion; write-in/overvote/undervote; multi-card via
  * SheetNumber (tag: hart). */
@@ -4492,8 +4640,19 @@ static int test_hart_cvr(void)
         "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
         "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
         "<CvrGuid>BBB</CvrGuid><IsBlank>false</IsBlank></Cvr>";
-    const char *names[2] = {"1_AAA.xml", "BBB.xml"};
-    const char *xmls[2];
+    /* A Republican ballot -> its President is a separate contest ("REP President"). */
+    static const char *k_sheet3 =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Cvr xmlns=\"http://tempuri.org/CVRDesign.xsd\"><Contests>"
+        "<Contest><Name>President</Name><Id>rp1</Id><Options><Option><Name>Zach</Name><Id>z1</Id>"
+        "<Value>1</Value></Option></Options></Contest>"
+        "</Contests><SheetNumber>1</SheetNumber>"
+        "<PrecinctSplit><Name>101</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Republican Party Ballot</Name><Id>r</Id></Party>"
+        "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
+        "<CvrGuid>CCC</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    const char *names[3] = {"1_AAA.xml", "BBB.xml", "1_CCC.xml"};
+    const char *xmls[3];
     wchar_t zpath[MAX_PATH];
     wchar_t err[512] = L"";
     const wchar_t *one[1];
@@ -4506,13 +4665,14 @@ static int test_hart_cvr(void)
 
     xmls[0] = k_sheet1;
     xmls[1] = k_sheet2;
+    xmls[2] = k_sheet3;
 
     if (!cvr_temp_path(zpath, ARRAYSIZE(zpath), L"ee_hart.zip"))
     {
         wprintf(L"hart: temp path failed\n");
         return 1;
     }
-    if (!hart_write_zip(zpath, names, xmls, 2))
+    if (!hart_write_zip(zpath, names, xmls, 3))
     {
         wprintf(L"hart: write zip failed\n");
         return 1;
@@ -4520,7 +4680,7 @@ static int test_hart_cvr(void)
     EeCvr_Init(&t);
     one[0] = zpath;
     s = EeCvr_LoadFromHartZips(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
-    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    if (s != EeLoadStatus_Ok || t.nrows != 3)
     {
         wprintf(L"hart: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
         goto done;
@@ -4537,11 +4697,12 @@ static int test_hart_cvr(void)
         wprintf(L"hart: multi-card not detected\n");
         goto done;
     }
-    /* Federal (President) must sort before State (Governor) despite XML order. */
-    if (!EeCvr_FindColumnByTitle(&t, L"President", &colPres) ||
-        !EeCvr_FindColumnByTitle(&t, L"Governor", &colGov) || !(colPres < colGov))
+    /* Primary: contests are party-prefixed; federal (President) sorts before state
+     * (Governor) despite the XML order. */
+    if (!EeCvr_FindColumnByTitle(&t, L"DEM President", &colPres) ||
+        !EeCvr_FindColumnByTitle(&t, L"DEM Governor", &colGov) || !(colPres < colGov))
     {
-        wprintf(L"hart: ordering President=%u Governor=%u\n", colPres, colGov);
+        wprintf(L"hart: ordering DEM President=%u DEM Governor=%u\n", colPres, colGov);
         goto done;
     }
     if (!EeCvr_Tabulate(&t, TRUE, &items, &nt))
@@ -4549,23 +4710,40 @@ static int test_hart_cvr(void)
         wprintf(L"hart: tabulate failed\n");
         goto done;
     }
-    if (hart_find_count(items, nt, L"President", L"Alice") != 1 ||
-        hart_find_count(items, nt, L"United States Senator", L"write-in") != 1 ||
-        hart_find_count(items, nt, L"Governor", L"undervote") != 1 ||
-        hart_find_count(items, nt, L"Attorney General", L"overvote") != 1 ||
-        hart_find_count(items, nt, L"City Council", L"Bob") != 1 ||
-        hart_find_count(items, nt, L"City Council", L"Carol") != 1 ||
-        hart_find_count(items, nt, L"Proposition 1", L"Yes") != 1)
+    if (hart_find_count(items, nt, L"DEM President", L"Alice") != 1 ||
+        hart_find_count(items, nt, L"REP President", L"Zach") != 1 ||
+        hart_find_count(items, nt, L"DEM United States Senator", L"write-in") != 1 ||
+        hart_find_count(items, nt, L"DEM Governor", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"DEM Attorney General", L"overvote") != 1 ||
+        hart_find_count(items, nt, L"DEM City Council", L"Bob") != 1 ||
+        hart_find_count(items, nt, L"DEM City Council", L"Carol") != 1 ||
+        hart_find_count(items, nt, L"DEM Proposition 1", L"Yes") != 1)
     {
-        wprintf(L"hart: tally mismatch (Pres/Alice=%ld Sen/wi=%ld Gov/uv=%ld AG/ov=%ld "
-                L"CC/Bob=%ld CC/Carol=%ld Prop/Yes=%ld)\n",
-                hart_find_count(items, nt, L"President", L"Alice"),
-                hart_find_count(items, nt, L"United States Senator", L"write-in"),
-                hart_find_count(items, nt, L"Governor", L"undervote"),
-                hart_find_count(items, nt, L"Attorney General", L"overvote"),
-                hart_find_count(items, nt, L"City Council", L"Bob"),
-                hart_find_count(items, nt, L"City Council", L"Carol"),
-                hart_find_count(items, nt, L"Proposition 1", L"Yes"));
+        wprintf(L"hart: tally mismatch\n");
+        goto done;
+    }
+    /* Party-first reorder: REP-first puts a REP contest at the top; DEM-first a DEM. */
+    EeCvr_ReorderTallyByParty(items, nt, EE_TAB_PARTY_REP);
+    if (wcsncmp(items[0].contest, L"REP ", 4) != 0)
+    {
+        wprintf(L"hart: REP-first put %s at top\n", items[0].contest);
+        goto done;
+    }
+    EeCvr_ReorderTallyByParty(items, nt, EE_TAB_PARTY_DEM);
+    if (wcsncmp(items[0].contest, L"DEM ", 4) != 0)
+    {
+        wprintf(L"hart: DEM-first put %s at top\n", items[0].contest);
+        goto done;
+    }
+    /* CSV round-trip: export this primary table (7 frozen keys incl. Party) and reload
+     * it through the file loader; the key columns must stay frozen, not tabulated. */
+    if (!hart_csv_roundtrip_ok(&t, 7))
+    {
+        goto done;
+    }
+    /* General-election reload: no Party column -> 6 frozen keys, none tabulated. */
+    if (!hart_ge_reload_ok())
+    {
         goto done;
     }
     rc = 0;

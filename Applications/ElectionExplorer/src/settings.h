@@ -29,7 +29,16 @@ extern "C"
         BOOL copy_prepend_normalized; /**< Prepend normalized fields on copy. */
         BOOL name_surname_first;      /**< Display names surname-first. */
         BOOL cvr_merge_writeins;      /**< CVR report: merge image + text write-ins. */
+        int cvr_tab_party_first;      /**< Primary tabulation party shown first:
+                                       *   0 = Republican (default), 1 = Democratic. */
     } EeSettings;
+
+    /** Values for EeSettings.cvr_tab_party_first. */
+    enum
+    {
+        EE_TAB_PARTY_REP = 0,
+        EE_TAB_PARTY_DEM = 1
+    };
 
     /**
      * Fill @p out with the built-in default options.

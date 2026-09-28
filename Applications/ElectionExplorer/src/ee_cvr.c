@@ -748,6 +748,33 @@ static const wchar_t *path_leaf(const wchar_t *path)
     return leaf;
 }
 
+/* Remap a single file's progress (percent 0..100, per-file row count) into an overall
+ * value across a multi-file load, so the UI shows one continuous bar and a cumulative
+ * ballot count instead of restarting at each file. */
+typedef struct CvrMultiProg
+{
+    EeLoadProgressFn fn;
+    void *user;
+    int f;              /* current file index (0-based) */
+    int count;          /* total files */
+    uint32_t rows_base; /* rows finished in prior files */
+} CvrMultiProg;
+
+static BOOL cvr_multi_prog(const EeLoadProgress *pr, void *user)
+{
+    CvrMultiProg *w = (CvrMultiProg *)user;
+    EeLoadProgress o = *pr;
+    o.percent =
+        (uint32_t)(((uint64_t)(uint32_t)w->f * 100u + pr->percent) / (uint32_t)w->count);
+    if (o.percent > 100u)
+    {
+        o.percent = 100u;
+    }
+    o.rows_loaded = w->rows_base + pr->rows_loaded;
+    o.scanning = 0; /* the ES&S readers have no discovery pass */
+    return (w->fn != NULL) ? w->fn(&o, w->user) : TRUE;
+}
+
 EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                  int count,
                                  EeCvrTable *out,
@@ -758,6 +785,9 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                  size_t error_cch)
 {
     int f;
+    CvrMultiProg mp;
+    EeLoadProgressFn eff_fn = NULL;
+    void *eff_user = NULL;
 
     if (paths == NULL || out == NULL || count <= 0)
     {
@@ -765,6 +795,17 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
         return EeLoadStatus_Error;
     }
     EeCvr_Clear(out);
+
+    if (progress_fn != NULL)
+    {
+        mp.fn = progress_fn;
+        mp.user = progress_user;
+        mp.count = count;
+        mp.rows_base = 0;
+        mp.f = 0;
+        eff_fn = cvr_multi_prog;
+        eff_user = &mp;
+    }
 
     for (f = 0; f < count; f++)
     {
@@ -777,6 +818,7 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
         ctx.path_leaf = path_leaf(paths[f]);
         ctx.err = error_message;
         ctx.errcch = error_cch;
+        mp.f = f;
 
         if (path_has_ext(paths[f], L".xlsx"))
         {
@@ -785,8 +827,8 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                  cvr_row_sink,
                                  &ctx,
                                  cancel_flag,
-                                 progress_fn,
-                                 progress_user,
+                                 eff_fn,
+                                 eff_user,
                                  error_message,
                                  error_cch);
         }
@@ -797,11 +839,12 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                 cvr_row_sink,
                                 &ctx,
                                 cancel_flag,
-                                progress_fn,
-                                progress_user,
+                                eff_fn,
+                                eff_user,
                                 error_message,
                                 error_cch);
         }
+        mp.rows_base = out->nrows; /* cumulative rows actually stored so far */
         if (ctx.failed)
         {
             EeCvr_Clear(out);

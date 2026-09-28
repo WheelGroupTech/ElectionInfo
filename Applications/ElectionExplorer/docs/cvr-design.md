@@ -178,6 +178,20 @@ helpers where they are not `AppState`-coupled. **File → Load Cast Vote Records
 uses a multi-select open dialog (`OFN_ALLOWMULTISELECT`), filtered to
 `*.xlsx;*.csv;*.tsv;*.txt` (with per-format and all-files alternatives).
 
+**Load progress dialog.** A determinate progress bar (0..100), a status line, and Cancel.
+The bar is driven by the loader's `percent` and is continuous across the whole load: the
+Hart loader spans its two passes (`total = entries × 2`), and `EeCvr_LoadFromFiles` remaps
+each ES&S file's 0..100 into an overall `(file × 100 + inner) / count` (via an internal
+`cvr_multi_prog` wrapper) so the bar does not restart per file. The status line shows
+"Scanning ballots…" during the Hart discovery pass (`EeLoadProgress.scanning`, no rows
+yet) and "N ballot records" once rows are being filled (cumulative across ES&S files).
+
+**Column-width cap.** The CVR grid is a single report ListView holding every column. Like
+the voter list, its per-column width is clamped so the cumulative header width stays under
+the Win32 16-bit limit (`32000 / ncols`, floored at ~20 px): past 32,767 px the header
+stops hit-testing and clicking a far-right column jumps the view back to the start. A wide
+CVR (~188 columns) needs this; a narrow one is unaffected.
+
 ## Phase 2 — vote tabulation (implemented)
 
 **Reports → Tabulate All CVR Votes…** on the CVR window opens a report tallying every
@@ -437,15 +451,20 @@ unchanged.
   (no `Party`) are unaffected.
 - **Contest order** (Hart only): a keyword classifier ranks each contest
   Federal → State → County → City → ISD → Other → MUD (with the office sub-orders inside
-  Federal/State/County); ties keep first-seen order. Cosmetic — it does not affect
-  tallies. In a tabulation report the party-first reorder (above) groups the ranked
-  contests by party first.
+  Federal/State/County). Within one rank, contests sort by a case-insensitive **natural**
+  compare of the name (`natural_cmp_ci`: digit runs compare by value), so races that
+  differ only by a trailing number come out in numeric order — `United States
+  Representative, District 6 < 12 < 26 < 33`, `Precinct Chair, Precinct 3486 < 4095` —
+  rather than the arbitrary order Hart wrote them (first-seen is only the final tiebreak).
+  Cosmetic — it does not affect tallies. In a tabulation report the party-first reorder
+  (above) groups the ranked contests by party first.
 - **Multi-card**: exact here — flagged when any row's `Sheet Number` >= 2 (no heuristic).
 - **Two passes** over the zip(s): pass 1 discovers the contest set, each contest's seat
   count and category, and party presence; pass 2 fills rows via `EeCvr_BuildBegin` +
-  `EeCvr_BuildAppendRow` (the shared table builder, which keeps blank sheets). Pass 2
-  reports a running ballot-record count through the progress callback so the load dialog
-  shows "N ballot records" above the bar (pass 1, still discovering, reports 0).
+  `EeCvr_BuildAppendRow` (the shared table builder, which keeps blank sheets). Pass 1
+  reports `scanning = TRUE` (no rows yet) so the load dialog shows "Scanning ballots…";
+  pass 2 reports a running ballot-record count so it shows "N ballot records". Progress
+  percent spans both passes (`total = xml_entries × 2`), driving a determinate bar.
 - **Validated** against official Clarity results for two Tarrant County elections:
   - **G24** (general; single 2.2 GB zip, 828,544 ballot sheets, ~1m40s): Railroad
     Commissioner matches on all four candidates exactly (418,535 / 342,948 / 20,791 /

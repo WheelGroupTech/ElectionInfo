@@ -66,8 +66,9 @@ REP sheet) and checks one row per sheet, the frozen key columns, category orderi
 (federal President sorts before state Governor despite XML order), vote-for-N
 expansion, write-in/overvote/undervote mapping, multi-card via `SheetNumber >= 2`,
 the primary per-party contest split (titles prefixed `DEM `/`REP `, so each party's
-race tallies separately), and `EeCvr_ReorderTallyByParty` (REP-first vs DEM-first
-grouping of the tabulation output). It also round-trips the loaded table through a CSV
+race tallies separately), `EeCvr_ReorderTallyByParty` (REP-first vs DEM-first
+grouping of the tabulation output), and natural contest ordering (US Rep "District 6"
+sorts before "District 33" although the XML lists 33 first). It also round-trips the loaded table through a CSV
 export + reload (`EeCvr_LoadFromFiles`) and checks the Hart key columns stay frozen
 (primary → 7 incl. `Party`; a general-election header with no `Party` → 6) rather than
 being tabulated as contests;

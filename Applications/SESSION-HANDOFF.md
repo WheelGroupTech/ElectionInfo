@@ -197,8 +197,9 @@ Railroad Commissioner exact on all 4 candidates (418,535 / 342,948 / 20,791 / 20
 President/Senator within a handful of the certified totals (certified adds
 cured/provisional ballots after the CVR snapshot).
 
-**Uncommitted (this session): primary per-party split, party-first tabulation order,
-filtered tabulation, load count.** Follow-ups on the Hart base, all requested by the user:
+**Primary per-party split, party-first tabulation order, filtered tabulation, load count,
+CSV round-trip fix (committed & pushed).** Follow-ups on the Hart base, all requested by
+the user:
 - **Per-party split for primaries.** `hart_cvr.c` now prefixes a primary contest's title
   with its party abbreviation (`party_abbr` → `REP`/`DEM`/`LIB`/`GRN` via
   `contest_display_name`), e.g. `DEM United States Senator` vs. `REP United States Senator`,
@@ -243,12 +244,44 @@ filtered tabulation, load count.** Follow-ups on the Hart base, all requested by
   Hassan 2,060 = 189,036 cast; REP Cornyn 65,621 / Paxton 55,341 / Hunt 19,729 / … =
   145,798 cast).
 
-Files (uncommitted): `hart_cvr.{c,h}`, `ee_cvr.{c,h}`, `settings.{c,h}`, `main.c`,
-`resource.h`, `test/smoke_load.c`, `docs/cvr-design.md`, `test/README.md`. Test `hart`
-extended (3-sheet zip: 2 DEM incl. a continuation + 1 REP; checks party-prefixed names,
-category order, vote-for-N/write-in/overvote/undervote, and `EeCvr_ReorderTallyByParty`
-REP-first vs DEM-first). Full smoke suite green; app builds clean x64 Debug. **Not yet
-GUI click-tested** (party-first radio, Tabulate Filtered greying, load count display).
+Files: `hart_cvr.{c,h}`, `ee_cvr.{c,h}`, `settings.{c,h}`, `main.c`, `resource.h`,
+`test/smoke_load.c`, `docs/cvr-design.md`, `test/README.md`. Test `hart` extended
+(3-sheet zip: 2 DEM incl. a continuation + 1 REP; party-prefixed names, category order,
+vote-for-N/write-in/overvote/undervote, `EeCvr_ReorderTallyByParty`, CSV round-trip + GE
+reload). Full smoke suite green; app builds clean x64 Debug.
+
+**Uncommitted (this session): scan status, determinate load bar, wide-CVR column clamp,
+natural contest sort.** Four user-requested Hart/CVR refinements:
+- **"Scanning ballots…" during Hart pass 1.** Added `int scanning` to `EeLoadProgress`
+  (`voter_table.h`). `hart_iterate_zip` sets it TRUE on the discovery pass (`rows_ptr ==
+  NULL`); the load dialog shows "Scanning ballots…" while scanning, else "N ballot
+  records" (`main.c` `EEM_CVR_LOAD_PROGRESS`).
+- **Determinate load progress bar (no more repeating marquee).** The CVR load dialog's bar
+  was `PBS_MARQUEE` (a chunk sweeping left→right over and over for both ES&S and Hart). Now
+  a determinate 0..100 bar driven by the loader's `percent`. Hart already spans its two
+  passes (`total = entries × 2`); `EeCvr_LoadFromFiles` now remaps each ES&S file's 0..100
+  into an overall `(f × 100 + inner) / count` and accumulates the row count via an internal
+  `cvr_multi_prog` wrapper, so the bar/counter don't restart per file. `CvrLoadProgressCb`
+  now posts percent + scanning flag (LPARAM) alongside rows (WPARAM); `CvrLoadJob.bar`
+  added.
+- **Wide-CVR column clamp.** The CVR grid is one report ListView with every column; a wide
+  CVR (~188 cols at 130/190 px ≈ 35k px) passed the Win32 32,767 px header limit, so
+  clicking a far-right column header jumped the view back to the start (same bug as the
+  wide voter-history lists). Clamp per-column width to `32000 / ncols` (floored ~20 px) in
+  the CVR column build (`main.c`), so the total stays under the limit. Narrow CVRs are
+  unaffected.
+- **Natural (numeric-aware) Hart contest sort.** `contest_order_cmp` broke ties within an
+  office rank by first-seen order, so Hart wrote US Rep districts and precinct-chair races
+  in arbitrary order (e.g. District 33 before 6). Added `natural_cmp_ci` (digit runs
+  compare by value) as the within-rank tiebreak (`hart_cvr.c`). Verified on real data: G24
+  US Rep now **6, 12, 24, 25, 26, 30, 33**; P26 precinct chairs sort numerically within
+  each party (DEM 1148/3486/4250, then REP 3240/3465/3486/…). ES&S already orders these via
+  its export column order (unchanged). `hart` test extended with a district-order assertion.
+
+Files (uncommitted): `voter_table.h`, `hart_cvr.c`, `ee_cvr.c`, `main.c`,
+`test/smoke_load.c`, `docs/cvr-design.md`. Full smoke suite green (EXIT:0); app builds
+clean x64 Debug. **Not yet GUI click-tested** (scan status text, determinate bar across
+ES&S files, far-right column-header clicks on a wide CVR).
 **Release relink needs the running app instance closed** (file lock, not a code error).
 
 The app is being published via the **Microsoft Store**.

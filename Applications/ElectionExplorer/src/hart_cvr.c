@@ -775,14 +775,86 @@ static void dict_free(ContestDict *d)
     ZeroMemory(d, sizeof(*d));
 }
 
+/* Case-insensitive "natural" compare: runs of digits compare by numeric value (so
+ * "District 6" < "District 26" < "District 33" and "Precinct 3486" < "Precinct 4095"),
+ * everything else compares by lowercased byte. Leading zeros in a digit run are ignored
+ * for the value but a longer run of significant digits is the larger number. */
+static int natural_cmp_ci(const char *a, const char *b)
+{
+    for (;;)
+    {
+        unsigned char ca = (unsigned char)*a;
+        unsigned char cb = (unsigned char)*b;
+        if (ca == 0 || cb == 0)
+        {
+            return (ca == cb) ? 0 : (ca == 0 ? -1 : 1);
+        }
+        if (ca >= '0' && ca <= '9' && cb >= '0' && cb <= '9')
+        {
+            const char *ea;
+            const char *eb;
+            size_t la;
+            size_t lb;
+            while (*a == '0')
+            {
+                a++;
+            }
+            while (*b == '0')
+            {
+                b++;
+            }
+            for (ea = a; *ea >= '0' && *ea <= '9'; ea++)
+            {
+            }
+            for (eb = b; *eb >= '0' && *eb <= '9'; eb++)
+            {
+            }
+            la = (size_t)(ea - a);
+            lb = (size_t)(eb - b);
+            if (la != lb)
+            {
+                return (la < lb) ? -1 : 1; /* more significant digits => larger number */
+            }
+            for (; a < ea; a++, b++)
+            {
+                if (*a != *b)
+                {
+                    return ((unsigned char)*a < (unsigned char)*b) ? -1 : 1;
+                }
+            }
+            b = eb; /* a == ea already; both runs have equal value, continue past them */
+            continue;
+        }
+        {
+            unsigned char lca = (ca >= 'A' && ca <= 'Z') ? (unsigned char)(ca + 32) : ca;
+            unsigned char lcb = (cb >= 'A' && cb <= 'Z') ? (unsigned char)(cb + 32) : cb;
+            if (lca != lcb)
+            {
+                return (lca < lcb) ? -1 : 1;
+            }
+        }
+        a++;
+        b++;
+    }
+}
+
 static int __cdecl contest_order_cmp(void *ctx, const void *a, const void *b)
 {
     const ContestDict *d = (const ContestDict *)ctx;
     const ContestInfo *x = &d->info[*(const uint32_t *)a];
     const ContestInfo *y = &d->info[*(const uint32_t *)b];
+    int c;
     if (x->rank != y->rank)
     {
         return (x->rank < y->rank) ? -1 : 1;
+    }
+    /* Same office category: sort by contest name so races that differ only by a trailing
+     * number (US Rep District 6/26/33, Precinct Chair Precinct 3486/4095, ...) come out
+     * in numeric order instead of the arbitrary order Hart wrote them. */
+    c = natural_cmp_ci(x->name, y->name);
+    if (c != 0)
+    {
+        return c;
     }
     return (x->first_seen < y->first_seen) ? -1 : (x->first_seen > y->first_seen ? 1 : 0);
 }
@@ -918,6 +990,9 @@ static EeLoadStatus hart_iterate_zip(const wchar_t *path,
                     pr.rows_loaded = (rows_ptr != NULL) ? *rows_ptr : 0u;
                     pr.bytes_read = *done_entries;
                     pr.bytes_total = total_entries;
+                    /* Pass 1 (rows_ptr == NULL) discovers the schema and has no rows
+                     * yet -- flag it so the UI can show "Scanning ballots...". */
+                    pr.scanning = (rows_ptr == NULL) ? 1 : 0;
                     if (!progress_fn(&pr, progress_user) && cancel_flag != NULL)
                     {
                         InterlockedExchange(cancel_flag, 1);

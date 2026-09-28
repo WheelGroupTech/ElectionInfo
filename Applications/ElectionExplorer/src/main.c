@@ -10538,15 +10538,33 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             {
                 SendMessageW(cw->list, WM_SETFONT, (WPARAM)cw->app->font_ui, TRUE);
             }
-            for (i = 0; i < cw->table.ncols; i++)
+            /* A report-mode ListView header desyncs and stops hit-testing once the
+             * cumulative column width passes the Win32 16-bit limit (32,767 px): the
+             * body keeps scrolling but far-right column headers can't be clicked and the
+             * view jumps back to the start. A wide CVR (e.g. ~188 contest columns) blows
+             * past it, so clamp per-column width to keep the total under the limit. */
             {
-                LVCOLUMNW col;
-                ZeroMemory(&col, sizeof(col));
-                col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-                col.fmt = LVCFMT_LEFT;
-                col.pszText = cw->table.col_titles[i];
-                col.cx = Scale(cw->app, (i < cw->table.frozen_count) ? 130 : 190);
-                ListView_InsertColumn(cw->list, (int)i, &col);
+                int cap = (cw->table.ncols > 0) ? (32000 / (int)cw->table.ncols) : 0;
+                int floor_w = Scale(cw->app, 20);
+                for (i = 0; i < cw->table.ncols; i++)
+                {
+                    LVCOLUMNW col;
+                    int cx = Scale(cw->app, (i < cw->table.frozen_count) ? 130 : 190);
+                    if (cx < floor_w)
+                    {
+                        cx = floor_w;
+                    }
+                    if (cap > 0 && cx > cap)
+                    {
+                        cx = cap; /* the limit always wins */
+                    }
+                    ZeroMemory(&col, sizeof(col));
+                    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                    col.fmt = LVCFMT_LEFT;
+                    col.pszText = cw->table.col_titles[i];
+                    col.cx = cx;
+                    ListView_InsertColumn(cw->list, (int)i, &col);
+                }
             }
 
             cw->status = CreateWindowExW(0,
@@ -13400,17 +13418,22 @@ typedef struct CvrLoadJob
     EeLoadStatus status;
     wchar_t err[512];
     HWND dlg;
-    HWND count_label; /* shows "N ballot records" during load */
+    HWND count_label; /* shows "N ballot records" (or "Scanning ballots…") during load */
+    HWND bar;         /* determinate progress bar (0..100) */
     HANDLE thread;
 } CvrLoadJob;
 
-/* Load progress: post the running ballot-record count to the load dialog. */
+/* Load progress: post the running ballot-record count, overall percent, and scan flag to
+ * the load dialog. wParam = rows loaded; LOWORD(lParam) = percent (0..100);
+ * HIWORD(lParam) = scanning (1 during the Hart discovery pass). */
 static BOOL CvrLoadProgressCb(const EeLoadProgress *pr, void *user)
 {
     CvrLoadJob *j = (CvrLoadJob *)user;
     if (j != NULL && j->dlg != NULL)
     {
-        PostMessageW(j->dlg, EEM_CVR_LOAD_PROGRESS, (WPARAM)pr->rows_loaded, 0);
+        uint32_t pct = (pr->percent > 100u) ? 100u : pr->percent;
+        PostMessageW(j->dlg, EEM_CVR_LOAD_PROGRESS, (WPARAM)pr->rows_loaded,
+                     MAKELPARAM((WORD)pct, (WORD)(pr->scanning ? 1 : 0)));
     }
     return TRUE; /* cancellation is driven by j->cancel, checked by the loader */
 }
@@ -13505,7 +13528,7 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             bar = CreateWindowExW(0,
                                   PROGRESS_CLASSW,
                                   NULL,
-                                  WS_CHILD | WS_VISIBLE | PBS_MARQUEE,
+                                  WS_CHILD | WS_VISIBLE,
                                   margin,
                                   margin + Scale(app, 46),
                                   rc.right - 2 * margin,
@@ -13514,6 +13537,7 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
                                   NULL,
                                   app->instance,
                                   NULL);
+            j->bar = bar;
             cancel = CreateWindowExW(0,
                                      L"BUTTON",
                                      L"Cancel",
@@ -13534,7 +13558,8 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             }
             if (bar != NULL)
             {
-                SendMessageW(bar, PBM_SETMARQUEE, TRUE, 30);
+                SendMessageW(bar, PBM_SETRANGE32, 0, 100);
+                SendMessageW(bar, PBM_SETPOS, 0, 0);
             }
             j->thread = CreateThread(NULL, 0, CvrLoadThreadProc, j, 0, NULL);
             if (j->thread == NULL)
@@ -13547,13 +13572,30 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
         }
 
         case EEM_CVR_LOAD_PROGRESS:
-            if (j != NULL && j->count_label != NULL)
+            if (j != NULL)
             {
-                wchar_t txt[64];
                 unsigned long n = (unsigned long)wParam;
-                StringCchPrintfW(txt, ARRAYSIZE(txt), L"%lu ballot record%s", n,
-                                 n == 1ul ? L"" : L"s");
-                SetWindowTextW(j->count_label, txt);
+                int pct = (int)LOWORD(lParam);
+                BOOL scanning = HIWORD(lParam) != 0;
+                if (j->bar != NULL)
+                {
+                    SendMessageW(j->bar, PBM_SETPOS, (WPARAM)pct, 0);
+                }
+                if (j->count_label != NULL)
+                {
+                    wchar_t txt[64];
+                    if (scanning)
+                    {
+                        /* Discovery pass: no rows produced yet. */
+                        StringCchCopyW(txt, ARRAYSIZE(txt), L"Scanning ballots…");
+                    }
+                    else
+                    {
+                        StringCchPrintfW(txt, ARRAYSIZE(txt), L"%lu ballot record%s", n,
+                                         n == 1ul ? L"" : L"s");
+                    }
+                    SetWindowTextW(j->count_label, txt);
+                }
             }
             return (INT_PTR)TRUE;
 

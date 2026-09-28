@@ -4616,6 +4616,11 @@ static int test_hart_cvr(void)
         "<Contest><Name>Governor</Name><Id>g1</Id><Options /><Undervotes>1</Undervotes></Contest>"
         "<Contest><Name>President</Name><Id>p1</Id><Options><Option><Name>Alice</Name><Id>a1</Id>"
         "<Value>1</Value></Option></Options></Contest>"
+        /* Two US Rep districts in NON-numeric XML order, to prove natural-order sorting. */
+        "<Contest><Name>United States Representative, District 33</Name><Id>r33</Id><Options>"
+        "<Option><Name>Cand33</Name><Id>c33</Id><Value>1</Value></Option></Options></Contest>"
+        "<Contest><Name>United States Representative, District 6</Name><Id>r6</Id><Options>"
+        "<Option><Name>Cand6</Name><Id>c6</Id><Value>1</Value></Option></Options></Contest>"
         "<Contest><Name>United States Senator</Name><Id>s1</Id><Options><Option><Name /><Id>w1</Id>"
         "<Value>1</Value><WriteInData><OriginalText>ZZ</OriginalText>"
         "<WriteInDataStatus>Unresolved</WriteInDataStatus></WriteInData></Option></Options></Contest>"
@@ -4721,6 +4726,18 @@ static int test_hart_cvr(void)
     {
         wprintf(L"hart: tally mismatch\n");
         goto done;
+    }
+    /* Natural contest order: District 6 must sort before District 33 (numeric, not
+     * lexicographic and not XML order, which put 33 first). */
+    {
+        uint32_t cR6 = 0, cR33 = 0;
+        if (!EeCvr_FindColumnByTitle(&t, L"DEM United States Representative, District 6", &cR6) ||
+            !EeCvr_FindColumnByTitle(&t, L"DEM United States Representative, District 33", &cR33) ||
+            cR6 >= cR33)
+        {
+            wprintf(L"hart: district natural order R6=%u R33=%u\n", cR6, cR33);
+            goto done;
+        }
     }
     /* Party-first reorder: REP-first puts a REP contest at the top; DEM-first a DEM. */
     EeCvr_ReorderTallyByParty(items, nt, EE_TAB_PARTY_REP);

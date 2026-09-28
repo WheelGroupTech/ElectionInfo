@@ -250,8 +250,8 @@ Files: `hart_cvr.{c,h}`, `ee_cvr.{c,h}`, `settings.{c,h}`, `main.c`, `resource.h
 vote-for-N/write-in/overvote/undervote, `EeCvr_ReorderTallyByParty`, CSV round-trip + GE
 reload). Full smoke suite green; app builds clean x64 Debug.
 
-**Uncommitted (this session): scan status, determinate load bar, wide-CVR column clamp,
-natural contest sort.** Four user-requested Hart/CVR refinements:
+**Scan status, determinate load bar, wide-CVR column clamp, natural contest sort
+(committed & pushed).** Four user-requested Hart/CVR refinements:
 - **"Scanning ballots…" during Hart pass 1.** Added `int scanning` to `EeLoadProgress`
   (`voter_table.h`). `hart_iterate_zip` sets it TRUE on the discovery pass (`rows_ptr ==
   NULL`); the load dialog shows "Scanning ballots…" while scanning, else "N ballot
@@ -278,10 +278,35 @@ natural contest sort.** Four user-requested Hart/CVR refinements:
   each party (DEM 1148/3486/4250, then REP 3240/3465/3486/…). ES&S already orders these via
   its export column order (unchanged). `hart` test extended with a district-order assertion.
 
-Files (uncommitted): `voter_table.h`, `hart_cvr.c`, `ee_cvr.c`, `main.c`,
-`test/smoke_load.c`, `docs/cvr-design.md`. Full smoke suite green (EXIT:0); app builds
-clean x64 Debug. **Not yet GUI click-tested** (scan status text, determinate bar across
-ES&S files, far-right column-header clicks on a wide CVR).
+Files: `voter_table.h`, `hart_cvr.c`, `ee_cvr.c`, `main.c`, `test/smoke_load.c`,
+`docs/cvr-design.md`. Full smoke suite green (EXIT:0); app builds clean x64 Debug.
+
+**Uncommitted (this session): residence address city/state/ZIP fix + dataset state
+inference.** Loading the Texas SOS "Official List of Registered Voters" (columns
+`RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, and NO residence-state column) produced
+normalized addresses missing city/state/ZIP. Two linked issues in `voter_table.c`:
+- **Unit number mistaken for a ZIP.** `RES_ADDR` here is street + unit with no inline
+  city/state/ZIP (e.g. `8000 W US 290 HWY 11210`, unit 11210). `compose_address`'s
+  "address already carries its own ZIP tail → don't append the city/state/ZIP columns"
+  guard (added for the earlier Travis district-code file) fired on the trailing unit
+  number, dropping the real `RESIDENT_CITY`/`RESIDENT_ZIP_CODE`. Fixed by only applying
+  that suppression when there is **no** dedicated ZIP column value (`zip5[0] == '\0'`); a
+  populated ZIP column is authoritative and always appended. `distcode` (no ZIP column)
+  still passes.
+- **No residence-state column → infer one for the dataset.** A voter list is a single
+  state (even multi-county lists stay in-state), so new `voter_apply_inferred_state`
+  (called from both load paths after `finalize_column_kinds`) tallies each row's residence
+  ZIP through a compact USPS ZIP3→state table (`zip3_to_state`), takes the plurality, and
+  re-composes every address with that state as a fallback — including rows whose own ZIP is
+  blank/redacted. Runs only when there is no residence-state column but there is a ZIP
+  column; files with a real state column are untouched. `compose_address` gained a
+  `fallback_state` param (existing caller passes NULL).
+- **Verified on the real 933,778-row file** (~6 s): every record now normalizes to
+  `street, CITY, TX ZIP`; the ~392 address-confidentiality (`*****`) records correctly show
+  `*****, TX`. New smoke test `resstate`; several address tests' expected strings updated to
+  include the inferred `TX`. Full suite green; app builds clean x64 Debug.
+
+Files (uncommitted): `voter_table.c`, `test/smoke_load.c`. **Not yet GUI click-tested.**
 **Release relink needs the running app instance closed** (file lock, not a code error).
 
 The app is being published via the **Microsoft Store**.

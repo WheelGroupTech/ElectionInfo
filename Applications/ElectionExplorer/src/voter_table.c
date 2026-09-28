@@ -3667,6 +3667,7 @@ static BOOL compose_address(const FieldList *fields,
                             int state_idx,
                             int zip_idx,
                             int zip4_idx,
+                            const char *fallback_state,
                             char *out,
                             size_t out_cap)
 {
@@ -3676,6 +3677,11 @@ static BOOL compose_address(const FieldList *fields,
     const char *street = field_at(fields, street_idx);
     const char *city = field_at(fields, city_idx);
     const char *state = field_at(fields, state_idx);
+    /* When the file has no residence-state column, callers may pass a dataset-wide
+     * inferred state (see voter_apply_inferred_state) to fill the tail. */
+    const char *state_use = (state[0] != '\0')
+                                ? state
+                                : ((fallback_state != NULL) ? fallback_state : "");
     const char *unit_type = field_at(fields, unit_type_idx);
     const char *unit = field_at(fields, unit_idx);
     char zip5[8];
@@ -3735,7 +3741,15 @@ static BOOL compose_address(const FieldList *fields,
              * the city / state / ZIP columns actually match that tail, those
              * columns are unrelated jurisdiction / district codes (e.g. Travis
              * "CITY" = "C10", "STATE BOARD OF EDUCATION" = "5"), not residence
-             * fields -- keep the address intact and do not append them. */
+             * fields -- keep the address intact and do not append them.
+             *
+             * This suppression only applies when there is NO dedicated ZIP column
+             * value (zip5 empty). When a real ZIP column is present, it is
+             * authoritative and must be appended: the file keeps city/ZIP in their
+             * own fields and the address line's trailing number is a unit/apartment,
+             * not a ZIP (e.g. Travis SOS lists: "8000 W US 290 HWY 11210" with
+             * RESIDENT_CITY=AUSTIN, RESIDENT_ZIP_CODE=78736). Without this guard the
+             * unit number was mistaken for a ZIP and the real city/ZIP were dropped. */
             BOOL full_has_own_tail = last_token_is_zip(full_buf, flen);
             BOOL any_matched = FALSE;
             if (zip5[0] != '\0' && ends_with_zip5(full_buf, flen, zip5, &remain))
@@ -3753,7 +3767,7 @@ static BOOL compose_address(const FieldList *fields,
                 flen = remain;
                 any_matched = TRUE;
             }
-            if (!any_matched && full_has_own_tail)
+            if (!any_matched && full_has_own_tail && zip5[0] == '\0')
             {
                 append_tail = FALSE;
             }
@@ -3770,7 +3784,7 @@ static BOOL compose_address(const FieldList *fields,
         /* Consistent tail: "…, City, STATE ZIP[-ZIP4]" from the columns. Skipped
          * when the full address already carries its own ZIP tail and the columns
          * did not match it (see append_tail above). */
-        if (append_tail && (city[0] != '\0' || state[0] != '\0' || zip5[0] != '\0'))
+        if (append_tail && (city[0] != '\0' || state_use[0] != '\0' || zip5[0] != '\0'))
         {
             if (len > 0 && !append_literal(out, out_cap, &len, ","))
             {
@@ -3780,13 +3794,13 @@ static BOOL compose_address(const FieldList *fields,
             {
                 return FALSE;
             }
-            if (state[0] != '\0' || zip5[0] != '\0')
+            if (state_use[0] != '\0' || zip5[0] != '\0')
             {
                 if (city[0] != '\0' && !append_literal(out, out_cap, &len, ","))
                 {
                     return FALSE;
                 }
-                if (state[0] != '\0' && !append_name_part(out, out_cap, &len, state))
+                if (state_use[0] != '\0' && !append_name_part(out, out_cap, &len, state_use))
                 {
                     return FALSE;
                 }
@@ -3809,6 +3823,179 @@ static BOOL compose_address(const FieldList *fields,
         }
     }
     return TRUE;
+}
+
+/* Map a ZIP code's first three digits (the USPS "SCF" prefix) to a state postal
+ * abbreviation. This is the standard prefix→state assignment; a handful of ZIPs sit on
+ * a state line, but that never changes the *majority* state of a single-state voter file,
+ * which is all we use it for (see voter_apply_inferred_state). Returns NULL if the ZIP is
+ * not three leading digits or falls in an unassigned prefix. */
+static const char *zip3_to_state(const char *zip)
+{
+    static const struct
+    {
+        short lo;
+        short hi;
+        char st[3];
+    } k_ranges[] = {
+        {5, 5, "NY"},     {6, 7, "PR"},     {8, 8, "VI"},     {9, 9, "PR"},
+        {10, 27, "MA"},   {28, 29, "RI"},   {30, 38, "NH"},   {39, 49, "ME"},
+        {50, 59, "VT"},   {60, 69, "CT"},   {70, 89, "NJ"},   {100, 149, "NY"},
+        {150, 196, "PA"}, {197, 199, "DE"}, {200, 205, "DC"}, {206, 219, "MD"},
+        {220, 246, "VA"}, {247, 268, "WV"}, {270, 289, "NC"}, {290, 299, "SC"},
+        {300, 319, "GA"}, {320, 349, "FL"}, {350, 369, "AL"}, {370, 385, "TN"},
+        {386, 397, "MS"}, {398, 399, "GA"}, {400, 427, "KY"}, {430, 459, "OH"},
+        {460, 479, "IN"}, {480, 499, "MI"}, {500, 528, "IA"}, {530, 549, "WI"},
+        {550, 567, "MN"}, {570, 577, "SD"}, {580, 588, "ND"}, {590, 599, "MT"},
+        {600, 629, "IL"}, {630, 658, "MO"}, {660, 679, "KS"}, {680, 693, "NE"},
+        {700, 714, "LA"}, {716, 729, "AR"}, {730, 732, "OK"}, {733, 733, "TX"},
+        {734, 749, "OK"}, {750, 799, "TX"}, {800, 816, "CO"}, {820, 831, "WY"},
+        {832, 838, "ID"}, {840, 847, "UT"}, {850, 865, "AZ"}, {870, 884, "NM"},
+        {885, 885, "TX"}, {889, 898, "NV"}, {900, 961, "CA"}, {967, 968, "HI"},
+        {969, 969, "GU"}, {970, 979, "OR"}, {980, 994, "WA"}, {995, 999, "AK"},
+    };
+    int z;
+    size_t i;
+    if (zip == NULL || zip[0] < '0' || zip[0] > '9' || zip[1] < '0' || zip[1] > '9' ||
+        zip[2] < '0' || zip[2] > '9')
+    {
+        return NULL;
+    }
+    z = (zip[0] - '0') * 100 + (zip[1] - '0') * 10 + (zip[2] - '0');
+    for (i = 0; i < sizeof(k_ranges) / sizeof(k_ranges[0]); i++)
+    {
+        if (z >= k_ranges[i].lo && z <= k_ranges[i].hi)
+        {
+            return k_ranges[i].st;
+        }
+    }
+    return NULL;
+}
+
+/* Some voter exports (e.g. the Texas SOS "Official List of Registered Voters") carry the
+ * residence city and ZIP in their own columns but omit the residence STATE entirely, so a
+ * composed address ends "…, CITY, ZIP" with no state. A voter list is (almost always) one
+ * state -- even a multi-county list is within a single state -- so we infer that one state
+ * from the data (the plurality of residence ZIPs by USPS prefix) and re-compose every
+ * address with it. Runs only when there is no residence-state column but there is a ZIP
+ * column; a file that already has a state column is left untouched. */
+static void voter_apply_inferred_state(EeVoterTable *table)
+{
+    struct
+    {
+        char st[3];
+        uint32_t n;
+    } tally[64];
+    int ntally = 0;
+    int best = -1;
+    uint32_t r;
+    int c;
+    uint32_t src_count;
+    const char *dom;
+    FieldList fl;
+
+    if (table == NULL || table->row_count == 0)
+    {
+        return;
+    }
+    if (table->addr_state_col >= 0 || table->addr_zip_col < 0)
+    {
+        return; /* has an explicit residence-state column, or no ZIP to infer from */
+    }
+
+    /* Plurality residence state via ZIP prefix. */
+    for (r = 0; r < table->row_count; r++)
+    {
+        const char *zip = EeVoterTable_GetCellUtf8(table, r, (uint32_t)table->addr_zip_col);
+        const char *st = zip3_to_state(zip);
+        int i;
+        if (st == NULL)
+        {
+            continue;
+        }
+        for (i = 0; i < ntally; i++)
+        {
+            if (tally[i].st[0] == st[0] && tally[i].st[1] == st[1])
+            {
+                tally[i].n++;
+                break;
+            }
+        }
+        if (i == ntally && ntally < (int)(sizeof(tally) / sizeof(tally[0])))
+        {
+            tally[i].st[0] = st[0];
+            tally[i].st[1] = st[1];
+            tally[i].st[2] = '\0';
+            tally[i].n = 1;
+            ntally++;
+        }
+    }
+    {
+        int i;
+        for (i = 0; i < ntally; i++)
+        {
+            if (best < 0 || tally[i].n > tally[best].n)
+            {
+                best = i;
+            }
+        }
+    }
+    if (best < 0)
+    {
+        return;
+    }
+    dom = tally[best].st;
+
+    /* Re-compose every address with the inferred state as the fallback. Reconstruct a
+     * FieldList over the stored source columns (borrowing pool pointers, never freed). */
+    src_count = table->column_count - (uint32_t)EE_FROZEN_COLUMN_COUNT;
+    ZeroMemory(&fl, sizeof(fl));
+    fl.items = (char **)malloc((size_t)src_count * sizeof(char *));
+    fl.lengths = (size_t *)malloc((size_t)src_count * sizeof(size_t));
+    if (fl.items == NULL || fl.lengths == NULL)
+    {
+        free(fl.items);
+        free(fl.lengths);
+        return;
+    }
+    fl.count = src_count;
+    fl.cap = src_count;
+#define EE_SRC(col) (((col) < 0) ? -1 : ((col) - (int)EE_FROZEN_COLUMN_COUNT))
+    for (r = 0; r < table->row_count; r++)
+    {
+        char addr_buf[512];
+        uint32_t ofs;
+        for (c = 0; c < (int)src_count; c++)
+        {
+            const char *s =
+                EeVoterTable_GetCellUtf8(table, r, (uint32_t)EE_FROZEN_COLUMN_COUNT + (uint32_t)c);
+            fl.items[c] = (char *)s;
+            fl.lengths[c] = strlen(s);
+        }
+        if (compose_address(&fl,
+                            EE_SRC(table->addr_full_col),
+                            EE_SRC(table->addr_number_col),
+                            EE_SRC(table->addr_predir_col),
+                            EE_SRC(table->addr_street_col),
+                            EE_SRC(table->addr_type_col),
+                            EE_SRC(table->addr_postdir_col),
+                            EE_SRC(table->addr_unit_type_col),
+                            EE_SRC(table->addr_unit_col),
+                            EE_SRC(table->addr_city_col),
+                            -1, /* no state column */
+                            EE_SRC(table->addr_zip_col),
+                            EE_SRC(table->addr_zip4_col),
+                            dom,
+                            addr_buf,
+                            sizeof(addr_buf)) &&
+            pool_add_cell(table, EE_COL_ADDRESS, addr_buf, strlen(addr_buf), &ofs))
+        {
+            table->cells[(size_t)r * (size_t)table->column_count + EE_COL_ADDRESS] = ofs;
+        }
+    }
+#undef EE_SRC
+    free(fl.items);
+    free(fl.lengths);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -4411,6 +4598,7 @@ static BOOL ingest_row(EeVoterTable *out,
                              m->state_idx,
                              m->zip_idx,
                              m->zip4_idx,
+                             NULL, /* per-row: no dataset state inferred yet */
                              addr_buf,
                              sizeof(addr_buf)))
         {
@@ -4568,6 +4756,7 @@ EeLoadStatus EeVoterTable_LoadXlsxSheet(const wchar_t *path,
     }
 
     finalize_column_kinds(out_table);
+    voter_apply_inferred_state(out_table);
     report_progress(progress_fn, progress_user, 99, out_table->row_count, 0, 0);
     return EeLoadStatus_Ok;
 }
@@ -4972,6 +5161,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
     }
 
     finalize_column_kinds(out_table);
+    voter_apply_inferred_state(out_table);
 
     /* Progress 99%: data parsed; UI will push 100% when grid is ready. */
     report_progress(progress_fn, progress_user, 99, out_table->row_count, bytes_read, file_size);

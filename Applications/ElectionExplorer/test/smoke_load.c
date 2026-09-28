@@ -161,11 +161,14 @@ static int test_copy_format(void)
         wprintf(L"copy: prepend format failed\n");
         goto done;
     }
-    if (strncmp(text, "100001,101,\"Smith, John A\",\"123 Main ST, Austin, 78701\",100001,", 63) !=
-        0)
     {
-        wprintf(L"copy: prepend prefix mismatch\n");
-        goto done;
+        const char *pfx =
+            "100001,101,\"Smith, John A\",\"123 Main ST, Austin, TX 78701\",100001,";
+        if (strncmp(text, pfx, strlen(pfx)) != 0)
+        {
+            wprintf(L"copy: prepend prefix mismatch\n");
+            goto done;
+        }
     }
     free(text);
     text = NULL;
@@ -228,7 +231,7 @@ static int test_copy_format(void)
             goto done;
         }
         EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-        if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
+        if (wcscmp(buf, L"123 Main ST, Austin, TX 78701") != 0)
         {
             wprintf(L"copy: address mismatch (%s)\n", buf);
             goto done;
@@ -374,37 +377,37 @@ static int test_zip4_omits_zeros(void)
     }
 
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
+    if (wcscmp(buf, L"123 Main ST, Austin, TX 78701") != 0)
     {
         wprintf(L"zip4: zero +4 field mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"456 Oak AVE, Austin, 78702-1234") != 0)
+    if (wcscmp(buf, L"456 Oak AVE, Austin, TX 78702-1234") != 0)
     {
         wprintf(L"zip4: real +4 field mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"789 Pine RD, Austin, 78703") != 0)
+    if (wcscmp(buf, L"789 Pine RD, Austin, TX 78703") != 0)
     {
         wprintf(L"zip4: missing +4 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 3, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"10 Elm CT, Austin, 78701") != 0)
+    if (wcscmp(buf, L"10 Elm CT, Austin, TX 78701") != 0)
     {
         wprintf(L"zip4: combined 0000 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 4, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"20 Ash LN, Austin, 78701") != 0)
+    if (wcscmp(buf, L"20 Ash LN, Austin, TX 78701") != 0)
     {
         wprintf(L"zip4: hyphen 0000 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 5, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"30 Bay DR, Austin, 78701-1111") != 0)
+    if (wcscmp(buf, L"30 Bay DR, Austin, TX 78701-1111") != 0)
     {
         wprintf(L"zip4: combined 1111 mismatch (%s)\n", buf);
         goto done;
@@ -461,7 +464,7 @@ static int test_res_addr_fields(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"123 Main St, Austin, 78701") != 0)
+    if (wcscmp(buf, L"123 Main St, Austin, TX 78701") != 0)
     {
         wprintf(L"resaddr: mismatch (%s)\n", buf);
         EeVoterTable_Clear(&t);
@@ -586,6 +589,72 @@ static int test_district_codes_not_appended(void)
     EeVoterTable_Clear(&t);
     rc = 0;
     wprintf(L"distcode ok\n");
+    return rc;
+}
+
+/* Some exports (e.g. the Texas SOS registered-voter list) carry residence city and ZIP
+ * in their own columns but omit residence STATE entirely, and the RES_ADDR line ends in a
+ * unit number that must not be mistaken for a ZIP. The composed address must keep the real
+ * city/ZIP AND gain the dataset-inferred state (plurality of residence ZIPs), which is
+ * also applied to rows whose own ZIP is blank/redacted (tag: resstate). */
+static int test_infer_residence_state(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[220];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_resstate.csv")))
+    {
+        wprintf(L"resstate: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"resstate: could not create %s\n", path);
+        return 1;
+    }
+    fputs("COUNTY_CODE,LAST_NAME,FIRST_NAME,VUID,RES_ADDR,RESIDENT_CITY,RESIDENT_ZIP_CODE\n", fp);
+    /* Row 0: RES_ADDR ends in a unit number (11210) that must not read as a ZIP. */
+    fputs("227,Tovar,Leslie,1,8000 W US 290 HWY 11210,AUSTIN,78736\n", fp);
+    fputs("227,Rohan,Johanna,2,6804 COVERED BRIDGE DR 12104,AUSTIN,78736\n", fp);
+    /* Row 2: blank ZIP -- gets the dataset's inferred state (TX) even so. */
+    fputs("227,Doe,Jane,3,100 MAIN ST,AUSTIN,\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 3)
+    {
+        wprintf(L"resstate: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"8000 W US 290 HWY 11210, AUSTIN, TX 78736") != 0)
+    {
+        wprintf(L"resstate: unit-number row (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"100 MAIN ST, AUSTIN, TX") != 0)
+    {
+        wprintf(L"resstate: blank-zip row did not get inferred state (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_Clear(&t);
+    rc = 0;
+    wprintf(L"resstate ok\n");
     return rc;
 }
 
@@ -738,19 +807,19 @@ static int test_house_number_dot_zero(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"6007 SUN VISTA DR, Austin, 78749") != 0)
+    if (wcscmp(buf, L"6007 SUN VISTA DR, Austin, TX 78749") != 0)
     {
         wprintf(L"blkdot: .0 house number mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"12 OAK ST, Austin, 78701") != 0)
+    if (wcscmp(buf, L"12 OAK ST, Austin, TX 78701") != 0)
     {
         wprintf(L"blkdot: plain house number mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"100.50 PINE RD, Austin, 78702") != 0)
+    if (wcscmp(buf, L"100.50 PINE RD, Austin, TX 78702") != 0)
     {
         wprintf(L"blkdot: non-zero fraction should remain (%s)\n", buf);
         goto done;
@@ -806,13 +875,13 @@ static int test_lot_unit_ignored(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"12 Oak ST, Austin, 78701") != 0)
+    if (wcscmp(buf, L"12 Oak ST, Austin, TX 78701") != 0)
     {
         wprintf(L"lotunit: LOT should be omitted (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"90 Pine RD APT 2, Austin, 78702") != 0)
+    if (wcscmp(buf, L"90 Pine RD APT 2, Austin, TX 78702") != 0)
     {
         wprintf(L"lotunit: APT should remain (%s)\n", buf);
         goto done;
@@ -5026,6 +5095,7 @@ int wmain(void)
     failed |= test_res_addr_fields();
     failed |= test_res_addr_no_duplicate_city_state_zip();
     failed |= test_district_codes_not_appended();
+    failed |= test_infer_residence_state();
     failed |= test_res_addr_zip_dash_and_unit();
     failed |= test_house_number_dot_zero();
     failed |= test_lot_unit_ignored();

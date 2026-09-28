@@ -1638,6 +1638,96 @@ static BOOL ee_is_state_code(const char *t, size_t len)
     return FALSE;
 }
 
+/* TRUE if @p t (length @p len, already lowercased) is a street directional or a common
+ * USPS street-suffix word. Some exports leave these visible inside an otherwise fully
+ * masked confidential address ("*** *** RD *** ***"); they identify nothing on their own. */
+static BOOL ee_is_street_word(const char *t, size_t len)
+{
+    static const char *const k_words[] = {
+        "n",    "s",    "e",    "w",    "ne",   "nw",   "se",   "sw",   "rd",   "st",
+        "ave",  "av",   "blvd", "dr",   "ln",   "ct",   "pl",   "cir",  "way",  "pkwy",
+        "hwy",  "trl",  "ter",  "loop", "cv",   "pass", "run",  "path", "sq",   "xing",
+        "aly",  "bnd",  "crk",  "cres", "holw", "mdw",  "pt",   "rdg",  "vw",   "walk",
+        "plz",  "expy", "fwy",  "row",  "apt",  "unit", "ste",  "bldg", "lot",  "trce"};
+    size_t i;
+    for (i = 0; i < ARRAYSIZE(k_words); i++)
+    {
+        if (strlen(k_words[i]) == len && memcmp(k_words[i], t, len) == 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Confidential (address-protected) voters are redacted with asterisks, but exports mask
+ * them in different shapes ("*****" vs "*** *** *** ***, ***, ***"). TRUE if the
+ * canonical (lowercased, space-separated) tokens are all masks -- asterisks, optionally
+ * with '-' (a masked ZIP+4 "-***") -- ignoring a state code and bare street-type /
+ * directional words some exports leave unmasked ("*** *** RD *** ***"). At least one
+ * mask is required; a real street name makes the address not redacted. */
+static BOOL ee_tokens_are_redacted(const char *const *tok, const size_t *toklen, size_t ntok)
+{
+    BOOL any_mask = FALSE;
+    size_t i;
+    for (i = 0; i < ntok; i++)
+    {
+        size_t j;
+        BOOL saw_star = FALSE;
+        BOOL is_mask = (toklen[i] > 0);
+        for (j = 0; j < toklen[i]; j++)
+        {
+            if (tok[i][j] == '*')
+            {
+                saw_star = TRUE;
+            }
+            else if (tok[i][j] != '-')
+            {
+                is_mask = FALSE;
+                break;
+            }
+        }
+        if (is_mask && saw_star)
+        {
+            any_mask = TRUE;
+        }
+        else if (!ee_is_state_code(tok[i], toklen[i]) && !ee_is_street_word(tok[i], toklen[i]))
+        {
+            return FALSE;
+        }
+    }
+    return any_mask;
+}
+
+/* TRUE if the address text @p in is fully redacted (see ee_tokens_are_redacted). */
+static BOOL ee_address_is_redacted(const char *in)
+{
+    char canon[EE_CMP_CANON_MAX];
+    const char *tok[64];
+    size_t toklen[64];
+    size_t ntok = 0;
+    const char *p;
+
+    ee_canon_for_compare(in, canon, sizeof(canon));
+    p = canon;
+    while (*p != '\0' && ntok < ARRAYSIZE(tok))
+    {
+        const char *s = p;
+        while (*p != '\0' && *p != ' ')
+        {
+            p++;
+        }
+        tok[ntok] = s;
+        toklen[ntok] = (size_t)(p - s);
+        ntok++;
+        if (*p == ' ')
+        {
+            p++;
+        }
+    }
+    return ee_tokens_are_redacted(tok, toklen, ntok);
+}
+
 /* Address canonical form for comparison: ee_canon_for_compare, then two
  * structural adjustments so precision/formatting differences between files don't
  * read as changes:
@@ -1680,6 +1770,20 @@ static void ee_canon_address_for_compare(const char *in, char *out, size_t out_c
     if (ntok == 0)
     {
         if (out_cap > 0)
+        {
+            out[0] = '\0';
+        }
+        return;
+    }
+    /* Every redacted (confidential) address is the same value -- never a change. */
+    if (ee_tokens_are_redacted(tok, toklen, ntok))
+    {
+        if (out_cap > 1)
+        {
+            out[0] = '*';
+            out[1] = '\0';
+        }
+        else if (out_cap > 0)
         {
             out[0] = '\0';
         }
@@ -3878,7 +3982,8 @@ static const char *zip3_to_state(const char *zip)
  * state -- even a multi-county list is within a single state -- so we infer that one state
  * from the data (the plurality of residence ZIPs by USPS prefix) and re-compose every
  * address with it. Runs only when there is no residence-state column but there is a ZIP
- * column; a file that already has a state column is left untouched. */
+ * column; a file that already has a state column is left untouched. Fully redacted
+ * (confidential) addresses are left as masked. */
 static void voter_apply_inferred_state(EeVoterTable *table)
 {
     struct
@@ -3965,6 +4070,12 @@ static void voter_apply_inferred_state(EeVoterTable *table)
     {
         char addr_buf[512];
         uint32_t ofs;
+        /* A confidential (fully redacted) address stays exactly as the source masked it;
+         * appending the inferred state would reveal more than the county published. */
+        if (ee_address_is_redacted(EeVoterTable_GetCellUtf8(table, r, EE_COL_ADDRESS)))
+        {
+            continue;
+        }
         for (c = 0; c < (int)src_count; c++)
         {
             const char *s =

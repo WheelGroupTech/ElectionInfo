@@ -281,8 +281,25 @@ reload). Full smoke suite green; app builds clean x64 Debug.
 Files: `voter_table.h`, `hart_cvr.c`, `ee_cvr.c`, `main.c`, `test/smoke_load.c`,
 `docs/cvr-design.md`. Full smoke suite green (EXIT:0); app builds clean x64 Debug.
 
-**Uncommitted (this session): residence address city/state/ZIP fix + dataset state
-inference.** Loading the Texas SOS "Official List of Registered Voters" (columns
+**Uncommitted (this session): redacted addresses compare as equal.** Comparing the SOS
+list (confidential voters normalize to `*****, TX`) with a `Registered_Voter_List` export
+(`*** *** *** ***, ***, ***`, sometimes with the street type left visible, e.g.
+`*** *** RD *** -***`) flagged every confidential voter as an address change — the two
+counties' exports simply mask differently. `ee_canon_address_for_compare`
+(`voter_table.c`) now canonicalizes any address whose tokens are all masks (`*`, optionally
+with `-`), ignoring a state code and bare street-suffix / directional words (new
+`ee_is_street_word`), to a single redacted value. A real street name still makes it
+comparable. Covers both the Compare summary and Show Differences (both go through
+`field_change_bits`). Real data (SOS 2026-09-16 vs 2026-09-23 list): redacted-vs-redacted
+address flags **392 → 0**; voters listed as differing 16,124 → 15,735. `cmpstate` test
+extended (two differently-masked confidential voters). The redaction rule is shared via
+`ee_tokens_are_redacted` / `ee_address_is_redacted`, and `voter_apply_inferred_state` now
+**skips fully redacted addresses** so they display exactly as masked (`*****`, not
+`*****, TX`) — verified on the SOS file: 392 confidential rows stay `*****`, the other
+933,386 still get `TX`. `resstate` test extended with a confidential row. Full suite green;
+app builds clean. Files (uncommitted): `voter_table.c`, `test/smoke_load.c`.
+
+**Residence address city/state/ZIP fix + dataset state inference (committed).** Loading the Texas SOS "Official List of Registered Voters" (columns
 `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, and NO residence-state column) produced
 normalized addresses missing city/state/ZIP. Two linked issues in `voter_table.c`:
 - **Unit number mistaken for a ZIP.** `RES_ADDR` here is street + unit with no inline
@@ -306,7 +323,6 @@ normalized addresses missing city/state/ZIP. Two linked issues in `voter_table.c
   `*****, TX`. New smoke test `resstate`; several address tests' expected strings updated to
   include the inferred `TX`. Full suite green; app builds clean x64 Debug.
 
-Files (uncommitted): `voter_table.c`, `test/smoke_load.c`. **Not yet GUI click-tested.**
 **Release relink needs the running app instance closed** (file lock, not a code error).
 
 The app is being published via the **Microsoft Store**.

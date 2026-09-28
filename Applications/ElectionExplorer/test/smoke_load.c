@@ -626,13 +626,15 @@ static int test_infer_residence_state(void)
     fputs("227,Rohan,Johanna,2,6804 COVERED BRIDGE DR 12104,AUSTIN,78736\n", fp);
     /* Row 2: blank ZIP -- gets the dataset's inferred state (TX) even so. */
     fputs("227,Doe,Jane,3,100 MAIN ST,AUSTIN,\n", fp);
+    /* Row 3: confidential voter -- stays masked, no inferred state appended. */
+    fputs("227,Hall,Steven,4,*****,*****,*****\n", fp);
     fclose(fp);
 
     EeVoterTable_Init(&t);
     err[0] = L'\0';
     s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
     DeleteFileW(path);
-    if (s != EeLoadStatus_Ok || t.row_count != 3)
+    if (s != EeLoadStatus_Ok || t.row_count != 4)
     {
         wprintf(L"resstate: load failed %s\n", err);
         EeVoterTable_Clear(&t);
@@ -649,6 +651,13 @@ static int test_infer_residence_state(void)
     if (wcscmp(buf, L"100 MAIN ST, AUSTIN, TX") != 0)
     {
         wprintf(L"resstate: blank-zip row did not get inferred state (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 3, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"*****") != 0)
+    {
+        wprintf(L"resstate: redacted row should stay masked (%s)\n", buf);
         EeVoterTable_Clear(&t);
         return 1;
     }
@@ -2510,14 +2519,21 @@ static int test_compare_missing_state(void)
     BOOL b_ok = FALSE;
 
     /* File A has the state token; file B omits it. Same residence -> not a change
-     * (ZIP already encodes the state). */
+     * (ZIP already encodes the state). Voter 2 is address-confidential and the two
+     * exports mask it differently (A: inferred state appended to a single mask, as the
+     * SOS list does; B: every part masked) -> the same redacted value, not a change. */
     a_ok = cmp_write_and_load(L"ee_cmpstate_a.csv",
                               "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
-                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78701\n",
+                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78701\n"
+                              "2,126,Hall,Steven,\"*****, TX\"\n"
+                              "3,127,Doe,Jane,\"*****, TX\"\n",
                               &a);
+    /* Voter 3's mask leaves the street type and ZIP+4 dash visible -- still redacted. */
     b_ok = cmp_write_and_load(L"ee_cmpstate_b.csv",
                               "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
-                              "1,101,Smith,John,100 MAIN ST AUSTIN 78701\n",
+                              "1,101,Smith,John,100 MAIN ST AUSTIN 78701\n"
+                              "2,126,Hall,Steven,\"*** *** *** ***, ***, ***\"\n"
+                              "3,127,Doe,Jane,\"*** *** RD *** -***, ***, ***\"\n",
                               &b);
     if (!a_ok || !b_ok)
     {
@@ -2535,9 +2551,9 @@ static int test_compare_missing_state(void)
         wprintf(L"cmpstate: compare failed\n");
         goto done;
     }
-    if (r.identical_a != 1 || r.addr_minor_a != 0 || r.addr_major_a != 0)
+    if (r.identical_a != 3 || r.addr_minor_a != 0 || r.addr_major_a != 0)
     {
-        wprintf(L"cmpstate: missing-state address flagged (id=%u amin=%u amaj=%u)\n",
+        wprintf(L"cmpstate: missing-state or masked address flagged (id=%u amin=%u amaj=%u)\n",
                 r.identical_a,
                 r.addr_minor_a,
                 r.addr_major_a);

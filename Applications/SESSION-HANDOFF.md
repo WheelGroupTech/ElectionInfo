@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-27
+**Last updated:** 2026-10-02
 **Branch:** main — **all work below is committed; working tree clean.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
@@ -281,7 +281,7 @@ reload). Full smoke suite green; app builds clean x64 Debug.
 Files: `voter_table.h`, `hart_cvr.c`, `ee_cvr.c`, `main.c`, `test/smoke_load.c`,
 `docs/cvr-design.md`. Full smoke suite green (EXIT:0); app builds clean x64 Debug.
 
-**Uncommitted (this session): redacted addresses compare as equal.** Comparing the SOS
+**Redacted addresses compare as equal (committed).** Comparing the SOS
 list (confidential voters normalize to `*****, TX`) with a `Registered_Voter_List` export
 (`*** *** *** ***, ***, ***`, sometimes with the street type left visible, e.g.
 `*** *** RD *** -***`) flagged every confidential voter as an address change — the two
@@ -297,7 +297,15 @@ extended (two differently-masked confidential voters). The redaction rule is sha
 **skips fully redacted addresses** so they display exactly as masked (`*****`, not
 `*****, TX`) — verified on the SOS file: 392 confidential rows stay `*****`, the other
 933,386 still get `TX`. `resstate` test extended with a confidential row. Full suite green;
-app builds clean. Files (uncommitted): `voter_table.c`, `test/smoke_load.c`.
+app builds clean.
+
+**Uncommitted (this session): version 1.2.0.0 + Store bundle.** App version 1.1.0.0 → **1.2.0.0**
+in `res/ElectionExplorer.rc` (FILEVERSION/PRODUCTVERSION + strings), `res/app.manifest`, and
+`ElectionExplorer.Package/Package.appxmanifest`. Built the Store upload:
+`Build/msix/ElectionExplorer.Package_1.2.0.0_x64_arm64_bundle.msixupload` (3.3 MB; x64+ARM64
+`.msixbundle` + both `.appxsym`). Verified: bundle and both packages are
+`WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-…980D6` / v1.2.0.0, and both EXEs report
+File/ProductVersion 1.2.0.0. Ready to upload in Partner Center (`Build/` is gitignored).
 
 **Residence address city/state/ZIP fix + dataset state inference (committed).** Loading the Texas SOS "Official List of Registered Voters" (columns
 `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, and NO residence-state column) produced
@@ -837,8 +845,8 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze the leading key
   columns in the CVR grid (a frozen/scroll split like the voter window); per-file
   byte progress instead of the marquee.
-- **Store:** the 1.1.0.0 upload bundle is already built at
-  `Build/msix/ElectionExplorer.Package_1.1.0.0_x64_arm64_bundle.msixupload` — submit it in
+- **Store:** the 1.2.0.0 upload bundle is built at
+  `Build/msix/ElectionExplorer.Package_1.2.0.0_x64_arm64_bundle.msixupload` — submit it in
   Partner Center; enable **GitHub Pages** so the privacy URL resolves
   (`https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`).
 - Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a

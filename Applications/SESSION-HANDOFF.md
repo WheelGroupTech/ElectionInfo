@@ -299,13 +299,15 @@ extended (two differently-masked confidential voters). The redaction rule is sha
 933,386 still get `TX`. `resstate` test extended with a confidential row. Full suite green;
 app builds clean.
 
-**Uncommitted (this session): version 1.2.0.0 + Store bundle.** App version 1.1.0.0 → **1.2.0.0**
+**Version 1.2.0.0 + Store bundle (committed; submitted to the Store 2026-10-02).** App version 1.1.0.0 → **1.2.0.0**
 in `res/ElectionExplorer.rc` (FILEVERSION/PRODUCTVERSION + strings), `res/app.manifest`, and
 `ElectionExplorer.Package/Package.appxmanifest`. Built the Store upload:
 `Build/msix/ElectionExplorer.Package_1.2.0.0_x64_arm64_bundle.msixupload` (3.3 MB; x64+ARM64
 `.msixbundle` + both `.appxsym`). Verified: bundle and both packages are
 `WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-…980D6` / v1.2.0.0, and both EXEs report
-File/ProductVersion 1.2.0.0. Ready to upload in Partner Center (`Build/` is gitignored).
+File/ProductVersion 1.2.0.0. **Submitted to the Microsoft Store on 2026-10-02** —
+awaiting certification. Store listing text (now incl. CVR features + MIT license line) is
+kept in `ElectionExplorer/STORE-LISTING.txt`. (`Build/` is gitignored.)
 
 **Residence address city/state/ZIP fix + dataset state inference (committed).** Loading the Texas SOS "Official List of Registered Voters" (columns
 `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, and NO residence-state column) produced
@@ -845,9 +847,8 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze the leading key
   columns in the CVR grid (a frozen/scroll split like the voter window); per-file
   byte progress instead of the marquee.
-- **Store:** the 1.2.0.0 upload bundle is built at
-  `Build/msix/ElectionExplorer.Package_1.2.0.0_x64_arm64_bundle.msixupload` — submit it in
-  Partner Center; enable **GitHub Pages** so the privacy URL resolves
+- **Store:** 1.2.0.0 was submitted on 2026-10-02 — watch for the certification result
+  (fix and resubmit if it fails). Enable **GitHub Pages** so the privacy URL resolves
   (`https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`).
 - Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a
   simplified small-size glyph if busy); `BackgroundColor` is `#FFFFFF` — switch to

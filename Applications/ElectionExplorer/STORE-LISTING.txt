@@ -1,0 +1,38 @@
+Election Explorer is a fast, private desktop tool for working with the election data counties publish: voter-registration lists and cast vote records (CVRs). Open files with millions of voters or hundreds of thousands of ballots, and browse, search, filter, tabulate, and compare them in seconds, all on your own computer.
+
+Everything happens locally. Election Explorer has no accounts, no ads, and no telemetry, and it never uploads your files. Your data stays on your machine.
+
+BUILT FOR REAL VOTER LISTS
+Election Explorer opens the large CSV, TSV, and Excel (.xlsx) files that counties publish, even lists with millions of voters and hundreds of columns. Files load in the background so the app stays responsive, and appear in a clean two-pane grid that keeps the key columns (Voter ID, Precinct, Name, and Address) pinned in place while you scroll through the rest.
+
+FIND WHAT YOU NEED
+Sort by any column and apply flexible, rule-based filters to narrow a list down to exactly the voters you're looking for. Addresses are automatically normalized to a consistent format, so the same address written different ways lines up.
+
+CHECK DATA QUALITY
+Spot problems quickly: find duplicate Voter IDs, or duplicate voter records that share the same name and date of birth.
+
+SEE THE BIG PICTURE
+Generate instant summary reports, such as the number of voters per precinct or per address, to understand the shape of a list at a glance.
+
+COMPARE TWO LISTS
+Open two versions of a list (for example, before and after an update) and compare them by Voter ID. Election Explorer shows who's only in one file, who's unchanged, and who changed, grading name and address edits as minor or major and flagging precinct changes. A side-by-side Differences view lets you review every changed field and copy the results.
+
+EXPLORE CAST VOTE RECORDS
+Load the cast vote records exported by ES&S and Hart InterCivic voting systems: Excel, CSV, or TSV files from ES&S, and the ZIP archives of ballot files produced by Hart. Combine several files from the same election, such as early voting, Election Day, and mail ballots, into a single view. Large exports, including multi-gigabyte Hart archives, load in the background with live progress.
+
+Every ballot record appears in a sortable grid with a column for each contest. Filter on any value, such as a precinct, a batch, or a vote in a particular race, to focus on just the ballots you care about.
+
+TABULATE THE VOTES
+Count every contest in one step: candidate totals plus write-ins, overvotes, and undervotes, with multi-seat ("vote for N") races summed correctly. Tabulate all ballots, or only the ones that match your current filter. In primaries, each party's races are counted separately, and you choose which party is listed first. Additional reports count ballot records by batch, precinct, and ballot style.
+
+WORK YOUR WAY
+Copy selected rows to the clipboard, or export any list, ballot view, or report to CSV or TSV for use in other tools. Look up any address in your preferred map service (Google, Bing, Apple, or OpenStreetMap), and adjust zoom and display options to suit you. Your preferences are remembered between sessions.
+
+RUNS EVERYWHERE WINDOWS DOES
+Native builds for both Intel/AMD (x64) and ARM64 PCs, on Windows 10 and Windows 11.
+
+Election Explorer is open source: https://github.com/WheelGroupTech/ElectionInfo
+
+ES&S and Hart InterCivic are trademarks of their respective owners. Election Explorer is not affiliated with or endorsed by them.
+
+Released under the MIT license: https://github.com/WheelGroupTech/ElectionInfo/blob/main/LICENSE

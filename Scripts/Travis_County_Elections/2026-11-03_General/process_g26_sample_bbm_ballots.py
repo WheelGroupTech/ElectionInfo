@@ -17,8 +17,9 @@
 # after the other:
 #   1. Full ballots
 #   2. Federal offices only ballots
-#   3. Ballots without the U.S. Representative contest (these pages do not
-#      have the "Sheet X of Y, Page N of M" footer)
+#   3. Limited ballots ("LB" in the EVS Ballot Detail Listing), which omit
+#      the U.S. Representative contest (these pages do not have the
+#      "Sheet X of Y, Page N of M" footer)
 #
 # The Nth time a ballot style is seen, the ballot is written to the Nth
 # subdirectory in SECTION_DIRS.
@@ -40,7 +41,7 @@ import pymupdf
 OUTPUT_DIR = "."
 
 # Subdirectory for each successive occurrence of the ballot styles
-SECTION_DIRS = ["Full", "Federal", "NoUSRep"]
+SECTION_DIRS = ["Full", "Federal", "LB"]
 
 # Ballot style on the line following the election title / Spanish title
 STYLE_PATTERN = re.compile(r"Travis County Joint General and Special Elections\s*\n[^\n]*\n\s*(\d+[A-Z]+)\s*\n")
@@ -111,9 +112,12 @@ def obtain_ballots_from_file(pathname):
         section_dir = f"{OUTPUT_DIR}/{SECTION_DIRS[section]}"
         os.makedirs(section_dir, exist_ok=True)
 
-        # Check that the ballot is complete
+        # Check that the page footer agrees with the pages present.  A mismatch
+        # does not necessarily mean pages are missing: in this election the
+        # footers of 126F and 392E say "Page N of 4", but the Ballot Detail
+        # Listing defines both as single-card (2 page) ballots.
         if expected is not None and len(pages) != expected:
-            print(f"WARNING: {SECTION_DIRS[section]} ballot {style} (page {pages[0]+1}) has {len(pages)} pages, but is marked as {expected} pages")
+            print(f"WARNING: {SECTION_DIRS[section]} ballot {style} (page {pages[0]+1}) has {len(pages)} pages, but its footer says \"of {expected}\"; verify against the Ballot Detail Listing")
         elif len(pages) not in (2, 4):
             print(f"WARNING: {SECTION_DIRS[section]} ballot {style} (page {pages[0]+1}) has {len(pages)} pages")
 

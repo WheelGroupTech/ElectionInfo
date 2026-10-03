@@ -22,6 +22,12 @@ read by people or consumed by the app. The directory also holds a set of **conce
 The three data files are kept in sync: the CSV and Markdown are generated from the JSON by
 `generate.py`.
 
+## State subfolders
+
+| Folder | Overview |
+|--------|----------|
+| `Texas_Election_Info/` | County-level dataset for all 254 Texas counties: voter registrar and voter-list availability, elections and historical-results sites with the record types posted (results, rosters, CVRs, etc.), open-records route, and voting system / tabulation method. Same JSON + CSV + Markdown pattern with its own `generate.py`; see its README. |
+
 ## Concept memos
 
 Analytical memos that use the dataset as a foundation. These are **concept/analysis

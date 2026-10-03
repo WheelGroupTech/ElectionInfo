@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-09-21
+**Last updated:** 2026-10-02
 **Branch:** main — **all work below is committed; working tree clean.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
@@ -130,8 +130,8 @@ ID, and leaking into Address). Added `STATEID`, `STATEIDNUMBER`, `STATEVOTERID`,
 `STATEVOTERIDNUMBER` to the `Role_Vuid` match (checked before the address rules). Extended
 `idvoter` test (roster-style header → Voter ID maps, no leak into Address).
 
-**Uncommitted (this session): wide "…With_History" tables — header desync / can't sort
-far-right columns.** On a Travis `Registered_Voters_With_History.csv` (389 columns; e.g.
+**Wide "…With_History" tables — header desync / can't sort far-right columns (committed
+`a82e8b8`).** On a Travis `Registered_Voters_With_History.csv` (389 columns; e.g.
 `PR06PARTY`) the scroll pane built 385 columns at `ScaleDisplay(120)` ≈ 120 px each
 (~46,000 px total), past the Win32 report-ListView **32,767 px** header limit: the body
 scrolls but the header freezes at the boundary and header hit-testing breaks, so columns
@@ -145,7 +145,7 @@ the limit — the real removal would be column virtualization, a larger future c
 Debug x64 builds clean; **Release link needs the running instance closed** (the running
 build locks the .exe — not a code error). File: `src/main.c`. **Not yet GUI click-tested.**
 
-**Uncommitted (this session): code-review hardening.** Reviewed an external code-review of
+**Code-review hardening (committed `8764f81`).** Reviewed an external code-review of
 ElectionExplorer; applied the legitimate items and rejected the rest as false
 positives / non-applicable (the review cited C++/WIL and `CHECK_WIN32` patterns this C
 project doesn't use). Applied: (1) defensive `load_thread` wait+close in the voter
@@ -162,6 +162,178 @@ bugs): per-window `EnableNonClientDpiScaling`/`SetThreadDpiAwarenessContext` for
 polish (needs mixed-DPI hardware to validate); streaming XLSX ZIP extraction (kept
 full-in-memory for v1, as the review itself recommends). Debug x64 + smoke suite (40)
 clean. Files: `src/main.c`, `src/voter_table.c`.
+
+**Export round-trip fidelity for "vote for N" contests (committed `1e951d5`).**
+Exporting a CVR to CSV/TSV then re-importing split multi-seat contests into N separate
+single-seat races, so a re-tabulation differed from the original (seen on Travis G24:
+Mustang Ridge / Rollingwood / The Hills / Volente council races). Cause: `EeCvr_Format
+DelimitedUtf8` wrote the header from `col_titles`, which holds the *derived* continuation
+titles (`<contest> (2)`, `(3)`) rather than the BLANK headers the source uses to group a
+vote-for-N contest; on re-import those distinct titles read as separate races. Fix
+(`ee_cvr.c`): export a **blank header for continuation columns** (`col_group[c] != c`),
+reproducing the source layout so a re-import regroups them. Verified with a load→tabulate
+→export→reload→tabulate harness on the real Travis G24 (6 files, 587,090 rows): baseline
+and reloaded tallies now **byte-identical**. New test `cvrrt`. Debug x64 + smoke suite
+(41) clean. File: `src/ee_cvr.c`.
+
+**Hart voting-system CVR support (committed `a98837c`).** New `src/hart_cvr.c`
+(`EeCvr_LoadFromHartZips`) reads Hart CVRs: a `.zip` of one XML per ballot sheet
+(`1_<guid>.xml` = sheet 1, `<guid>.xml` = later sheets; each XML is one row — sheets
+can't be linked). Custom flat XML scanner (no third-party) + streaming zip iteration via
+vendored miniz (`mz_zip_reader_init_cfile` on a wide `FILE*`, entry-by-entry so a 2.2 GB
+export isn't held in memory; non-`.xml` write-in `.png` images ignored). Two passes:
+discover contests/seat-counts/category/party, then fill rows via shared builder
+`EeCvr_BuildBegin`/`EeCvr_BuildAppendRow` (refactored `append_data_row` → `cvr_store_row`;
+builder keeps blank sheets). Frozen keys: CvrGuid, Sheet Number, Batch Sequence, Batch
+Number, Precinct, Party (primary only), Is Blank. Vote-for-N expands to N columns (blank
+continuation headers → col_group); write-in→"Write-in", unfilled→undervote, over-marked→
+overvote (seat count from non-overvoted ballots only). Contests ordered Federal→State→
+County→City→ISD→Other→MUD (Hart only; keyword classifier; cosmetic). Multi-card via
+`SheetNumber>=2` (exact; `EeCvr_HasMultiCard` now checks the Sheet Number column first).
+Loader dispatch keys on `.zip` (first selection) in `CvrLoadThreadProc`; open-dialog
+filter adds `*.zip` (ES&S / Hart filter groups). **Validated against official Clarity
+results** for Tarrant G24 (single 2.2 GB zip, **828,544 ballot sheets, ~1m40s**):
+Railroad Commissioner exact on all 4 candidates (418,535 / 342,948 / 20,791 / 20,248);
+President/Senator within a handful of the certified totals (certified adds
+cured/provisional ballots after the CVR snapshot).
+
+**Primary per-party split, party-first tabulation order, filtered tabulation, load count,
+CSV round-trip fix (committed & pushed).** Follow-ups on the Hart base, all requested by
+the user:
+- **Per-party split for primaries.** `hart_cvr.c` now prefixes a primary contest's title
+  with its party abbreviation (`party_abbr` → `REP`/`DEM`/`LIB`/`GRN` via
+  `contest_display_name`), e.g. `DEM United States Senator` vs. `REP United States Senator`,
+  mirroring the ES&S convention — so each party's copy of a race interns as a distinct
+  contest and tallies separately (replaces the earlier merge-under-one-heading behavior).
+  General elections (no Party) are unaffected.
+- **Tabulation party-first ordering.** New `EeCvr_ReorderTallyByParty(items, count,
+  party_first)` (`ee_cvr.{c,h}`) stably regroups whole contest blocks so one party's
+  contests print first, then the other, then non-partisan — overriding the
+  Federal/State/County order *between* parties, preserving it within each. Controlled by
+  the new **Edit → Options… → "Party to display first for tabulation"** radio (Republican
+  default / Democratic), persisted as `g_settings.cvr_tab_party_first` (registry
+  `CvrTabPartyFirst`; `EE_TAB_PARTY_REP`=0 / `EE_TAB_PARTY_DEM`=1, `settings.{c,h}`,
+  `IDC_CVR_PARTY_REP/_DEM`). No-op on a general election; never reorders CVR columns or
+  changes a count. Changing it re-tabulates the open report in place.
+- **Filtered tabulation.** Reports menu: **Tabulate CVR Votes…** renamed **Tabulate All
+  CVR Votes…**; new **Tabulate Filtered CVR Votes…** (`IDM_CVR_TABULATE_FILTERED`) tallies
+  only the filtered `cw->disp` subset, greyed via `WM_INITMENUPOPUP` when no filter is
+  active. New core `EeCvr_TabulateRows(t, rows, nrows, …)` shares one `cvr_tabulate_core`
+  with `EeCvr_Tabulate` (rows==NULL = all). `CvrReportWindow.filtered` remembers the mode;
+  title reads `CVR Tabulation` or `CVR Tabulation (Filtered)`; `App_ShowCvrReport(cw,
+  filtered)`.
+- **Load ballot-record count.** The CVR load dialog now shows "N ballot records" above the
+  progress bar (like the voter list). Worker thread posts counts via
+  `CvrLoadProgressCb` → `EEM_CVR_LOAD_PROGRESS`; Hart pass 2 reports the running row count
+  (pass 1, still discovering, reports 0), ES&S reports its row count too.
+- **Help/docs updated** (`k_CvrHelpOptions`/`k_CvrHelpReports`, `docs/cvr-design.md`,
+  `test/README.md`).
+- **Export round-trip fix (`ee_cvr.c`).** Exporting a Hart CVR to CSV and reloading it
+  tabulated the Hart key columns (Sheet Number, Batch Sequence, Batch Number, Party, Is
+  Blank) as if they were contests: `cvr_is_key_header` only knew the ES&S key names, so
+  the contiguous frozen-column scan stopped at `CvrGuid` and defaulted `frozen_count` to
+  1. Added the Hart key names to `cvr_is_key_header`, so a reloaded Hart export freezes
+  the same leading columns (primary → 7 incl. Party; general → 6). Verified on real
+  Tarrant data: P26 reload frozen=7 with no key-column contests, and a full **G24**
+  load→export→reload→tabulate round-trip (828,544 rows) is now **byte-identical**
+  (frozen=6, no Party). `hart` test extended with a CSV round-trip + a general-election
+  reload check.
+- **Validated against official Clarity results:** Tarrant **P26 primary** (6 zips,
+  488,862 ballot sheets, ~1m20s) — with the per-party split, U.S. Senator matches the
+  certified totals **exactly for both parties** (DEM Crockett 103,743 / Talarico 83,233 /
+  Hassan 2,060 = 189,036 cast; REP Cornyn 65,621 / Paxton 55,341 / Hunt 19,729 / … =
+  145,798 cast).
+
+Files: `hart_cvr.{c,h}`, `ee_cvr.{c,h}`, `settings.{c,h}`, `main.c`, `resource.h`,
+`test/smoke_load.c`, `docs/cvr-design.md`, `test/README.md`. Test `hart` extended
+(3-sheet zip: 2 DEM incl. a continuation + 1 REP; party-prefixed names, category order,
+vote-for-N/write-in/overvote/undervote, `EeCvr_ReorderTallyByParty`, CSV round-trip + GE
+reload). Full smoke suite green; app builds clean x64 Debug.
+
+**Scan status, determinate load bar, wide-CVR column clamp, natural contest sort
+(committed & pushed).** Four user-requested Hart/CVR refinements:
+- **"Scanning ballots…" during Hart pass 1.** Added `int scanning` to `EeLoadProgress`
+  (`voter_table.h`). `hart_iterate_zip` sets it TRUE on the discovery pass (`rows_ptr ==
+  NULL`); the load dialog shows "Scanning ballots…" while scanning, else "N ballot
+  records" (`main.c` `EEM_CVR_LOAD_PROGRESS`).
+- **Determinate load progress bar (no more repeating marquee).** The CVR load dialog's bar
+  was `PBS_MARQUEE` (a chunk sweeping left→right over and over for both ES&S and Hart). Now
+  a determinate 0..100 bar driven by the loader's `percent`. Hart already spans its two
+  passes (`total = entries × 2`); `EeCvr_LoadFromFiles` now remaps each ES&S file's 0..100
+  into an overall `(f × 100 + inner) / count` and accumulates the row count via an internal
+  `cvr_multi_prog` wrapper, so the bar/counter don't restart per file. `CvrLoadProgressCb`
+  now posts percent + scanning flag (LPARAM) alongside rows (WPARAM); `CvrLoadJob.bar`
+  added.
+- **Wide-CVR column clamp.** The CVR grid is one report ListView with every column; a wide
+  CVR (~188 cols at 130/190 px ≈ 35k px) passed the Win32 32,767 px header limit, so
+  clicking a far-right column header jumped the view back to the start (same bug as the
+  wide voter-history lists). Clamp per-column width to `32000 / ncols` (floored ~20 px) in
+  the CVR column build (`main.c`), so the total stays under the limit. Narrow CVRs are
+  unaffected.
+- **Natural (numeric-aware) Hart contest sort.** `contest_order_cmp` broke ties within an
+  office rank by first-seen order, so Hart wrote US Rep districts and precinct-chair races
+  in arbitrary order (e.g. District 33 before 6). Added `natural_cmp_ci` (digit runs
+  compare by value) as the within-rank tiebreak (`hart_cvr.c`). Verified on real data: G24
+  US Rep now **6, 12, 24, 25, 26, 30, 33**; P26 precinct chairs sort numerically within
+  each party (DEM 1148/3486/4250, then REP 3240/3465/3486/…). ES&S already orders these via
+  its export column order (unchanged). `hart` test extended with a district-order assertion.
+
+Files: `voter_table.h`, `hart_cvr.c`, `ee_cvr.c`, `main.c`, `test/smoke_load.c`,
+`docs/cvr-design.md`. Full smoke suite green (EXIT:0); app builds clean x64 Debug.
+
+**Redacted addresses compare as equal (committed).** Comparing the SOS
+list (confidential voters normalize to `*****, TX`) with a `Registered_Voter_List` export
+(`*** *** *** ***, ***, ***`, sometimes with the street type left visible, e.g.
+`*** *** RD *** -***`) flagged every confidential voter as an address change — the two
+counties' exports simply mask differently. `ee_canon_address_for_compare`
+(`voter_table.c`) now canonicalizes any address whose tokens are all masks (`*`, optionally
+with `-`), ignoring a state code and bare street-suffix / directional words (new
+`ee_is_street_word`), to a single redacted value. A real street name still makes it
+comparable. Covers both the Compare summary and Show Differences (both go through
+`field_change_bits`). Real data (SOS 2026-09-16 vs 2026-09-23 list): redacted-vs-redacted
+address flags **392 → 0**; voters listed as differing 16,124 → 15,735. `cmpstate` test
+extended (two differently-masked confidential voters). The redaction rule is shared via
+`ee_tokens_are_redacted` / `ee_address_is_redacted`, and `voter_apply_inferred_state` now
+**skips fully redacted addresses** so they display exactly as masked (`*****`, not
+`*****, TX`) — verified on the SOS file: 392 confidential rows stay `*****`, the other
+933,386 still get `TX`. `resstate` test extended with a confidential row. Full suite green;
+app builds clean.
+
+**Version 1.2.0.0 + Store bundle (committed; submitted to the Store 2026-10-02).** App version 1.1.0.0 → **1.2.0.0**
+in `res/ElectionExplorer.rc` (FILEVERSION/PRODUCTVERSION + strings), `res/app.manifest`, and
+`ElectionExplorer.Package/Package.appxmanifest`. Built the Store upload:
+`Build/msix/ElectionExplorer.Package_1.2.0.0_x64_arm64_bundle.msixupload` (3.3 MB; x64+ARM64
+`.msixbundle` + both `.appxsym`). Verified: bundle and both packages are
+`WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-…980D6` / v1.2.0.0, and both EXEs report
+File/ProductVersion 1.2.0.0. **Submitted to the Microsoft Store on 2026-10-02** —
+awaiting certification. Store listing text (now incl. CVR features + MIT license line) is
+kept in `ElectionExplorer/STORE-LISTING.txt`. (`Build/` is gitignored.)
+
+**Residence address city/state/ZIP fix + dataset state inference (committed).** Loading the Texas SOS "Official List of Registered Voters" (columns
+`RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, and NO residence-state column) produced
+normalized addresses missing city/state/ZIP. Two linked issues in `voter_table.c`:
+- **Unit number mistaken for a ZIP.** `RES_ADDR` here is street + unit with no inline
+  city/state/ZIP (e.g. `8000 W US 290 HWY 11210`, unit 11210). `compose_address`'s
+  "address already carries its own ZIP tail → don't append the city/state/ZIP columns"
+  guard (added for the earlier Travis district-code file) fired on the trailing unit
+  number, dropping the real `RESIDENT_CITY`/`RESIDENT_ZIP_CODE`. Fixed by only applying
+  that suppression when there is **no** dedicated ZIP column value (`zip5[0] == '\0'`); a
+  populated ZIP column is authoritative and always appended. `distcode` (no ZIP column)
+  still passes.
+- **No residence-state column → infer one for the dataset.** A voter list is a single
+  state (even multi-county lists stay in-state), so new `voter_apply_inferred_state`
+  (called from both load paths after `finalize_column_kinds`) tallies each row's residence
+  ZIP through a compact USPS ZIP3→state table (`zip3_to_state`), takes the plurality, and
+  re-composes every address with that state as a fallback — including rows whose own ZIP is
+  blank/redacted. Runs only when there is no residence-state column but there is a ZIP
+  column; files with a real state column are untouched. `compose_address` gained a
+  `fallback_state` param (existing caller passes NULL).
+- **Verified on the real 933,778-row file** (~6 s): every record now normalizes to
+  `street, CITY, TX ZIP`; the ~392 address-confidentiality (`*****`) records correctly show
+  `*****, TX`. New smoke test `resstate`; several address tests' expected strings updated to
+  include the inferred `TX`. Full suite green; app builds clean x64 Debug.
+
+**Release relink needs the running app instance closed** (file lock, not a code error).
 
 The app is being published via the **Microsoft Store**.
 
@@ -675,9 +847,8 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
   summaries, ballot-style breakdowns, per-precinct cross-tabs; freeze the leading key
   columns in the CVR grid (a frozen/scroll split like the voter window); per-file
   byte progress instead of the marquee.
-- **Store:** the 1.1.0.0 upload bundle is already built at
-  `Build/msix/ElectionExplorer.Package_1.1.0.0_x64_arm64_bundle.msixupload` — submit it in
-  Partner Center; enable **GitHub Pages** so the privacy URL resolves
+- **Store:** 1.2.0.0 was submitted on 2026-10-02 — watch for the certification result
+  (fix and resubmit if it fails). Enable **GitHub Pages** so the privacy URL resolves
   (`https://wheelgrouptech.github.io/ElectionInfo/Applications/ElectionExplorer/PRIVACY`).
 - Optional polish: eyeball the 16px app icon in Explorer/title bar (swap to a
   simplified small-size glyph if busy); `BackgroundColor` is `#FFFFFF` — switch to

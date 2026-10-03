@@ -161,11 +161,14 @@ static int test_copy_format(void)
         wprintf(L"copy: prepend format failed\n");
         goto done;
     }
-    if (strncmp(text, "100001,101,\"Smith, John A\",\"123 Main ST, Austin, 78701\",100001,", 63) !=
-        0)
     {
-        wprintf(L"copy: prepend prefix mismatch\n");
-        goto done;
+        const char *pfx =
+            "100001,101,\"Smith, John A\",\"123 Main ST, Austin, TX 78701\",100001,";
+        if (strncmp(text, pfx, strlen(pfx)) != 0)
+        {
+            wprintf(L"copy: prepend prefix mismatch\n");
+            goto done;
+        }
     }
     free(text);
     text = NULL;
@@ -228,7 +231,7 @@ static int test_copy_format(void)
             goto done;
         }
         EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-        if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
+        if (wcscmp(buf, L"123 Main ST, Austin, TX 78701") != 0)
         {
             wprintf(L"copy: address mismatch (%s)\n", buf);
             goto done;
@@ -374,37 +377,37 @@ static int test_zip4_omits_zeros(void)
     }
 
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"123 Main ST, Austin, 78701") != 0)
+    if (wcscmp(buf, L"123 Main ST, Austin, TX 78701") != 0)
     {
         wprintf(L"zip4: zero +4 field mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"456 Oak AVE, Austin, 78702-1234") != 0)
+    if (wcscmp(buf, L"456 Oak AVE, Austin, TX 78702-1234") != 0)
     {
         wprintf(L"zip4: real +4 field mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"789 Pine RD, Austin, 78703") != 0)
+    if (wcscmp(buf, L"789 Pine RD, Austin, TX 78703") != 0)
     {
         wprintf(L"zip4: missing +4 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 3, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"10 Elm CT, Austin, 78701") != 0)
+    if (wcscmp(buf, L"10 Elm CT, Austin, TX 78701") != 0)
     {
         wprintf(L"zip4: combined 0000 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 4, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"20 Ash LN, Austin, 78701") != 0)
+    if (wcscmp(buf, L"20 Ash LN, Austin, TX 78701") != 0)
     {
         wprintf(L"zip4: hyphen 0000 mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 5, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"30 Bay DR, Austin, 78701-1111") != 0)
+    if (wcscmp(buf, L"30 Bay DR, Austin, TX 78701-1111") != 0)
     {
         wprintf(L"zip4: combined 1111 mismatch (%s)\n", buf);
         goto done;
@@ -461,7 +464,7 @@ static int test_res_addr_fields(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"123 Main St, Austin, 78701") != 0)
+    if (wcscmp(buf, L"123 Main St, Austin, TX 78701") != 0)
     {
         wprintf(L"resaddr: mismatch (%s)\n", buf);
         EeVoterTable_Clear(&t);
@@ -586,6 +589,81 @@ static int test_district_codes_not_appended(void)
     EeVoterTable_Clear(&t);
     rc = 0;
     wprintf(L"distcode ok\n");
+    return rc;
+}
+
+/* Some exports (e.g. the Texas SOS registered-voter list) carry residence city and ZIP
+ * in their own columns but omit residence STATE entirely, and the RES_ADDR line ends in a
+ * unit number that must not be mistaken for a ZIP. The composed address must keep the real
+ * city/ZIP AND gain the dataset-inferred state (plurality of residence ZIPs), which is
+ * also applied to rows whose own ZIP is blank/redacted (tag: resstate). */
+static int test_infer_residence_state(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[220];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_resstate.csv")))
+    {
+        wprintf(L"resstate: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"resstate: could not create %s\n", path);
+        return 1;
+    }
+    fputs("COUNTY_CODE,LAST_NAME,FIRST_NAME,VUID,RES_ADDR,RESIDENT_CITY,RESIDENT_ZIP_CODE\n", fp);
+    /* Row 0: RES_ADDR ends in a unit number (11210) that must not read as a ZIP. */
+    fputs("227,Tovar,Leslie,1,8000 W US 290 HWY 11210,AUSTIN,78736\n", fp);
+    fputs("227,Rohan,Johanna,2,6804 COVERED BRIDGE DR 12104,AUSTIN,78736\n", fp);
+    /* Row 2: blank ZIP -- gets the dataset's inferred state (TX) even so. */
+    fputs("227,Doe,Jane,3,100 MAIN ST,AUSTIN,\n", fp);
+    /* Row 3: confidential voter -- stays masked, no inferred state appended. */
+    fputs("227,Hall,Steven,4,*****,*****,*****\n", fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 4)
+    {
+        wprintf(L"resstate: load failed %s\n", err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"8000 W US 290 HWY 11210, AUSTIN, TX 78736") != 0)
+    {
+        wprintf(L"resstate: unit-number row (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"100 MAIN ST, AUSTIN, TX") != 0)
+    {
+        wprintf(L"resstate: blank-zip row did not get inferred state (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 3, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"*****") != 0)
+    {
+        wprintf(L"resstate: redacted row should stay masked (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_Clear(&t);
+    rc = 0;
+    wprintf(L"resstate ok\n");
     return rc;
 }
 
@@ -738,19 +816,19 @@ static int test_house_number_dot_zero(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"6007 SUN VISTA DR, Austin, 78749") != 0)
+    if (wcscmp(buf, L"6007 SUN VISTA DR, Austin, TX 78749") != 0)
     {
         wprintf(L"blkdot: .0 house number mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"12 OAK ST, Austin, 78701") != 0)
+    if (wcscmp(buf, L"12 OAK ST, Austin, TX 78701") != 0)
     {
         wprintf(L"blkdot: plain house number mismatch (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 2, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"100.50 PINE RD, Austin, 78702") != 0)
+    if (wcscmp(buf, L"100.50 PINE RD, Austin, TX 78702") != 0)
     {
         wprintf(L"blkdot: non-zero fraction should remain (%s)\n", buf);
         goto done;
@@ -806,13 +884,13 @@ static int test_lot_unit_ignored(void)
         return 1;
     }
     EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"12 Oak ST, Austin, 78701") != 0)
+    if (wcscmp(buf, L"12 Oak ST, Austin, TX 78701") != 0)
     {
         wprintf(L"lotunit: LOT should be omitted (%s)\n", buf);
         goto done;
     }
     EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
-    if (wcscmp(buf, L"90 Pine RD APT 2, Austin, 78702") != 0)
+    if (wcscmp(buf, L"90 Pine RD APT 2, Austin, TX 78702") != 0)
     {
         wprintf(L"lotunit: APT should remain (%s)\n", buf);
         goto done;
@@ -2441,14 +2519,21 @@ static int test_compare_missing_state(void)
     BOOL b_ok = FALSE;
 
     /* File A has the state token; file B omits it. Same residence -> not a change
-     * (ZIP already encodes the state). */
+     * (ZIP already encodes the state). Voter 2 is address-confidential and the two
+     * exports mask it differently (A: inferred state appended to a single mask, as the
+     * SOS list does; B: every part masked) -> the same redacted value, not a change. */
     a_ok = cmp_write_and_load(L"ee_cmpstate_a.csv",
                               "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
-                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78701\n",
+                              "1,101,Smith,John,100 MAIN ST AUSTIN TX 78701\n"
+                              "2,126,Hall,Steven,\"*****, TX\"\n"
+                              "3,127,Doe,Jane,\"*****, TX\"\n",
                               &a);
+    /* Voter 3's mask leaves the street type and ZIP+4 dash visible -- still redacted. */
     b_ok = cmp_write_and_load(L"ee_cmpstate_b.csv",
                               "VUID,PCTCOD,LSTNAM,FSTNAM,Residential Address\n"
-                              "1,101,Smith,John,100 MAIN ST AUSTIN 78701\n",
+                              "1,101,Smith,John,100 MAIN ST AUSTIN 78701\n"
+                              "2,126,Hall,Steven,\"*** *** *** ***, ***, ***\"\n"
+                              "3,127,Doe,Jane,\"*** *** RD *** -***, ***, ***\"\n",
                               &b);
     if (!a_ok || !b_ok)
     {
@@ -2466,9 +2551,9 @@ static int test_compare_missing_state(void)
         wprintf(L"cmpstate: compare failed\n");
         goto done;
     }
-    if (r.identical_a != 1 || r.addr_minor_a != 0 || r.addr_major_a != 0)
+    if (r.identical_a != 3 || r.addr_minor_a != 0 || r.addr_major_a != 0)
     {
-        wprintf(L"cmpstate: missing-state address flagged (id=%u amin=%u amaj=%u)\n",
+        wprintf(L"cmpstate: missing-state or masked address flagged (id=%u amin=%u amaj=%u)\n",
                 r.identical_a,
                 r.addr_minor_a,
                 r.addr_major_a);
@@ -4263,6 +4348,520 @@ done:
     return rc;
 }
 
+/* Export round-trip fidelity for a "vote for N" contest: a contest's blank
+ * continuation columns must export with BLANK headers (not their derived "(2)"
+ * display titles), so re-importing the exported CSV regroups the columns into one
+ * contest and tabulation is unchanged (tag: cvrrt). */
+static int test_cvr_roundtrip(void)
+{
+    static const char *k_head =
+        "<?xml version=\"1.0\"?><worksheet "
+        "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>";
+    /* Column C is a titled 2-seat contest; column D is its BLANK continuation. */
+    static const char *k_hdr =
+        "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Cast Vote Record</t></is></c>"
+        "<c r=\"B1\" t=\"inlineStr\"><is><t>Precinct</t></is></c>"
+        "<c r=\"C1\" t=\"inlineStr\"><is><t>Council 2 Seats (10)</t></is></c>"
+        "<c r=\"D1\"/>"
+        "<c r=\"E1\" t=\"inlineStr\"><is><t>Mayor (11)</t></is></c></row>";
+    static const char *k_rows =
+        "<row r=\"2\"><c r=\"A2\"><v>1</v></c>"
+        "<c r=\"B2\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C2\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+        "<c r=\"D2\" t=\"inlineStr\"><is><t>Bob</t></is></c>"
+        "<c r=\"E2\" t=\"inlineStr\"><is><t>Xavier</t></is></c></row>"
+        "<row r=\"3\"><c r=\"A3\"><v>2</v></c>"
+        "<c r=\"B3\" t=\"inlineStr\"><is><t>P1</t></is></c>"
+        "<c r=\"C3\" t=\"inlineStr\"><is><t>Bob</t></is></c>"
+        "<c r=\"D3\" t=\"inlineStr\"><is><t>Alice</t></is></c>"
+        "<c r=\"E3\" t=\"inlineStr\"><is><t>Yolanda</t></is></c></row>";
+
+    wchar_t xpath[MAX_PATH];
+    wchar_t cpath[MAX_PATH];
+    wchar_t err[512] = L"";
+    char sheet[4096];
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    EeCvrTally *ta = NULL;
+    EeCvrTally *tb = NULL;
+    uint32_t na = 0, nb = 0, i;
+    uint32_t *rows = NULL;
+    char *csv = NULL;
+    size_t csvlen = 0;
+    int rc = 1;
+
+    if (!cvr_temp_path(xpath, ARRAYSIZE(xpath), L"ee_cvr_rt.xlsx") ||
+        !cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_cvr_rt.csv"))
+    {
+        wprintf(L"cvrrt: temp path failed\n");
+        return 1;
+    }
+    StringCchPrintfA(sheet, ARRAYSIZE(sheet), "%s%s%s</sheetData></worksheet>", k_head, k_hdr,
+                     k_rows);
+    if (!cvr_write_xlsx(xpath, sheet))
+    {
+        wprintf(L"cvrrt: write xlsx failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = xpath;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"cvrrt: xlsx load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Baseline tally from the .xlsx (Council summed across C+D: Alice 2, Bob 2). */
+    if (!EeCvr_Tabulate(&t, TRUE, &ta, &na))
+    {
+        wprintf(L"cvrrt: baseline tabulate failed\n");
+        goto done;
+    }
+    /* Export all rows as CSV. */
+    rows = (uint32_t *)malloc((size_t)t.nrows * sizeof(uint32_t));
+    for (i = 0; i < t.nrows; i++)
+    {
+        rows[i] = i;
+    }
+    if (!EeCvr_FormatDelimitedUtf8(&t, rows, t.nrows, ',', TRUE, &csv, &csvlen))
+    {
+        wprintf(L"cvrrt: export failed\n");
+        goto done;
+    }
+    /* The continuation column's header must be blank in the export. */
+    if (strstr(csv, "Council 2 Seats (10),,Mayor (11)") == NULL)
+    {
+        wprintf(L"cvrrt: continuation header not blank in export:\n%hs\n", csv);
+        goto done;
+    }
+    if (!cvr_write_bytes(cpath, csv, csvlen))
+    {
+        wprintf(L"cvrrt: write csv failed\n");
+        goto done;
+    }
+    EeCvr_Clear(&t);
+    EeCvr_Init(&t);
+    one[0] = cpath;
+    s = EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok)
+    {
+        wprintf(L"cvrrt: csv reload s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &tb, &nb))
+    {
+        wprintf(L"cvrrt: reloaded tabulate failed\n");
+        goto done;
+    }
+    /* Tallies must be identical: same contest count and per-row values (no split
+     * "Council 2 Seats (10) (2)" contest). */
+    if (na != nb)
+    {
+        wprintf(L"cvrrt: tally count differs baseline=%u reloaded=%u\n", na, nb);
+        goto done;
+    }
+    for (i = 0; i < na; i++)
+    {
+        if (wcscmp(ta[i].contest, tb[i].contest) != 0 ||
+            wcscmp(ta[i].selection, tb[i].selection) != 0 || ta[i].count != tb[i].count)
+        {
+            wprintf(L"cvrrt: row %u differs (%s/%s/%u vs %s/%s/%u)\n", i, ta[i].contest,
+                    ta[i].selection, ta[i].count, tb[i].contest, tb[i].selection, tb[i].count);
+            goto done;
+        }
+    }
+    rc = 0;
+    wprintf(L"cvrrt ok\n");
+
+done:
+    EeCvr_FreeTally(ta, na);
+    EeCvr_FreeTally(tb, nb);
+    free(rows);
+    free(csv);
+    EeCvr_Clear(&t);
+    DeleteFileW(xpath);
+    DeleteFileW(cpath);
+    if (rc != 0)
+    {
+        wprintf(L"cvrrt test failed\n");
+    }
+    return rc;
+}
+
+/* Author a zip of (name, xml) entries at @p path. */
+static BOOL hart_write_zip(const wchar_t *path, const char *const *names,
+                           const char *const *xmls, int n)
+{
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    FILE *fp = NULL;
+    int i;
+    BOOL ok = TRUE;
+    memset(&zip, 0, sizeof(zip));
+    if (!mz_zip_writer_init_heap(&zip, 0, 0))
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n && ok; i++)
+    {
+        ok = mz_zip_writer_add_mem(&zip, names[i], xmls[i], strlen(xmls[i]),
+                                   MZ_DEFAULT_COMPRESSION);
+    }
+    ok = ok && mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize);
+    if (ok)
+    {
+        ok = (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL &&
+              fwrite(zbuf, 1, zsize, fp) == zsize);
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    mz_free(zbuf);
+    mz_zip_writer_end(&zip);
+    return ok;
+}
+
+/* Find a tabulation entry's count by (contest, selection); -1 if absent. */
+static long hart_find_count(EeCvrTally *items, uint32_t n, const wchar_t *contest,
+                            const wchar_t *sel)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+    {
+        if (wcscmp(items[i].contest, contest) == 0 && wcscmp(items[i].selection, sel) == 0)
+        {
+            return (long)items[i].count;
+        }
+    }
+    return -1;
+}
+
+/* Export @p src to a CSV, reload it through the file loader, and verify the reloaded
+ * table freezes @p want_frozen leading key columns and tabulates identically to @p src.
+ * Guards the round-trip bug where a Hart export's key columns (Sheet Number, Batch
+ * Sequence, Party, Is Blank, ...) were re-tabulated as contests because the CSV frozen-
+ * column detector only knew the ES&S key names. Returns TRUE on success. */
+static BOOL hart_csv_roundtrip_ok(const EeCvrTable *src, uint32_t want_frozen)
+{
+    wchar_t cpath[MAX_PATH] = L"";
+    wchar_t err[512] = L"";
+    const wchar_t *one[1];
+    EeCvrTable t2;
+    EeCvrTally *ba = NULL, *rb = NULL;
+    uint32_t nba = 0, nrb = 0, i;
+    uint32_t *rows = NULL;
+    char *csv = NULL;
+    size_t csvlen = 0;
+    BOOL ok = FALSE;
+
+    EeCvr_Init(&t2);
+    if (!EeCvr_Tabulate(src, TRUE, &ba, &nba))
+    {
+        wprintf(L"hart-rt: baseline tabulate failed\n");
+        goto out;
+    }
+    rows = (uint32_t *)malloc((size_t)src->nrows * sizeof(uint32_t));
+    if (rows == NULL)
+    {
+        goto out;
+    }
+    for (i = 0; i < src->nrows; i++)
+    {
+        rows[i] = i;
+    }
+    if (!EeCvr_FormatDelimitedUtf8(src, rows, src->nrows, ',', TRUE, &csv, &csvlen))
+    {
+        wprintf(L"hart-rt: export failed\n");
+        goto out;
+    }
+    if (!cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_hart_rt.csv") ||
+        !cvr_write_bytes(cpath, csv, csvlen))
+    {
+        wprintf(L"hart-rt: write csv failed\n");
+        goto out;
+    }
+    one[0] = cpath;
+    if (EeCvr_LoadFromFiles(one, 1, &t2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"hart-rt: csv reload failed: %s\n", err);
+        goto out;
+    }
+    if (t2.frozen_count != want_frozen)
+    {
+        wprintf(L"hart-rt: reloaded frozen=%u (want %u)\n", t2.frozen_count, want_frozen);
+        goto out;
+    }
+    if (!EeCvr_Tabulate(&t2, TRUE, &rb, &nrb))
+    {
+        wprintf(L"hart-rt: reloaded tabulate failed\n");
+        goto out;
+    }
+    if (nba != nrb)
+    {
+        wprintf(L"hart-rt: tally count differs baseline=%u reloaded=%u\n", nba, nrb);
+        goto out;
+    }
+    for (i = 0; i < nba; i++)
+    {
+        if (wcscmp(ba[i].contest, rb[i].contest) != 0 ||
+            wcscmp(ba[i].selection, rb[i].selection) != 0 || ba[i].count != rb[i].count)
+        {
+            wprintf(L"hart-rt: row %u differs (%s/%s/%u vs %s/%s/%u)\n", i, ba[i].contest,
+                    ba[i].selection, ba[i].count, rb[i].contest, rb[i].selection, rb[i].count);
+            goto out;
+        }
+    }
+    ok = TRUE;
+
+out:
+    EeCvr_FreeTally(ba, nba);
+    EeCvr_FreeTally(rb, nrb);
+    free(rows);
+    free(csv);
+    EeCvr_Clear(&t2);
+    DeleteFileW(cpath);
+    return ok;
+}
+
+/* A Hart GENERAL-election export has no Party column, so its key block is 6 columns
+ * (CvrGuid, Sheet Number, Batch Sequence, Batch Number, Precinct, Is Blank). Verify a
+ * CSV with that header reloads with frozen_count == 6 and that the key columns are not
+ * tabulated as contests. Returns TRUE on success. */
+static BOOL hart_ge_reload_ok(void)
+{
+    static const char *k_csv =
+        "CvrGuid,Sheet Number,Batch Sequence,Batch Number,Precinct,Is Blank,"
+        "President,United States Senator\r\n"
+        "AAA,1,1,1,101,false,Alice,Bob\r\n"
+        "BBB,1,2,1,101,false,Alice,Carol\r\n";
+    wchar_t cpath[MAX_PATH] = L"";
+    wchar_t err[512] = L"";
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0;
+    BOOL ok = FALSE;
+
+    EeCvr_Init(&t);
+    if (!cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_hart_ge.csv") ||
+        !cvr_write_bytes(cpath, k_csv, strlen(k_csv)))
+    {
+        wprintf(L"hart-ge: write csv failed\n");
+        goto out;
+    }
+    one[0] = cpath;
+    if (EeCvr_LoadFromFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"hart-ge: load failed: %s\n", err);
+        goto out;
+    }
+    if (t.frozen_count != 6)
+    {
+        wprintf(L"hart-ge: frozen=%u (want 6)\n", t.frozen_count);
+        goto out;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt))
+    {
+        wprintf(L"hart-ge: tabulate failed\n");
+        goto out;
+    }
+    /* Real contests are counted; key columns are not. */
+    if (hart_find_count(items, nt, L"President", L"Alice") != 2 ||
+        hart_find_count(items, nt, L"United States Senator", L"Bob") != 1 ||
+        hart_find_count(items, nt, L"Sheet Number", L"1") != -1 ||
+        hart_find_count(items, nt, L"Is Blank", L"false") != -1 ||
+        hart_find_count(items, nt, L"Batch Sequence", L"1") != -1)
+    {
+        wprintf(L"hart-ge: key column tabulated as a contest\n");
+        goto out;
+    }
+    ok = TRUE;
+
+out:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    DeleteFileW(cpath);
+    return ok;
+}
+
+/* Hart CVR loader: a zip of per-sheet XML files -> one row each; category-ordered
+ * contests; vote-for-N expansion; write-in/overvote/undervote; multi-card via
+ * SheetNumber (tag: hart). */
+static int test_hart_cvr(void)
+{
+    /* Sheet 1: Governor listed BEFORE President (to prove federal-first reordering);
+     * a write-in Senator, a vote-for-2 City Council, and an overvoted Attorney
+     * General. Sheet 2: a proposition (SheetNumber 2 -> multi-card). */
+    static const char *k_sheet1 =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Cvr xmlns=\"http://tempuri.org/CVRDesign.xsd\"><Contests>"
+        "<Contest><Name>Governor</Name><Id>g1</Id><Options /><Undervotes>1</Undervotes></Contest>"
+        "<Contest><Name>President</Name><Id>p1</Id><Options><Option><Name>Alice</Name><Id>a1</Id>"
+        "<Value>1</Value></Option></Options></Contest>"
+        /* Two US Rep districts in NON-numeric XML order, to prove natural-order sorting. */
+        "<Contest><Name>United States Representative, District 33</Name><Id>r33</Id><Options>"
+        "<Option><Name>Cand33</Name><Id>c33</Id><Value>1</Value></Option></Options></Contest>"
+        "<Contest><Name>United States Representative, District 6</Name><Id>r6</Id><Options>"
+        "<Option><Name>Cand6</Name><Id>c6</Id><Value>1</Value></Option></Options></Contest>"
+        "<Contest><Name>United States Senator</Name><Id>s1</Id><Options><Option><Name /><Id>w1</Id>"
+        "<Value>1</Value><WriteInData><OriginalText>ZZ</OriginalText>"
+        "<WriteInDataStatus>Unresolved</WriteInDataStatus></WriteInData></Option></Options></Contest>"
+        "<Contest><Name>City Council</Name><Id>c1</Id><Options>"
+        "<Option><Name>Bob</Name><Id>b1</Id><Value>1</Value></Option>"
+        "<Option><Name>Carol</Name><Id>c2</Id><Value>1</Value></Option></Options></Contest>"
+        "<Contest><Name>Attorney General</Name><Id>ag1</Id><Options>"
+        "<Option><Name>Dan</Name><Id>d1</Id><Value>1</Value></Option>"
+        "<Option><Name>Eve</Name><Id>e1</Id><Value>1</Value></Option></Options><Overvoted /></Contest>"
+        "</Contests><SheetNumber>1</SheetNumber>"
+        "<PrecinctSplit><Name>101</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
+        "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
+        "<CvrGuid>AAA</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    static const char *k_sheet2 =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Cvr xmlns=\"http://tempuri.org/CVRDesign.xsd\"><Contests>"
+        "<Contest><Name>Proposition 1</Name><Id>pr1</Id><Options>"
+        "<Option><Name>Yes</Name><Id>yy</Id><Value>1</Value></Option></Options></Contest>"
+        "</Contests><SheetNumber>2</SheetNumber>"
+        "<PrecinctSplit><Name>101</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
+        "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
+        "<CvrGuid>BBB</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    /* A Republican ballot -> its President is a separate contest ("REP President"). */
+    static const char *k_sheet3 =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Cvr xmlns=\"http://tempuri.org/CVRDesign.xsd\"><Contests>"
+        "<Contest><Name>President</Name><Id>rp1</Id><Options><Option><Name>Zach</Name><Id>z1</Id>"
+        "<Value>1</Value></Option></Options></Contest>"
+        "</Contests><SheetNumber>1</SheetNumber>"
+        "<PrecinctSplit><Name>101</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Republican Party Ballot</Name><Id>r</Id></Party>"
+        "<BatchSequence>1</BatchSequence><BatchNumber>1</BatchNumber>"
+        "<CvrGuid>CCC</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    const char *names[3] = {"1_AAA.xml", "BBB.xml", "1_CCC.xml"};
+    const char *xmls[3];
+    wchar_t zpath[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeLoadStatus s;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0;
+    uint32_t colPres = 0, colGov = 0;
+    int rc = 1;
+
+    xmls[0] = k_sheet1;
+    xmls[1] = k_sheet2;
+    xmls[2] = k_sheet3;
+
+    if (!cvr_temp_path(zpath, ARRAYSIZE(zpath), L"ee_hart.zip"))
+    {
+        wprintf(L"hart: temp path failed\n");
+        return 1;
+    }
+    if (!hart_write_zip(zpath, names, xmls, 3))
+    {
+        wprintf(L"hart: write zip failed\n");
+        return 1;
+    }
+    EeCvr_Init(&t);
+    one[0] = zpath;
+    s = EeCvr_LoadFromHartZips(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 3)
+    {
+        wprintf(L"hart: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Frozen keys: CvrGuid, Sheet Number, Batch Sequence, Batch Number, Precinct,
+     * Party, Is Blank -> 7 (Party present). */
+    if (t.frozen_count != 7)
+    {
+        wprintf(L"hart: frozen=%u (want 7)\n", t.frozen_count);
+        goto done;
+    }
+    if (!EeCvr_HasMultiCard(&t))
+    {
+        wprintf(L"hart: multi-card not detected\n");
+        goto done;
+    }
+    /* Primary: contests are party-prefixed; federal (President) sorts before state
+     * (Governor) despite the XML order. */
+    if (!EeCvr_FindColumnByTitle(&t, L"DEM President", &colPres) ||
+        !EeCvr_FindColumnByTitle(&t, L"DEM Governor", &colGov) || !(colPres < colGov))
+    {
+        wprintf(L"hart: ordering DEM President=%u DEM Governor=%u\n", colPres, colGov);
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt))
+    {
+        wprintf(L"hart: tabulate failed\n");
+        goto done;
+    }
+    if (hart_find_count(items, nt, L"DEM President", L"Alice") != 1 ||
+        hart_find_count(items, nt, L"REP President", L"Zach") != 1 ||
+        hart_find_count(items, nt, L"DEM United States Senator", L"write-in") != 1 ||
+        hart_find_count(items, nt, L"DEM Governor", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"DEM Attorney General", L"overvote") != 1 ||
+        hart_find_count(items, nt, L"DEM City Council", L"Bob") != 1 ||
+        hart_find_count(items, nt, L"DEM City Council", L"Carol") != 1 ||
+        hart_find_count(items, nt, L"DEM Proposition 1", L"Yes") != 1)
+    {
+        wprintf(L"hart: tally mismatch\n");
+        goto done;
+    }
+    /* Natural contest order: District 6 must sort before District 33 (numeric, not
+     * lexicographic and not XML order, which put 33 first). */
+    {
+        uint32_t cR6 = 0, cR33 = 0;
+        if (!EeCvr_FindColumnByTitle(&t, L"DEM United States Representative, District 6", &cR6) ||
+            !EeCvr_FindColumnByTitle(&t, L"DEM United States Representative, District 33", &cR33) ||
+            cR6 >= cR33)
+        {
+            wprintf(L"hart: district natural order R6=%u R33=%u\n", cR6, cR33);
+            goto done;
+        }
+    }
+    /* Party-first reorder: REP-first puts a REP contest at the top; DEM-first a DEM. */
+    EeCvr_ReorderTallyByParty(items, nt, EE_TAB_PARTY_REP);
+    if (wcsncmp(items[0].contest, L"REP ", 4) != 0)
+    {
+        wprintf(L"hart: REP-first put %s at top\n", items[0].contest);
+        goto done;
+    }
+    EeCvr_ReorderTallyByParty(items, nt, EE_TAB_PARTY_DEM);
+    if (wcsncmp(items[0].contest, L"DEM ", 4) != 0)
+    {
+        wprintf(L"hart: DEM-first put %s at top\n", items[0].contest);
+        goto done;
+    }
+    /* CSV round-trip: export this primary table (7 frozen keys incl. Party) and reload
+     * it through the file loader; the key columns must stay frozen, not tabulated. */
+    if (!hart_csv_roundtrip_ok(&t, 7))
+    {
+        goto done;
+    }
+    /* General-election reload: no Party column -> 6 frozen keys, none tabulated. */
+    if (!hart_ge_reload_ok())
+    {
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"hart ok\n");
+
+done:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    DeleteFileW(zpath);
+    if (rc != 0)
+    {
+        wprintf(L"hart test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -4512,6 +5111,7 @@ int wmain(void)
     failed |= test_res_addr_fields();
     failed |= test_res_addr_no_duplicate_city_state_zip();
     failed |= test_district_codes_not_appended();
+    failed |= test_infer_residence_state();
     failed |= test_res_addr_zip_dash_and_unit();
     failed |= test_house_number_dot_zero();
     failed |= test_lot_unit_ignored();
@@ -4544,6 +5144,8 @@ int wmain(void)
     failed |= test_cvr_delimited();
     failed |= test_cvr_colcounts();
     failed |= test_cvr_export();
+    failed |= test_cvr_roundtrip();
+    failed |= test_hart_cvr();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

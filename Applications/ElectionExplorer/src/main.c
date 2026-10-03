@@ -8292,7 +8292,12 @@ static const wchar_t k_CvrHelpOptions[] =
     L"\"Write-in\", and the placeholder \"No image found\". When this is on (the "
     L"default), all of these are combined into a single \"write-in\" tally row, "
     L"matching how official results report one Write-in total; when off, each variant "
-    L"is counted on its own row.";
+    L"is counted on its own row.\r\n\r\n"
+    L"•  Party to display first for tabulation — for a primary, contests are split by "
+    L"party (their names are prefixed \"REP\" or \"DEM\"). This chooses which party's "
+    L"contests are listed first in a tabulation report; the other party follows, then "
+    L"any non-partisan contests. Republican is the default. It affects only the order "
+    L"of the tabulation report, not the CVR window's columns or any tally count.";
 
 static const wchar_t k_CvrHelpFilters[] =
     L"Filters (Filter menu, or Ctrl+L) narrow the visible ballot records. Each rule "
@@ -8314,18 +8319,24 @@ static const wchar_t k_CvrHelpFilters[] =
 
 static const wchar_t k_CvrHelpReports[] =
     L"Reports (Reports menu) summarize the loaded Cast Vote Records.\r\n\r\n"
-    L"•  Tabulate CVR Votes — counts every contest: one row per selection "
-    L"(candidate, Yes/No, and then write-in, overvote, and undervote), with the "
-    L"contest name repeated on each of its rows. \"Vote for N\" contests are summed "
-    L"across all of their columns.\r\n\r\n"
+    L"•  Tabulate All CVR Votes — counts every contest over all ballot records: one "
+    L"row per selection (candidate, Yes/No, and then write-in, overvote, and "
+    L"undervote), with the contest name repeated on each of its rows. \"Vote for N\" "
+    L"contests are summed across all of their columns. For a primary, contests are "
+    L"split by party and listed party-by-party (see Options → Party to display "
+    L"first).\r\n\r\n"
+    L"•  Tabulate Filtered CVR Votes — the same tabulation, but counting only the "
+    L"records currently shown by the active filter. It is unavailable (greyed) when no "
+    L"filter is applied, since that would duplicate Tabulate All.\r\n\r\n"
     L"•  Display Batch / Precinct / Ballot Style Report — one row per distinct value "
     L"in that column with the number of ballot records carrying it. A report is "
     L"unavailable (greyed) when the CVR has no such column or its data is "
     L"redacted.\r\n\r\n"
     L"Each report opens in its own window; empty values group into a \"(blank)\" row. "
-    L"Reports count ALL ballot records and ignore any active filter. Click a header "
-    L"to sort; right-click a row to Copy it, to Include or Exclude that value in the "
-    L"CVR window's filter, or to Export the selection.";
+    L"The Batch / Precinct / Ballot Style reports count ALL ballot records and ignore "
+    L"any active filter. Click a header to sort; right-click a row to Copy it, to "
+    L"Include or Exclude that value in the CVR window's filter, or to Export the "
+    L"selection.";
 
 static const wchar_t k_CvrHelpExport[] =
     L"Export writes ballot records to a UTF-8 file — CSV by default, or TSV — with a "
@@ -9988,7 +9999,7 @@ typedef struct CvrWindow
     wchar_t base_name[192]; /* initial CVR file base name (no extension), for exports */
 } CvrWindow;
 
-static void App_ShowCvrReport(CvrWindow *cw);
+static void App_ShowCvrReport(CvrWindow *cw, BOOL filtered);
 static void App_ShowCvrValueReport(CvrWindow *cw, int kind);
 static void App_ShowCvrOptions(CvrWindow *cw);
 static BOOL App_ShowCvrFilter(CvrWindow *cw);
@@ -10007,6 +10018,7 @@ struct CvrReportWindow
     HWND status;         /* bottom status bar                     */
     EeCvrTally *items;   /* tabulated (contest, selection, count) */
     uint32_t count;
+    BOOL filtered;       /* TRUE = tabulate only the filtered rows */
 };
 
 /* Per-column value report (Batch / Precinct / Ballot Style): one value per row with
@@ -10130,7 +10142,9 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(edit_menu, MF_STRING, IDM_CVR_OPTIONS, L"&Options…");
     AppendMenuW(filter_menu, MF_STRING, IDM_CVR_FILTER, L"&Filter…\tCtrl+L");
     AppendMenuW(filter_menu, MF_STRING, IDM_CVR_FILTER_RESET, L"&Reset Filter");
-    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate CVR Votes…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate All CVR Votes…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE_FILTERED,
+                L"Tabulate F&iltered CVR Votes…");
     AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_BATCH, L"Display &Batch Report…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_PRECINCT, L"Display &Precinct Report…");
@@ -10524,15 +10538,33 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             {
                 SendMessageW(cw->list, WM_SETFONT, (WPARAM)cw->app->font_ui, TRUE);
             }
-            for (i = 0; i < cw->table.ncols; i++)
+            /* A report-mode ListView header desyncs and stops hit-testing once the
+             * cumulative column width passes the Win32 16-bit limit (32,767 px): the
+             * body keeps scrolling but far-right column headers can't be clicked and the
+             * view jumps back to the start. A wide CVR (e.g. ~188 contest columns) blows
+             * past it, so clamp per-column width to keep the total under the limit. */
             {
-                LVCOLUMNW col;
-                ZeroMemory(&col, sizeof(col));
-                col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
-                col.fmt = LVCFMT_LEFT;
-                col.pszText = cw->table.col_titles[i];
-                col.cx = Scale(cw->app, (i < cw->table.frozen_count) ? 130 : 190);
-                ListView_InsertColumn(cw->list, (int)i, &col);
+                int cap = (cw->table.ncols > 0) ? (32000 / (int)cw->table.ncols) : 0;
+                int floor_w = Scale(cw->app, 20);
+                for (i = 0; i < cw->table.ncols; i++)
+                {
+                    LVCOLUMNW col;
+                    int cx = Scale(cw->app, (i < cw->table.frozen_count) ? 130 : 190);
+                    if (cx < floor_w)
+                    {
+                        cx = floor_w;
+                    }
+                    if (cap > 0 && cx > cap)
+                    {
+                        cx = cap; /* the limit always wins */
+                    }
+                    ZeroMemory(&col, sizeof(col));
+                    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                    col.fmt = LVCFMT_LEFT;
+                    col.pszText = cw->table.col_titles[i];
+                    col.cx = cx;
+                    ListView_InsertColumn(cw->list, (int)i, &col);
+                }
             }
 
             cw->status = CreateWindowExW(0,
@@ -10586,6 +10618,11 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                    (UINT)k_CvrReportIds[k],
                                    MF_BYCOMMAND | (cw->vreport_avail[k] ? MF_ENABLED : MF_GRAYED));
                 }
+                /* Filtered tabulation is available only while a filter is narrowing
+                 * the view. */
+                EnableMenuItem((HMENU)wParam,
+                               IDM_CVR_TABULATE_FILTERED,
+                               MF_BYCOMMAND | (cw->filt_active ? MF_ENABLED : MF_GRAYED));
             }
             break;
 
@@ -10600,7 +10637,10 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     Cvr_CopySelected(cw);
                     return 0;
                 case IDM_CVR_TABULATE:
-                    App_ShowCvrReport(cw);
+                    App_ShowCvrReport(cw, FALSE);
+                    return 0;
+                case IDM_CVR_TABULATE_FILTERED:
+                    App_ShowCvrReport(cw, TRUE);
                     return 0;
                 case IDM_CVR_REPORT_BATCH:
                     App_ShowCvrValueReport(cw, EE_CVRREP_BATCH);
@@ -11274,13 +11314,93 @@ static LRESULT CALLBACK CvrReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 }
 
 /* Tabulate the CVR and open (or re-focus) the report window tied to @p cw. */
-static void App_ShowCvrReport(CvrWindow *cw)
+/* Tabulate for @p rw honoring its filtered mode, the merge-write-ins setting, and the
+ * primary party-first ordering. Returns FALSE on OOM (out params left NULL/0). */
+static BOOL Cvr_TabulateReport(CvrReportWindow *rw, EeCvrTally **out_items, uint32_t *out_count)
+{
+    CvrWindow *cw = rw->owner;
+    BOOL ok;
+    if (rw->filtered && cw->filt_active)
+    {
+        ok = EeCvr_TabulateRows(&cw->table, cw->disp, cw->disp_count,
+                                g_settings.cvr_merge_writeins, out_items, out_count);
+    }
+    else
+    {
+        ok = EeCvr_Tabulate(&cw->table, g_settings.cvr_merge_writeins, out_items, out_count);
+    }
+    if (ok)
+    {
+        EeCvr_ReorderTallyByParty(*out_items, *out_count, g_settings.cvr_tab_party_first);
+    }
+    return ok;
+}
+
+/* Compose the tabulation window title into @p title. */
+static void Cvr_ReportTitle(CvrWindow *cw, BOOL filtered, wchar_t *title, size_t cch)
+{
+    wchar_t base[128];
+    base[0] = L'\0';
+    GetWindowTextW(cw->hwnd, base, ARRAYSIZE(base));
+    if (base[0] != L'\0')
+    {
+        StringCchPrintfW(title, cch, filtered ? L"CVR Tabulation (Filtered) — %s"
+                                              : L"CVR Tabulation — %s",
+                         base);
+    }
+    else
+    {
+        StringCchCopyW(title, cch, filtered ? L"CVR Tabulation (Filtered)" : L"CVR Tabulation");
+    }
+}
+
+/* Re-tabulate an open report (current merge/party settings + its filtered mode) and
+ * refresh its list + title. */
+static void App_RefreshCvrReport(CvrReportWindow *rw)
+{
+    EeCvrTally *items = NULL;
+    uint32_t count = 0;
+    HCURSOR old_cursor;
+
+    if (rw == NULL || rw->owner == NULL)
+    {
+        return;
+    }
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!Cvr_TabulateReport(rw, &items, &count))
+    {
+        SetCursor(old_cursor);
+        return; /* keep the existing tally on failure */
+    }
+    SetCursor(old_cursor);
+    EeCvr_FreeTally(rw->items, rw->count);
+    rw->items = items;
+    rw->count = count;
+    {
+        wchar_t title[MAX_PATH + 64];
+        Cvr_ReportTitle(rw->owner, rw->filtered, title, ARRAYSIZE(title));
+        SetWindowTextW(rw->hwnd, title);
+    }
+    if (rw->list != NULL)
+    {
+        ListView_SetItemCountEx(rw->list, (int)count, LVSICF_NOINVALIDATEALL);
+        ListView_RedrawItems(rw->list, 0, (int)count);
+        InvalidateRect(rw->list, NULL, TRUE);
+    }
+    if (rw->status != NULL)
+    {
+        wchar_t st[96];
+        StringCchPrintfW(st, ARRAYSIZE(st), L"%u rows — right-click to copy", count);
+        SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
+    }
+}
+
+static void App_ShowCvrReport(CvrWindow *cw, BOOL filtered)
 {
     EeCvrTally *items = NULL;
     uint32_t count = 0;
     CvrReportWindow *rw;
     wchar_t title[MAX_PATH + 64];
-    wchar_t base[128];
     HCURSOR old_cursor;
     RECT pr;
     int x = CW_USEDEFAULT;
@@ -11290,63 +11410,53 @@ static void App_ShowCvrReport(CvrWindow *cw)
     {
         return;
     }
-    if (cw->report != NULL)
-    {
-        SetForegroundWindow(cw->report->hwnd);
-        return;
-    }
     if (cw->table.nrows == 0 || cw->table.ncols <= cw->table.frozen_count)
     {
-        MessageBoxW(cw->hwnd,
-                    L"There are no contest columns to tabulate.",
-                    L"Tabulate CVR Votes",
-                    MB_ICONINFORMATION | MB_OK);
+        MessageBoxW(cw->hwnd, L"There are no contest columns to tabulate.",
+                    L"Tabulate CVR Votes", MB_ICONINFORMATION | MB_OK);
         return;
     }
-
-    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (!EeCvr_Tabulate(&cw->table, g_settings.cvr_merge_writeins, &items, &count))
+    /* One tabulation report per CVR window: if it is already open, just switch it to
+     * the requested (all vs filtered) mode, re-tabulate, and bring it forward. */
+    if (cw->report != NULL)
     {
-        SetCursor(old_cursor);
-        MessageBoxW(cw->hwnd,
-                    L"Out of memory while tabulating the Cast Vote Records.",
-                    L"Tabulate CVR Votes",
-                    MB_ICONERROR | MB_OK);
-        return;
-    }
-    SetCursor(old_cursor);
-    if (count == 0)
-    {
-        EeCvr_FreeTally(items, count);
-        MessageBoxW(cw->hwnd,
-                    L"No selections were found to tabulate.",
-                    L"Tabulate CVR Votes",
-                    MB_ICONINFORMATION | MB_OK);
+        cw->report->filtered = filtered;
+        App_RefreshCvrReport(cw->report);
+        SetForegroundWindow(cw->report->hwnd);
         return;
     }
 
     rw = (CvrReportWindow *)calloc(1, sizeof(CvrReportWindow));
     if (rw == NULL)
     {
-        EeCvr_FreeTally(items, count);
         return;
     }
     rw->owner = cw;
     rw->app = cw->app;
+    rw->filtered = filtered;
+
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (!Cvr_TabulateReport(rw, &items, &count))
+    {
+        SetCursor(old_cursor);
+        free(rw);
+        MessageBoxW(cw->hwnd, L"Out of memory while tabulating the Cast Vote Records.",
+                    L"Tabulate CVR Votes", MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetCursor(old_cursor);
+    if (count == 0)
+    {
+        EeCvr_FreeTally(items, count);
+        free(rw);
+        MessageBoxW(cw->hwnd, L"No selections were found to tabulate.", L"Tabulate CVR Votes",
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
     rw->items = items;
     rw->count = count;
 
-    base[0] = L'\0';
-    GetWindowTextW(cw->hwnd, base, ARRAYSIZE(base));
-    if (base[0] != L'\0')
-    {
-        StringCchPrintfW(title, ARRAYSIZE(title), L"CVR Tabulation — %s", base);
-    }
-    else
-    {
-        StringCchCopyW(title, ARRAYSIZE(title), L"CVR Tabulation");
-    }
-
+    Cvr_ReportTitle(cw, filtered, title, ARRAYSIZE(title));
     if (GetWindowRect(cw->hwnd, &pr))
     {
         x = pr.left + Scale(cw->app, 48);
@@ -11376,41 +11486,6 @@ static void App_ShowCvrReport(CvrWindow *cw)
     cw->report = rw;
     ShowWindow(rw->hwnd, SW_SHOW);
     SetForegroundWindow(rw->hwnd);
-}
-
-/* Re-tabulate an open report with the current merge setting and refresh its list. */
-static void App_RefreshCvrReport(CvrReportWindow *rw)
-{
-    EeCvrTally *items = NULL;
-    uint32_t count = 0;
-    HCURSOR old_cursor;
-
-    if (rw == NULL || rw->owner == NULL)
-    {
-        return;
-    }
-    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (!EeCvr_Tabulate(&rw->owner->table, g_settings.cvr_merge_writeins, &items, &count))
-    {
-        SetCursor(old_cursor);
-        return; /* keep the existing tally on failure */
-    }
-    SetCursor(old_cursor);
-    EeCvr_FreeTally(rw->items, rw->count);
-    rw->items = items;
-    rw->count = count;
-    if (rw->list != NULL)
-    {
-        ListView_SetItemCountEx(rw->list, (int)count, LVSICF_NOINVALIDATEALL);
-        ListView_RedrawItems(rw->list, 0, (int)count);
-        InvalidateRect(rw->list, NULL, TRUE);
-    }
-    if (rw->status != NULL)
-    {
-        wchar_t st[96];
-        StringCchPrintfW(st, ARRAYSIZE(st), L"%u rows — right-click to copy", count);
-        SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
-    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -12319,6 +12394,7 @@ typedef struct CvrOptData
     AppState *app;
     HWND owner; /* CVR window the dialog is modal to / centered over */
     BOOL merge;
+    int party_first; /* EE_TAB_PARTY_REP / EE_TAB_PARTY_DEM */
 } CvrOptData;
 
 static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -12343,6 +12419,9 @@ static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
             int x = CW_USEDEFAULT;
             int y = CW_USEDEFAULT;
             HWND chk;
+            HWND lbl;
+            HWND rep;
+            HWND dem;
             HWND ok;
             HWND cancel;
 
@@ -12350,8 +12429,8 @@ static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
             SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
             app = d->app;
 
-            cx = Scale(app, 320);
-            cy = Scale(app, 118);
+            cx = Scale(app, 340);
+            cy = Scale(app, 172);
             rc.left = 0;
             rc.top = 0;
             rc.right = cx;
@@ -12388,6 +12467,45 @@ static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
                                   app->instance,
                                   NULL);
             SendMessageW(chk, BM_SETCHECK, d->merge ? BST_CHECKED : BST_UNCHECKED, 0);
+
+            lbl = CreateWindowExW(0,
+                                  L"STATIC",
+                                  L"Party to display first for tabulation:",
+                                  WS_CHILD | WS_VISIBLE,
+                                  margin,
+                                  margin + Scale(app, 34),
+                                  rc.right - 2 * margin,
+                                  Scale(app, 18),
+                                  dlg,
+                                  NULL,
+                                  app->instance,
+                                  NULL);
+            rep = CreateWindowExW(0,
+                                  L"BUTTON",
+                                  L"Republican",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
+                                  margin + Scale(app, 10),
+                                  margin + Scale(app, 56),
+                                  Scale(app, 130),
+                                  Scale(app, 22),
+                                  dlg,
+                                  (HMENU)(INT_PTR)IDC_CVR_PARTY_REP,
+                                  app->instance,
+                                  NULL);
+            dem = CreateWindowExW(0,
+                                  L"BUTTON",
+                                  L"Democratic",
+                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                                  margin + Scale(app, 150),
+                                  margin + Scale(app, 56),
+                                  Scale(app, 130),
+                                  Scale(app, 22),
+                                  dlg,
+                                  (HMENU)(INT_PTR)IDC_CVR_PARTY_DEM,
+                                  app->instance,
+                                  NULL);
+            SendMessageW(d->party_first == EE_TAB_PARTY_DEM ? dem : rep, BM_SETCHECK, BST_CHECKED,
+                         0);
             ok = CreateWindowExW(0,
                                  L"BUTTON",
                                  L"OK",
@@ -12415,6 +12533,9 @@ static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
             if (app->font_ui != NULL)
             {
                 SendMessageW(chk, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(lbl, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(rep, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(dem, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
                 SendMessageW(ok, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
                 SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
             }
@@ -12433,6 +12554,11 @@ static INT_PTR CALLBACK CvrOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
                                              BM_GETCHECK,
                                              0,
                                              0) == BST_CHECKED);
+                    d->party_first =
+                        (SendMessageW(GetDlgItem(dlg, IDC_CVR_PARTY_DEM), BM_GETCHECK, 0, 0) ==
+                         BST_CHECKED)
+                            ? EE_TAB_PARTY_DEM
+                            : EE_TAB_PARTY_REP;
                 }
                 EndDialog(dlg, 1);
                 return (INT_PTR)TRUE;
@@ -12473,6 +12599,7 @@ static void App_ShowCvrOptions(CvrWindow *cw)
     d.app = cw->app;
     d.owner = cw->hwnd;
     d.merge = g_settings.cvr_merge_writeins;
+    d.party_first = g_settings.cvr_tab_party_first;
 
     ZeroMemory(buf, sizeof(buf));
     dt->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME;
@@ -12488,9 +12615,12 @@ static void App_ShowCvrOptions(CvrWindow *cw)
 
     if (DialogBoxIndirectParamW(cw->app->instance, dt, cw->hwnd, CvrOptionsDlgProc, (LPARAM)&d) == 1)
     {
-        if ((d.merge != 0) != (g_settings.cvr_merge_writeins != 0))
+        BOOL changed = ((d.merge != 0) != (g_settings.cvr_merge_writeins != 0)) ||
+                       (d.party_first != g_settings.cvr_tab_party_first);
+        if (changed)
         {
             g_settings.cvr_merge_writeins = d.merge;
+            g_settings.cvr_tab_party_first = d.party_first;
             EeSettings_Save(&g_settings);
             if (cw->report != NULL)
             {
@@ -13275,7 +13405,8 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
 /* CVR loading (worker thread behind a modal progress dialog)                 */
 /* -------------------------------------------------------------------------- */
 
-#define EEM_CVR_LOAD_DONE (WM_APP + 11)
+#define EEM_CVR_LOAD_DONE     (WM_APP + 11)
+#define EEM_CVR_LOAD_PROGRESS (WM_APP + 12)
 
 typedef struct CvrLoadJob
 {
@@ -13287,20 +13418,60 @@ typedef struct CvrLoadJob
     EeLoadStatus status;
     wchar_t err[512];
     HWND dlg;
+    HWND count_label; /* shows "N ballot records" (or "Scanning ballots…") during load */
+    HWND bar;         /* determinate progress bar (0..100) */
     HANDLE thread;
 } CvrLoadJob;
+
+/* Load progress: post the running ballot-record count, overall percent, and scan flag to
+ * the load dialog. wParam = rows loaded; LOWORD(lParam) = percent (0..100);
+ * HIWORD(lParam) = scanning (1 during the Hart discovery pass). */
+static BOOL CvrLoadProgressCb(const EeLoadProgress *pr, void *user)
+{
+    CvrLoadJob *j = (CvrLoadJob *)user;
+    if (j != NULL && j->dlg != NULL)
+    {
+        uint32_t pct = (pr->percent > 100u) ? 100u : pr->percent;
+        PostMessageW(j->dlg, EEM_CVR_LOAD_PROGRESS, (WPARAM)pr->rows_loaded,
+                     MAKELPARAM((WORD)pct, (WORD)(pr->scanning ? 1 : 0)));
+    }
+    return TRUE; /* cancellation is driven by j->cancel, checked by the loader */
+}
+
+/* TRUE if @p path ends (case-insensitively) with ".zip". */
+static BOOL path_is_zip(const wchar_t *path)
+{
+    size_t n = (path != NULL) ? wcslen(path) : 0;
+    return n >= 4 && _wcsicmp(path + (n - 4), L".zip") == 0;
+}
 
 static DWORD WINAPI CvrLoadThreadProc(void *param)
 {
     CvrLoadJob *j = (CvrLoadJob *)param;
-    j->status = EeCvr_LoadFromFiles(j->paths,
-                                    j->count,
-                                    j->table,
-                                    &j->cancel,
-                                    NULL,
-                                    NULL,
-                                    j->err,
-                                    ARRAYSIZE(j->err));
+    /* Hart CVRs come as .zip (one XML per ballot sheet); ES&S come as .xlsx/.csv/.tsv.
+     * Key on the first selection. */
+    if (j->count > 0 && path_is_zip(j->paths[0]))
+    {
+        j->status = EeCvr_LoadFromHartZips(j->paths,
+                                           j->count,
+                                           j->table,
+                                           &j->cancel,
+                                           CvrLoadProgressCb,
+                                           j,
+                                           j->err,
+                                           ARRAYSIZE(j->err));
+    }
+    else
+    {
+        j->status = EeCvr_LoadFromFiles(j->paths,
+                                        j->count,
+                                        j->table,
+                                        &j->cancel,
+                                        CvrLoadProgressCb,
+                                        j,
+                                        j->err,
+                                        ARRAYSIZE(j->err));
+    }
     PostMessageW(j->dlg, EEM_CVR_LOAD_DONE, 0, 0);
     return 0;
 }
@@ -13317,6 +13488,7 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             RECT rc;
             int margin;
             HWND label;
+            HWND count;
             HWND bar;
             HWND cancel;
             j = (CvrLoadJob *)lParam;
@@ -13324,7 +13496,7 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             j->dlg = dlg;
             app = j->app;
 
-            App_CenterModalClient(dlg, app, Scale(app, 340), Scale(app, 116));
+            App_CenterModalClient(dlg, app, Scale(app, 340), Scale(app, 140));
             GetClientRect(dlg, &rc);
             margin = Scale(app, 14);
             label = CreateWindowExW(0,
@@ -13339,18 +13511,33 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
                                     NULL,
                                     app->instance,
                                     NULL);
+            /* Running ballot-record count, like the voter-list load. */
+            count = CreateWindowExW(0,
+                                    L"STATIC",
+                                    L"0 ballot records",
+                                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                    margin,
+                                    margin + Scale(app, 22),
+                                    rc.right - 2 * margin,
+                                    Scale(app, 18),
+                                    dlg,
+                                    NULL,
+                                    app->instance,
+                                    NULL);
+            j->count_label = count;
             bar = CreateWindowExW(0,
                                   PROGRESS_CLASSW,
                                   NULL,
-                                  WS_CHILD | WS_VISIBLE | PBS_MARQUEE,
+                                  WS_CHILD | WS_VISIBLE,
                                   margin,
-                                  margin + Scale(app, 26),
+                                  margin + Scale(app, 46),
                                   rc.right - 2 * margin,
                                   Scale(app, 16),
                                   dlg,
                                   NULL,
                                   app->instance,
                                   NULL);
+            j->bar = bar;
             cancel = CreateWindowExW(0,
                                      L"BUTTON",
                                      L"Cancel",
@@ -13366,11 +13553,13 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             if (app->font_ui)
             {
                 SendMessageW(label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(count, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
                 SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
             }
             if (bar != NULL)
             {
-                SendMessageW(bar, PBM_SETMARQUEE, TRUE, 30);
+                SendMessageW(bar, PBM_SETRANGE32, 0, 100);
+                SendMessageW(bar, PBM_SETPOS, 0, 0);
             }
             j->thread = CreateThread(NULL, 0, CvrLoadThreadProc, j, 0, NULL);
             if (j->thread == NULL)
@@ -13381,6 +13570,34 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             }
             return (INT_PTR)FALSE;
         }
+
+        case EEM_CVR_LOAD_PROGRESS:
+            if (j != NULL)
+            {
+                unsigned long n = (unsigned long)wParam;
+                int pct = (int)LOWORD(lParam);
+                BOOL scanning = HIWORD(lParam) != 0;
+                if (j->bar != NULL)
+                {
+                    SendMessageW(j->bar, PBM_SETPOS, (WPARAM)pct, 0);
+                }
+                if (j->count_label != NULL)
+                {
+                    wchar_t txt[64];
+                    if (scanning)
+                    {
+                        /* Discovery pass: no rows produced yet. */
+                        StringCchCopyW(txt, ARRAYSIZE(txt), L"Scanning ballots…");
+                    }
+                    else
+                    {
+                        StringCchPrintfW(txt, ARRAYSIZE(txt), L"%lu ballot record%s", n,
+                                         n == 1ul ? L"" : L"s");
+                    }
+                    SetWindowTextW(j->count_label, txt);
+                }
+            }
+            return (INT_PTR)TRUE;
 
         case EEM_CVR_LOAD_DONE:
             if (j != NULL && j->thread != NULL)
@@ -13466,10 +13683,11 @@ static void App_BeginOpenCvr(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
-                      L"Excel workbooks (*.xlsx)\0*.xlsx\0"
-                      L"Delimited text (*.csv;*.tsv;*.txt)\0*.csv;*.tsv;*.txt\0"
-                      L"All files (*.*)\0*.*\0";
+    ofn.lpstrFilter =
+        L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt;*.zip)\0*.xlsx;*.csv;*.tsv;*.txt;*.zip\0"
+        L"ES&S (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
+        L"Hart (*.zip)\0*.zip\0"
+        L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 32768;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;

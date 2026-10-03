@@ -93,6 +93,10 @@ extern "C"
         uint32_t rows_loaded;
         uint64_t bytes_read;
         uint64_t bytes_total;
+        int scanning; /* TRUE during a preliminary discovery pass that has not yet
+                       * produced any rows (e.g. the Hart loader's pass 1); rows_loaded
+                       * is 0 while this holds. Producers that have no scan pass leave
+                       * it 0. */
     } EeLoadProgress;
 
     /**

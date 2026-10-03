@@ -279,9 +279,21 @@ static BOOL wcieq_trimmed(const wchar_t *s, const wchar_t *key)
 
 static BOOL cvr_is_key_header(const wchar_t *s)
 {
-    return wcieq_trimmed(s, L"cast vote record") || wcieq_trimmed(s, L"batch") ||
-           wcieq_trimmed(s, L"ballot status") || wcieq_trimmed(s, L"precinct") ||
-           wcieq_trimmed(s, L"ballot style");
+    /* ES&S key columns. */
+    if (wcieq_trimmed(s, L"cast vote record") || wcieq_trimmed(s, L"batch") ||
+        wcieq_trimmed(s, L"ballot status") || wcieq_trimmed(s, L"precinct") ||
+        wcieq_trimmed(s, L"ballot style"))
+    {
+        return TRUE;
+    }
+    /* Hart key columns (see hart_cvr.c). Recognized here so a Hart CVR exported to
+     * CSV/TSV and reloaded through EeCvr_LoadFromFiles freezes the same leading
+     * columns the Hart loader did -- otherwise the scan stops at "CvrGuid" and the
+     * remaining key columns (Sheet Number, Batch Sequence, Batch Number, Party,
+     * Is Blank) would be tabulated as if they were contests. */
+    return wcieq_trimmed(s, L"cvrguid") || wcieq_trimmed(s, L"sheet number") ||
+           wcieq_trimmed(s, L"batch sequence") || wcieq_trimmed(s, L"batch number") ||
+           wcieq_trimmed(s, L"party") || wcieq_trimmed(s, L"is blank");
 }
 
 /* True if a header cell is blank (empty or only whitespace). */
@@ -496,6 +508,38 @@ static BOOL establish_header(CvrLoadCtx *ctx, const char *const *cells, uint32_t
     return TRUE;
 }
 
+/* Public builder entry used by the Hart loader: establish a caller-computed column
+ * layout from UTF-8 @p header_cells (blank "" cells become "vote for N" continuation
+ * columns, exactly as in a loaded header) with an explicit @p frozen_count. The table
+ * is cleared first. Follow with EeCvr_BuildAppendRow per ballot sheet. */
+BOOL EeCvr_BuildBegin(EeCvrTable *t,
+                      const char *const *header_cells,
+                      uint32_t ncells,
+                      uint32_t frozen_count)
+{
+    if (t == NULL || ncells == 0)
+    {
+        return FALSE;
+    }
+    EeCvr_Clear(t);
+    if (!cvr_build_titles(header_cells, ncells, &t->col_titles, &t->col_group))
+    {
+        return FALSE;
+    }
+    t->ncols = ncells;
+    t->frozen_count = (frozen_count < ncells) ? frozen_count : ncells;
+    if (t->frozen_count == 0)
+    {
+        t->frozen_count = 1;
+    }
+    if (!ensure_rows(t))
+    {
+        return FALSE;
+    }
+    t->row_start[0] = 0;
+    return TRUE;
+}
+
 /* Confirm a later file's header matches the established schema exactly. */
 static BOOL header_matches(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
 {
@@ -532,9 +576,17 @@ static BOOL header_matches(CvrLoadCtx *ctx, const char *const *cells, uint32_t n
     return ok;
 }
 
-static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
+/* Intern @p cells into a new physical row. When @p skip_if_no_contest is TRUE a row
+ * with no non-blank cell beyond the frozen key columns is discarded (ES&S export
+ * artifact guard); when FALSE every row is kept (the Hart builder, where a blank
+ * ballot sheet is still a real record). Returns FALSE only on OOM. */
+static BOOL cvr_store_row(EeCvrTable *t,
+                          const char *const *cells,
+                          uint32_t ncells,
+                          BOOL skip_if_no_contest,
+                          wchar_t *err,
+                          size_t errcch)
 {
-    EeCvrTable *t = ctx->t;
     uint32_t c;
     uint32_t limit = (ncells < t->ncols) ? ncells : t->ncols;
     size_t row_start_ent;
@@ -542,7 +594,7 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
 
     if (!ensure_rows(t))
     {
-        cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+        cvr_set_err(err, errcch, L"Out of memory loading ballots.");
         return FALSE;
     }
     row_start_ent = t->nent;
@@ -564,7 +616,7 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
         dst = (vlen < sizeof(stackbuf)) ? stackbuf : (heapbuf = (char *)malloc(vlen + 1));
         if (dst == NULL)
         {
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+            cvr_set_err(err, errcch, L"Out of memory loading ballots.");
             return FALSE;
         }
         vlen = normalize_ws(v, dst);
@@ -576,13 +628,13 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
         if (!val_intern(t, dst, vlen, &id))
         {
             free(heapbuf);
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory interning values.");
+            cvr_set_err(err, errcch, L"Out of memory interning values.");
             return FALSE;
         }
         free(heapbuf);
         if (!ensure_ent(t, 1))
         {
-            cvr_set_err(ctx->err, ctx->errcch, L"Out of memory loading ballots.");
+            cvr_set_err(err, errcch, L"Out of memory loading ballots.");
             return FALSE;
         }
         t->ent_col[t->nent] = c;
@@ -605,7 +657,7 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
      * Cast-Vote-Record-id line plus a headless row whose contests are still
      * column-aligned and tally correctly). Keeps `.xlsx` and delimited-text
      * exports of the same election consistent. */
-    if (!saw_contest)
+    if (skip_if_no_contest && !saw_contest)
     {
         t->nent = row_start_ent; /* discard any key-only entries */
         return TRUE;
@@ -614,6 +666,21 @@ static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t 
     t->view_index[t->nrows] = t->nrows;
     t->nrows++;
     return TRUE;
+}
+
+static BOOL append_data_row(CvrLoadCtx *ctx, const char *const *cells, uint32_t ncells)
+{
+    return cvr_store_row(ctx->t, cells, ncells, TRUE, ctx->err, ctx->errcch);
+}
+
+/* Public builder entry used by the Hart loader: appends a row, keeping blank sheets. */
+BOOL EeCvr_BuildAppendRow(EeCvrTable *t, const char *const *cells, uint32_t ncells)
+{
+    if (t == NULL)
+    {
+        return FALSE;
+    }
+    return cvr_store_row(t, cells, ncells, FALSE, NULL, 0);
 }
 
 static BOOL cvr_row_sink(void *vctx, const char *const *cells, uint32_t ncells)
@@ -681,6 +748,33 @@ static const wchar_t *path_leaf(const wchar_t *path)
     return leaf;
 }
 
+/* Remap a single file's progress (percent 0..100, per-file row count) into an overall
+ * value across a multi-file load, so the UI shows one continuous bar and a cumulative
+ * ballot count instead of restarting at each file. */
+typedef struct CvrMultiProg
+{
+    EeLoadProgressFn fn;
+    void *user;
+    int f;              /* current file index (0-based) */
+    int count;          /* total files */
+    uint32_t rows_base; /* rows finished in prior files */
+} CvrMultiProg;
+
+static BOOL cvr_multi_prog(const EeLoadProgress *pr, void *user)
+{
+    CvrMultiProg *w = (CvrMultiProg *)user;
+    EeLoadProgress o = *pr;
+    o.percent =
+        (uint32_t)(((uint64_t)(uint32_t)w->f * 100u + pr->percent) / (uint32_t)w->count);
+    if (o.percent > 100u)
+    {
+        o.percent = 100u;
+    }
+    o.rows_loaded = w->rows_base + pr->rows_loaded;
+    o.scanning = 0; /* the ES&S readers have no discovery pass */
+    return (w->fn != NULL) ? w->fn(&o, w->user) : TRUE;
+}
+
 EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                  int count,
                                  EeCvrTable *out,
@@ -691,6 +785,9 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                  size_t error_cch)
 {
     int f;
+    CvrMultiProg mp;
+    EeLoadProgressFn eff_fn = NULL;
+    void *eff_user = NULL;
 
     if (paths == NULL || out == NULL || count <= 0)
     {
@@ -698,6 +795,17 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
         return EeLoadStatus_Error;
     }
     EeCvr_Clear(out);
+
+    if (progress_fn != NULL)
+    {
+        mp.fn = progress_fn;
+        mp.user = progress_user;
+        mp.count = count;
+        mp.rows_base = 0;
+        mp.f = 0;
+        eff_fn = cvr_multi_prog;
+        eff_user = &mp;
+    }
 
     for (f = 0; f < count; f++)
     {
@@ -710,6 +818,7 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
         ctx.path_leaf = path_leaf(paths[f]);
         ctx.err = error_message;
         ctx.errcch = error_cch;
+        mp.f = f;
 
         if (path_has_ext(paths[f], L".xlsx"))
         {
@@ -718,8 +827,8 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                  cvr_row_sink,
                                  &ctx,
                                  cancel_flag,
-                                 progress_fn,
-                                 progress_user,
+                                 eff_fn,
+                                 eff_user,
                                  error_message,
                                  error_cch);
         }
@@ -730,11 +839,12 @@ EeLoadStatus EeCvr_LoadFromFiles(const wchar_t *const *paths,
                                 cvr_row_sink,
                                 &ctx,
                                 cancel_flag,
-                                progress_fn,
-                                progress_user,
+                                eff_fn,
+                                eff_user,
                                 error_message,
                                 error_cch);
         }
+        mp.rows_base = out->nrows; /* cumulative rows actually stored so far */
         if (ctx.failed)
         {
             EeCvr_Clear(out);
@@ -995,11 +1105,23 @@ BOOL EeCvr_FormatDelimitedUtf8(const EeCvrTable *t,
     {
         for (c = 0; c < t->ncols; c++)
         {
+            /* A "vote for N" contest occupies several columns; only the first is
+             * titled and the continuation columns carry a BLANK header in the source
+             * (that is how the loader regroups them via col_group). col_titles holds
+             * derived display titles ("<contest> (2)", "(3)") for those columns, so
+             * write a blank header for them here instead — otherwise a re-import would
+             * see distinct non-blank titles and split the race into N separate
+             * single-seat contests, changing the tabulation. */
+            const wchar_t *title = t->col_titles[c];
+            if (t->col_group != NULL && t->col_group[c] != c)
+            {
+                title = L"";
+            }
             if (c > 0 && !cvr_tb_append(&b, &delim, 1))
             {
                 goto fail;
             }
-            if (!cvr_tb_append_wide_field(&b, t->col_titles[c], delim))
+            if (!cvr_tb_append_wide_field(&b, title, delim))
             {
                 goto fail;
             }
@@ -1613,14 +1735,19 @@ static wchar_t *wcs_dup(const wchar_t *s)
     return d;
 }
 
-BOOL EeCvr_Tabulate(const EeCvrTable *t,
-                    BOOL merge_writeins,
-                    EeCvrTally **out_items,
-                    uint32_t *out_count)
+/* Tabulate over @p rows (an array of @p nrows physical row indices) when @p rows is
+ * non-NULL, else over all rows. See EeCvr_Tabulate / EeCvr_TabulateRows. */
+static BOOL cvr_tabulate_core(const EeCvrTable *t,
+                              const uint32_t *rows,
+                              uint32_t nrows,
+                              BOOL merge_writeins,
+                              EeCvrTally **out_items,
+                              uint32_t *out_count)
 {
     static const wchar_t k_writein_label[] = L"write-in";
     AggMap m;
-    uint32_t r;
+    uint32_t rr;
+    uint32_t iter_n;
     uint32_t i;
     uint32_t out_n = 0;
     uint32_t prev_cc = 0;
@@ -1637,13 +1764,21 @@ BOOL EeCvr_Tabulate(const EeCvrTable *t,
     {
         return TRUE; /* nothing to tabulate */
     }
+    iter_n = (rows != NULL) ? nrows : t->nrows;
     ZeroMemory(&m, sizeof(m));
 
-    for (r = 0; r < t->nrows; r++)
+    for (rr = 0; rr < iter_n; rr++)
     {
-        uint32_t lo = t->row_start[r];
-        uint32_t hi = t->row_start[r + 1];
+        uint32_t r = (rows != NULL) ? rows[rr] : rr;
+        uint32_t lo;
+        uint32_t hi;
         uint32_t k;
+        if (r >= t->nrows)
+        {
+            continue;
+        }
+        lo = t->row_start[r];
+        hi = t->row_start[r + 1];
         for (k = lo; k < hi; k++)
         {
             uint32_t c = t->ent_col[k];
@@ -1712,6 +1847,88 @@ BOOL EeCvr_Tabulate(const EeCvrTable *t,
     return TRUE;
 }
 
+BOOL EeCvr_Tabulate(const EeCvrTable *t,
+                    BOOL merge_writeins,
+                    EeCvrTally **out_items,
+                    uint32_t *out_count)
+{
+    return cvr_tabulate_core(t, NULL, 0, merge_writeins, out_items, out_count);
+}
+
+BOOL EeCvr_TabulateRows(const EeCvrTable *t,
+                        const uint32_t *rows,
+                        uint32_t nrows,
+                        BOOL merge_writeins,
+                        EeCvrTally **out_items,
+                        uint32_t *out_count)
+{
+    return cvr_tabulate_core(t, rows, nrows, merge_writeins, out_items, out_count);
+}
+
+/* Party rank for a tabulation contest name from its "REP "/"DEM " prefix:
+ * 0 = the display-first party, 1 = the other party, 2 = non-partisan. */
+static int cvr_tally_party_rank(const wchar_t *contest, int party_first)
+{
+    BOOL rep = (wcsncmp(contest, L"REP ", 4) == 0);
+    BOOL dem = (wcsncmp(contest, L"DEM ", 4) == 0);
+    if (!rep && !dem)
+    {
+        return 2;
+    }
+    /* party_first: 0 = REP first, 1 = DEM first. */
+    if (party_first == 1)
+    {
+        return dem ? 0 : 1;
+    }
+    return rep ? 0 : 1;
+}
+
+void EeCvr_ReorderTallyByParty(EeCvrTally *items, uint32_t count, int party_first)
+{
+    /* Stable-partition whole contest groups (consecutive rows sharing a contest) so
+     * the display-first party's contests come first, then the other party's, then
+     * non-partisan contests -- preserving the category order within each block. Used
+     * for primaries where tabulation is grouped by party. */
+    EeCvrTally *tmp;
+    uint32_t i;
+    uint32_t out = 0;
+    int pass;
+
+    if (items == NULL || count < 2)
+    {
+        return;
+    }
+    tmp = (EeCvrTally *)malloc((size_t)count * sizeof(EeCvrTally));
+    if (tmp == NULL)
+    {
+        return; /* leave order unchanged on OOM */
+    }
+    for (pass = 0; pass < 3; pass++)
+    {
+        i = 0;
+        while (i < count)
+        {
+            /* extent of this contest group */
+            uint32_t j = i + 1;
+            while (j < count && wcscmp(items[j].contest, items[i].contest) == 0)
+            {
+                j++;
+            }
+            if (cvr_tally_party_rank(items[i].contest, party_first) == pass)
+            {
+                uint32_t k;
+                for (k = i; k < j; k++)
+                {
+                    tmp[out++] = items[k];
+                }
+            }
+            i = j;
+        }
+    }
+    memcpy(items, tmp, (size_t)count * sizeof(EeCvrTally));
+    free(tmp);
+}
+
 void EeCvr_FreeTally(EeCvrTally *items, uint32_t count)
 {
     uint32_t i;
@@ -1778,7 +1995,31 @@ BOOL EeCvr_HasMultiCard(const EeCvrTable *t)
     uint32_t nref = 0;
     uint32_t extra = 0;
 
-    if (t == NULL || t->nrows == 0 || t->ncols <= t->frozen_count)
+    if (t == NULL || t->nrows == 0 || t->ncols == 0)
+    {
+        return FALSE;
+    }
+    /* Hart CVRs record one row per ballot SHEET with an explicit "Sheet Number" key
+     * column, so multi-card is exact: any sheet numbered >= 2 means multi-card. */
+    for (c = 0; c < t->frozen_count && c < t->ncols; c++)
+    {
+        const wchar_t *title = t->col_titles[c];
+        if (title != NULL && (wcs_contains_ci(title, L"sheet number") ||
+                              wcs_contains_ci(title, L"sheetnumber")))
+        {
+            wchar_t buf[32];
+            for (r = 0; r < t->nrows; r++)
+            {
+                EeCvr_GetCellW(t, r, c, buf, ARRAYSIZE(buf));
+                if (buf[0] != L'\0' && _wtoi(buf) >= 2)
+                {
+                    return TRUE;
+                }
+            }
+            return FALSE;
+        }
+    }
+    if (t->ncols <= t->frozen_count)
     {
         return FALSE;
     }

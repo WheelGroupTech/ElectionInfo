@@ -24,11 +24,14 @@
 #define IDM_CVR_REPORT_PRECINCT   40017
 #define IDM_CVR_REPORT_BALLOTSTYLE 40018
 #define IDM_EXPORT_SELECTED       40019
+#define IDM_CVR_TABULATE_FILTERED 40073
 /* Export "All" for report context menus. */
 #define IDM_EXPORT_ALL            40072
 
 /* CVR options dialog child controls. */
 #define IDC_CVR_MERGE_WRITEINS 41400
+#define IDC_CVR_PARTY_REP      41401
+#define IDC_CVR_PARTY_DEM      41402
 
 /* Export options dialog child control. */
 #define IDC_EXPORT_NORMALIZED 41500

@@ -172,6 +172,7 @@
     <ClCompile Include="src\xlsx.c" />
     <ClCompile Include="src\csv_sheet.c" />
     <ClCompile Include="src\ee_cvr.c" />
+    <ClCompile Include="src\hart_cvr.c" />
     <!-- Vendored third-party: build quietly (its warnings are not ours to fix). -->
     <ClCompile Include="src\third_party\miniz\miniz.c">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>

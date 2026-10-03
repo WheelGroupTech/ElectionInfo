@@ -178,10 +178,28 @@ helpers where they are not `AppState`-coupled. **File → Load Cast Vote Records
 uses a multi-select open dialog (`OFN_ALLOWMULTISELECT`), filtered to
 `*.xlsx;*.csv;*.tsv;*.txt` (with per-format and all-files alternatives).
 
+**Load progress dialog.** A determinate progress bar (0..100), a status line, and Cancel.
+The bar is driven by the loader's `percent` and is continuous across the whole load: the
+Hart loader spans its two passes (`total = entries × 2`), and `EeCvr_LoadFromFiles` remaps
+each ES&S file's 0..100 into an overall `(file × 100 + inner) / count` (via an internal
+`cvr_multi_prog` wrapper) so the bar does not restart per file. The status line shows
+"Scanning ballots…" during the Hart discovery pass (`EeLoadProgress.scanning`, no rows
+yet) and "N ballot records" once rows are being filled (cumulative across ES&S files).
+
+**Column-width cap.** The CVR grid is a single report ListView holding every column. Like
+the voter list, its per-column width is clamped so the cumulative header width stays under
+the Win32 16-bit limit (`32000 / ncols`, floored at ~20 px): past 32,767 px the header
+stops hit-testing and clicking a far-right column jumps the view back to the start. A wide
+CVR (~188 columns) needs this; a narrow one is unaffected.
+
 ## Phase 2 — vote tabulation (implemented)
 
-**Reports → Tabulate CVR Votes…** on the CVR window opens a report tallying every
-contest.
+**Reports → Tabulate All CVR Votes…** on the CVR window opens a report tallying every
+contest. **Reports → Tabulate Filtered CVR Votes…** does the same over only the
+records the active filter shows; it is greyed when no filter is applied (it would
+duplicate Tabulate All). The report window remembers which mode created it, so
+changing an Option (write-in merge, party order) or the filter re-tabulates it in the
+same mode; its title reads `CVR Tabulation` or `CVR Tabulation (Filtered)`.
 
 - Core (GUI-free): `EeCvr_Tabulate(t, merge_writeins, &items, &count)` in
   `ee_cvr.{c,h}`. It scans the sparse entries once (O(entries), not rows×cols), skips
@@ -208,6 +226,21 @@ contest.
   **Edit → Options… → "Merge image and text write-ins"** on the CVR window
   (`g_settings.cvr_merge_writeins`, persisted in the registry; default on). Changing
   it re-tabulates any open report in place.
+- **Filtered subset:** `EeCvr_TabulateRows(t, rows, nrows, merge, &items, &count)`
+  runs the same core over an explicit physical-row list (`cw->disp` / `cw->disp_count`)
+  instead of every row, backing **Tabulate Filtered CVR Votes…**. Both entry points
+  share one `cvr_tabulate_core`; `EeCvr_Tabulate` passes `rows == NULL` to mean all.
+- **Primary party split & ordering:** the Hart loader (below) prefixes a primary
+  contest's title with its party (`REP `/`DEM `), matching the ES&S convention, so the
+  two parties' copies of a race tally separately. After tabulating,
+  `EeCvr_ReorderTallyByParty(items, count, party_first)` stably regroups whole contest
+  blocks so one party's contests print first, then the other, then any non-partisan
+  contest — overriding the Federal/State/County category order *between* parties while
+  preserving it within each. `party_first` comes from **Edit → Options… → "Party to
+  display first for tabulation"** (`g_settings.cvr_tab_party_first`,
+  `EE_TAB_PARTY_REP`=0 default / `EE_TAB_PARTY_DEM`=1, persisted in the registry). It is
+  a no-op on a general election (no prefixes) and never changes the CVR window's column
+  order or any count.
 - UI: `CvrReportWindow` (class `k_CvrReportClassName`) — an owner-data three-column
   list (**Contest | Selection | Votes**); the contest name repeats on each of its
   selection rows. Bold/grey header via the shared `App_HeaderCustomDraw` (list
@@ -318,8 +351,10 @@ Filter rules reuse `EeFilterSet`/`EeFilterRule` (relation restricted to is/is-no
 and matching uses `EeCvr_GetCellW` (physical-row access). The reusable primitive
 `EeCvr_CollectColumnValues` is covered by test `cvrfilt`.
 
-Tabulation (Reports → Tabulate CVR Votes…) still counts **all** ballots, not the
-filtered subset — consistent with the voter-list reports, which ignore filters.
+Tabulation has two entry points: **Tabulate All CVR Votes…** counts every ballot
+(like the voter-list reports, which ignore filters), while **Tabulate Filtered CVR
+Votes…** counts only the current `disp` subset. The Batch / Precinct / Ballot Style
+reports always count all ballots.
 
 ### Future Phase 2 polish
 
@@ -378,6 +413,69 @@ The voter-list window mirrors this: File → **Export Voter List…**
 Precinct/Address reports gain **Export Selected…**/**Export All…**
 (`-…_Precincts`/`-…_Addresses`). Voter rows use the efficient
 `EeVoterTable_FormatDelimitedUtf8` (delim + header added to the former copy path).
+
+## Hart voting-system CVRs (`hart_cvr.c`)
+
+Hart exports a CVR as one or more **`.zip`** files, each holding **one XML per ballot
+sheet** (`1_<guid>.xml` = first/only sheet; `<guid>.xml` = later sheets). Each XML's
+`CvrGuid` is its own filename guid and there is no shared ballot id, so the sheets of a
+multi-sheet ballot cannot be linked — each XML is one row. `EeCvr_LoadFromHartZips`
+(dispatched from the loader when the first selection ends in `.zip`) produces the same
+`EeCvrTable` the ES&S path does, so tabulation, reports, filtering and export all work
+unchanged.
+
+- **XML** (custom scanner, no third-party): `<Cvr><Contests><Contest><Name/><Id/>
+  <Options><Option><Name/><Id/><Value/>[<WriteInData><OriginalText/>…]</Option>…</Options>
+  [<Undervotes>n</Undervotes>][<Overvoted/>]</Contest>…</Contests>` then metadata
+  `BatchSequence, SheetNumber, PrecinctSplit{Name}, Party{Name} (primary only),
+  BatchNumber, CvrGuid, IsBlank`. Entities are decoded; a UTF-8 BOM is skipped.
+- **ZIP**: iterated entry-by-entry with the vendored **miniz** (`mz_zip_reader_init_cfile`
+  on a wide-opened `FILE*`), so a multi-GB export is never held in memory at once.
+  Non-`.xml` entries (Hart stores scanned write-in images as `.png`) are ignored.
+- **Columns**: frozen keys `CvrGuid, Sheet Number, Batch Sequence, Batch Number,
+  Precinct, Party (only if any ballot has one), Is Blank`, then contests. These Hart key
+  names are also recognized by `cvr_is_key_header`, so a Hart CVR exported to CSV/TSV and
+  reloaded through `EeCvr_LoadFromFiles` freezes the same leading columns (primary → 7
+  incl. `Party`; general → 6) instead of tabulating them as contests. Each contest
+  is one column, or several ("vote for N") with blank continuation headers so
+  `col_group` sums the race. A selected candidate is its name; a write-in is the marker
+  **"Write-in"** (generic — the handwritten text and `.png` image are not used, matching
+  the merge-write-ins behavior); an unfilled seat is `undervote`; an over-marked contest
+  fills every seat with `overvote`. Seat count comes only from non-overvoted ballots (an
+  overvoted vote-for-1 is one `overvote`, not two).
+- **Primary party split**: when a ballot carries a `Party`, its contest titles are
+  prefixed with the party abbreviation (`party_abbr` → `REP`/`DEM`/`LIB`/`GRN`) via
+  `contest_display_name`, e.g. `DEM United States Senator` vs. `REP United States
+  Senator`. This mirrors the ES&S `REP …`/`DEM …` convention so each party's copy of a
+  race interns as a distinct contest and tallies separately. General-election exports
+  (no `Party`) are unaffected.
+- **Contest order** (Hart only): a keyword classifier ranks each contest
+  Federal → State → County → City → ISD → Other → MUD (with the office sub-orders inside
+  Federal/State/County). Within one rank, contests sort by a case-insensitive **natural**
+  compare of the name (`natural_cmp_ci`: digit runs compare by value), so races that
+  differ only by a trailing number come out in numeric order — `United States
+  Representative, District 6 < 12 < 26 < 33`, `Precinct Chair, Precinct 3486 < 4095` —
+  rather than the arbitrary order Hart wrote them (first-seen is only the final tiebreak).
+  Cosmetic — it does not affect tallies. In a tabulation report the party-first reorder
+  (above) groups the ranked contests by party first.
+- **Multi-card**: exact here — flagged when any row's `Sheet Number` >= 2 (no heuristic).
+- **Two passes** over the zip(s): pass 1 discovers the contest set, each contest's seat
+  count and category, and party presence; pass 2 fills rows via `EeCvr_BuildBegin` +
+  `EeCvr_BuildAppendRow` (the shared table builder, which keeps blank sheets). Pass 1
+  reports `scanning = TRUE` (no rows yet) so the load dialog shows "Scanning ballots…";
+  pass 2 reports a running ballot-record count so it shows "N ballot records". Progress
+  percent spans both passes (`total = xml_entries × 2`), driving a determinate bar.
+- **Validated** against official Clarity results for two Tarrant County elections:
+  - **G24** (general; single 2.2 GB zip, 828,544 ballot sheets, ~1m40s): Railroad
+    Commissioner matches on all four candidates exactly (418,535 / 342,948 / 20,791 /
+    20,248); President/US Senator match within a handful of votes (certified totals add
+    cured/provisional ballots after the election-night CVR snapshot).
+  - **P26** (primary; 6 zips, 488,862 ballot sheets, ~1m20s): with the per-party split,
+    U.S. Senator matches the certified totals **exactly** for both parties — DEM Crockett
+    103,743 / Talarico 83,233 / Hassan 2,060 (189,036 cast); REP Cornyn 65,621 /
+    Paxton 55,341 / Hunt 19,729 / … (145,798 cast).
+
+  Test `hart`.
 
 ## Testing
 

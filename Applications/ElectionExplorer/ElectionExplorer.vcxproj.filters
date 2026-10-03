@@ -36,6 +36,9 @@
     <ClCompile Include="src\ee_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\hart_cvr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\third_party\miniz\miniz.c">
       <Filter>Source Files</Filter>
     </ClCompile>

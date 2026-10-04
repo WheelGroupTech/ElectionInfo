@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-02
+**Last updated:** 2026-10-03
 **Branch:** main — **all work below is committed; working tree clean.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
@@ -308,6 +308,43 @@ in `res/ElectionExplorer.rc` (FILEVERSION/PRODUCTVERSION + strings), `res/app.ma
 File/ProductVersion 1.2.0.0. **Submitted to the Microsoft Store on 2026-10-02** —
 awaiting certification. Store listing text (now incl. CVR features + MIT license line) is
 kept in `ElectionExplorer/STORE-LISTING.txt`. (`Build/` is gitignored.)
+
+**Uncommitted (this session): El Paso County header classification fixes.** Loading
+`El_Paso_County_TX/09282026_El_Paso_Countywide_Voter_File.xlsx` gave a blank Voter ID and
+addresses like `11611 DYER ST APT, EL PASO TX, 1 79934`. All fixes are in `classify_field` /
+`ingest_header` (`voter_table.c`):
+- **Stray "1" before the ZIP:** the district column `STATE BOARD OF EDU 23` (value `1`) was
+  classified as residence state by the loose `STATE` substring rule. New
+  `header_is_district_like` (digit, or BOARD/EDU/SENAT/REP/DIST/WARD/CODE/MEMBER/COUNCIL/
+  PROPOSED) keeps such columns out of the loose city/state rules; state is then inferred (TX).
+- **Exact beats loose:** `classify_field` now reports a `loose` flag; an exact-name column
+  replaces an earlier loose match for VUID/city/state/ZIP/ZIP4 (`City_Name` beats `City_State`,
+  `Zip_Code` beats `Zip_Country`). A combined city+state value no longer repeats the state
+  (`compose_address` strips a trailing ` <state>` from the city).
+- **New header names:** `VoterID` (weak VUID — an explicit VUID/State Voter ID column wins),
+  `Apartment_Number` (unit), `Street_Dir_Suffix`/`StreetPostDir` (post-direction), `City_Name`,
+  and a new house-number-suffix role (`Street_Number_Suffix` → `1009 1/2 …`, plumbed through
+  new `EeVoterTable.addr_number_suffix_col` and a `compose_address` parameter).
+- **Verified on real data (old vs new code, every row):** El Paso xlsx 537,182 rows — all
+  Voter IDs filled, units/trailer/space numbers kept, `…, EL PASO, TX 799xx`, no stray digits
+  (18 rows genuinely lack city/ZIP in the source). El Paso 06-12 `.txt` (other format) — all
+  529,674 fixed (same `STATE BOARD OF EDU` bug). Dallas 2026-10-01 — 9,194 addresses regain a
+  dropped post-direction (`streetpostdir`, e.g. `US HIGHWAY 80 E`). Travis SOS + 09-23 list —
+  0 changes. Travis 07-06 With_History — 780 confidential rows go from `****, C10, 5` to
+  `****` (see next bullet).
+- **Value-based city/state column check after load.** New `voter_finalize_addresses` (both
+  load paths) replaces `voter_apply_inferred_state`: `voter_validate_address_columns` drops a
+  city column whose non-blank, non-redacted values mostly contain a digit (Travis 07-06's
+  column literally named `CITY` = district codes `C10`), and a state column whose values are
+  mostly not a state code/name (`ee_value_is_state`); `voter_infer_dataset_state` then infers
+  the state if there's no state column; `voter_recompose_addresses` re-builds addresses once
+  if either changed anything (redacted addresses still never get an inferred state). The
+  dropped column stays visible as a raw column. Verified old-vs-new on six real lists: all
+  change counts identical to the previous run; only the Travis 07-06 redacted rows' content
+  changed (`****`); no `C10` in any normalized address. `distcode` test extended with a
+  confidential row.
+New smoke test `elpaso`; full suite green; app builds clean x64 Debug. Files (uncommitted):
+`voter_table.c`, `voter_table.h`, `test/smoke_load.c`.
 
 **Residence address city/state/ZIP fix + dataset state inference (committed).** Loading the Texas SOS "Official List of Registered Voters" (columns
 `RES_ADDR`, `RESIDENT_CITY`, `RESIDENT_ZIP_CODE`, and NO residence-state column) produced

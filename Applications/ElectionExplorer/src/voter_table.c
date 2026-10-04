@@ -715,6 +715,7 @@ void EeVoterTable_Init(EeVoterTable *table)
     table->name_surname_first = TRUE;
     table->addr_full_col = -1;
     table->addr_number_col = -1;
+    table->addr_number_suffix_col = -1;
     table->addr_predir_col = -1;
     table->addr_street_col = -1;
     table->addr_type_col = -1;
@@ -2632,6 +2633,7 @@ typedef enum FieldRole
     Role_Precinct,
     Role_AddrFull,
     Role_AddrNumber,
+    Role_AddrNumberSuffix,
     Role_AddrPredir,
     Role_AddrStreet,
     Role_AddrType,
@@ -2704,8 +2706,37 @@ static BOOL is_mailing_header(const char *norm)
     return FALSE;
 }
 
-static FieldRole classify_field(const char *norm)
+/* TRUE for a header that names an election district / jurisdiction rather than a
+ * residence field: it carries a digit ("CITY 06", "STATE BOARD OF EDU 23") or a
+ * district word. Used only to keep such columns out of the loose city/state rules. */
+static BOOL header_is_district_like(const char *norm)
 {
+    static const char *const k_words[] = {"BOARD", "EDU", "SENAT", "REP", "DIST",
+                                          "WARD", "CODE", "MEMBER", "COUNCIL", "PROPOSED"};
+    const char *p;
+    size_t i;
+    for (p = norm; *p != '\0'; p++)
+    {
+        if (*p >= '0' && *p <= '9')
+        {
+            return TRUE;
+        }
+    }
+    for (i = 0; i < ARRAYSIZE(k_words); i++)
+    {
+        if (header_contains(norm, k_words[i]))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Classify one normalized header. *loose is set TRUE for a weak match (a loose
+ * substring rule, or a generic "VoterID") that a later exact match may override. */
+static FieldRole classify_field(const char *norm, BOOL *loose)
+{
+    *loose = FALSE;
     if (norm[0] == '\0')
     {
         return Role_None;
@@ -2720,6 +2751,14 @@ static FieldRole classify_field(const char *norm)
         strcmp(norm, "STATEID") == 0 || strcmp(norm, "STATEIDNUMBER") == 0 ||
         strcmp(norm, "STATEVOTERID") == 0 || strcmp(norm, "STATEVOTERIDNUMBER") == 0)
     {
+        return Role_Vuid;
+    }
+    /* A generic "VoterID" (El Paso County) is the Voter ID only when no explicit
+     * VUID / State Voter ID column exists -- marked loose so that one wins. */
+    if (strcmp(norm, "VOTERID") == 0 || strcmp(norm, "VOTERIDNUMBER") == 0 ||
+        strcmp(norm, "VOTERIDNO") == 0)
+    {
+        *loose = TRUE;
         return Role_Vuid;
     }
 
@@ -2806,6 +2845,12 @@ static FieldRole classify_field(const char *norm)
     {
         return Role_AddrFull;
     }
+    if (strcmp(norm, "STREETNUMBERSUFFIX") == 0 || strcmp(norm, "STREETNUMSUFFIX") == 0 ||
+        strcmp(norm, "HOUSENUMBERSUFFIX") == 0 || strcmp(norm, "HOUSENUMSUFFIX") == 0 ||
+        strcmp(norm, "HOUSESUFFIX") == 0)
+    {
+        return Role_AddrNumberSuffix;
+    }
     if (strcmp(norm, "BLKNUM") == 0 || strcmp(norm, "BLOCKNUM") == 0 ||
         strcmp(norm, "HOUSENUM") == 0 || strcmp(norm, "HOUSENUMBER") == 0 ||
         strcmp(norm, "HOUSENO") == 0 || strcmp(norm, "HSENO") == 0 ||
@@ -2837,7 +2882,8 @@ static FieldRole classify_field(const char *norm)
         return Role_AddrDir;
     }
     if (strcmp(norm, "POSTDIR") == 0 || strcmp(norm, "POSTDIRECTION") == 0 ||
-        strcmp(norm, "STRPOST") == 0)
+        strcmp(norm, "STRPOST") == 0 || strcmp(norm, "STREETDIRSUFFIX") == 0 ||
+        strcmp(norm, "STRDIRSUFFIX") == 0 || strcmp(norm, "STREETPOSTDIR") == 0)
     {
         return Role_AddrPostdir;
     }
@@ -2848,13 +2894,15 @@ static FieldRole classify_field(const char *norm)
     }
     if (strcmp(norm, "UNITNO") == 0 || strcmp(norm, "UNITNUM") == 0 ||
         strcmp(norm, "UNITNUMBER") == 0 || strcmp(norm, "UNIT") == 0 ||
-        strcmp(norm, "APTNO") == 0 || strcmp(norm, "APTNUM") == 0 || strcmp(norm, "APARTMENT") == 0)
+        strcmp(norm, "APTNO") == 0 || strcmp(norm, "APTNUM") == 0 || strcmp(norm, "APARTMENT") == 0 ||
+        strcmp(norm, "APARTMENTNUMBER") == 0 || strcmp(norm, "APARTMENTNUM") == 0 ||
+        strcmp(norm, "APARTMENTNO") == 0 || strcmp(norm, "APTNUMBER") == 0)
     {
         return Role_AddrUnit;
     }
     if (strcmp(norm, "RSCITY") == 0 || strcmp(norm, "RESCITY") == 0 ||
         strcmp(norm, "RESIDENCECITY") == 0 || strcmp(norm, "RESIDENTCITY") == 0 ||
-        strcmp(norm, "CITY") == 0)
+        strcmp(norm, "CITY") == 0 || strcmp(norm, "CITYNAME") == 0)
     {
         return Role_AddrCity;
     }
@@ -2878,24 +2926,31 @@ static FieldRole classify_field(const char *norm)
     if (header_contains(norm, "ZIP4") || header_contains(norm, "PLUS4") ||
         strcmp(norm, "ZIPCODE4") == 0)
     {
+        *loose = TRUE;
         return Role_AddrZip4;
     }
     if (header_contains(norm, "ZIP") || header_contains(norm, "POSTALCODE"))
     {
+        *loose = TRUE;
         return Role_AddrZip;
     }
-    /* Loose substring matching: a county jurisdiction column literally named "CITY"
-     * or "STATE BOARD OF EDUCATION" can be classified as residence city/state here.
-     * `compose_address` guards the visible impact by not appending a city/state/ZIP
-     * tail when the address already ends with its own ZIP (see
-     * test_district_codes_not_appended / tag `distcode`). A stricter exact-match
-     * header map is a possible v2 improvement. */
+    /* Loose city/state (a later exact-name column overrides these). District /
+     * jurisdiction columns ("STATE BOARD OF EDU 23", "CITY SINGLE MEMBER 07",
+     * "City_Code", "City_Ward") are skipped: their values ("1", "C10") are not
+     * residence fields. A county column literally named "CITY" still matches exactly
+     * above; `compose_address` guards that case (tag `distcode`). */
+    if (header_is_district_like(norm))
+    {
+        return Role_None;
+    }
     if (header_contains(norm, "CITY"))
     {
+        *loose = TRUE;
         return Role_AddrCity;
     }
     if (header_contains(norm, "STATE") && !header_contains(norm, "COUNTY"))
     {
+        *loose = TRUE;
         return Role_AddrState;
     }
 
@@ -3761,6 +3816,7 @@ static BOOL last_token_is_zip(const char *s, size_t len)
 static BOOL compose_address(const FieldList *fields,
                             int full_idx,
                             int number_idx,
+                            int number_suffix_idx,
                             int predir_idx,
                             int street_idx,
                             int type_idx,
@@ -3782,7 +3838,7 @@ static BOOL compose_address(const FieldList *fields,
     const char *city = field_at(fields, city_idx);
     const char *state = field_at(fields, state_idx);
     /* When the file has no residence-state column, callers may pass a dataset-wide
-     * inferred state (see voter_apply_inferred_state) to fill the tail. */
+     * inferred state (see voter_infer_dataset_state) to fill the tail. */
     const char *state_use = (state[0] != '\0')
                                 ? state
                                 : ((fallback_state != NULL) ? fallback_state : "");
@@ -3814,6 +3870,7 @@ static BOOL compose_address(const FieldList *fields,
         }
         tidy_house_number_token(num_buf);
         if (!append_name_part(out, out_cap, &len, num_buf) ||
+            !append_name_part(out, out_cap, &len, field_at(fields, number_suffix_idx)) ||
             !append_name_part(out, out_cap, &len, field_at(fields, predir_idx)) ||
             !append_name_part(out, out_cap, &len, street) ||
             !append_name_part(out, out_cap, &len, field_at(fields, type_idx)) ||
@@ -3890,11 +3947,31 @@ static BOOL compose_address(const FieldList *fields,
          * did not match it (see append_tail above). */
         if (append_tail && (city[0] != '\0' || state_use[0] != '\0' || zip5[0] != '\0'))
         {
+            /* A combined city+state column ("EL PASO TX") would repeat the state the tail
+             * is about to emit; drop a trailing " <state>" from the city in that case. */
+            char city_buf[128];
+            const char *city_out = city;
+            if (state_use[0] != '\0' && SUCCEEDED(StringCchCopyA(city_buf, ARRAYSIZE(city_buf), city)))
+            {
+                size_t cl = strlen(city_buf);
+                size_t sl = strlen(state_use);
+                if (cl > sl + 1 && city_buf[cl - sl - 1] == ' ' &&
+                    _stricmp(city_buf + cl - sl, state_use) == 0)
+                {
+                    cl -= sl;
+                    while (cl > 0 && (city_buf[cl - 1] == ' ' || city_buf[cl - 1] == ','))
+                    {
+                        cl--;
+                    }
+                    city_buf[cl] = '\0';
+                    city_out = city_buf;
+                }
+            }
             if (len > 0 && !append_literal(out, out_cap, &len, ","))
             {
                 return FALSE;
             }
-            if (city[0] != '\0' && !append_name_part(out, out_cap, &len, city))
+            if (city_out[0] != '\0' && !append_name_part(out, out_cap, &len, city_out))
             {
                 return FALSE;
             }
@@ -3932,7 +4009,7 @@ static BOOL compose_address(const FieldList *fields,
 /* Map a ZIP code's first three digits (the USPS "SCF" prefix) to a state postal
  * abbreviation. This is the standard prefix→state assignment; a handful of ZIPs sit on
  * a state line, but that never changes the *majority* state of a single-state voter file,
- * which is all we use it for (see voter_apply_inferred_state). Returns NULL if the ZIP is
+ * which is all we use it for (see voter_infer_dataset_state). Returns NULL if the ZIP is
  * not three leading digits or falls in an unassigned prefix. */
 static const char *zip3_to_state(const char *zip)
 {
@@ -3976,15 +4053,131 @@ static const char *zip3_to_state(const char *zip)
     return NULL;
 }
 
+/* TRUE if @p s (a raw cell) is a plausible residence-state value: a two-letter state / DC
+ * code or a full state name, case-insensitive. */
+static BOOL ee_value_is_state(const char *s)
+{
+    static const char *const k_names[] = {
+        "alabama",        "alaska",        "arizona",       "arkansas",     "california",
+        "colorado",       "connecticut",   "delaware",      "florida",      "georgia",
+        "hawaii",         "idaho",         "illinois",      "indiana",      "iowa",
+        "kansas",         "kentucky",      "louisiana",     "maine",        "maryland",
+        "massachusetts",  "michigan",      "minnesota",     "mississippi",  "missouri",
+        "montana",        "nebraska",      "nevada",        "new hampshire", "new jersey",
+        "new mexico",     "new york",      "north carolina", "north dakota", "ohio",
+        "oklahoma",       "oregon",        "pennsylvania",  "rhode island", "south carolina",
+        "south dakota",   "tennessee",     "texas",         "utah",         "vermont",
+        "virginia",       "washington",    "west virginia", "wisconsin",    "wyoming",
+        "district of columbia"};
+    char buf[32];
+    size_t n = 0;
+    size_t i;
+    while (*s == ' ' || *s == '\t')
+    {
+        s++;
+    }
+    for (; *s != '\0' && n + 1 < sizeof(buf); s++)
+    {
+        buf[n++] = (char)ee_lc((unsigned char)*s);
+    }
+    while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+    {
+        n--;
+    }
+    buf[n] = '\0';
+    if (n == 2)
+    {
+        return ee_is_state_code(buf, 2);
+    }
+    for (i = 0; i < ARRAYSIZE(k_names); i++)
+    {
+        if (strcmp(buf, k_names[i]) == 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* TRUE if @p s is blank (empty or only spaces/tabs). */
+static BOOL ee_value_is_blank(const char *s)
+{
+    while (*s == ' ' || *s == '\t')
+    {
+        s++;
+    }
+    return *s == '\0';
+}
+
+/* Value-based check of the residence city / state columns after a load. A header can
+ * mislead: Travis names a district-code column literally "CITY" (values like "C10"), and a
+ * "STATE BOARD OF EDUCATION" column holds "1" / "5". So look across every row: a city
+ * column whose values mostly contain a digit, or a state column whose values are mostly not
+ * a state code / name, is not a residence field and is dropped from the normalized address
+ * (it stays visible as a raw column). Blank and redacted values do not vote, and a
+ * majority is required, so an occasional odd value never disqualifies a real column.
+ * Returns TRUE if a column was dropped (addresses must then be re-composed). */
+static BOOL voter_validate_address_columns(EeVoterTable *table)
+{
+    BOOL changed = FALSE;
+    uint32_t r;
+
+    if (table->addr_city_col >= 0)
+    {
+        uint32_t n = 0;
+        uint32_t coded = 0;
+        for (r = 0; r < table->row_count; r++)
+        {
+            const char *v = EeVoterTable_GetCellUtf8(table, r, (uint32_t)table->addr_city_col);
+            if (ee_value_is_blank(v) || ee_address_is_redacted(v))
+            {
+                continue;
+            }
+            n++;
+            if (strpbrk(v, "0123456789") != NULL)
+            {
+                coded++;
+            }
+        }
+        if (n > 0 && coded > n / 2)
+        {
+            table->addr_city_col = -1;
+            changed = TRUE;
+        }
+    }
+    if (table->addr_state_col >= 0)
+    {
+        uint32_t n = 0;
+        uint32_t bad = 0;
+        for (r = 0; r < table->row_count; r++)
+        {
+            const char *v = EeVoterTable_GetCellUtf8(table, r, (uint32_t)table->addr_state_col);
+            if (ee_value_is_blank(v) || ee_address_is_redacted(v))
+            {
+                continue;
+            }
+            n++;
+            if (!ee_value_is_state(v))
+            {
+                bad++;
+            }
+        }
+        if (n > 0 && bad > n / 2)
+        {
+            table->addr_state_col = -1;
+            changed = TRUE;
+        }
+    }
+    return changed;
+}
+
 /* Some voter exports (e.g. the Texas SOS "Official List of Registered Voters") carry the
  * residence city and ZIP in their own columns but omit the residence STATE entirely, so a
  * composed address ends "…, CITY, ZIP" with no state. A voter list is (almost always) one
- * state -- even a multi-county list is within a single state -- so we infer that one state
- * from the data (the plurality of residence ZIPs by USPS prefix) and re-compose every
- * address with it. Runs only when there is no residence-state column but there is a ZIP
- * column; a file that already has a state column is left untouched. Fully redacted
- * (confidential) addresses are left as masked. */
-static void voter_apply_inferred_state(EeVoterTable *table)
+ * state -- even a multi-county list is within a single state -- so infer that one state
+ * from the data: the plurality of residence ZIPs by USPS prefix. Only meaningful when there
+ * is no residence-state column but there is a ZIP column. Returns FALSE if none found. */
+static BOOL voter_infer_dataset_state(const EeVoterTable *table, char out[3])
 {
     struct
     {
@@ -3993,27 +4186,17 @@ static void voter_apply_inferred_state(EeVoterTable *table)
     } tally[64];
     int ntally = 0;
     int best = -1;
+    int i;
     uint32_t r;
-    int c;
-    uint32_t src_count;
-    const char *dom;
-    FieldList fl;
 
-    if (table == NULL || table->row_count == 0)
-    {
-        return;
-    }
     if (table->addr_state_col >= 0 || table->addr_zip_col < 0)
     {
-        return; /* has an explicit residence-state column, or no ZIP to infer from */
+        return FALSE;
     }
-
-    /* Plurality residence state via ZIP prefix. */
     for (r = 0; r < table->row_count; r++)
     {
         const char *zip = EeVoterTable_GetCellUtf8(table, r, (uint32_t)table->addr_zip_col);
         const char *st = zip3_to_state(zip);
-        int i;
         if (st == NULL)
         {
             continue;
@@ -4035,25 +4218,35 @@ static void voter_apply_inferred_state(EeVoterTable *table)
             ntally++;
         }
     }
+    for (i = 0; i < ntally; i++)
     {
-        int i;
-        for (i = 0; i < ntally; i++)
+        if (best < 0 || tally[i].n > tally[best].n)
         {
-            if (best < 0 || tally[i].n > tally[best].n)
-            {
-                best = i;
-            }
+            best = i;
         }
     }
     if (best < 0)
     {
-        return;
+        return FALSE;
     }
-    dom = tally[best].st;
+    out[0] = tally[best].st[0];
+    out[1] = tally[best].st[1];
+    out[2] = '\0';
+    return TRUE;
+}
 
-    /* Re-compose every address with the inferred state as the fallback. Reconstruct a
-     * FieldList over the stored source columns (borrowing pool pointers, never freed). */
-    src_count = table->column_count - (uint32_t)EE_FROZEN_COLUMN_COUNT;
+/* Re-compose every row's normalized address from the stored source columns using the
+ * table's (possibly just-revised) address column roles, with @p fallback_state (may be
+ * NULL) filling a missing state. A confidential (fully redacted) address stays exactly as
+ * the source masked it -- appending an inferred state would reveal more than the county
+ * published. Reconstructs a FieldList over the stored cells (borrowing pool pointers). */
+static void voter_recompose_addresses(EeVoterTable *table, const char *fallback_state)
+{
+    uint32_t r;
+    int c;
+    uint32_t src_count = table->column_count - (uint32_t)EE_FROZEN_COLUMN_COUNT;
+    FieldList fl;
+
     ZeroMemory(&fl, sizeof(fl));
     fl.items = (char **)malloc((size_t)src_count * sizeof(char *));
     fl.lengths = (size_t *)malloc((size_t)src_count * sizeof(size_t));
@@ -4066,16 +4259,29 @@ static void voter_apply_inferred_state(EeVoterTable *table)
     fl.count = src_count;
     fl.cap = src_count;
 #define EE_SRC(col) (((col) < 0) ? -1 : ((col) - (int)EE_FROZEN_COLUMN_COUNT))
+#define EE_COMPOSE(fallback)                                                                    \
+    compose_address(&fl,                                                                        \
+                    EE_SRC(table->addr_full_col),                                               \
+                    EE_SRC(table->addr_number_col),                                             \
+                    EE_SRC(table->addr_number_suffix_col),                                      \
+                    EE_SRC(table->addr_predir_col),                                             \
+                    EE_SRC(table->addr_street_col),                                             \
+                    EE_SRC(table->addr_type_col),                                               \
+                    EE_SRC(table->addr_postdir_col),                                            \
+                    EE_SRC(table->addr_unit_type_col),                                          \
+                    EE_SRC(table->addr_unit_col),                                               \
+                    EE_SRC(table->addr_city_col),                                               \
+                    EE_SRC(table->addr_state_col),                                              \
+                    EE_SRC(table->addr_zip_col),                                                \
+                    EE_SRC(table->addr_zip4_col),                                               \
+                    (fallback),                                                                 \
+                    addr_buf,                                                                   \
+                    sizeof(addr_buf))
     for (r = 0; r < table->row_count; r++)
     {
         char addr_buf[512];
         uint32_t ofs;
-        /* A confidential (fully redacted) address stays exactly as the source masked it;
-         * appending the inferred state would reveal more than the county published. */
-        if (ee_address_is_redacted(EeVoterTable_GetCellUtf8(table, r, EE_COL_ADDRESS)))
-        {
-            continue;
-        }
+        BOOL ok;
         for (c = 0; c < (int)src_count; c++)
         {
             const char *s =
@@ -4083,30 +4289,41 @@ static void voter_apply_inferred_state(EeVoterTable *table)
             fl.items[c] = (char *)s;
             fl.lengths[c] = strlen(s);
         }
-        if (compose_address(&fl,
-                            EE_SRC(table->addr_full_col),
-                            EE_SRC(table->addr_number_col),
-                            EE_SRC(table->addr_predir_col),
-                            EE_SRC(table->addr_street_col),
-                            EE_SRC(table->addr_type_col),
-                            EE_SRC(table->addr_postdir_col),
-                            EE_SRC(table->addr_unit_type_col),
-                            EE_SRC(table->addr_unit_col),
-                            EE_SRC(table->addr_city_col),
-                            -1, /* no state column */
-                            EE_SRC(table->addr_zip_col),
-                            EE_SRC(table->addr_zip4_col),
-                            dom,
-                            addr_buf,
-                            sizeof(addr_buf)) &&
-            pool_add_cell(table, EE_COL_ADDRESS, addr_buf, strlen(addr_buf), &ofs))
+        ok = EE_COMPOSE(NULL);
+        if (ok && fallback_state != NULL && !ee_address_is_redacted(addr_buf))
+        {
+            ok = EE_COMPOSE(fallback_state);
+        }
+        if (ok && pool_add_cell(table, EE_COL_ADDRESS, addr_buf, strlen(addr_buf), &ofs))
         {
             table->cells[(size_t)r * (size_t)table->column_count + EE_COL_ADDRESS] = ofs;
         }
     }
+#undef EE_COMPOSE
 #undef EE_SRC
     free(fl.items);
     free(fl.lengths);
+}
+
+/* Post-load address pass (both load paths): drop city / state columns whose values show
+ * they are not residence fields, infer the dataset's state when there is no state column,
+ * and re-compose the normalized addresses once if either changed anything. */
+static void voter_finalize_addresses(EeVoterTable *table)
+{
+    BOOL changed;
+    BOOL have_state;
+    char st[3];
+
+    if (table == NULL || table->row_count == 0)
+    {
+        return;
+    }
+    changed = voter_validate_address_columns(table);
+    have_state = voter_infer_dataset_state(table, st);
+    if (changed || have_state)
+    {
+        voter_recompose_addresses(table, have_state ? st : NULL);
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -4423,6 +4640,7 @@ typedef struct LoadColumnMap
     int precinct_idx;
     int addr_full_idx;
     int house_idx;
+    int house_sfx_idx;
     int predir_idx;
     int street_idx;
     int strtype_idx;
@@ -4450,12 +4668,16 @@ static EeLoadStatus ingest_header(EeVoterTable *out,
     FieldRole roles[EE_MAX_COLUMNS];
     uint32_t src_col_count;
     size_t i;
+    /* TRUE while a role's column came from a weak (loose) match; a later exact match
+     * replaces it (e.g. El Paso "City_Name" beats an earlier "City_State"). */
+    BOOL vuid_loose = FALSE, city_loose = FALSE, state_loose = FALSE;
+    BOOL zip_loose = FALSE, zip4_loose = FALSE;
 
     map->vuid_idx = map->other_id_idx = -1;
     map->full_idx = map->pre_idx = map->first_idx = map->mid_idx = map->last_idx = map->suf_idx =
         -1;
     map->precinct_idx = -1;
-    map->addr_full_idx = map->house_idx = map->predir_idx = map->street_idx = map->strtype_idx =
+    map->addr_full_idx = map->house_idx = map->house_sfx_idx = map->predir_idx = map->street_idx = map->strtype_idx =
         map->dir_idx = map->postdir_idx = map->unitype_idx = map->unit_idx = map->city_idx =
             map->state_idx = map->zip_idx = map->zip4_idx = -1;
 
@@ -4471,13 +4693,17 @@ static EeLoadStatus ingest_header(EeVoterTable *out,
     for (i = 0; i < header->count; i++)
     {
         char norm[128];
+        BOOL loose = FALSE;
         normalize_header(header->items[i], norm, sizeof(norm));
-        roles[i] = classify_field(norm);
+        roles[i] = classify_field(norm, &loose);
         switch (roles[i])
         {
             case Role_Vuid:
-                if (map->vuid_idx < 0)
+                if (map->vuid_idx < 0 || (vuid_loose && !loose))
+                {
                     map->vuid_idx = (int)i;
+                    vuid_loose = loose;
+                }
                 break;
             case Role_OtherId:
                 if (map->other_id_idx < 0)
@@ -4519,6 +4745,10 @@ static EeLoadStatus ingest_header(EeVoterTable *out,
                 if (map->house_idx < 0)
                     map->house_idx = (int)i;
                 break;
+            case Role_AddrNumberSuffix:
+                if (map->house_sfx_idx < 0)
+                    map->house_sfx_idx = (int)i;
+                break;
             case Role_AddrPredir:
                 if (map->predir_idx < 0)
                     map->predir_idx = (int)i;
@@ -4548,20 +4778,32 @@ static EeLoadStatus ingest_header(EeVoterTable *out,
                     map->unit_idx = (int)i;
                 break;
             case Role_AddrCity:
-                if (map->city_idx < 0)
+                if (map->city_idx < 0 || (city_loose && !loose))
+                {
                     map->city_idx = (int)i;
+                    city_loose = loose;
+                }
                 break;
             case Role_AddrState:
-                if (map->state_idx < 0)
+                if (map->state_idx < 0 || (state_loose && !loose))
+                {
                     map->state_idx = (int)i;
+                    state_loose = loose;
+                }
                 break;
             case Role_AddrZip:
-                if (map->zip_idx < 0)
+                if (map->zip_idx < 0 || (zip_loose && !loose))
+                {
                     map->zip_idx = (int)i;
+                    zip_loose = loose;
+                }
                 break;
             case Role_AddrZip4:
-                if (map->zip4_idx < 0)
+                if (map->zip4_idx < 0 || (zip4_loose && !loose))
+                {
                     map->zip4_idx = (int)i;
+                    zip4_loose = loose;
+                }
                 break;
             default:
                 break;
@@ -4589,6 +4831,8 @@ static EeLoadStatus ingest_header(EeVoterTable *out,
     out->addr_full_col =
         (map->addr_full_idx < 0) ? -1 : map->addr_full_idx + (int)EE_FROZEN_COLUMN_COUNT;
     out->addr_number_col = (map->house_idx < 0) ? -1 : map->house_idx + (int)EE_FROZEN_COLUMN_COUNT;
+    out->addr_number_suffix_col =
+        (map->house_sfx_idx < 0) ? -1 : map->house_sfx_idx + (int)EE_FROZEN_COLUMN_COUNT;
     out->addr_predir_col =
         (map->predir_idx < 0) ? -1 : map->predir_idx + (int)EE_FROZEN_COLUMN_COUNT;
     out->addr_street_col =
@@ -4699,6 +4943,7 @@ static BOOL ingest_row(EeVoterTable *out,
         if (!compose_address(row,
                              m->addr_full_idx,
                              m->house_idx,
+                             m->house_sfx_idx,
                              m->predir_idx,
                              m->street_idx,
                              m->strtype_idx,
@@ -4867,7 +5112,7 @@ EeLoadStatus EeVoterTable_LoadXlsxSheet(const wchar_t *path,
     }
 
     finalize_column_kinds(out_table);
-    voter_apply_inferred_state(out_table);
+    voter_finalize_addresses(out_table);
     report_progress(progress_fn, progress_user, 99, out_table->row_count, 0, 0);
     return EeLoadStatus_Ok;
 }
@@ -5272,7 +5517,7 @@ EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,
     }
 
     finalize_column_kinds(out_table);
-    voter_apply_inferred_state(out_table);
+    voter_finalize_addresses(out_table);
 
     /* Progress 99%: data parsed; UI will push 100% when grid is ready. */
     report_progress(progress_fn, progress_user, 99, out_table->row_count, bytes_read, file_size);

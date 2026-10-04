@@ -567,13 +567,16 @@ static int test_district_codes_not_appended(void)
     }
     fputs("VUID,NAME,Residential Address,Precinct,STATE BOARD OF EDUCATION,CITY\n", fp);
     fputs("2128393968,ABAGARO MOSISA,1109 N IH 35  NB AUSTIN TX 78702 ,P 100,5,C10\n", fp);
+    /* A confidential row has no ZIP tail of its own, so only the value-based column check
+     * (the "CITY" values are digit-bearing district codes) keeps "C10" off it. */
+    fputs("2128393969,REDACTED VOTER,****,P 100,5,C10\n", fp);
     fclose(fp);
 
     EeVoterTable_Init(&t);
     err[0] = L'\0';
     s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
     DeleteFileW(path);
-    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    if (s != EeLoadStatus_Ok || t.row_count != 2)
     {
         wprintf(L"distcode: load failed %s\n", err);
         EeVoterTable_Clear(&t);
@@ -583,6 +586,13 @@ static int test_district_codes_not_appended(void)
     if (wcscmp(buf, L"1109 N IH 35  NB AUSTIN TX 78702") != 0)
     {
         wprintf(L"distcode: district codes appended (%s)\n", buf);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    EeVoterTable_GetViewCellW(&t, 1, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"****") != 0)
+    {
+        wprintf(L"distcode: district code on redacted row (%s)\n", buf);
         EeVoterTable_Clear(&t);
         return 1;
     }
@@ -664,6 +674,100 @@ static int test_infer_residence_state(void)
     EeVoterTable_Clear(&t);
     rc = 0;
     wprintf(L"resstate ok\n");
+    return rc;
+}
+
+/* El Paso County layout: a generic "VoterID" is the Voter ID when no VUID column exists;
+ * "Apartment_Number", "Street_Number_Suffix" and "Street_Dir_Suffix" are address parts;
+ * the pure "City_Name" beats an earlier combined "City_State"; and the district column
+ * "STATE BOARD OF EDU 23" (value "1") is not the residence state -- the state is inferred
+ * (TX). A file that also has an explicit VUID column uses it over "VoterID" (tag: elpaso). */
+static int test_el_paso_layout(void)
+{
+    static const char *k_hdr =
+        "VoterID,Voter_Name,City_State,Zip_Country,Street_Number,Street_Number_Suffix,"
+        "Street_Dir,Street_Name,Street_Type,Street_Dir_Suffix,Unit_Type,Apartment_Number,"
+        "Zip_Code,City_Name,Precinct,STATE BOARD OF EDU 23\n";
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[220];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) ||
+        FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_elpaso.csv")))
+    {
+        wprintf(L"elpaso: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"elpaso: could not create %s\n", path);
+        return 1;
+    }
+    fputs(k_hdr, fp);
+    fputs("2208823355,\"A CENICEROS, ISABEL G\",EL PASO TX,79907,1009,1/2,N,MACADAMIA,CIR,E,"
+          "SPC,27,79907,EL PASO,195.1,1\n",
+          fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"elpaso: load failed %s\n", err);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_VOTER_ID, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2208823355") != 0)
+    {
+        wprintf(L"elpaso: VoterID not used (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_ADDRESS, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"1009 1/2 N MACADAMIA CIR E SPC 27, EL PASO, TX 79907") != 0)
+    {
+        wprintf(L"elpaso: address (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_Clear(&t);
+
+    /* With an explicit VUID column present, it wins over the generic VoterID. */
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"elpaso: could not recreate %s\n", path);
+        return 1;
+    }
+    fputs("VoterID,VUID,Voter_Name\n111,2208823355,\"DOE, JANE\"\n", fp);
+    fclose(fp);
+    EeVoterTable_Init(&t);
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"elpaso: second load failed %s\n", err);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_VOTER_ID, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2208823355") != 0)
+    {
+        wprintf(L"elpaso: VUID should beat VoterID (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"elpaso ok\n");
+
+done:
+    DeleteFileW(path);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"elpaso test failed\n");
+    }
     return rc;
 }
 
@@ -5112,6 +5216,7 @@ int wmain(void)
     failed |= test_res_addr_no_duplicate_city_state_zip();
     failed |= test_district_codes_not_appended();
     failed |= test_infer_residence_state();
+    failed |= test_el_paso_layout();
     failed |= test_res_addr_zip_dash_and_unit();
     failed |= test_house_number_dot_zero();
     failed |= test_lot_unit_ignored();

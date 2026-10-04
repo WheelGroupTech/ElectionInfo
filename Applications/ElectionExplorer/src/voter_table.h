@@ -75,6 +75,7 @@ extern "C"
         /* Display-column indices for residence address parts (-1 if absent). */
         int addr_full_col;
         int addr_number_col;
+        int addr_number_suffix_col; /* e.g. "1/2", "A" after the house number */
         int addr_predir_col;
         int addr_street_col;
         int addr_type_col;

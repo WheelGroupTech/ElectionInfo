@@ -7,7 +7,8 @@
     "code_url_secondary is an alternate official source (e.g., a compiled PDF, or the LexisNexis public-access portal for states whose official code is published only through LexisNexis: AR, GA, MS, TN).",
     "admin_agency is the state's chief election authority; it is not always the Secretary of State (some states use a Board/Commission, a Department of Elections, or the Lieutenant Governor).",
     "Deep links into statute browsers can shift when codes are recompiled; the code_citation lets you re-navigate if a link breaks.",
-    "voter_portal_url is the state's public voter portal (register / check registration / find polling place / view ballot). Wyoming has none statewide (no online registration; records are held by county clerks), so its value is empty."
+    "voter_portal_url is the state's public voter portal (register / check registration / find polling place / view ballot). Wyoming has none statewide (no online registration; records are held by county clerks), so its value is empty.",
+    "Texas: statutes.capitol.texas.gov is a JavaScript application. Its links (including code_url) work in a web browser, but non-browser clients receive the same HTML app shell for every path. code_url_secondary therefore points to the Legislature's own file server (tcss.legis.texas.gov), which the site uses for downloads and which serves the full Election Code PDF directly."
   ],
   "states": [
     {
@@ -435,7 +436,7 @@
       "abbr": "TX",
       "code_citation": "Texas Election Code",
       "code_url": "https://statutes.capitol.texas.gov/?link=EL",
-      "code_url_secondary": "https://statutes.capitol.texas.gov/docs/sdocs/electioncode.pdf",
+      "code_url_secondary": "https://tcss.legis.texas.gov/resources/sdocs/electioncode.pdf",
       "admin_agency": "Texas Secretary of State (Elections Division)",
       "admin_url": "https://www.sos.texas.gov/elections/index.shtml",
       "voter_portal_url": "https://www.votetexas.gov/"

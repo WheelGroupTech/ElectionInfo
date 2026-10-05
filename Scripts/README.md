@@ -45,6 +45,7 @@ Tools for **DS200 scanner results tapes** captured as TIFF images (for example f
 | `process_tif_results_tapes.py` | Processes TIFF images of ES&S DS200 results tapes and stores extracted data |
 | `analyze_tif_results_tapes_data.py` | Analyzes results-tape data produced by `process_tif_results_tapes.py` (uses the local `results_dbfile.*` shelve files) |
 | `analyze_dallas_missing_tapes.py` | Compares expected vs captured Dallas results tapes to help identify missing tapes |
+| `verify_results_tape.py` | Verifies one DS200 results tape against the CVRs it reports: OCRs the tape, selects the location's ballots by ballot-style match to the check-in roster (finding central-count rescans and replacement scanners), and compares every vote line using OCR plus digit-template matching. Writes a report, a line-by-line CSV, and review sheets of tape-image crops for any line a person must read. Flags reprinted tapes and scan-stitch duplicates. Run with `--help` for options. |
 
 ---
 

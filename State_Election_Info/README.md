@@ -37,6 +37,7 @@ caveats inline.
 
 | File | Overview |
 |------|----------|
+| `Analysis_Software_Endorsement_Path.md` | How Texas and other states certify or endorse election software and comparably complex government software (property tax, GIS, forensics, gaming), and a six-step path for earning official acceptance of a pre-canvass data-analysis tool for large counties. |
 | `Co-Judge_Reconciliation_Concept.md` | A bipartisan two-co-judge, pre-canvass records-reconciliation and bounded forensic-examination program that keeps all records/equipment under the election administrator's authority (satisfying federal chain-of-custody constraints). |
 | `RMF_for_EMS_Control_Catalog.md` | Adapts DoD/IC classified-system assurance (NIST RMF, STIGs, application whitelisting, removable-media control) to auditing Election Management Systems; maps each control to an election adaptation, marks certification-safe vs. certification-affecting, and tiers by county/state/federal capacity. |
 

@@ -18,6 +18,7 @@ read by people or consumed by the app. The directory also holds a set of **conce
 | `state_election_codes.csv` | Flat, one row per state (same fields as the JSON records) for spreadsheets and imports. |
 | `State_Election_Codes.md` | Human-readable table of all 50 states. |
 | `generate.py` | Regenerates the CSV and Markdown from the JSON (see below). |
+| `check_links.py` | Checks every URL in the JSON and reports broken or suspicious links (see below). |
 
 The three data files are kept in sync: the CSV and Markdown are generated from the JSON by
 `generate.py`.
@@ -38,16 +39,6 @@ caveats inline.
 |------|----------|
 | `Co-Judge_Reconciliation_Concept.md` | A bipartisan two-co-judge, pre-canvass records-reconciliation and bounded forensic-examination program that keeps all records/equipment under the election administrator's authority (satisfying federal chain-of-custody constraints). |
 | `RMF_for_EMS_Control_Catalog.md` | Adapts DoD/IC classified-system assurance (NIST RMF, STIGs, application whitelisting, removable-media control) to auditing Election Management Systems; maps each control to an election adaptation, marks certification-safe vs. certification-affecting, and tiers by county/state/federal capacity. |
-
-| File | Overview |
-|------|----------|
-| `state_election_codes.json` | Canonical source. Top-level `title`, `description`, `generated` date, `notes`, and a `states` array of 50 records. Intended for programmatic use. |
-| `state_election_codes.csv` | Flat, one row per state (same fields as the JSON records) for spreadsheets and imports. |
-| `State_Election_Codes.md` | Human-readable table of all 50 states. |
-| `generate.py` | Regenerates the CSV and Markdown from the JSON (see below). |
-
-The three data files are kept in sync: the CSV and Markdown are generated from the JSON by
-`generate.py`.
 
 ## Record schema
 
@@ -94,3 +85,36 @@ The script uses only the Python standard library and resolves paths relative to 
 it can be run from any directory. It rebuilds `state_election_codes.csv` and
 `State_Election_Codes.md` in place; the verification date shown in the Markdown comes from
 the JSON `generated` field.
+
+## Checking links
+
+Government sites move pages often, and several state sites are JavaScript applications that
+answer "200 OK" with the same page for *any* path — so a plain status check misses dead
+links. `check_links.py` tests every URL in `state_election_codes.json`:
+
+```
+python check_links.py                    # report problems only
+python check_links.py -v                 # also list links that are OK
+python check_links.py --state TX         # limit to states (repeatable)
+python check_links.py --field code_url   # limit to fields (repeatable)
+python check_links.py --report out.json  # write full results as JSON
+```
+
+Beyond HTTP errors and timeouts, it requests a random nonexistent path on each host and
+compares responses (to detect app shells / catch-all pages), and flags "soft 404" pages,
+redirects that land on an error page, deep links that redirect to the site home page,
+`.pdf` links that don't return a PDF, and TLS certificates that don't match the host name.
+Results are graded:
+
+| Level | Meaning |
+|-------|---------|
+| `FAIL` | Broken: HTTP error, error page, mismatched TLS certificate, or no response. A timeout can be a temporary outage or a site dropping traffic from your network — recheck before changing the link. |
+| `WARN` | Suspicious: needs a human check in a browser (app shell, redirect to home page, PDF mismatch, TLS chain problem). |
+| `BLOCKED` | The site refused a scripted request (bot protection). The link may be fine; spot-check in a browser. |
+| `NOTE` | Works, but worth knowing — e.g., redirects to another host, so the canonical URL may have moved. |
+| `OK` | Loaded normally. |
+
+Exit status is 1 if anything FAILs (`--strict` also fails on WARN), so it can run in CI.
+Links already known to work only in a browser (currently the Texas statutes app, documented
+in the JSON `notes`) are listed in `KNOWN_BROWSER_ONLY` inside the script and reported as
+`NOTE`. Like `generate.py`, it uses only the Python standard library.

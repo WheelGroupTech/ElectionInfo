@@ -79,7 +79,7 @@
       "code_url_secondary": null,
       "admin_agency": "Connecticut Secretary of the State (Election Services)",
       "admin_url": "https://portal.ct.gov/SOTS/Election-Services/",
-      "voter_portal_url": "https://myvote.ct.gov/"
+      "voter_portal_url": "https://portaldir.ct.gov/sots/LookUp.aspx"
     },
     {
       "state": "Delaware",
@@ -128,8 +128,8 @@
       "code_url": "https://legislature.idaho.gov/statutesrules/idstat/title34/",
       "code_url_secondary": null,
       "admin_agency": "Idaho Secretary of State (Elections Division)",
-      "admin_url": "https://sos.idaho.gov/elections-division/",
-      "voter_portal_url": "https://voteidaho.gov/"
+      "admin_url": "https://voteidaho.gov/",
+      "voter_portal_url": "https://votertools.voteidaho.gov/TEDElectionLink/VoterServices/voter-search/ovr-voter-search?returnUrl=VoterServices%2Fvoter%2Fvoter-profile"
     },
     {
       "state": "Illinois",
@@ -409,7 +409,7 @@
       "code_url_secondary": null,
       "admin_agency": "South Carolina State Election Commission",
       "admin_url": "https://scvotes.gov/",
-      "voter_portal_url": "https://info.scvotes.sc.gov/Eng/VoterInquiry/VoterInformation.aspx"
+      "voter_portal_url": "https://vrems.scvotes.sc.gov/Voter/Login"
     },
     {
       "state": "South Dakota",
@@ -489,7 +489,7 @@
       "code_url_secondary": null,
       "admin_agency": "West Virginia Secretary of State (Elections)",
       "admin_url": "https://sos.wv.gov/elections",
-      "voter_portal_url": "https://govotewv.com/"
+      "voter_portal_url": "https://sos.wv.gov/govotewv"
     },
     {
       "state": "Wisconsin",

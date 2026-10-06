@@ -4,9 +4,10 @@
 non-destructive integrity examination of voting system equipment (90th Legislature, R.S., 2027;
 draft).
 
-**Companion files:** `1_Bill_Text.md`, `3_Fiscal_Note.md`, `4_Sponsor_Summary.md`.
+**Companion files:** `Bill_Text.md`, `Fiscal_Note.md`, `Sponsor_Summary.md`.
 
-**Sources:** `State_Election_Info/Co-Judge_Reconciliation_Concept.md` (the "concept memo"),
+**Sources:** From https://github.com/WheelGroupTech/ElectionInfo/ 
+`State_Election_Info/Co-Judge_Reconciliation_Concept.md` (the "concept memo"),
 `RMF_for_EMS_Control_Catalog.md` (the "control catalog"), `Analysis_Software_Endorsement_Path.md`
 (the "software memo"), and the Texas county dataset in `State_Election_Info/Texas_Election_Info/`.
 

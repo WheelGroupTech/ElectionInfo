@@ -446,7 +446,9 @@ results of the records reconciliation.
 (c) If a record required to perform a reconciliation does not exist or cannot be located, the
 absence of the record shall be logged as a factual discrepancy.
 
-(d) To the extent practicable, the general custodian shall conduct the count under
+(d) In an election in which a risk-limiting audit is conducted under Subchapter I, the count
+under Section 127.201 is conducted on the schedule prescribed by Section 127.201(b-2). In any
+other election, the general custodian shall, to the extent practicable, conduct the count under
 Section 127.201 so that it is completed before the examination closing date. On request of the
 general custodian, the secretary of state shall, to the extent practicable, prescribe dates under
 Subchapter I that permit the results of a risk-limiting audit in the county to be reconciled
@@ -454,7 +456,7 @@ before the examination closing date. A comparison under Subsection (a)(4) that c
 before the examination closing date because the count or audit is not complete shall be completed
 and reported under Section 127.418(d).
 
-(e) Notwithstanding Section 66.058, a container holding voted ballots may be opened during an
+(e) Notwithstanding Section 66.058(b-1), a container holding voted ballots may be opened during an
 examination only to conduct a count under Section 127.201, Chapter 65, or Subchapter I, and only
 under dual control in the presence of the co-judges or under Section 127.405(d). A container
 holding unvoted, spoiled, or other ballots that are not voted ballots may be opened for the
@@ -666,7 +668,8 @@ under Section 127.427. The existence of an unresolved item does not prevent or d
 (d) A comparison described by Section 127.410(d) and any part of an integrity examination not
 completed by the examination closing date shall be completed, and a supplemental report in the
 form prescribed by the secretary of state shall be signed and published under Section 127.425,
-not later than the 45th day after election day. A supplemental report does not affect the
+not later than the later of the 45th day after election day or the 15th day after the date the
+count under Section 127.201 is completed. A supplemental report does not affect the
 canvass and is an election record.
 
 **Sec. 127.419. INTEGRITY EXAMINATION.** (a) If an examination is requested, the general
@@ -1039,9 +1042,9 @@ enacted codes.
    appears in the current text). New Subsection (d) is added after (c).
 3. **Section 67.004.** The current section has Subsections (a) through (g) as amended by
    S.B. 2753, 89th Legislature (2025). New Subsections (h) through (j) follow.
-4. **Section 66.058.** Rather than inserting a new subsection with a letter that could not be
-   verified, the draft uses a "notwithstanding Section 66.058" clause in Section 127.410(e).
-   The Council may prefer a direct amendment to Section 66.058.
+4. **Section 66.058.** Section 66.058(b-1) bars opening a container of voted ballots "except as
+   permitted by this code." Section 127.410(e) supplies that permission by a "notwithstanding
+   Section 66.058(b-1)" clause, so no direct amendment to Section 66.058 is needed.
 5. **Section 127.005 alternate.** Section 127.005 requires an alternate presiding judge at the
    central counting station only in elections in which judges are appointed under
    Section 32.002. Section 1(a)(2)(A) of this draft describes that pairing in those terms.
@@ -1054,3 +1057,8 @@ enacted codes.
    up.
 8. **Repealer.** No provision of existing law is repealed. Conflicts are handled by the specific
    "notwithstanding" clause in Section 127.410(e) and by Section 8.
+9. **Section 127.201(b-2) timing.** In an election with a statewide risk-limiting audit, the
+   hand count under Section 127.201 may not begin until the Secretary of State certifies the
+   audit complete, and it may run to the 30th day or a later deadline set by the Secretary.
+   Sections 127.410(d) and 127.418(d) were conformed so the tabulator-to-hand-count comparison
+   goes into the supplemental report in those elections.

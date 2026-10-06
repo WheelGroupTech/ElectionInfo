@@ -164,13 +164,15 @@ memo §5, by precinct, by polling location, and countywide:
 | Chain of custody | seals, transfers, access and media logs | §127.1232 video; §127.009 device logs; Subchapter D and §129.023 test and hash records |
 
 Subsection (c) treats a missing record as a discrepancy, so silence is never read as agreement.
-Subsection (d) handles timing. The §127.201 manual count may by law run to the 21st day, and the
-risk-limiting audit runs on dates the Secretary of State sets. The bill asks the custodian, and on
-request the Secretary, to finish those before the examination closes where practicable. Anything
-not finished is completed in a supplemental report by the 45th day. Subsection (e) is the only
-override of existing law. Notwithstanding §66.058, which generally bars opening voted-ballot
-containers during the preservation period, a container may be opened only for a count the code
-already authorizes (Chapter 65, §127.201, or the RLA). Containers of unvoted or spoiled ballots may
+Subsection (d) handles timing. In an election with a statewide risk-limiting audit (every
+November general from 2026 on), §127.201(b-2) delays the hand count until the Secretary of State
+certifies the audit complete and lets it run to the 30th day or later. So in those elections the
+tabulator-to-hand-count comparison goes into the supplemental report. In other elections the
+custodian finishes the hand count before the examination closes where practicable. The
+supplemental report is due by the later of the 45th day or 15 days after the hand count ends.
+Subsection (e) is the only override of existing law. Notwithstanding §66.058(b-1), which bars
+opening voted-ballot containers during the preservation period "except as permitted by this
+code," a container may be opened only for a count the code already authorizes (Chapter 65, §127.201, or the RLA). Containers of unvoted or spoiled ballots may
 be opened for ballot accounting, under dual control and with resealing logged.
 
 **§127.411 Read-only copies; controlled hardware.** Work is done on read-only copies and
@@ -233,7 +235,8 @@ statutes.
 **§127.418 Deadline (tier f, hard fallback).** The examination closes on the earlier of completion
 or the second day before the last permissible canvass day. At 5 p.m. that day, open items are
 recorded as unresolved and travel with the canvass record. Unfinished comparisons and integrity
-work go into a supplemental report by the 45th day, which does not affect the canvass.
+work go into a supplemental report by the later of the 45th day or 15 days after the hand count
+ends, which does not affect the canvass.
 
 *Example: Tuesday, November 7, 2028 general election.*
 
@@ -244,12 +247,12 @@ work go into a supplemental report by the 45th day, which does not affect the ca
 | by Wed Sep 20 (day −48) | Public L&A and hash validation, witnessed by co-judges | §129.023(b), (c-1) |
 | Sun Oct 8 (day −30) | Examination plan issued | §127.409 |
 | Nov 7 to 9 | Tabulation; §127.131(f) reconciliation; public random draw by day +2 | §§127.131, 127.420 |
-| by Fri Nov 10 (day +3) | Partial manual count must begin (72 hours) | §127.201 |
+| after SOS certifies the RLA | Hand count begins; due by day +30 or the SOS deadline | §127.201(b-2) |
 | Nov 8 to 19 | Records reconciliation; integrity examination of drawn units | §§127.410, 127.419 |
 | Sun Nov 19 (day +12) | Latest examination closing date | §127.418(a)(2) |
 | Mon Nov 20 or Tue Nov 21 | Canvass (latest is day +14) | §67.003(c), (d) |
 | by 3rd day after canvass | Reports posted | §127.425 |
-| Fri Dec 22 (day +45) | Supplemental report deadline | §127.418(d) |
+| Fri Dec 22 (day +45), or 15 days after the hand count ends if later | Supplemental report deadline | §127.418(d) |
 
 If the 2nd-day-before date falls on a weekend, staff may need to work that day. The Council should
 also confirm how §1.006 (weekend and holiday extensions) interacts with the new closing date.
@@ -444,10 +447,13 @@ filing.
   (f); §66.058 (22-month preservation; voted-ballot containers not opened except as authorized);
   §213.006; §213.013; Chapter 127 subchapters A through J; Chapter 122 Subchapter B headings;
   Gov't Code §552.139 and Elec. Code §273.061 and §32.051 exist with the subjects described.
-- **Not verified:** the text of §127.093 (post-count equipment testing), because the source page
-  was rate-limited and could not be read; the exact subsection lettering inside §66.058 (avoided by
-  using a "notwithstanding" clause); Chapter 122 reexamination provisions (cited generally); and
-  how §1.006 interacts with the new closing date.
+- **Checked against the official text (Dan's Election Code download, Oct. 5, 2026):** Chapters 1,
+  66, 67, 87, 127, 129 and 273. §127.093(d) requires a test immediately after each count, and
+  §66.058(b-1) is the "except as permitted by this code" bar the bill relies on. One conflict was
+  found and fixed: §127.201(b-2) (S.B. 827, 2025) delays the hand count until the RLA is certified,
+  so §§127.410(d) and 127.418(d) were conformed. §1.006(b) moves dependent dates when a deadline
+  falls on a weekend, which also shifts the examination closing date.
+- **Not verified:** Chapter 122 reexamination provisions (cited generally).
 - **Correction to the concept memo:** §127.005 requires an alternate presiding judge at the central
   counting station only in elections with judges appointed under §32.002. It does not itself
   require party pairing in all elections. The findings were drafted to match.

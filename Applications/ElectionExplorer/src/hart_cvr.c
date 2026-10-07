@@ -1,8 +1,29 @@
 /**
  * @file hart_cvr.c
- * @brief Loader for Hart voting-system Cast Vote Records.
+ * @brief Loader for Hart voting-system Cast Vote Records (ZIP/XML and PDF reports).
  *
- * A Hart CVR export is one or more ZIP files, each containing one XML file per
+ * Hart publishes CVRs in two forms; either or both can be loaded:
+ *  - ZIP: one XML file per ballot sheet (described below);
+ *  - PDF: the "CVR Report" (Microsoft Reporting Services rendering, document title
+ *    "Count_CvrReport"), one record per ballot sheet, each starting a new page and
+ *    continuing onto further pages when long. Each page carries a header block
+ *    (Precinct, Party, Polling Place, Voting Type, Device Type, Device Serial,
+ *    Device Data Id, Cvr Id, Central Batch Id) above a two-column "Contest Title" /
+ *    "Option" table. An Option cell is a selection, "Write-in", "Overvote", or
+ *    "Undervotes: N". The PDF has no Sheet Number, Batch Sequence or Is Blank, but
+ *    adds the device and polling-place fields the XML lacks.
+ *
+ * Load modes (EeCvr_LoadFromHartFiles):
+ *  - ZIPs only: as before;
+ *  - PDFs only: the votes and header fields come from the PDF records (some counties
+ *    publish only the PDF);
+ *  - ZIPs + PDFs: the votes come from the ZIPs; the PDFs supply Voting Type, Polling
+ *    Place, Device Type, Device Serial and Device Data Id, matched by Cvr Id.
+ * A PDF is accepted only if its first page has the Hart CVR Report header labels
+ * (Cvr Id, Device Serial, Device Data Id, Central Batch Id) and the Contest Title /
+ * Option table header, so other vendors' PDFs are rejected with a clear message.
+ *
+ * A Hart CVR ZIP export is one or more ZIP files, each containing one XML file per
  * scanned ballot SHEET (the first/only sheet is named `1_<guid>.xml`; later sheets
  * of a multi-sheet ballot are `<guid>.xml`). There is not enough information to link
  * the sheets of one ballot together, so each XML becomes one row.
@@ -23,7 +44,10 @@
  * Mapping into the sparse EeCvrTable (shared with the ES&S loader so tabulation,
  * reports, filtering and export work unchanged):
  *  - Frozen key columns, in order: CvrGuid, Sheet Number, Batch Sequence,
- *    Batch Number, Precinct, Party (only when any ballot has one), Is Blank.
+ *    Batch Number, Precinct, Party (only when any ballot has one), [Voting Type,
+ *    Polling Place, Device Type, Device Serial, Device Data Id -- when PDFs are
+ *    loaded], Is Blank. A PDF-only load has no Sheet Number, Batch Sequence or Is
+ *    Blank column.
  *  - Each contest becomes one column, or several ("vote for N") when a ballot marks
  *    more than one option; the extra columns carry a blank continuation header so
  *    the existing col_group logic sums the race across them. A selected candidate is
@@ -38,6 +62,7 @@
  */
 
 #include "ee_cvr.h"
+#include "pdf_reader.h"
 
 #include <windows.h>
 #include <stdio.h>
@@ -383,6 +408,12 @@ typedef struct
     char precinct[192];
     char party[192];
     int has_party;
+    /* PDF-only header fields (blank for a ZIP sheet unless filled from a PDF). */
+    char vtype[64];
+    char pplace[256];
+    char dtype[64];
+    char dserial[64];
+    char ddata[96];
 
     char *arena; /* decoded strings, NUL-terminated, referenced by offset */
     size_t arena_len;
@@ -450,6 +481,7 @@ static BOOL parse_sheet(HartSheet *s, char *xml)
     s->has_party = 0;
     s->guid[0] = s->sheet[0] = s->batchseq[0] = s->batchnum[0] = s->isblank[0] = '\0';
     s->precinct[0] = s->party[0] = '\0';
+    s->vtype[0] = s->pplace[0] = s->dtype[0] = s->dserial[0] = s->ddata[0] = '\0';
 
     if (contests != NULL)
     {
@@ -616,6 +648,90 @@ static BOOL parse_sheet(HartSheet *s, char *xml)
             tag_copy(pa, "<Name>", s->party, sizeof(s->party));
         }
     }
+    return TRUE;
+}
+
+/* Append raw (already decoded) text [src,len) to the arena; returns its offset or
+ * (size_t)-1 on OOM. Used for PDF text, which needs no entity decoding. */
+static size_t arena_add_raw(HartSheet *s, const char *src, size_t len)
+{
+    size_t need = s->arena_len + len + 1;
+    size_t off;
+    if (need > s->arena_cap)
+    {
+        size_t nc = s->arena_cap ? s->arena_cap : 4096;
+        char *nb;
+        while (nc < need)
+        {
+            nc *= 2;
+        }
+        nb = (char *)realloc(s->arena, nc);
+        if (nb == NULL)
+        {
+            return (size_t)-1;
+        }
+        s->arena = nb;
+        s->arena_cap = nc;
+    }
+    off = s->arena_len;
+    if (len > 0)
+    {
+        memcpy(s->arena + off, src, len);
+    }
+    s->arena[off + len] = '\0';
+    s->arena_len += len + 1;
+    return off;
+}
+
+/* Start a new contest named [name,len) on @p s; returns its index or -1 on OOM. */
+static int sheet_add_contest(HartSheet *s, const char *name, size_t len)
+{
+    HartContest *hc;
+    if (s->nct == s->cap_ct)
+    {
+        int ncap = s->cap_ct ? s->cap_ct * 2 : 32;
+        HartContest *ng = (HartContest *)realloc(s->ct, (size_t)ncap * sizeof(HartContest));
+        if (ng == NULL)
+        {
+            return -1;
+        }
+        memset(ng + s->cap_ct, 0, (size_t)(ncap - s->cap_ct) * sizeof(HartContest));
+        s->ct = ng;
+        s->cap_ct = ncap;
+    }
+    hc = &s->ct[s->nct];
+    hc->nsel = 0;
+    hc->undervotes = 0;
+    hc->overvoted = 0;
+    hc->name_off = arena_add_raw(s, name, len);
+    if (hc->name_off == (size_t)-1)
+    {
+        return -1;
+    }
+    return s->nct++;
+}
+
+/* Add selection text [v,len) to contest @p idx. FALSE on OOM. */
+static BOOL sheet_add_selection(HartSheet *s, int idx, const char *v, size_t len)
+{
+    HartContest *hc = &s->ct[idx];
+    size_t off = arena_add_raw(s, v, len);
+    if (off == (size_t)-1)
+    {
+        return FALSE;
+    }
+    if (hc->nsel == hc->cap_sel)
+    {
+        int scap = hc->cap_sel ? hc->cap_sel * 2 : 4;
+        size_t *ns = (size_t *)realloc(hc->sel_off, (size_t)scap * sizeof(size_t));
+        if (ns == NULL)
+        {
+            return FALSE;
+        }
+        hc->sel_off = ns;
+        hc->cap_sel = scap;
+    }
+    hc->sel_off[hc->nsel++] = off;
     return TRUE;
 }
 
@@ -860,6 +976,63 @@ static int __cdecl contest_order_cmp(void *ctx, const void *a, const void *b)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Progress                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/* Shared progress/cancel state across every pass and file of one load. Work units are
+ * zip entries and PDF pages. */
+typedef struct HartProgress
+{
+    volatile LONG *cancel_flag;
+    EeLoadProgressFn fn;
+    void *user;
+    uint64_t done;
+    uint64_t total;
+    uint32_t last_pct;
+    const uint32_t *rows; /* ballot records so far, or NULL during a scan pass */
+} HartProgress;
+
+/* Count one unit of work; every 1024 units check cancel and report. Returns FALSE when
+ * the load should stop (cancelled). */
+static BOOL hart_tick(HartProgress *pg)
+{
+    pg->done++;
+    if ((pg->done & 0x3FF) != 0)
+    {
+        return TRUE;
+    }
+    if (pg->cancel_flag != NULL && *pg->cancel_flag != 0)
+    {
+        return FALSE;
+    }
+    if (pg->fn != NULL && pg->total > 0)
+    {
+        uint32_t pct = (uint32_t)((pg->done * 99ull) / pg->total);
+        if (pct > 99u)
+        {
+            pct = 99u;
+        }
+        if (pct != pg->last_pct)
+        {
+            EeLoadProgress pr;
+            pg->last_pct = pct;
+            pr.percent = pct;
+            pr.rows_loaded = (pg->rows != NULL) ? *pg->rows : 0u;
+            pr.bytes_read = pg->done;
+            pr.bytes_total = pg->total;
+            /* A discovery pass (rows == NULL) has no rows yet -- flag it so the UI can
+             * show "Scanning ballots...". */
+            pr.scanning = (pg->rows == NULL) ? 1 : 0;
+            if (!pg->fn(&pr, pg->user) && pg->cancel_flag != NULL)
+            {
+                InterlockedExchange(pg->cancel_flag, 1);
+            }
+        }
+    }
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
 /* ZIP iteration                                                              */
 /* -------------------------------------------------------------------------- */
 
@@ -872,13 +1045,7 @@ static EeLoadStatus hart_iterate_zip(const wchar_t *path,
                                      size_t *buf_cap,
                                      HartEntryFn fn,
                                      void *ctx,
-                                     volatile LONG *cancel_flag,
-                                     uint64_t *done_entries,
-                                     uint64_t total_entries,
-                                     const uint32_t *rows_ptr, /* ballot records so far, or NULL */
-                                     EeLoadProgressFn progress_fn,
-                                     void *progress_user,
-                                     uint32_t *last_pct,
+                                     HartProgress *pg,
                                      wchar_t *err,
                                      size_t errcch)
 {
@@ -966,39 +1133,10 @@ static EeLoadStatus hart_iterate_zip(const wchar_t *path,
             hart_set_err(err, errcch, L"Out of memory building the CVR table.");
             break;
         }
-
-        (*done_entries)++;
-        if (((*done_entries) & 0x3FF) == 0)
+        if (!hart_tick(pg))
         {
-            if (cancel_flag != NULL && *cancel_flag != 0)
-            {
-                status = EeLoadStatus_Cancelled;
-                break;
-            }
-            if (progress_fn != NULL && total_entries > 0)
-            {
-                uint32_t pct = (uint32_t)((*done_entries * 99ull) / total_entries);
-                if (pct > 99u)
-                {
-                    pct = 99u;
-                }
-                if (pct != *last_pct)
-                {
-                    EeLoadProgress pr;
-                    *last_pct = pct;
-                    pr.percent = pct;
-                    pr.rows_loaded = (rows_ptr != NULL) ? *rows_ptr : 0u;
-                    pr.bytes_read = *done_entries;
-                    pr.bytes_total = total_entries;
-                    /* Pass 1 (rows_ptr == NULL) discovers the schema and has no rows
-                     * yet -- flag it so the UI can show "Scanning ballots...". */
-                    pr.scanning = (rows_ptr == NULL) ? 1 : 0;
-                    if (!progress_fn(&pr, progress_user) && cancel_flag != NULL)
-                    {
-                        InterlockedExchange(cancel_flag, 1);
-                    }
-                }
-            }
+            status = EeLoadStatus_Cancelled;
+            break;
         }
     }
 
@@ -1053,6 +1191,901 @@ static uint64_t hart_count_entries(const wchar_t *const *paths, int count)
 }
 
 /* -------------------------------------------------------------------------- */
+/* String map (interning + Cvr Id lookup for the ZIP+PDF merge)               */
+/* -------------------------------------------------------------------------- */
+
+/* Open-addressing map from a NUL-terminated string (stored once in a pool) to a
+ * uint32 value. Strings are addressed by pool offset (the pool may move). */
+typedef struct StrMap
+{
+    char *pool;
+    size_t pool_len;
+    size_t pool_cap;
+    uint32_t *slot_off; /* slot -> pool offset + 1 (0 = empty) */
+    uint32_t *slot_val;
+    uint32_t cap;
+    uint32_t n;
+} StrMap;
+
+static void strmap_free(StrMap *m)
+{
+    free(m->pool);
+    free(m->slot_off);
+    free(m->slot_val);
+    ZeroMemory(m, sizeof(*m));
+}
+
+static BOOL strmap_rehash(StrMap *m, uint32_t ncap)
+{
+    uint32_t *no = (uint32_t *)calloc(ncap, sizeof(uint32_t));
+    uint32_t *nv = (uint32_t *)calloc(ncap, sizeof(uint32_t));
+    uint32_t i;
+    if (no == NULL || nv == NULL)
+    {
+        free(no);
+        free(nv);
+        return FALSE;
+    }
+    for (i = 0; i < m->cap; i++)
+    {
+        if (m->slot_off[i] != 0)
+        {
+            uint32_t s = fnv1a(m->pool + (m->slot_off[i] - 1)) & (ncap - 1);
+            while (no[s] != 0)
+            {
+                s = (s + 1) & (ncap - 1);
+            }
+            no[s] = m->slot_off[i];
+            nv[s] = m->slot_val[i];
+        }
+    }
+    free(m->slot_off);
+    free(m->slot_val);
+    m->slot_off = no;
+    m->slot_val = nv;
+    m->cap = ncap;
+    return TRUE;
+}
+
+/* Find @p key; returns its slot or (uint32_t)-1. */
+static uint32_t strmap_find(const StrMap *m, const char *key)
+{
+    uint32_t s;
+    if (m->cap == 0)
+    {
+        return (uint32_t)-1;
+    }
+    s = fnv1a(key) & (m->cap - 1);
+    while (m->slot_off[s] != 0)
+    {
+        if (strcmp(m->pool + (m->slot_off[s] - 1), key) == 0)
+        {
+            return s;
+        }
+        s = (s + 1) & (m->cap - 1);
+    }
+    return (uint32_t)-1;
+}
+
+/* Insert @p key (or find it). *out_off receives its pool offset; when new, its value
+ * is set to @p val. Returns FALSE on OOM. */
+static BOOL strmap_put(StrMap *m, const char *key, uint32_t val, uint32_t *out_off)
+{
+    uint32_t s;
+    size_t len;
+    if (m->cap == 0 || (m->n + 1) * 4 >= m->cap * 3)
+    {
+        if (!strmap_rehash(m, m->cap ? m->cap * 2 : 1024))
+        {
+            return FALSE;
+        }
+    }
+    s = fnv1a(key) & (m->cap - 1);
+    while (m->slot_off[s] != 0)
+    {
+        if (strcmp(m->pool + (m->slot_off[s] - 1), key) == 0)
+        {
+            *out_off = m->slot_off[s] - 1;
+            return TRUE;
+        }
+        s = (s + 1) & (m->cap - 1);
+    }
+    len = strlen(key) + 1;
+    if (m->pool_len + len > 0xFFFFFFF0u)
+    {
+        return FALSE;
+    }
+    if (m->pool_len + len > m->pool_cap)
+    {
+        size_t nc = m->pool_cap ? m->pool_cap * 2 : 65536;
+        char *np;
+        while (nc < m->pool_len + len)
+        {
+            nc *= 2;
+        }
+        np = (char *)realloc(m->pool, nc);
+        if (np == NULL)
+        {
+            return FALSE;
+        }
+        m->pool = np;
+        m->pool_cap = nc;
+    }
+    memcpy(m->pool + m->pool_len, key, len);
+    m->slot_off[s] = (uint32_t)m->pool_len + 1;
+    m->slot_val[s] = val;
+    *out_off = (uint32_t)m->pool_len;
+    m->pool_len += len;
+    m->n++;
+    return TRUE;
+}
+
+/* PDF header fields per Cvr Id, for decorating ZIP rows. */
+enum
+{
+    META_VTYPE = 0,
+    META_PPLACE,
+    META_DTYPE,
+    META_DSERIAL,
+    META_DDATA,
+    META_COUNT
+};
+
+typedef struct HartMeta
+{
+    StrMap vals;   /* interned field values */
+    StrMap guids;  /* lowercase Cvr Id -> entry index */
+    uint32_t *ent; /* META_COUNT value offsets per entry */
+    uint32_t n;
+    uint32_t cap;
+} HartMeta;
+
+static void meta_free(HartMeta *m)
+{
+    strmap_free(&m->vals);
+    strmap_free(&m->guids);
+    free(m->ent);
+    ZeroMemory(m, sizeof(*m));
+}
+
+static void ascii_lower(char *s)
+{
+    for (; *s; s++)
+    {
+        if (*s >= 'A' && *s <= 'Z')
+        {
+            *s = (char)(*s - 'A' + 'a');
+        }
+    }
+}
+
+static BOOL meta_add(HartMeta *m, const HartSheet *s)
+{
+    const char *f[META_COUNT];
+    uint32_t off, k;
+    uint32_t *e;
+    char key[80];
+    if (s->guid[0] == '\0')
+    {
+        return TRUE;
+    }
+    StringCchCopyA(key, ARRAYSIZE(key), s->guid);
+    ascii_lower(key);
+    if (strmap_find(&m->guids, key) != (uint32_t)-1)
+    {
+        return TRUE; /* first occurrence wins */
+    }
+    if (m->n == m->cap)
+    {
+        uint32_t nc = m->cap ? m->cap * 2 : 4096;
+        uint32_t *ne = (uint32_t *)realloc(m->ent, (size_t)nc * META_COUNT * sizeof(uint32_t));
+        if (ne == NULL)
+        {
+            return FALSE;
+        }
+        m->ent = ne;
+        m->cap = nc;
+    }
+    f[META_VTYPE] = s->vtype;
+    f[META_PPLACE] = s->pplace;
+    f[META_DTYPE] = s->dtype;
+    f[META_DSERIAL] = s->dserial;
+    f[META_DDATA] = s->ddata;
+    e = &m->ent[(size_t)m->n * META_COUNT];
+    for (k = 0; k < META_COUNT; k++)
+    {
+        if (!strmap_put(&m->vals, f[k], 0, &e[k]))
+        {
+            return FALSE;
+        }
+    }
+    if (!strmap_put(&m->guids, key, m->n, &off))
+    {
+        return FALSE;
+    }
+    m->n++;
+    return TRUE;
+}
+
+/* Fill @p s's PDF fields from the entry for its Cvr Id. Returns TRUE if found. */
+static BOOL meta_apply(const HartMeta *m, HartSheet *s)
+{
+    char key[80];
+    uint32_t slot;
+    const uint32_t *e;
+    StringCchCopyA(key, ARRAYSIZE(key), s->guid);
+    ascii_lower(key);
+    slot = strmap_find(&m->guids, key);
+    if (slot == (uint32_t)-1)
+    {
+        s->vtype[0] = s->pplace[0] = s->dtype[0] = s->dserial[0] = s->ddata[0] = '\0';
+        return FALSE;
+    }
+    e = &m->ent[(size_t)m->guids.slot_val[slot] * META_COUNT];
+    StringCchCopyA(s->vtype, ARRAYSIZE(s->vtype), m->vals.pool + e[META_VTYPE]);
+    StringCchCopyA(s->pplace, ARRAYSIZE(s->pplace), m->vals.pool + e[META_PPLACE]);
+    StringCchCopyA(s->dtype, ARRAYSIZE(s->dtype), m->vals.pool + e[META_DTYPE]);
+    StringCchCopyA(s->dserial, ARRAYSIZE(s->dserial), m->vals.pool + e[META_DSERIAL]);
+    StringCchCopyA(s->ddata, ARRAYSIZE(s->ddata), m->vals.pool + e[META_DDATA]);
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Hart PDF report parsing                                                    */
+/* -------------------------------------------------------------------------- */
+
+/* One table/header cell: the text of all runs drawn inside one clip rectangle. */
+typedef struct PdfCell
+{
+    float x0, y0, x1, y1;
+    size_t off; /* text in HartPdfCtx.text */
+    size_t len;
+} PdfCell;
+
+typedef struct HartPdfCtx
+{
+    EePdf *pdf;
+    EePdfPageText pt;
+    PdfCell *cells;
+    uint32_t ncells;
+    uint32_t cap_cells;
+    char *text;
+    size_t text_len;
+    size_t text_cap;
+    uint32_t *order; /* scratch index array */
+    uint32_t cap_order;
+} HartPdfCtx;
+
+static void pdfctx_free(HartPdfCtx *c)
+{
+    EePdf_Close(c->pdf);
+    EePdf_PageTextFree(&c->pt);
+    free(c->cells);
+    free(c->text);
+    free(c->order);
+    ZeroMemory(c, sizeof(*c));
+}
+
+static BOOL cell_text_append(HartPdfCtx *c, const char *s, size_t n)
+{
+    if (c->text_len + n + 1 > c->text_cap)
+    {
+        size_t nc = c->text_cap ? c->text_cap * 2 : 8192;
+        char *nt;
+        while (nc < c->text_len + n + 1)
+        {
+            nc *= 2;
+        }
+        nt = (char *)realloc(c->text, nc);
+        if (nt == NULL)
+        {
+            return FALSE;
+        }
+        c->text = nt;
+        c->text_cap = nc;
+    }
+    memcpy(c->text + c->text_len, s, n);
+    c->text_len += n;
+    c->text[c->text_len] = '\0';
+    return TRUE;
+}
+
+/* Group the page's runs into cells: consecutive runs inside the same clip form one
+ * cell whose text is their concatenation (a wrapped contest title is two runs). */
+static BOOL pdf_build_cells(HartPdfCtx *c)
+{
+    uint32_t i;
+    c->ncells = 0;
+    c->text_len = 0;
+    for (i = 0; i < c->pt.nruns; i++)
+    {
+        const EePdfTextRun *r = &c->pt.runs[i];
+        PdfCell *cell;
+        BOOL join = FALSE;
+        if (i > 0 && r->clip_id != 0 && r->clip_id == c->pt.runs[i - 1].clip_id && c->ncells > 0)
+        {
+            join = TRUE;
+        }
+        if (!join)
+        {
+            if (c->ncells == c->cap_cells)
+            {
+                uint32_t nc = c->cap_cells ? c->cap_cells * 2 : 256;
+                PdfCell *ncl = (PdfCell *)realloc(c->cells, (size_t)nc * sizeof(PdfCell));
+                if (ncl == NULL)
+                {
+                    return FALSE;
+                }
+                c->cells = ncl;
+                c->cap_cells = nc;
+            }
+            cell = &c->cells[c->ncells++];
+            if (r->has_clip)
+            {
+                cell->x0 = r->clip_x0;
+                cell->y0 = r->clip_y0;
+                cell->x1 = r->clip_x1;
+                cell->y1 = r->clip_y1;
+            }
+            else
+            {
+                cell->x0 = cell->x1 = r->x;
+                cell->y0 = cell->y1 = r->y;
+            }
+            cell->off = c->text_len;
+            cell->len = 0;
+        }
+        cell = &c->cells[c->ncells - 1];
+        if (!cell_text_append(c, c->pt.text + r->text_off, r->text_len))
+        {
+            return FALSE;
+        }
+        cell->len += r->text_len;
+    }
+    return TRUE;
+}
+
+/* Trimmed view of a cell's text. */
+static const char *cell_trim(const HartPdfCtx *c, const PdfCell *cell, size_t *len)
+{
+    const char *s = c->text + cell->off;
+    size_t n = cell->len;
+    while (n > 0 && (*s == ' ' || *s == '\t'))
+    {
+        s++;
+        n--;
+    }
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t'))
+    {
+        n--;
+    }
+    *len = n;
+    return s;
+}
+
+static BOOL text_is(const char *s, size_t n, const char *lit)
+{
+    size_t l = strlen(lit);
+    return n == l && memcmp(s, lit, l) == 0;
+}
+
+/* If [s,n) starts with @p label (e.g. "Cvr Id:"), copy the trimmed remainder into
+ * @p dst and return TRUE. */
+static BOOL take_label(const char *s, size_t n, const char *label, char *dst, size_t cap)
+{
+    size_t l = strlen(label);
+    if (n < l || memcmp(s, label, l) != 0)
+    {
+        return FALSE;
+    }
+    s += l;
+    n -= l;
+    while (n > 0 && *s == ' ')
+    {
+        s++;
+        n--;
+    }
+    while (n > 0 && s[n - 1] == ' ')
+    {
+        n--;
+    }
+    if (n >= cap)
+    {
+        n = cap - 1;
+    }
+    memcpy(dst, s, n);
+    dst[n] = '\0';
+    return TRUE;
+}
+
+/* "3156 - 008" -> "3156-008": the PDF spaces the precinct split separator, the XML
+ * does not; normalize so both sources key the same precinct. */
+static void normalize_precinct(char *p)
+{
+    char *w = p;
+    const char *r = p;
+    while (*r)
+    {
+        if (r[0] == ' ' && r[1] == '-' && r[2] == ' ')
+        {
+            *w++ = '-';
+            r += 3;
+            continue;
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
+
+/* Parsed header of one PDF page. */
+typedef struct HartPdfPage
+{
+    int is_cvr_page;   /* has the Contest Title / Option table header */
+    int has_labels;    /* has the Hart header labels (Cvr Id, Device Serial, ...) */
+    char guid[80];
+    char precinct[192];
+    char party[192];
+    char batch[24];
+    char vtype[64];
+    char pplace[256];
+    char dtype[64];
+    char dserial[64];
+    char ddata[96];
+    int title_cell;    /* index of "Contest Title" header cell */
+    int option_cell;   /* index of "Option" header cell */
+} HartPdfPage;
+
+static void pdf_parse_header(const HartPdfCtx *c, HartPdfPage *pg)
+{
+    uint32_t i;
+    int found = 0;
+    ZeroMemory(pg, sizeof(*pg));
+    pg->title_cell = pg->option_cell = -1;
+    for (i = 0; i < c->ncells; i++)
+    {
+        size_t n;
+        const char *s = cell_trim(c, &c->cells[i], &n);
+        if (pg->title_cell < 0 && text_is(s, n, "Contest Title"))
+        {
+            pg->title_cell = (int)i;
+        }
+        else if (pg->option_cell < 0 && text_is(s, n, "Option"))
+        {
+            pg->option_cell = (int)i;
+        }
+    }
+    pg->is_cvr_page = (pg->title_cell >= 0 && pg->option_cell >= 0);
+    for (i = 0; i < c->ncells; i++)
+    {
+        const PdfCell *cell = &c->cells[i];
+        size_t n;
+        const char *s;
+        /* header block = above the table header (when there is one) */
+        if (pg->is_cvr_page && cell->y1 <= c->cells[pg->title_cell].y1)
+        {
+            continue;
+        }
+        s = cell_trim(c, cell, &n);
+        if (take_label(s, n, "Cvr Id:", pg->guid, sizeof(pg->guid)))
+            found |= 1;
+        else if (take_label(s, n, "Device Serial:", pg->dserial, sizeof(pg->dserial)))
+            found |= 2;
+        else if (take_label(s, n, "Device Data Id:", pg->ddata, sizeof(pg->ddata)))
+            found |= 4;
+        else if (take_label(s, n, "Central Batch Id:", pg->batch, sizeof(pg->batch)))
+            found |= 8;
+        else if (take_label(s, n, "Precinct:", pg->precinct, sizeof(pg->precinct)))
+            normalize_precinct(pg->precinct);
+        else if (take_label(s, n, "Party:", pg->party, sizeof(pg->party)))
+            ;
+        else if (take_label(s, n, "Polling Place:", pg->pplace, sizeof(pg->pplace)))
+            ;
+        else if (take_label(s, n, "Voting Type:", pg->vtype, sizeof(pg->vtype)))
+            ;
+        else if (take_label(s, n, "Device Type:", pg->dtype, sizeof(pg->dtype)))
+            ;
+    }
+    pg->has_labels = (found == 15);
+    ascii_lower(pg->guid);
+}
+
+static int __cdecl cell_y_desc_cmp(void *ctx, const void *a, const void *b)
+{
+    const PdfCell *cells = (const PdfCell *)ctx;
+    float ya = cells[*(const uint32_t *)a].y1;
+    float yb = cells[*(const uint32_t *)b].y1;
+    if (ya != yb)
+    {
+        return (ya > yb) ? -1 : 1;
+    }
+    return (*(const uint32_t *)a < *(const uint32_t *)b) ? -1 : 1;
+}
+
+/* Interpret one Option cell's text into contest @p idx. */
+static BOOL add_option_text(HartSheet *s, int idx, const char *v, size_t n)
+{
+    HartContest *hc = &s->ct[idx];
+    if (n >= 11 && memcmp(v, "Undervotes:", 11) == 0)
+    {
+        hc->undervotes += atoi(v + 11) > 0 ? atoi(v + 11) : 1;
+        return TRUE;
+    }
+    if ((n == 8 && memcmp(v, "Overvote", 8) == 0) || (n >= 10 && memcmp(v, "Overvotes:", 10) == 0))
+    {
+        hc->overvoted = 1;
+        return TRUE;
+    }
+    if (n >= 8 && _strnicmp(v, "Write-in", 8) == 0)
+    {
+        return sheet_add_selection(s, idx, "Write-in", 8);
+    }
+    if (n == 0)
+    {
+        return TRUE;
+    }
+    return sheet_add_selection(s, idx, v, n);
+}
+
+/* Add the page's table rows (contests + options) to @p s. Option cells are matched to
+ * the title cell whose vertical extent contains their centre (a wrapped title is a
+ * taller cell); an option with no title on this page continues the previous contest. */
+static BOOL pdf_add_rows(HartPdfCtx *c, const HartPdfPage *pg, HartSheet *s)
+{
+    const PdfCell *th = &c->cells[pg->title_cell];
+    const PdfCell *oh = &c->cells[pg->option_cell];
+    float split = oh->x0; /* left of the Option column = title column */
+    uint32_t i, nt = 0, no = 0;
+    uint32_t *titles, *opts;
+    int *title_idx = NULL;
+    BOOL ok = TRUE;
+
+    if (c->cap_order < c->ncells * 2 + 2)
+    {
+        uint32_t nc = c->ncells * 2 + 64;
+        uint32_t *nb = (uint32_t *)realloc(c->order, (size_t)nc * sizeof(uint32_t));
+        if (nb == NULL)
+        {
+            return FALSE;
+        }
+        c->order = nb;
+        c->cap_order = nc;
+    }
+    titles = c->order;
+    opts = c->order + c->ncells + 1;
+    for (i = 0; i < c->ncells; i++)
+    {
+        const PdfCell *cell = &c->cells[i];
+        float cx = (cell->x0 + cell->x1) * 0.5f;
+        if ((int)i == pg->title_cell || (int)i == pg->option_cell)
+        {
+            continue;
+        }
+        if (cell->y1 > th->y0 + 0.5f) /* not below the table header */
+        {
+            continue;
+        }
+        if (cx < split)
+        {
+            titles[nt++] = i;
+        }
+        else if (cx < oh->x1 + 0.5f)
+        {
+            opts[no++] = i;
+        }
+    }
+    qsort_s(titles, nt, sizeof(uint32_t), cell_y_desc_cmp, c->cells);
+    qsort_s(opts, no, sizeof(uint32_t), cell_y_desc_cmp, c->cells);
+
+    if (nt > 0)
+    {
+        title_idx = (int *)malloc((size_t)nt * sizeof(int));
+        if (title_idx == NULL)
+        {
+            return FALSE;
+        }
+    }
+    for (i = 0; i < nt && ok; i++)
+    {
+        size_t n;
+        const char *t = cell_trim(c, &c->cells[titles[i]], &n);
+        title_idx[i] = sheet_add_contest(s, t, n);
+        ok = (title_idx[i] >= 0);
+    }
+    for (i = 0; i < no && ok; i++)
+    {
+        const PdfCell *oc = &c->cells[opts[i]];
+        float cy = (oc->y0 + oc->y1) * 0.5f;
+        int target = -1;
+        uint32_t k;
+        size_t n;
+        const char *v;
+        for (k = 0; k < nt; k++)
+        {
+            const PdfCell *tc = &c->cells[titles[k]];
+            if (cy >= tc->y0 - 0.5f && cy <= tc->y1 + 0.5f)
+            {
+                target = title_idx[k];
+                break;
+            }
+        }
+        if (target < 0)
+        {
+            /* nearest title above, else the last contest so far (continued page) */
+            for (k = 0; k < nt; k++)
+            {
+                if (c->cells[titles[k]].y0 >= cy)
+                {
+                    target = title_idx[k];
+                }
+            }
+            if (target < 0 && s->nct > 0)
+            {
+                target = s->nct - 1 - (int)nt;
+                if (target < 0)
+                {
+                    target = -1;
+                }
+            }
+        }
+        if (target < 0)
+        {
+            continue;
+        }
+        v = cell_trim(c, oc, &n);
+        ok = add_option_text(s, target, v, n);
+    }
+    free(title_idx);
+    return ok;
+}
+
+/* Start a new sheet record from a page header. */
+static void pdf_begin_sheet(HartSheet *s, const HartPdfPage *pg)
+{
+    s->arena_len = 0;
+    s->nct = 0;
+    s->sheet[0] = s->batchseq[0] = s->isblank[0] = '\0';
+    StringCchCopyA(s->guid, ARRAYSIZE(s->guid), pg->guid);
+    StringCchCopyA(s->batchnum, ARRAYSIZE(s->batchnum), pg->batch);
+    StringCchCopyA(s->precinct, ARRAYSIZE(s->precinct), pg->precinct);
+    StringCchCopyA(s->party, ARRAYSIZE(s->party), pg->party);
+    s->has_party = (pg->party[0] != '\0');
+    StringCchCopyA(s->vtype, ARRAYSIZE(s->vtype), pg->vtype);
+    StringCchCopyA(s->pplace, ARRAYSIZE(s->pplace), pg->pplace);
+    StringCchCopyA(s->dtype, ARRAYSIZE(s->dtype), pg->dtype);
+    StringCchCopyA(s->dserial, ARRAYSIZE(s->dserial), pg->dserial);
+    StringCchCopyA(s->ddata, ARRAYSIZE(s->ddata), pg->ddata);
+}
+
+/* Last path component, for messages. */
+static const wchar_t *path_leaf(const wchar_t *path)
+{
+    const wchar_t *leaf = path;
+    const wchar_t *p;
+    for (p = path; *p; p++)
+    {
+        if (*p == L'\\' || *p == L'/')
+        {
+            leaf = p + 1;
+        }
+    }
+    return leaf;
+}
+
+static void set_pdf_err(wchar_t *err, size_t cch, const wchar_t *path, const wchar_t *what)
+{
+    if (err != NULL && cch > 0)
+    {
+        StringCchPrintfW(err, cch, L"%s: %s", path_leaf(path), what);
+    }
+}
+
+/* Open @p path and verify page 1 is a Hart CVR Report page. On success the context
+ * holds the open document. */
+static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, wchar_t *err, size_t errcch)
+{
+    wchar_t perr[256] = L"";
+    HartPdfPage pg;
+    ZeroMemory(c, sizeof(*c));
+    EePdf_PageTextInit(&c->pt);
+    if (!EePdf_Open(path, &c->pdf, perr, ARRAYSIZE(perr)))
+    {
+        set_pdf_err(err, errcch, path, perr);
+        return FALSE;
+    }
+    if (EePdf_PageCount(c->pdf) == 0 || !EePdf_ExtractPageText(c->pdf, 0, &c->pt) ||
+        !pdf_build_cells(c))
+    {
+        set_pdf_err(err, errcch, path, L"the first page could not be read.");
+        pdfctx_free(c);
+        return FALSE;
+    }
+    pdf_parse_header(c, &pg);
+    if (!pg.is_cvr_page || !pg.has_labels || pg.guid[0] == '\0')
+    {
+        set_pdf_err(err, errcch, path,
+                    L"not a Hart Cast Vote Record report (expected the Hart \"CVR Report\" "
+                    L"with Cvr Id, Device Serial and Contest Title / Option columns).");
+        pdfctx_free(c);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+BOOL EeCvr_IsHartCvrPdf(const wchar_t *path, wchar_t *error_message, size_t error_cch)
+{
+    HartPdfCtx c;
+    if (path == NULL)
+    {
+        hart_set_err(error_message, error_cch, L"Invalid arguments.");
+        return FALSE;
+    }
+    if (!hart_pdf_open(&c, path, error_message, error_cch))
+    {
+        return FALSE;
+    }
+    pdfctx_free(&c);
+    return TRUE;
+}
+
+typedef BOOL (*HartSheetFn)(void *ctx, HartSheet *sheet);
+
+/* Walk every page of a Hart CVR Report PDF, assembling consecutive pages with the
+ * same Cvr Id into one sheet record, and call @p fn per record. When @p rows_only is
+ * FALSE (metadata scan) the contest table is skipped. */
+static EeLoadStatus hart_iterate_pdf(const wchar_t *path,
+                                     HartSheet *sheet,
+                                     HartSheetFn fn,
+                                     void *ctx,
+                                     BOOL want_rows,
+                                     HartProgress *pg,
+                                     wchar_t *err,
+                                     size_t errcch)
+{
+    HartPdfCtx c;
+    uint32_t i, n;
+    BOOL open_rec = FALSE;
+    EeLoadStatus status = EeLoadStatus_Ok;
+
+    if (!hart_pdf_open(&c, path, err, errcch))
+    {
+        return EeLoadStatus_Error;
+    }
+    n = EePdf_PageCount(c.pdf);
+    for (i = 0; i < n; i++)
+    {
+        HartPdfPage hp;
+        if (i > 0 && (!EePdf_ExtractPageText(c.pdf, i, &c.pt) || !pdf_build_cells(&c)))
+        {
+            wchar_t msg[96];
+            StringCchPrintfW(msg, ARRAYSIZE(msg), L"page %u could not be read.", i + 1);
+            set_pdf_err(err, errcch, path, msg);
+            status = EeLoadStatus_Error;
+            break;
+        }
+        pdf_parse_header(&c, &hp);
+        if (hp.is_cvr_page && hp.guid[0] == '\0')
+        {
+            /* Never drop or mis-attribute a ballot sheet silently: a table page with no
+             * readable Cvr Id means the layout is not understood. */
+            wchar_t msg[96];
+            StringCchPrintfW(msg, ARRAYSIZE(msg), L"page %u has no readable Cvr Id.", i + 1);
+            set_pdf_err(err, errcch, path, msg);
+            status = EeLoadStatus_Error;
+            break;
+        }
+        if (hp.is_cvr_page)
+        {
+            if (!open_rec || strcmp(hp.guid, sheet->guid) != 0)
+            {
+                if (open_rec && !fn(ctx, sheet))
+                {
+                    status = EeLoadStatus_Error;
+                    hart_set_err(err, errcch, L"Out of memory building the CVR table.");
+                    break;
+                }
+                pdf_begin_sheet(sheet, &hp);
+                open_rec = TRUE;
+            }
+            if (want_rows && !pdf_add_rows(&c, &hp, sheet))
+            {
+                status = EeLoadStatus_Error;
+                hart_set_err(err, errcch, L"Out of memory reading the CVR PDF.");
+                break;
+            }
+        }
+        if (!hart_tick(pg))
+        {
+            status = EeLoadStatus_Cancelled;
+            break;
+        }
+    }
+    if (status == EeLoadStatus_Ok && open_rec && !fn(ctx, sheet))
+    {
+        status = EeLoadStatus_Error;
+        hart_set_err(err, errcch, L"Out of memory building the CVR table.");
+    }
+    pdfctx_free(&c);
+    return status;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Column layout                                                              */
+/* -------------------------------------------------------------------------- */
+
+enum
+{
+    HK_GUID = 0,
+    HK_SHEET,
+    HK_BSEQ,
+    HK_BNUM,
+    HK_PRECINCT,
+    HK_PARTY,
+    HK_VTYPE,
+    HK_PPLACE,
+    HK_DTYPE,
+    HK_DSERIAL,
+    HK_DDATA,
+    HK_ISBLANK,
+    HK_COUNT
+};
+
+static const char *const k_HartKeyNames[HK_COUNT] = {
+    "CvrGuid",       "Sheet Number",  "Batch Sequence", "Batch Number",
+    "Precinct",      "Party",         "Voting Type",    "Polling Place",
+    "Device Type",   "Device Serial", "Device Data Id", "Is Blank"};
+
+static const char *hart_key_value(const HartSheet *s, int key)
+{
+    switch (key)
+    {
+        case HK_GUID: return s->guid;
+        case HK_SHEET: return s->sheet;
+        case HK_BSEQ: return s->batchseq;
+        case HK_BNUM: return s->batchnum;
+        case HK_PRECINCT: return s->precinct;
+        case HK_PARTY: return s->party;
+        case HK_VTYPE: return s->vtype;
+        case HK_PPLACE: return s->pplace;
+        case HK_DTYPE: return s->dtype;
+        case HK_DSERIAL: return s->dserial;
+        case HK_DDATA: return s->ddata;
+        case HK_ISBLANK: return s->isblank;
+        default: return "";
+    }
+}
+
+/* Choose the frozen key columns for a load. */
+static uint32_t hart_key_layout(int *keys, BOOL has_zip, BOOL has_pdf, BOOL has_party)
+{
+    uint32_t n = 0;
+    keys[n++] = HK_GUID;
+    if (has_zip)
+    {
+        keys[n++] = HK_SHEET;
+        keys[n++] = HK_BSEQ;
+    }
+    keys[n++] = HK_BNUM;
+    keys[n++] = HK_PRECINCT;
+    if (has_party)
+    {
+        keys[n++] = HK_PARTY;
+    }
+    if (has_pdf)
+    {
+        keys[n++] = HK_VTYPE;
+        keys[n++] = HK_PPLACE;
+        keys[n++] = HK_DTYPE;
+        keys[n++] = HK_DSERIAL;
+        keys[n++] = HK_DDATA;
+    }
+    if (has_zip)
+    {
+        keys[n++] = HK_ISBLANK;
+    }
+    return n;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Two-pass load                                                              */
 /* -------------------------------------------------------------------------- */
 
@@ -1061,28 +2094,35 @@ typedef struct
     ContestDict *dict;
     HartSheet *sheet;
     int global_has_party;
+    const HartMeta *meta; /* ZIP+PDF: count Cvr Ids found in the PDFs */
+    uint64_t meta_hits;
 } Pass1Ctx;
 
-static BOOL pass1_entry(void *vctx, char *xml)
+static BOOL pass1_sheet(void *vctx, HartSheet *sheet)
 {
     Pass1Ctx *p = (Pass1Ctx *)vctx;
     int i;
-    if (!parse_sheet(p->sheet, xml))
-    {
-        return FALSE;
-    }
-    if (p->sheet->has_party)
+    if (sheet->has_party)
     {
         p->global_has_party = 1;
     }
-    for (i = 0; i < p->sheet->nct; i++)
+    if (p->meta != NULL)
     {
-        HartContest *hc = &p->sheet->ct[i];
+        char key[80];
+        StringCchCopyA(key, ARRAYSIZE(key), sheet->guid);
+        ascii_lower(key);
+        if (strmap_find(&p->meta->guids, key) != (uint32_t)-1)
+        {
+            p->meta_hits++;
+        }
+    }
+    for (i = 0; i < sheet->nct; i++)
+    {
+        HartContest *hc = &sheet->ct[i];
         char name[384];
         uint32_t idx;
         ContestInfo *ci;
-        contest_display_name(name, sizeof(name), p->sheet->party,
-                             p->sheet->arena + hc->name_off);
+        contest_display_name(name, sizeof(name), sheet->party, sheet->arena + hc->name_off);
         idx = dict_intern(p->dict, name);
         if (idx == (uint32_t)-1)
         {
@@ -1110,6 +2150,16 @@ static BOOL pass1_entry(void *vctx, char *xml)
     return TRUE;
 }
 
+static BOOL pass1_entry(void *vctx, char *xml)
+{
+    Pass1Ctx *p = (Pass1Ctx *)vctx;
+    if (!parse_sheet(p->sheet, xml))
+    {
+        return FALSE;
+    }
+    return pass1_sheet(vctx, p->sheet);
+}
+
 typedef struct
 {
     ContestDict *dict;
@@ -1117,47 +2167,39 @@ typedef struct
     EeCvrTable *table;
     const char **cells; /* ncols */
     uint32_t ncols;
-    uint32_t frozen;
-    int party_col;      /* -1 if none */
-    int isblank_col;
-    int precinct_col;
+    const int *keys;    /* frozen key column ids, nkeys of them */
+    uint32_t nkeys;
+    const HartMeta *meta; /* ZIP+PDF: decorate rows by Cvr Id */
 } Pass2Ctx;
 
-static BOOL pass2_entry(void *vctx, char *xml)
+static BOOL pass2_sheet(void *vctx, HartSheet *sheet)
 {
     Pass2Ctx *p = (Pass2Ctx *)vctx;
     uint32_t c;
     int i;
-    if (!parse_sheet(p->sheet, xml))
+    if (p->meta != NULL)
     {
-        return FALSE;
+        meta_apply(p->meta, sheet);
     }
     for (c = 0; c < p->ncols; c++)
     {
         p->cells[c] = "";
     }
-    p->cells[0] = p->sheet->guid;
-    p->cells[1] = p->sheet->sheet;
-    p->cells[2] = p->sheet->batchseq;
-    p->cells[3] = p->sheet->batchnum;
-    p->cells[p->precinct_col] = p->sheet->precinct;
-    if (p->party_col >= 0)
+    for (c = 0; c < p->nkeys; c++)
     {
-        p->cells[p->party_col] = p->sheet->party;
+        p->cells[c] = hart_key_value(sheet, p->keys[c]);
     }
-    p->cells[p->isblank_col] = p->sheet->isblank;
 
-    for (i = 0; i < p->sheet->nct; i++)
+    for (i = 0; i < sheet->nct; i++)
     {
-        HartContest *hc = &p->sheet->ct[i];
+        HartContest *hc = &sheet->ct[i];
         char name[384];
         uint32_t idx;
         ContestInfo *ci;
         uint32_t base;
-        contest_display_name(name, sizeof(name), p->sheet->party,
-                             p->sheet->arena + hc->name_off);
-        idx = dict_intern(p->dict, name); /* already present */
         int n, slot = 0, k;
+        contest_display_name(name, sizeof(name), sheet->party, sheet->arena + hc->name_off);
+        idx = dict_intern(p->dict, name); /* already present */
         if (idx == (uint32_t)-1)
         {
             return FALSE;
@@ -1175,7 +2217,7 @@ static BOOL pass2_entry(void *vctx, char *xml)
         }
         for (k = 0; k < hc->nsel && slot < n; k++)
         {
-            p->cells[base + (uint32_t)slot] = p->sheet->arena + hc->sel_off[k];
+            p->cells[base + (uint32_t)slot] = sheet->arena + hc->sel_off[k];
             slot++;
         }
         for (k = 0; k < hc->undervotes && slot < n; k++)
@@ -1187,26 +2229,53 @@ static BOOL pass2_entry(void *vctx, char *xml)
     return EeCvr_BuildAppendRow(p->table, p->cells, p->ncols);
 }
 
-EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
-                                    int count,
-                                    EeCvrTable *out,
-                                    volatile LONG *cancel_flag,
-                                    EeLoadProgressFn progress_fn,
-                                    void *progress_user,
-                                    wchar_t *error_message,
-                                    size_t error_cch)
+static BOOL pass2_entry(void *vctx, char *xml)
+{
+    Pass2Ctx *p = (Pass2Ctx *)vctx;
+    if (!parse_sheet(p->sheet, xml))
+    {
+        return FALSE;
+    }
+    return pass2_sheet(vctx, p->sheet);
+}
+
+/* Metadata scan of the PDFs (ZIP+PDF mode). */
+static BOOL meta_sheet(void *vctx, HartSheet *sheet)
+{
+    return meta_add((HartMeta *)vctx, sheet);
+}
+
+static BOOL path_has_ext_w(const wchar_t *path, const wchar_t *ext)
+{
+    size_t n = wcslen(path);
+    size_t e = wcslen(ext);
+    return n >= e && _wcsicmp(path + (n - e), ext) == 0;
+}
+
+EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
+                                     int count,
+                                     EeCvrTable *out,
+                                     volatile LONG *cancel_flag,
+                                     EeLoadProgressFn progress_fn,
+                                     void *progress_user,
+                                     wchar_t *error_message,
+                                     size_t error_cch)
 {
     ContestDict dict;
     HartSheet sheet;
+    HartMeta meta;
+    HartProgress pg;
     char *buf = NULL;
     size_t buf_cap = 0;
-    uint64_t total, done = 0;
-    uint32_t last_pct = 101;
     EeLoadStatus s = EeLoadStatus_Ok;
-    int f;
+    int f, nzip = 0, npdf = 0;
     uint32_t frozen, ncols, i;
     uint32_t *order = NULL;
     const char **header = NULL;
+    const wchar_t **zips = NULL;
+    const wchar_t **pdfs = NULL;
+    int keys[HK_COUNT];
+    uint64_t pdf_pages = 0;
     Pass1Ctx p1;
     Pass2Ctx p2;
 
@@ -1217,19 +2286,94 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
     }
     EeCvr_Clear(out);
     ZeroMemory(&dict, sizeof(dict));
+    ZeroMemory(&meta, sizeof(meta));
+    ZeroMemory(&pg, sizeof(pg));
+    ZeroMemory(&p2, sizeof(p2));
     sheet_init(&sheet);
 
-    /* progress spans both passes */
-    total = hart_count_entries(paths, count) * 2ull;
+    zips = (const wchar_t **)calloc((size_t)count, sizeof(wchar_t *));
+    pdfs = (const wchar_t **)calloc((size_t)count, sizeof(wchar_t *));
+    if (zips == NULL || pdfs == NULL)
+    {
+        hart_set_err(error_message, error_cch, L"Out of memory.");
+        s = EeLoadStatus_Error;
+        goto cleanup;
+    }
+    for (f = 0; f < count; f++)
+    {
+        if (path_has_ext_w(paths[f], L".zip"))
+        {
+            zips[nzip++] = paths[f];
+        }
+        else if (path_has_ext_w(paths[f], L".pdf"))
+        {
+            pdfs[npdf++] = paths[f];
+        }
+        else
+        {
+            set_pdf_err(error_message, error_cch, paths[f],
+                        L"Hart Cast Vote Records must be .zip or .pdf files.");
+            s = EeLoadStatus_Error;
+            goto cleanup;
+        }
+    }
+
+    /* Validate every PDF up front (rejects other vendors' PDFs before any work) and
+     * size the progress bar. */
+    for (f = 0; f < npdf; f++)
+    {
+        HartPdfCtx c;
+        if (!hart_pdf_open(&c, pdfs[f], error_message, error_cch))
+        {
+            s = EeLoadStatus_Error;
+            goto cleanup;
+        }
+        pdf_pages += EePdf_PageCount(c.pdf);
+        pdfctx_free(&c);
+    }
+
+    pg.cancel_flag = cancel_flag;
+    pg.fn = progress_fn;
+    pg.user = progress_user;
+    pg.last_pct = 101;
+    pg.total = hart_count_entries(zips, nzip) * 2ull + pdf_pages * (nzip > 0 ? 1ull : 2ull);
+
+    /* ---- ZIP+PDF: index the PDFs' header fields by Cvr Id ---- */
+    if (nzip > 0 && npdf > 0)
+    {
+        pg.rows = NULL;
+        for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
+        {
+            s = hart_iterate_pdf(pdfs[f], &sheet, meta_sheet, &meta, FALSE, &pg, error_message,
+                                 error_cch);
+        }
+        if (s != EeLoadStatus_Ok)
+        {
+            goto cleanup;
+        }
+    }
 
     /* ---- Pass 1: discover contests / seat counts / party presence ---- */
+    ZeroMemory(&p1, sizeof(p1));
     p1.dict = &dict;
     p1.sheet = &sheet;
-    p1.global_has_party = 0;
-    for (f = 0; f < count && s == EeLoadStatus_Ok; f++)
+    p1.meta = (nzip > 0 && npdf > 0) ? &meta : NULL;
+    pg.rows = NULL;
+    if (nzip > 0)
     {
-        s = hart_iterate_zip(paths[f], &buf, &buf_cap, pass1_entry, &p1, cancel_flag, &done, total,
-                             NULL, progress_fn, progress_user, &last_pct, error_message, error_cch);
+        for (f = 0; f < nzip && s == EeLoadStatus_Ok; f++)
+        {
+            s = hart_iterate_zip(zips[f], &buf, &buf_cap, pass1_entry, &p1, &pg, error_message,
+                                 error_cch);
+        }
+    }
+    else
+    {
+        for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
+        {
+            s = hart_iterate_pdf(pdfs[f], &sheet, pass1_sheet, &p1, TRUE, &pg, error_message,
+                                 error_cch);
+        }
     }
     if (s != EeLoadStatus_Ok)
     {
@@ -1237,13 +2381,20 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
     }
     if (dict.n == 0)
     {
-        hart_set_err(error_message, error_cch, L"No Cast Vote Records were found in the zip.");
+        hart_set_err(error_message, error_cch, L"No Cast Vote Records were found.");
+        s = EeLoadStatus_Error;
+        goto cleanup;
+    }
+    if (p1.meta != NULL && p1.meta_hits == 0)
+    {
+        hart_set_err(error_message, error_cch,
+                     L"The PDF reports do not match the CVR zip files (no Cvr Id in common).");
         s = EeLoadStatus_Error;
         goto cleanup;
     }
 
     /* ---- Build the ordered column layout ---- */
-    frozen = p1.global_has_party ? 7u : 6u;
+    frozen = hart_key_layout(keys, nzip > 0, npdf > 0, p1.global_has_party != 0);
     order = (uint32_t *)malloc((size_t)dict.n * sizeof(uint32_t));
     if (order == NULL)
     {
@@ -1269,19 +2420,9 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
         s = EeLoadStatus_Error;
         goto cleanup;
     }
-    header[0] = "CvrGuid";
-    header[1] = "Sheet Number";
-    header[2] = "Batch Sequence";
-    header[3] = "Batch Number";
-    header[4] = "Precinct";
-    if (p1.global_has_party)
+    for (i = 0; i < frozen; i++)
     {
-        header[5] = "Party";
-        header[6] = "Is Blank";
-    }
-    else
-    {
-        header[5] = "Is Blank";
+        header[i] = k_HartKeyNames[keys[i]];
     }
     for (i = frozen; i < ncols; i++)
     {
@@ -1305,23 +2446,32 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
     p2.sheet = &sheet;
     p2.table = out;
     p2.ncols = ncols;
-    p2.frozen = frozen;
-    p2.precinct_col = 4;
-    p2.party_col = p1.global_has_party ? 5 : -1;
-    p2.isblank_col = p1.global_has_party ? 6 : 5;
+    p2.keys = keys;
+    p2.nkeys = frozen;
+    p2.meta = (nzip > 0 && npdf > 0) ? &meta : NULL;
     p2.cells = (const char **)malloc((size_t)ncols * sizeof(char *));
     if (p2.cells == NULL)
     {
         s = EeLoadStatus_Error;
         goto cleanup;
     }
-    for (f = 0; f < count && s == EeLoadStatus_Ok; f++)
+    pg.rows = &out->nrows;
+    if (nzip > 0)
     {
-        s = hart_iterate_zip(paths[f], &buf, &buf_cap, pass2_entry, &p2, cancel_flag, &done, total,
-                             &out->nrows, progress_fn, progress_user, &last_pct, error_message,
-                             error_cch);
+        for (f = 0; f < nzip && s == EeLoadStatus_Ok; f++)
+        {
+            s = hart_iterate_zip(zips[f], &buf, &buf_cap, pass2_entry, &p2, &pg, error_message,
+                                 error_cch);
+        }
     }
-    free((void *)p2.cells);
+    else
+    {
+        for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
+        {
+            s = hart_iterate_pdf(pdfs[f], &sheet, pass2_sheet, &p2, TRUE, &pg, error_message,
+                                 error_cch);
+        }
+    }
 
     if (s != EeLoadStatus_Ok)
     {
@@ -1329,7 +2479,7 @@ EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
     }
     if (out->nrows == 0)
     {
-        hart_set_err(error_message, error_cch, L"No Cast Vote Records were found in the zip.");
+        hart_set_err(error_message, error_cch, L"No Cast Vote Records were found.");
         s = EeLoadStatus_Error;
     }
 
@@ -1338,10 +2488,27 @@ cleanup:
     {
         EeCvr_Clear(out);
     }
+    free((void *)p2.cells);
     free(order);
     free(header);
     free(buf);
+    free((void *)zips);
+    free((void *)pdfs);
     sheet_free(&sheet);
     dict_free(&dict);
+    meta_free(&meta);
     return s;
+}
+
+EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,
+                                    int count,
+                                    EeCvrTable *out,
+                                    volatile LONG *cancel_flag,
+                                    EeLoadProgressFn progress_fn,
+                                    void *progress_user,
+                                    wchar_t *error_message,
+                                    size_t error_cch)
+{
+    return EeCvr_LoadFromHartFiles(paths, count, out, cancel_flag, progress_fn, progress_user,
+                                   error_message, error_cch);
 }

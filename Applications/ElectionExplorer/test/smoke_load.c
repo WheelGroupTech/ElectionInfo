@@ -10,6 +10,7 @@
 
 #include "third_party/miniz/miniz.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4966,6 +4967,613 @@ done:
     return rc;
 }
 
+/* ---- Hart PDF CVR Report fixtures ------------------------------------------------- */
+
+/* Growable byte buffer for authoring test PDFs. */
+typedef struct TBuf
+{
+    char *p;
+    size_t len;
+    size_t cap;
+} TBuf;
+
+static BOOL tb_add(TBuf *b, const void *s, size_t n)
+{
+    if (b->len + n + 1 > b->cap)
+    {
+        size_t nc = b->cap ? b->cap * 2 : 4096;
+        char *np;
+        while (nc < b->len + n + 1)
+        {
+            nc *= 2;
+        }
+        np = (char *)realloc(b->p, nc);
+        if (np == NULL)
+        {
+            return FALSE;
+        }
+        b->p = np;
+        b->cap = nc;
+    }
+    memcpy(b->p + b->len, s, n);
+    b->len += n;
+    b->p[b->len] = '\0';
+    return TRUE;
+}
+
+static BOOL tb_printf(TBuf *b, const char *fmt, ...)
+{
+    char tmp[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    if (FAILED(StringCchVPrintfA(tmp, ARRAYSIZE(tmp), fmt, ap)))
+    {
+        va_end(ap);
+        return FALSE;
+    }
+    va_end(ap);
+    return tb_add(b, tmp, strlen(tmp));
+}
+
+/* One Reporting-Services-style cell: a clip rectangle with one text line per entry of
+ * @p lines (NULL-terminated). A line starting with '<' is emitted as a hex string in
+ * the Type0 font F255; anything else is a literal string in the WinAnsi font F5. */
+static BOOL tpdf_cell(TBuf *c, double x, double y, double w, double h, const char *const *lines)
+{
+    int i, n = 0;
+    BOOL ok;
+    while (lines[n] != NULL)
+    {
+        n++;
+    }
+    ok = tb_printf(c, "q %.1f %.3f %.1f %.2f re W n\n", x, y, w, h);
+    for (i = 0; i < n && ok; i++)
+    {
+        double ty = y + h - 10.8 - 13.32 * i;
+        if (lines[i][0] == '<')
+        {
+            ok = tb_printf(c, "BT /F255 9.999 Tf 0 0 0 rg 523.653 TL %.3f %.3f Td %s Tj T* ET\n",
+                           x + 0.016, ty, lines[i]);
+        }
+        else
+        {
+            ok = tb_printf(c, "BT /F5 9.999 Tf 0 0 0 rg 418.896 TL %.3f %.3f Td (", x + 0.016, ty);
+            {
+                const char *s;
+                for (s = lines[i]; *s && ok; s++)
+                {
+                    if (*s == '(' || *s == ')' || *s == '\\')
+                    {
+                        ok = tb_add(c, "\\", 1);
+                    }
+                    ok = ok && tb_add(c, s, 1);
+                }
+            }
+            ok = ok && tb_printf(c, ") Tj T* ET\n");
+        }
+    }
+    return ok && tb_printf(c, "Q\n");
+}
+
+static BOOL tpdf_cell1(TBuf *c, double x, double y, double w, double h, const char *text)
+{
+    const char *lines[2];
+    lines[0] = text;
+    lines[1] = NULL;
+    return tpdf_cell(c, x, y, w, h, lines);
+}
+
+/* A Hart CVR Report page header block + table header. */
+typedef struct TPdfHdr
+{
+    const char *precinct;
+    const char *party;
+    const char *pplace;
+    const char *vtype;
+    const char *dtype;
+    const char *dserial;
+    const char *ddata;
+    const char *cvrid;
+    const char *batch;
+} TPdfHdr;
+
+static BOOL tpdf_header(TBuf *c, const TPdfHdr *h, int page, int pages)
+{
+    char tmp[256];
+    BOOL ok = tpdf_cell1(c, 20.0, 741.4, 147.2, 24.8, "CVR Report");
+    StringCchPrintfA(tmp, ARRAYSIZE(tmp), "Page %d of %d", page, pages);
+    ok = ok && tpdf_cell1(c, 172.2, 688.8, 269.6, 10.4, tmp);
+#define TPDF_LABEL(x, y, label, val)                                                   \
+    StringCchPrintfA(tmp, ARRAYSIZE(tmp), "%s%s", label, val);                         \
+    ok = ok && tpdf_cell1(c, x, y, 270.8, 14.4, tmp)
+    TPDF_LABEL(23.0, 632.1, "Precinct: ", h->precinct);
+    TPDF_LABEL(23.0, 617.7, "Party: ", h->party);
+    TPDF_LABEL(23.0, 603.3, "Polling Place: ", h->pplace);
+    TPDF_LABEL(23.0, 588.9, "Voting Type: ", h->vtype);
+    TPDF_LABEL(318.2, 632.1, "Device Type: ", h->dtype);
+    TPDF_LABEL(318.2, 617.7, "Device Serial: ", h->dserial);
+    TPDF_LABEL(318.2, 603.3, "Device Data Id: ", h->ddata);
+    TPDF_LABEL(318.2, 588.9, "Cvr Id: ", h->cvrid);
+    TPDF_LABEL(23.0, 574.5, "Central Batch Id: ", h->batch);
+#undef TPDF_LABEL
+    ok = ok && tpdf_cell1(c, 20.0, 555.6, 269.6, 17.0, "Contest Title");
+    ok = ok && tpdf_cell1(c, 315.2, 555.6, 269.6, 17.0, "Option");
+    return ok;
+}
+
+/* One table row at row index @p r (top row 0): title + option(s). A title may be given
+ * as two lines (wrapped -> a taller cell, options vertically centred). */
+static BOOL tpdf_row(TBuf *c, double *y_top, const char *t1, const char *t2,
+                     const char *const *opts)
+{
+    const char *tl[3];
+    int nopt = 0, k;
+    double h, y;
+    BOOL ok;
+    while (opts[nopt] != NULL)
+    {
+        nopt++;
+    }
+    tl[0] = t1;
+    tl[1] = t2;
+    tl[2] = NULL;
+    h = (t2 != NULL || nopt > 1) ? 26.64 : 13.32;
+    y = *y_top - h;
+    ok = tpdf_cell(c, 27.2, y, 269.6, h, tl);
+    for (k = 0; k < nopt && ok; k++)
+    {
+        double oy = (nopt == 1) ? y + (h - 13.32) / 2 : y + h - 13.32 * (k + 1);
+        ok = tpdf_cell1(c, 315.2, oy, 269.6, 13.32, opts[k]);
+    }
+    *y_top = y - 4.0;
+    return ok;
+}
+
+/* Write a PDF whose pages have the given content streams. @p hart adds the Info Title
+ * and the Type0/ToUnicode font; @p break_startxref writes a bogus negative startxref so
+ * the reader must rebuild its object index by scanning. */
+static BOOL tpdf_write(const wchar_t *path, TBuf *pages, int npages, BOOL break_startxref)
+{
+    static const char k_Cmap[] =
+        "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+        "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+        "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+        "1 beginbfchar\n<0078> <00f1>\nendbfchar\n"
+        "1 beginbfrange\n<0003> <0061> <0020>\nendbfrange\n"
+        "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+    TBuf b = {0};
+    uint64_t offs[64];
+    int nobj, i, xref_num;
+    BOOL ok = TRUE;
+    FILE *fp = NULL;
+    uint64_t xref_off;
+
+    /* objects: 1 catalog, 2 pages, 3 F5, 4 F255, 5 cmap, 6 info,
+     * then per page: page, content, length (3 each), then the xref stream. */
+    nobj = 6 + npages * 3;
+    xref_num = nobj + 1;
+    if (xref_num >= (int)ARRAYSIZE(offs))
+    {
+        return FALSE;
+    }
+    ok = tb_printf(&b, "%%PDF-1.7\r\n");
+#define OBJ(n) (offs[n] = b.len, ok = ok && tb_printf(&b, "%d 0 obj\r\n", n))
+    OBJ(1);
+    ok = ok && tb_printf(&b, "<< /Type /Catalog /Pages 2 0 R >>\r\nendobj\r\n");
+    OBJ(2);
+    ok = ok && tb_printf(&b, "<< /Type /Pages /Count %d /Kids [", npages);
+    for (i = 0; i < npages; i++)
+    {
+        ok = ok && tb_printf(&b, " %d 0 R", 7 + i * 3);
+    }
+    ok = ok && tb_printf(&b, " ] >>\r\nendobj\r\n");
+    OBJ(3);
+    ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEE+Segoe#20UI "
+                             "/Encoding /WinAnsiEncoding >>\r\nendobj\r\n");
+    OBJ(4);
+    ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEE+Segoe#20UI "
+                             "/Encoding /Identity-H /ToUnicode 5 0 R >>\r\nendobj\r\n");
+    OBJ(5);
+    ok = ok && tb_printf(&b, "<< /Length %u >>\r\nstream\r\n", (unsigned)strlen(k_Cmap));
+    ok = ok && tb_add(&b, k_Cmap, strlen(k_Cmap));
+    ok = ok && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
+    OBJ(6);
+    ok = ok && tb_printf(&b, "<< /Title (Count_CvrReport) /Producer (Microsoft Reporting "
+                             "Services PDF Rendering Extension 2019.11.0.0) >>\r\nendobj\r\n");
+    for (i = 0; i < npages && ok; i++)
+    {
+        int pn = 7 + i * 3;
+        mz_ulong clen = mz_compressBound((mz_ulong)pages[i].len);
+        unsigned char *z = (unsigned char *)malloc(clen);
+        if (z == NULL ||
+            mz_compress(z, &clen, (const unsigned char *)pages[i].p, (mz_ulong)pages[i].len) != MZ_OK)
+        {
+            free(z);
+            ok = FALSE;
+            break;
+        }
+        OBJ(pn);
+        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] "
+                                 "/Contents %d 0 R /Resources << /Font << /F5 3 0 R "
+                                 "/F255 4 0 R >> >> >>\r\nendobj\r\n", pn + 1);
+        OBJ(pn + 1);
+        /* /Length is an indirect object written AFTER the stream (as SSRS does). */
+        ok = ok && tb_printf(&b, "<</Length %d 0 R\r\n/Filter /FlateDecode >>\r\nstream\r\n", pn + 2);
+        ok = ok && tb_add(&b, z, clen);
+        ok = ok && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
+        OBJ(pn + 2);
+        ok = ok && tb_printf(&b, "%lu\r\nendobj\r\n", (unsigned long)clen);
+        free(z);
+    }
+    /* xref stream: W [1 4 2], one entry per object 0..xref_num */
+    xref_off = b.len;
+    offs[xref_num] = xref_off;
+    if (ok)
+    {
+        unsigned char raw[64 * 7];
+        mz_ulong clen = mz_compressBound(sizeof(raw));
+        unsigned char *z = (unsigned char *)malloc(clen);
+        int nent = xref_num + 1;
+        for (i = 0; i < nent; i++)
+        {
+            unsigned char *e = raw + i * 7;
+            uint64_t o = (i == 0) ? 0 : offs[i];
+            e[0] = (unsigned char)(i == 0 ? 0 : 1);
+            e[1] = (unsigned char)(o >> 24);
+            e[2] = (unsigned char)(o >> 16);
+            e[3] = (unsigned char)(o >> 8);
+            e[4] = (unsigned char)o;
+            e[5] = (unsigned char)(i == 0 ? 0xFF : 0);
+            e[6] = (unsigned char)(i == 0 ? 0xFF : 0);
+        }
+        if (z == NULL || mz_compress(z, &clen, raw, (mz_ulong)(nent * 7)) != MZ_OK)
+        {
+            ok = FALSE;
+        }
+        else
+        {
+            ok = tb_printf(&b, "%d 0 obj\r\n<< /Type /XRef /Index [ 0 %d ] /W [ 1 4 2 ] "
+                               "/Filter /FlateDecode /Size %d /Length %lu /Root 1 0 R "
+                               "/Info 6 0 R >>\r\nstream\r\n",
+                           xref_num, nent, nent, (unsigned long)clen) &&
+                 tb_add(&b, z, clen) && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
+        }
+        free(z);
+    }
+#undef OBJ
+    ok = ok && tb_printf(&b, "startxref\r\n%s%lu\r\n%%%%EOF", break_startxref ? "-" : "",
+                         break_startxref ? 1234ul : (unsigned long)xref_off);
+    if (ok)
+    {
+        ok = (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL && fwrite(b.p, 1, b.len, fp) == b.len);
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    free(b.p);
+    return ok;
+}
+
+/* Build the 3-page Hart CVR Report fixture: record A (DEM) spans pages 1-2, record B
+ * (REP) is page 3. @p guid_a / @p guid_b set the Cvr Ids. */
+static BOOL tpdf_hart_fixture(const wchar_t *path, const char *guid_a, const char *guid_b,
+                              BOOL break_startxref)
+{
+    static const char *o_alice[] = {"Alice", NULL};
+    static const char *o_under[] = {"Undervotes: 1", NULL};
+    static const char *o_over[] = {"Overvote", NULL};
+    static const char *o_wi[] = {"Write-in", NULL};
+    static const char *o_council[] = {"Bob", "Carol", NULL};
+    /* "Perla Mu\xf1oz" through the Type0 font: ASCII c -> code c - 29, n-tilde -> 0x0078 */
+    static const char *o_munoz[] = {"<003300480055004f004400030030005800780052005d>", NULL};
+    static const char *o_yes[] = {"Yes", NULL};
+    static const char *o_zach[] = {"Zach", NULL};
+    TBuf pg[3];
+    TPdfHdr ha, hb;
+    double y;
+    BOOL ok;
+    int i;
+    ZeroMemory(pg, sizeof(pg));
+    ZeroMemory(&ha, sizeof(ha));
+    ha.precinct = "101 - 001"; /* PDF spacing; loads as "101-001" like the XML */
+    ha.party = "Democratic Party Ballot";
+    ha.pplace = "Central Library";
+    ha.vtype = "Election Day Voting";
+    ha.dtype = "Scan";
+    ha.dserial = "S1902990909";
+    ha.ddata = "XY(1)Z";
+    ha.cvrid = guid_a;
+    ha.batch = "";
+    hb = ha;
+    hb.party = "Republican Party Ballot";
+    hb.pplace = "EV - Town Hall";
+    hb.vtype = "Early Voting";
+    hb.cvrid = guid_b;
+
+    ok = tpdf_header(&pg[0], &ha, 1, 3);
+    y = 551.9;
+    ok = ok && tpdf_row(&pg[0], &y, "Governor", NULL, o_under); /* listed before President */
+    ok = ok && tpdf_row(&pg[0], &y, "President", NULL, o_alice);
+    ok = ok && tpdf_row(&pg[0], &y, "Attorney General", NULL, o_over);
+    ok = ok && tpdf_row(&pg[0], &y, "United States Senator", NULL, o_wi);
+    ok = ok && tpdf_row(&pg[0], &y, "City Council", NULL, o_council);
+    ok = ok && tpdf_header(&pg[1], &ha, 2, 3); /* same Cvr Id: continuation page */
+    y = 551.9;
+    ok = ok && tpdf_row(&pg[1], &y, "Lieutenant Governor", NULL, o_munoz);
+    ok = ok && tpdf_row(&pg[1], &y, "Proposition ", "1", o_yes); /* wrapped title */
+    ok = ok && tpdf_header(&pg[2], &hb, 3, 3);
+    y = 551.9;
+    ok = ok && tpdf_row(&pg[2], &y, "President", NULL, o_zach);
+    ok = ok && tpdf_write(path, pg, 3, break_startxref);
+    for (i = 0; i < 3; i++)
+    {
+        free(pg[i].p);
+    }
+    return ok;
+}
+
+/* A one-page PDF that is not a Hart CVR Report. */
+static BOOL tpdf_other_fixture(const wchar_t *path)
+{
+    TBuf pg = {0};
+    BOOL ok = tpdf_cell1(&pg, 72.0, 700.0, 300.0, 14.0, "Cast Vote Record Export") &&
+              tpdf_cell1(&pg, 72.0, 680.0, 300.0, 14.0, "Ballot ID: 1 Precinct: 101") &&
+              tpdf_write(path, &pg, 1, FALSE);
+    free(pg.p);
+    return ok;
+}
+
+/* Hart PDF CVR Report loading (tag: hartpdf): PDF-only rows/keys/tallies (incl. a
+ * record continued across pages, a wrapped title, vote-for-2, overvote, undervote,
+ * write-in, and a ToUnicode-mapped accented name); object-index rebuild after a bogus
+ * startxref; rejection of a non-Hart PDF; ZIP+PDF decoration by Cvr Id; and an error
+ * when a ZIP and PDF share no Cvr Id. */
+static int test_hart_pdf(void)
+{
+    static const char *k_GuidA = "AAAAAAAA-1111-2222-3333-444444444444";
+    static const char *k_GuidB = "BBBBBBBB-1111-2222-3333-444444444444";
+    static const char *k_xa =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><Cvr><Contests>"
+        "<Contest><Name>President</Name><Id>p</Id><Options><Option><Name>Alice</Name><Id>a</Id>"
+        "<Value>1</Value></Option></Options></Contest></Contests>"
+        "<BatchSequence>7</BatchSequence><SheetNumber>1</SheetNumber>"
+        "<PrecinctSplit><Name>101-001</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
+        "<CvrGuid>aaaaaaaa-1111-2222-3333-444444444444</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    static const char *k_xc =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><Cvr><Contests>"
+        "<Contest><Name>President</Name><Id>p</Id><Options><Option><Name>Zed</Name><Id>z</Id>"
+        "<Value>1</Value></Option></Options></Contest></Contests>"
+        "<BatchSequence>8</BatchSequence><SheetNumber>1</SheetNumber>"
+        "<PrecinctSplit><Name>101-001</Name><Id>x</Id></PrecinctSplit>"
+        "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
+        "<CvrGuid>cccccccc-1111-2222-3333-444444444444</CvrGuid><IsBlank>false</IsBlank></Cvr>";
+    wchar_t pdf[MAX_PATH], pdf_broken[MAX_PATH], pdf_other[MAX_PATH], zip_ok[MAX_PATH],
+        zip_none[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[256];
+    const wchar_t *paths[2];
+    const char *names[2];
+    const char *xmls[2];
+    EeCvrTable t;
+    EeLoadStatus s;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0, col = 0;
+    int rc = 1;
+
+    EeCvr_Init(&t);
+    if (!cvr_temp_path(pdf, ARRAYSIZE(pdf), L"ee_hart.pdf") ||
+        !cvr_temp_path(pdf_broken, ARRAYSIZE(pdf_broken), L"ee_hart_broken.pdf") ||
+        !cvr_temp_path(pdf_other, ARRAYSIZE(pdf_other), L"ee_other.pdf") ||
+        !cvr_temp_path(zip_ok, ARRAYSIZE(zip_ok), L"ee_hart_pdf.zip") ||
+        !cvr_temp_path(zip_none, ARRAYSIZE(zip_none), L"ee_hart_pdf_none.zip"))
+    {
+        wprintf(L"hartpdf: temp path failed\n");
+        return 1;
+    }
+    if (!tpdf_hart_fixture(pdf, k_GuidA, k_GuidB, FALSE) ||
+        !tpdf_hart_fixture(pdf_broken, k_GuidA, k_GuidB, TRUE) || !tpdf_other_fixture(pdf_other))
+    {
+        wprintf(L"hartpdf: write pdf failed\n");
+        goto done;
+    }
+
+    /* ---- detection ---- */
+    if (!EeCvr_IsHartCvrPdf(pdf, err, ARRAYSIZE(err)))
+    {
+        wprintf(L"hartpdf: fixture not detected as Hart: %s\n", err);
+        goto done;
+    }
+    if (EeCvr_IsHartCvrPdf(pdf_other, err, ARRAYSIZE(err)) || wcsstr(err, L"not a Hart") == NULL)
+    {
+        wprintf(L"hartpdf: non-Hart PDF accepted (err=%s)\n", err);
+        goto done;
+    }
+    paths[0] = pdf_other;
+    s = EeCvr_LoadFromHartFiles(paths, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Error || wcsstr(err, L"ee_other.pdf") == NULL)
+    {
+        wprintf(L"hartpdf: non-Hart load s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+
+    /* ---- PDF only ---- */
+    paths[0] = pdf;
+    s = EeCvr_LoadFromHartFiles(paths, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"hartpdf: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* CvrGuid, Batch Number, Precinct, Party, Voting Type, Polling Place, Device Type,
+     * Device Serial, Device Data Id */
+    if (t.frozen_count != 9 || !EeCvr_FindColumnByTitle(&t, L"Polling Place", &col))
+    {
+        wprintf(L"hartpdf: frozen=%u (want 9) / no Polling Place\n", t.frozen_count);
+        goto done;
+    }
+    EeCvr_GetCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"aaaaaaaa-1111-2222-3333-444444444444") != 0)
+    {
+        wprintf(L"hartpdf: guid (%s)\n", buf);
+        goto done;
+    }
+    EeCvr_GetCellW(&t, 0, col, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Central Library") != 0)
+    {
+        wprintf(L"hartpdf: polling place (%s)\n", buf);
+        goto done;
+    }
+    if (!EeCvr_FindColumnByTitle(&t, L"Precinct", &col) ||
+        (EeCvr_GetCellW(&t, 0, col, buf, ARRAYSIZE(buf)), wcscmp(buf, L"101-001") != 0))
+    {
+        wprintf(L"hartpdf: precinct (%s)\n", buf);
+        goto done;
+    }
+    if (!EeCvr_FindColumnByTitle(&t, L"Device Data Id", &col) ||
+        (EeCvr_GetCellW(&t, 0, col, buf, ARRAYSIZE(buf)), wcscmp(buf, L"XY(1)Z") != 0))
+    {
+        wprintf(L"hartpdf: device data id (%s)\n", buf);
+        goto done;
+    }
+    {
+        uint32_t cPres = 0, cGov = 0;
+        if (!EeCvr_FindColumnByTitle(&t, L"DEM President", &cPres) ||
+            !EeCvr_FindColumnByTitle(&t, L"DEM Governor", &cGov) || cPres >= cGov)
+        {
+            wprintf(L"hartpdf: contest order President=%u Governor=%u\n", cPres, cGov);
+            goto done;
+        }
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt))
+    {
+        wprintf(L"hartpdf: tabulate failed\n");
+        goto done;
+    }
+    if (hart_find_count(items, nt, L"DEM President", L"Alice") != 1 ||
+        hart_find_count(items, nt, L"REP President", L"Zach") != 1 ||
+        hart_find_count(items, nt, L"DEM Governor", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"DEM Attorney General", L"overvote") != 1 ||
+        hart_find_count(items, nt, L"DEM United States Senator", L"write-in") != 1 ||
+        hart_find_count(items, nt, L"DEM City Council", L"Bob") != 1 ||
+        hart_find_count(items, nt, L"DEM City Council", L"Carol") != 1 ||
+        hart_find_count(items, nt, L"DEM Lieutenant Governor", L"Perla Mu\x00F1oz") != 1 ||
+        hart_find_count(items, nt, L"DEM Proposition 1", L"Yes") != 1)
+    {
+        uint32_t k;
+        wprintf(L"hartpdf: tally mismatch\n");
+        for (k = 0; k < nt; k++)
+        {
+            wprintf(L"   %s | %s | %u\n", items[k].contest, items[k].selection, items[k].count);
+        }
+        goto done;
+    }
+    EeCvr_FreeTally(items, nt);
+    items = NULL;
+    nt = 0;
+    /* The PDF key columns must stay frozen (not tabulated) after a CSV round trip. */
+    if (!hart_csv_roundtrip_ok(&t, 9))
+    {
+        goto done;
+    }
+
+    /* ---- bogus startxref: the object index is rebuilt by scanning ---- */
+    paths[0] = pdf_broken;
+    s = EeCvr_LoadFromHartFiles(paths, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"hartpdf: broken-xref load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+
+    /* ---- ZIP + PDF: votes from the zip, device/polling fields from the PDF ---- */
+    names[0] = "1_aaaaaaaa-1111-2222-3333-444444444444.xml";
+    names[1] = "1_cccccccc-1111-2222-3333-444444444444.xml";
+    xmls[0] = k_xa;
+    xmls[1] = k_xc;
+    if (!hart_write_zip(zip_ok, names, xmls, 2) || !hart_write_zip(zip_none, names + 1, xmls + 1, 1))
+    {
+        wprintf(L"hartpdf: write zip failed\n");
+        goto done;
+    }
+    paths[0] = zip_ok;
+    paths[1] = pdf;
+    s = EeCvr_LoadFromHartFiles(paths, 2, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"hartpdf: zip+pdf load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* CvrGuid, Sheet Number, Batch Sequence, Batch Number, Precinct, Party, Voting Type,
+     * Polling Place, Device Type, Device Serial, Device Data Id, Is Blank */
+    if (t.frozen_count != 12 || !EeCvr_FindColumnByTitle(&t, L"Device Serial", &col))
+    {
+        wprintf(L"hartpdf: zip+pdf frozen=%u (want 12)\n", t.frozen_count);
+        goto done;
+    }
+    {
+        uint32_t r, matched = 0, blank = 0;
+        for (r = 0; r < t.nrows; r++)
+        {
+            wchar_t g[64];
+            EeCvr_GetCellW(&t, r, 0, g, ARRAYSIZE(g));
+            EeCvr_GetCellW(&t, r, col, buf, ARRAYSIZE(buf));
+            if (wcscmp(g, L"aaaaaaaa-1111-2222-3333-444444444444") == 0 &&
+                wcscmp(buf, L"S1902990909") == 0)
+            {
+                matched++;
+            }
+            if (wcscmp(g, L"cccccccc-1111-2222-3333-444444444444") == 0 && buf[0] == L'\0')
+            {
+                blank++; /* no PDF record for this sheet: left blank */
+            }
+        }
+        if (matched != 1 || blank != 1)
+        {
+            wprintf(L"hartpdf: zip+pdf decoration matched=%u blank=%u\n", matched, blank);
+            goto done;
+        }
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt) ||
+        hart_find_count(items, nt, L"DEM President", L"Alice") != 1 ||
+        hart_find_count(items, nt, L"DEM President", L"Zed") != 1 ||
+        hart_find_count(items, nt, L"REP President", L"Zach") != -1)
+    {
+        wprintf(L"hartpdf: zip+pdf tallies must come from the zip\n");
+        goto done;
+    }
+    EeCvr_FreeTally(items, nt);
+    items = NULL;
+    nt = 0;
+
+    /* ---- ZIP + PDF with no Cvr Id in common -> error ---- */
+    paths[0] = zip_none;
+    paths[1] = pdf;
+    s = EeCvr_LoadFromHartFiles(paths, 2, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Error || wcsstr(err, L"do not match") == NULL)
+    {
+        wprintf(L"hartpdf: mismatched zip+pdf s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"hartpdf ok\n");
+
+done:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    DeleteFileW(pdf);
+    DeleteFileW(pdf_broken);
+    DeleteFileW(pdf_other);
+    DeleteFileW(zip_ok);
+    DeleteFileW(zip_none);
+    if (rc != 0)
+    {
+        wprintf(L"hartpdf test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -5251,6 +5859,7 @@ int wmain(void)
     failed |= test_cvr_export();
     failed |= test_cvr_roundtrip();
     failed |= test_hart_cvr();
+    failed |= test_hart_pdf();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     return failed == 0 ? 0 : 1;

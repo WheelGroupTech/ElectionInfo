@@ -419,8 +419,9 @@ Precinct/Address reports gain **Export Selected…**/**Export All…**
 Hart exports a CVR as one or more **`.zip`** files, each holding **one XML per ballot
 sheet** (`1_<guid>.xml` = first/only sheet; `<guid>.xml` = later sheets). Each XML's
 `CvrGuid` is its own filename guid and there is no shared ballot id, so the sheets of a
-multi-sheet ballot cannot be linked — each XML is one row. `EeCvr_LoadFromHartZips`
-(dispatched from the loader when the first selection ends in `.zip`) produces the same
+multi-sheet ballot cannot be linked — each XML is one row. `EeCvr_LoadFromHartFiles`
+(dispatched from the loader when the selection is `.zip`/`.pdf` files; `EeCvr_LoadFromHartZips`
+remains as a zip-only wrapper; see the PDF section below) produces the same
 `EeCvrTable` the ES&S path does, so tabulation, reports, filtering and export all work
 unchanged.
 
@@ -476,6 +477,75 @@ unchanged.
     Paxton 55,341 / Hunt 19,729 / … (145,798 cast).
 
   Test `hart`.
+
+### Hart PDF "CVR Report" (`pdf_reader.c` + `hart_cvr.c`)
+
+Some Texas counties publish only Hart's PDF **CVR Report**, not the ZIP; others publish
+both. The PDF is rendered by Microsoft Reporting Services (document title
+`Count_CvrReport`). It has one record per ballot **sheet** (same Cvr Ids as the ZIP's
+`CvrGuid`), each starting a new page and continuing onto further pages when long. Each
+page has a header block — `Precinct`, `Party`, `Polling Place`, `Voting Type`,
+`Device Type`, `Device Serial`, `Device Data Id`, `Cvr Id`, `Central Batch Id` — above a
+two-column `Contest Title` / `Option` table. An Option cell is a selection, `Write-in`,
+`Overvote` (the selections of an overvoted contest are not listed), or
+`Undervotes: N`. Unlike the XML, the PDF has **no** Sheet Number, Batch Sequence or
+Is Blank, but it does carry the device and polling-place fields the XML lacks.
+
+- **`pdf_reader.{c,h}`** — a minimal read-only PDF text extractor (no third-party
+  beyond miniz for FlateDecode). It reads on demand through a 256 KB window (never the
+  whole file), loads classic xref tables and xref streams (`/Prev` chains, PNG
+  predictors, object streams), walks the page tree, and interprets each page's content
+  stream (CTM, `q`/`Q`, `re W n` clip rectangles, text operators) into **runs** = text +
+  origin + enclosing clip rectangle + clip id. Fonts: simple fonts via WinAnsi +
+  `/Differences`; Type0 Identity-H 2-byte codes; a ToUnicode CMap overrides either
+  (SSRS draws non-WinAnsi names such as *Perla Muñoz Hopkins* / *Jenné Molacek* with a
+  per-page Type0 font `F2xx`, decoded through its ToUnicode map).
+  **Repairs:** Hart's 3.7 GB G24 report has `startxref -604206927` — the writer stored the
+  offset as a signed 32-bit int. A negative `startxref`/`/Prev` is taken modulo 2^32, and
+  any object or xref offset that does not land on its `N G obj` header is retried at
+  +4 GiB multiples (32-bit offsets wrapped past 4 GiB). If the xref is unusable the object
+  table is rebuilt by scanning for `N G obj` headers and the last `/Root`.
+  Not supported (not needed for these reports): encryption, filters other than Flate.
+- **Detection** (`EeCvr_IsHartCvrPdf`): page 1 must have the `Cvr Id:`, `Device Serial:`,
+  `Device Data Id:` and `Central Batch Id:` labels **and** the `Contest Title` / `Option`
+  table header. Every selected PDF is checked before any work, so another vendor's PDF
+  (or an unrelated PDF) aborts the load with "<file>: not a Hart Cast Vote Record report…".
+- **Page → sheet**: runs inside one clip rectangle form a **cell** (a wrapped contest
+  title is two runs in one taller cell, joined directly — SSRS keeps the trailing space on
+  the first line). Header cells (above the table header) are parsed by label; table cells
+  are split into the title column and the Option column at the Option header's x. Each
+  Option cell attaches to the title cell whose vertical extent contains its centre (else
+  the nearest title above; with none on the page, the previous page's last contest).
+  Multiple Option cells on one title are multiple selections (vote for N) — no Tarrant
+  export contains a valid multi-selection, so this rendering is assumed. Consecutive pages
+  with the same Cvr Id are one sheet. The Cvr Id is lower-cased and `"3156 - 008"` precinct
+  splits are normalized to the XML's `"3156-008"`, so both sources key identically.
+- **Load modes** (`EeCvr_LoadFromHartFiles`, any mix of `.zip`/`.pdf`; anything else is
+  rejected, and the load thread refuses to mix Hart and ES&S files):
+  - **PDF only** — two passes over the PDFs (discover, fill). Frozen keys: `CvrGuid,
+    Batch Number, Precinct, [Party], Voting Type, Polling Place, Device Type,
+    Device Serial, Device Data Id`.
+  - **ZIP + PDF** — one pass over the PDFs builds a lowercase-Cvr-Id → header-field map
+    (`HartMeta`: interned values in a `StrMap`), then the usual two ZIP passes; pass 2
+    decorates each row by Cvr Id (rows with no PDF record leave the fields blank). Votes
+    come only from the ZIP. Frozen keys: the ZIP keys with `Voting Type, Polling Place,
+    Device Type, Device Serial, Device Data Id` inserted before `Is Blank`. If no ZIP Cvr Id
+    appears in the PDFs the load fails ("The PDF reports do not match the CVR zip files").
+  - The new key names are in `cvr_is_key_header`, so CSV/TSV round-trips stay frozen.
+  - Multi-card: a PDF-only load has no Sheet Number, so `EeCvr_HasMultiCard` falls back to
+    the reference-contest heuristic.
+- **Performance**: ~10–11k pages/s per pass. G24 (3.7 GB, 1,654,992 pages): open 6.5 s
+  (page tree of 1.65M kids), one full pass 147 s.
+- **Validated** — PDF-only vs. ZIP-only tabulations are **byte-identical** for every
+  Tarrant pair: G25 ABM/ED/EV, L26 ABM/ED/EV, PR26 ABM/ED/EV × Dem/Rep, P26 ABM/ED/EV ×
+  Dem/Rep, and G24 (see the session handoff for counts); ZIP+PDF tallies equal ZIP-only.
+  The PDFs' Voting Type revealed that the local `L26 CVR-ED.zip` / `L26 CVR-EV.zip` are
+  swapped (ED.pdf matches EV.zip exactly and vice versa).
+
+  Test `hartpdf` (authors Hart-style PDFs with an xref stream, indirect `/Length`, a Type0
+  font + ToUnicode, a record continued across pages, a wrapped title, vote-for-2,
+  overvote, undervote, write-in; plus a bogus-`startxref` variant, a non-Hart PDF, ZIP+PDF
+  decoration and a no-common-Cvr-Id error).
 
 ## Testing
 

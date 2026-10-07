@@ -26,7 +26,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c ^
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c ^
   src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
 test\smoke_load.exe
 ```
@@ -72,5 +72,14 @@ sorts before "District 33" although the XML lists 33 first). It also round-trips
 export + reload (`EeCvr_LoadFromFiles`) and checks the Hart key columns stay frozen
 (primary → 7 incl. `Party`; a general-election header with no `Party` → 6) rather than
 being tabulated as contests;
+`hartpdf` covers Hart PDF "CVR Report" loading (`EeCvr_LoadFromHartFiles`,
+`EeCvr_IsHartCvrPdf`; needs `src\pdf_reader.c`): authors Hart-style PDFs (xref stream,
+indirect `/Length`, WinAnsi + Type0/ToUnicode fonts, Reporting-Services clip-rectangle
+cells) and checks one row per sheet with a record continued across pages, the PDF key
+columns (Voting Type, Polling Place, Device Type/Serial/Data Id; precinct `101 - 001` ->
+`101-001`), a wrapped title, vote-for-2, overvote/undervote/write-in, an accented name
+decoded via ToUnicode, a CSV round trip, an object-index rebuild after a bogus
+`startxref`, rejection of a non-Hart PDF, ZIP+PDF decoration by Cvr Id (votes from the
+zip), and the error when a ZIP and PDF share no Cvr Id;
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

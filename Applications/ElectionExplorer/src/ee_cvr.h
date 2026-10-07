@@ -90,9 +90,39 @@ extern "C"
                                      size_t error_cch);
 
     /**
+     * Load Hart Cast Vote Records from any mix of `.zip` exports (one XML per ballot
+     * sheet) and `.pdf` "CVR Report" exports into @p out. See hart_cvr.c.
+     *  - ZIPs only: votes and keys from the XML.
+     *  - PDFs only: votes and keys from the PDF records (adds Voting Type, Polling
+     *    Place, Device Type, Device Serial, Device Data Id; no Sheet Number, Batch
+     *    Sequence or Is Blank).
+     *  - ZIPs + PDFs: votes from the XML, decorated with the PDF fields matched by
+     *    Cvr Id (error if no Cvr Id is shared).
+     * Every PDF must be a Hart CVR Report (see EeCvr_IsHartCvrPdf); another vendor's
+     * PDF, or any file that is not .zip/.pdf, aborts the load with @p error_message
+     * naming the file. Same status/cancel/progress contract as EeCvr_LoadFromFiles.
+     */
+    EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
+                                         int count,
+                                         EeCvrTable *out,
+                                         volatile LONG *cancel_flag,
+                                         EeLoadProgressFn progress_fn,
+                                         void *progress_user,
+                                         wchar_t *error_message,
+                                         size_t error_cch);
+
+    /**
+     * TRUE if @p path is a Hart "CVR Report" PDF: its first page carries the Hart
+     * header labels (Cvr Id, Device Serial, Device Data Id, Central Batch Id) and the
+     * Contest Title / Option table header. On FALSE, @p error_message (optional)
+     * explains why (unreadable PDF, or a PDF from another source).
+     */
+    BOOL EeCvr_IsHartCvrPdf(const wchar_t *path, wchar_t *error_message, size_t error_cch);
+
+    /**
      * Load one or more Hart CVR `.zip` files (each holds one XML per ballot sheet)
-     * into @p out. See hart_cvr.c. Column layout, contest ordering, and multi-card
-     * handling are described there. Same status/cancel/progress contract as
+     * into @p out. Equivalent to EeCvr_LoadFromHartFiles with only zip paths; kept
+     * for existing callers. Same status/cancel/progress contract as
      * EeCvr_LoadFromFiles.
      */
     EeLoadStatus EeCvr_LoadFromHartZips(const wchar_t *const *paths,

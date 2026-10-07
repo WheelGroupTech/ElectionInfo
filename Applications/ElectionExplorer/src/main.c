@@ -13438,28 +13438,47 @@ static BOOL CvrLoadProgressCb(const EeLoadProgress *pr, void *user)
     return TRUE; /* cancellation is driven by j->cancel, checked by the loader */
 }
 
-/* TRUE if @p path ends (case-insensitively) with ".zip". */
-static BOOL path_is_zip(const wchar_t *path)
+/* TRUE if @p path is a Hart CVR file: a ".zip" export (one XML per ballot sheet) or a
+ * ".pdf" CVR Report (case-insensitive). */
+static BOOL path_is_hart(const wchar_t *path)
 {
     size_t n = (path != NULL) ? wcslen(path) : 0;
-    return n >= 4 && _wcsicmp(path + (n - 4), L".zip") == 0;
+    return n >= 4 &&
+           (_wcsicmp(path + (n - 4), L".zip") == 0 || _wcsicmp(path + (n - 4), L".pdf") == 0);
 }
 
 static DWORD WINAPI CvrLoadThreadProc(void *param)
 {
     CvrLoadJob *j = (CvrLoadJob *)param;
-    /* Hart CVRs come as .zip (one XML per ballot sheet); ES&S come as .xlsx/.csv/.tsv.
-     * Key on the first selection. */
-    if (j->count > 0 && path_is_zip(j->paths[0]))
+    int i, nhart = 0;
+    /* Hart CVRs come as .zip and/or .pdf (loaded together: PDF-only, or ZIP votes
+     * decorated with the PDF's device/polling-place fields); ES&S come as
+     * .xlsx/.csv/.tsv. The two vendors' files cannot be mixed in one load. */
+    for (i = 0; i < j->count; i++)
     {
-        j->status = EeCvr_LoadFromHartZips(j->paths,
-                                           j->count,
-                                           j->table,
-                                           &j->cancel,
-                                           CvrLoadProgressCb,
-                                           j,
-                                           j->err,
-                                           ARRAYSIZE(j->err));
+        if (path_is_hart(j->paths[i]))
+        {
+            nhart++;
+        }
+    }
+    if (nhart > 0 && nhart < j->count)
+    {
+        j->status = EeLoadStatus_Error;
+        StringCchCopyW(j->err,
+                       ARRAYSIZE(j->err),
+                       L"Hart files (.zip, .pdf) and ES&S files (.xlsx, .csv, .tsv, .txt) "
+                       L"cannot be loaded together. Select files from one vendor.");
+    }
+    else if (nhart > 0)
+    {
+        j->status = EeCvr_LoadFromHartFiles(j->paths,
+                                            j->count,
+                                            j->table,
+                                            &j->cancel,
+                                            CvrLoadProgressCb,
+                                            j,
+                                            j->err,
+                                            ARRAYSIZE(j->err));
     }
     else
     {
@@ -13684,9 +13703,10 @@ static void App_BeginOpenCvr(AppState *app)
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
     ofn.lpstrFilter =
-        L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt;*.zip)\0*.xlsx;*.csv;*.tsv;*.txt;*.zip\0"
+        L"Cast Vote Records (*.xlsx;*.csv;*.tsv;*.txt;*.zip;*.pdf)\0"
+        L"*.xlsx;*.csv;*.tsv;*.txt;*.zip;*.pdf\0"
         L"ES&S (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
-        L"Hart (*.zip)\0*.zip\0"
+        L"Hart (*.zip;*.pdf)\0*.zip;*.pdf\0"
         L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 32768;

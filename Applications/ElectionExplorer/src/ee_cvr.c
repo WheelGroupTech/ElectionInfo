@@ -290,10 +290,14 @@ static BOOL cvr_is_key_header(const wchar_t *s)
      * CSV/TSV and reloaded through EeCvr_LoadFromFiles freezes the same leading
      * columns the Hart loader did -- otherwise the scan stops at "CvrGuid" and the
      * remaining key columns (Sheet Number, Batch Sequence, Batch Number, Party,
-     * Is Blank) would be tabulated as if they were contests. */
+     * Is Blank, and the PDF report's Voting Type / Polling Place / Device Type /
+     * Device Serial / Device Data Id) would be tabulated as if they were contests. */
     return wcieq_trimmed(s, L"cvrguid") || wcieq_trimmed(s, L"sheet number") ||
            wcieq_trimmed(s, L"batch sequence") || wcieq_trimmed(s, L"batch number") ||
-           wcieq_trimmed(s, L"party") || wcieq_trimmed(s, L"is blank");
+           wcieq_trimmed(s, L"party") || wcieq_trimmed(s, L"is blank") ||
+           wcieq_trimmed(s, L"voting type") || wcieq_trimmed(s, L"polling place") ||
+           wcieq_trimmed(s, L"device type") || wcieq_trimmed(s, L"device serial") ||
+           wcieq_trimmed(s, L"device data id");
 }
 
 /* True if a header cell is blank (empty or only whitespace). */

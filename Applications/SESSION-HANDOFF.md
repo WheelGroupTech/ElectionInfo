@@ -4,8 +4,43 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-03
-**Branch:** main — **all work below is committed; working tree clean.** Store prep, the
+**Last updated:** 2026-10-07
+
+### In progress — Hart PDF "CVR Report" import (UNCOMMITTED, ready to commit)
+
+Some Texas counties publish only Hart's PDF CVR Report (no ZIP). File → Load Cast Vote
+Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
+- **New `src/pdf_reader.{c,h}`** — minimal read-only PDF text extractor (miniz only):
+  xref tables/streams (+`/Prev`, predictors, object streams), 256 KB read window
+  (multi-GB safe), page tree, content-stream interpreter → text runs with innermost clip
+  rect. WinAnsi/`/Differences` + Type0/ToUnicode fonts. Repairs Hart's **negative
+  `startxref`** (signed-32 overflow in the 3.7 GB G24 PDF) and retries offsets at +4 GiB;
+  falls back to an object-scan rebuild.
+- **`hart_cvr.c`**: `EeCvr_LoadFromHartFiles` (any mix of .zip/.pdf) +
+  `EeCvr_IsHartCvrPdf` (page-1 labels Cvr Id / Device Serial / Device Data Id / Central
+  Batch Id + Contest Title/Option header; other vendors' PDFs are rejected by name).
+  PDF-only → keys `CvrGuid, Batch Number, Precinct, [Party], Voting Type, Polling Place,
+  Device Type, Device Serial, Device Data Id`. ZIP+PDF → ZIP votes decorated by Cvr Id
+  with those 5 fields (inserted before Is Blank); error if no Cvr Id in common. A table
+  page without a readable Cvr Id fails the load (never silently drops a sheet).
+  `EeCvr_LoadFromHartZips` is now a wrapper. Shared sheet processing (pass1/pass2 on a
+  `HartSheet`) so ordering/vote-for-N/party prefixes are identical across sources.
+- `ee_cvr.c` `cvr_is_key_header` knows the 5 new key names (CSV round-trip stays frozen);
+  `main.c` dispatch: any .zip/.pdf → Hart loader, mixing Hart + ES&S files is refused;
+  open-dialog filters add `*.pdf`. `.vcxproj`/filters add `pdf_reader.{c,h}`.
+- Test **`hartpdf`** (generated Hart-style PDFs). Full smoke suite green; app builds clean
+  x64 Debug + Release. Docs: `docs/cvr-design.md` (Hart PDF section), `test/README.md`.
+- **Validated:** PDF-only tabulation is byte-identical to ZIP-only for every Tarrant pair
+  (G25, L26, PR26, P26 — all ABM/ED/EV, both parties — and G24 828,544 sheets); ZIP+PDF
+  tallies = ZIP. A layout quirk found on G24 (SSRS draws some header blocks outside the
+  body clip) is why runs report the innermost clip rather than the intersection.
+- Data note: local `Election_CVRs/Tarrant_County_TX/L26 CVR-ED.zip` and `L26 CVR-EV.zip`
+  are **swapped** (each PDF's Voting Type + exact tally match prove it).
+- Perf: ~10–11k PDF pages/s per pass; PDF-only G24 ≈ 5 min (two passes), ZIP ≈ 1m40s.
+- Not done / possible follow-ups: Polling Place / Device Serial / Voting Type value
+  reports (the Reports menu only knows Batch/Precinct/Ballot Style, and its Batch report
+  looks for "Batch", so it is greyed for Hart's "Batch Number"); single-pass PDF load.
+**Branch:** main — **the Hart PDF work above is uncommitted; everything below is committed.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR

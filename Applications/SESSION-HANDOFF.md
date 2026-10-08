@@ -4,9 +4,21 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-07
+**Last updated:** 2026-10-08
 
-### In progress — Hart PDF "CVR Report" import (UNCOMMITTED, ready to commit)
+### In progress — Hart value reports (UNCOMMITTED, ready to commit)
+
+- CVR **Reports** menu adds **Display Polling Place / Device Serial / Voting Type
+  Report…** (`IDM_CVR_REPORT_POLLINGPLACE/DEVICESERIAL/VOTINGTYPE` 40074–40076,
+  `EE_CVRREP_*` kinds 3–5; export suffixes `_Polling_Places` / `_Device_Serials` /
+  `_Voting_Types`). Greyed unless the column exists with data (Hart PDF loads).
+- **Batch report fixed for Hart:** new `Cvr_FindReportColumn` also accepts `Batch Number`
+  (Hart) for the Batch report. Still greyed for PDF-only ED/EV loads (blank Central
+  Batch Id) by design.
+- Help → Reports text updated; `hartpdf` test extended (value counts + Batch Number);
+  smoke suite green; app builds clean x64 Debug + Release. Not yet click-tested.
+
+### Committed — Hart PDF "CVR Report" import
 
 Some Texas counties publish only Hart's PDF CVR Report (no ZIP). File → Load Cast Vote
 Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
@@ -34,13 +46,12 @@ Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
   (G25, L26, PR26, P26 — all ABM/ED/EV, both parties — and G24 828,544 sheets); ZIP+PDF
   tallies = ZIP. A layout quirk found on G24 (SSRS draws some header blocks outside the
   body clip) is why runs report the innermost clip rather than the intersection.
-- Data note: local `Election_CVRs/Tarrant_County_TX/L26 CVR-ED.zip` and `L26 CVR-EV.zip`
-  are **swapped** (each PDF's Voting Type + exact tally match prove it).
+- Data note: local `L26 CVR-ED.zip` / `L26 CVR-EV.zip` were swapped; renamed 2026-10-08
+  so each matches its PDF (31,158 ED / 52,784 EV sheets; ZIP+PDF pairs now load).
 - Perf: ~10–11k PDF pages/s per pass; PDF-only G24 ≈ 5 min (two passes), ZIP ≈ 1m40s.
-- Not done / possible follow-ups: Polling Place / Device Serial / Voting Type value
-  reports (the Reports menu only knows Batch/Precinct/Ballot Style, and its Batch report
-  looks for "Batch", so it is greyed for Hart's "Batch Number"); single-pass PDF load.
-**Branch:** main — **the Hart PDF work above is uncommitted; everything below is committed.** Store prep, the
+- Possible follow-up: single-pass PDF load (PDF-only G24 ≈ 5 min).
+
+**Branch:** main — **only the value-report work above is uncommitted; everything else is committed.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR

@@ -80,6 +80,9 @@ columns (Voting Type, Polling Place, Device Type/Serial/Data Id; precinct `101 -
 `101-001`), a wrapped title, vote-for-2, overvote/undervote/write-in, an accented name
 decoded via ToUnicode, a CSV round trip, an object-index rebuild after a bogus
 `startxref`, rejection of a non-Hart PDF, ZIP+PDF decoration by Cvr Id (votes from the
-zip), and the error when a ZIP and PDF share no Cvr Id;
+zip), the value-report data behind Reports → Polling Place / Device Serial / Voting
+Type (`EeCvr_CollectColumnCounts` on those columns) and Hart's `Batch Number` (reportable
+for a zip with batches, not for a PDF with a blank Central Batch Id), and the error when
+a ZIP and PDF share no Cvr Id;
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

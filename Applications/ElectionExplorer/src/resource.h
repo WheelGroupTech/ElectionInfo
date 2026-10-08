@@ -25,6 +25,10 @@
 #define IDM_CVR_REPORT_BALLOTSTYLE 40018
 #define IDM_EXPORT_SELECTED       40019
 #define IDM_CVR_TABULATE_FILTERED 40073
+/* Hart PDF key-column value reports (CVR Reports menu). */
+#define IDM_CVR_REPORT_POLLINGPLACE 40074
+#define IDM_CVR_REPORT_DEVICESERIAL 40075
+#define IDM_CVR_REPORT_VOTINGTYPE   40076
 /* Export "All" for report context menus. */
 #define IDM_EXPORT_ALL            40072
 

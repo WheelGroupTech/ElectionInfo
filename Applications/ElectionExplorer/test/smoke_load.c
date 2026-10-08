@@ -5324,6 +5324,29 @@ static BOOL tpdf_other_fixture(const wchar_t *path)
     return ok;
 }
 
+/* Ballot-record count of @p value in the column titled @p title (what a CVR value
+ * report shows); -1 if the column is missing, not reportable, or lacks the value. */
+static long hart_value_count(const EeCvrTable *t, const wchar_t *title, const wchar_t *value)
+{
+    uint32_t col = 0, n = 0, blank = 0, i;
+    EeCvrValueCount *items = NULL;
+    long found = -1;
+    if (!EeCvr_FindColumnByTitle(t, title, &col) || !EeCvr_ColumnHasReportableData(t, col) ||
+        !EeCvr_CollectColumnCounts(t, col, &items, &n, &blank))
+    {
+        return -1;
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (wcscmp(items[i].value, value) == 0)
+        {
+            found = (long)items[i].count;
+        }
+    }
+    EeCvr_FreeColumnCounts(items, n);
+    return found;
+}
+
 /* Hart PDF CVR Report loading (tag: hartpdf): PDF-only rows/keys/tallies (incl. a
  * record continued across pages, a wrapped title, vote-for-2, overvote, undervote,
  * write-in, and a ToUnicode-mapped accented name); object-index rebuild after a bogus
@@ -5337,7 +5360,7 @@ static int test_hart_pdf(void)
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><Cvr><Contests>"
         "<Contest><Name>President</Name><Id>p</Id><Options><Option><Name>Alice</Name><Id>a</Id>"
         "<Value>1</Value></Option></Options></Contest></Contests>"
-        "<BatchSequence>7</BatchSequence><SheetNumber>1</SheetNumber>"
+        "<BatchSequence>7</BatchSequence><BatchNumber>12</BatchNumber><SheetNumber>1</SheetNumber>"
         "<PrecinctSplit><Name>101-001</Name><Id>x</Id></PrecinctSplit>"
         "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
         "<CvrGuid>aaaaaaaa-1111-2222-3333-444444444444</CvrGuid><IsBlank>false</IsBlank></Cvr>";
@@ -5345,7 +5368,7 @@ static int test_hart_pdf(void)
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><Cvr><Contests>"
         "<Contest><Name>President</Name><Id>p</Id><Options><Option><Name>Zed</Name><Id>z</Id>"
         "<Value>1</Value></Option></Options></Contest></Contests>"
-        "<BatchSequence>8</BatchSequence><SheetNumber>1</SheetNumber>"
+        "<BatchSequence>8</BatchSequence><BatchNumber>12</BatchNumber><SheetNumber>1</SheetNumber>"
         "<PrecinctSplit><Name>101-001</Name><Id>x</Id></PrecinctSplit>"
         "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
         "<CvrGuid>cccccccc-1111-2222-3333-444444444444</CvrGuid><IsBlank>false</IsBlank></Cvr>";
@@ -5472,6 +5495,24 @@ static int test_hart_pdf(void)
     EeCvr_FreeTally(items, nt);
     items = NULL;
     nt = 0;
+    /* Value reports on the PDF key columns (Reports -> Polling Place / Device Serial /
+     * Voting Type). The fixture's Central Batch Id is blank, so its Batch Number column
+     * has nothing to report (the Batch report is greyed). */
+    if (hart_value_count(&t, L"Polling Place", L"Central Library") != 1 ||
+        hart_value_count(&t, L"Polling Place", L"EV - Town Hall") != 1 ||
+        hart_value_count(&t, L"Device Serial", L"S1902990909") != 2 ||
+        hart_value_count(&t, L"Voting Type", L"Election Day Voting") != 1 ||
+        hart_value_count(&t, L"Voting Type", L"Early Voting") != 1)
+    {
+        wprintf(L"hartpdf: polling place / device serial / voting type counts\n");
+        goto done;
+    }
+    if (EeCvr_FindColumnByTitle(&t, L"Batch Number", &col) &&
+        EeCvr_ColumnHasReportableData(&t, col))
+    {
+        wprintf(L"hartpdf: blank Batch Number reported as reportable\n");
+        goto done;
+    }
     /* The PDF key columns must stay frozen (not tabulated) after a CSV round trip. */
     if (!hart_csv_roundtrip_ok(&t, 9))
     {
@@ -5546,6 +5587,13 @@ static int test_hart_pdf(void)
     EeCvr_FreeTally(items, nt);
     items = NULL;
     nt = 0;
+    /* Hart's batch column is "Batch Number" (the Batch report accepts it). */
+    if (hart_value_count(&t, L"Batch Number", L"12") != 2 ||
+        hart_value_count(&t, L"Polling Place", L"Central Library") != 1)
+    {
+        wprintf(L"hartpdf: zip+pdf Batch Number / Polling Place counts\n");
+        goto done;
+    }
 
     /* ---- ZIP + PDF with no Cvr Id in common -> error ---- */
     paths[0] = zip_none;

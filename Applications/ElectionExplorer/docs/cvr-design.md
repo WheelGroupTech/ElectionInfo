@@ -256,13 +256,20 @@ same mode; its title reads `CVR Tabulation` or `CVR Tabulation (Filtered)`.
   Harris 398,968 / Trump 170,781 / …, and the merged **write-in 3,690** = 3,680
   image + 10 text, matching the official combined Write-in total).
 
-## Per-column value reports (Batch / Precinct / Ballot Style)
+## Per-column value reports (Batch / Precinct / Ballot Style / Polling Place / Device Serial / Voting Type)
 
 **Reports → Display Batch Report… / Display Precinct Report… / Display Ballot Style
-Report…** on the CVR window each open a two-column report — the distinct
-**Batch / Precinct / Ballot Style** values on the left and the **number of ballot
-records** carrying each on the right — modeled on the voter-list Precinct/Address
-reports.
+Report… / Display Polling Place Report… / Display Device Serial Report… / Display
+Voting Type Report…** on the CVR window each open a two-column report — the distinct
+values of that column on the left and the **number of ballot records** carrying each
+on the right — modeled on the voter-list Precinct/Address reports. The last three
+report the key columns a Hart PDF CVR Report adds (PDF-only or ZIP+PDF loads), so they
+are greyed for ES&S and ZIP-only Hart data.
+
+- **Column lookup (`Cvr_FindReportColumn`):** by header title; the **Batch** report also
+  accepts Hart's **`Batch Number`** (ES&S calls it `Batch`), keeping the "Batch" label.
+  A Hart PDF-only load of Election Day / Early Voting data has a blank Central Batch Id,
+  so its Batch report stays greyed (nothing to report).
 
 - **Menu gating (`CvrWndProc` `WM_INITMENUPOPUP`):** each item is greyed unless the
   CVR actually has that column *and* the column holds real data. `EeCvr_FindColumnByTitle`
@@ -281,7 +288,9 @@ reports.
   two-column list (**`<label>` | Number of Ballot Records**), bold/grey header via the
   shared `App_HeaderCustomDraw`, header-click sort on either column (the value column
   sorts numerically when every value is a digit run — typical for these codes). A
-  `(blank)` row is appended for records with no value in the column. Multi-select +
+  `(blank)` row is appended for records with no value in the column. Export suffixes:
+  `-…_Batches`, `-…_Precincts`, `-…_Ballot_Styles`, `-…_Polling_Places`,
+  `-…_Device_Serials`, `-…_Voting_Types`. Multi-select +
   **right-click → Copy** (and Ctrl+C) copy as tab-separated UTF-8; **right-click →
   Include/Exclude** adds an `is` rule for that value to the CVR window's own filter
   (`EeFilterSet` + `Cvr_ApplyFilter`, same ProcMon semantics as the CVR filter). The

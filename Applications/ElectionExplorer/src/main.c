@@ -8329,12 +8329,17 @@ static const wchar_t k_CvrHelpReports[] =
     L"records currently shown by the active filter. It is unavailable (greyed) when no "
     L"filter is applied, since that would duplicate Tabulate All.\r\n\r\n"
     L"•  Display Batch / Precinct / Ballot Style Report — one row per distinct value "
-    L"in that column with the number of ballot records carrying it. A report is "
-    L"unavailable (greyed) when the CVR has no such column or its data is "
-    L"redacted.\r\n\r\n"
+    L"in that column with the number of ballot records carrying it. The Batch report "
+    L"uses the \"Batch\" column (ES&S) or the \"Batch Number\" column (Hart).\r\n\r\n"
+    L"•  Display Polling Place / Device Serial / Voting Type Report — the same, for the "
+    L"columns a Hart PDF CVR Report adds (load the PDF alone, or with its ZIP): where "
+    L"ballots were cast, which scanner counted them, and Election Day / Early Voting / "
+    L"Absentee.\r\n\r\n"
+    L"A report is unavailable (greyed) when the CVR has no such column or its data is "
+    L"blank or redacted.\r\n\r\n"
     L"Each report opens in its own window; empty values group into a \"(blank)\" row. "
-    L"The Batch / Precinct / Ballot Style reports count ALL ballot records and ignore "
-    L"any active filter. Click a header to sort; right-click a row to Copy it, to "
+    L"These per-column reports count ALL ballot records and ignore any active "
+    L"filter. Click a header to sort; right-click a row to Copy it, to "
     L"Include or Exclude that value in the CVR window's filter, or to Export the "
     L"selection.";
 
@@ -9966,13 +9971,17 @@ typedef struct CvrReportWindow CvrReportWindow;
 typedef struct CvrValueReportWindow CvrValueReportWindow;
 
 /* Per-column value reports opened from the CVR Reports menu (Batch / Precinct /
- * Ballot Style). Indexed by these kinds; one window of each kind per CVR window. */
+ * Ballot Style, plus the Hart PDF report's Polling Place / Device Serial / Voting
+ * Type). Indexed by these kinds; one window of each kind per CVR window. */
 enum
 {
     EE_CVRREP_BATCH = 0,
     EE_CVRREP_PRECINCT = 1,
     EE_CVRREP_BALLOTSTYLE = 2,
-    EE_CVRREP_COUNT = 3
+    EE_CVRREP_POLLINGPLACE = 3,
+    EE_CVRREP_DEVICESERIAL = 4,
+    EE_CVRREP_VOTINGTYPE = 5,
+    EE_CVRREP_COUNT = 6
 };
 
 typedef struct CvrWindow
@@ -9991,7 +10000,7 @@ typedef struct CvrWindow
     uint32_t disp_count;
     BOOL filt_active;        /* a filter is narrowing the view */
     HWND hwnd_filter;        /* open CVR filter window for this CVR window, or NULL */
-    CvrValueReportWindow *vreports[EE_CVRREP_COUNT]; /* Batch/Precinct/Ballot Style reports */
+    CvrValueReportWindow *vreports[EE_CVRREP_COUNT]; /* per-column value reports */
     /* Per-column report availability, computed once at load (the data never changes
      * afterward) so WM_INITMENUPOPUP need not re-scan the table on every menu open. */
     BOOL vreport_avail[EE_CVRREP_COUNT];
@@ -10021,7 +10030,8 @@ struct CvrReportWindow
     BOOL filtered;       /* TRUE = tabulate only the filtered rows */
 };
 
-/* Per-column value report (Batch / Precinct / Ballot Style): one value per row with
+/* Per-column value report (Batch / Precinct / Ballot Style / Polling Place / Device
+ * Serial / Voting Type): one value per row with
  * its ballot-record count, like the voter-list Precinct/Address reports. */
 struct CvrValueReportWindow
 {
@@ -10032,7 +10042,7 @@ struct CvrValueReportWindow
     HWND status;
     int kind;                /* EE_CVRREP_* (slot in owner->vreports)  */
     uint32_t column;         /* source CVR column                      */
-    const wchar_t *label;    /* "Batch" / "Precinct" / "Ballot Style"  */
+    const wchar_t *label;    /* "Batch" / "Precinct" / "Polling Place" ... */
     EeCvrValueCount *items;  /* value + count, in current sort order    */
     uint32_t count;
     BOOL has_blank;          /* a "(blank)" row is present in items      */
@@ -10150,6 +10160,12 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_PRECINCT, L"Display &Precinct Report…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_BALLOTSTYLE,
                 L"Display Ballot &Style Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_POLLINGPLACE,
+                L"Display P&olling Place Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_DEVICESERIAL,
+                L"Display &Device Serial Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_VOTINGTYPE,
+                L"Display &Voting Type Report…");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
@@ -10479,15 +10495,40 @@ static const wchar_t *Cvr_ReportColumnTitle(int kind)
             return L"Precinct";
         case EE_CVRREP_BALLOTSTYLE:
             return L"Ballot Style";
+        case EE_CVRREP_POLLINGPLACE:
+            return L"Polling Place";
+        case EE_CVRREP_DEVICESERIAL:
+            return L"Device Serial";
+        case EE_CVRREP_VOTINGTYPE:
+            return L"Voting Type";
         default:
             return L"";
     }
 }
 
-/* Command IDs for the three CVR value reports, indexed by EE_CVRREP_*. */
+/* Find the CVR column a value-report kind reports on. Vendors name some key columns
+ * differently: ES&S calls the batch column "Batch", Hart calls it "Batch Number", so
+ * the Batch report accepts either (the report keeps the "Batch" label). */
+static BOOL Cvr_FindReportColumn(const EeCvrTable *t, int kind, uint32_t *col)
+{
+    if (EeCvr_FindColumnByTitle(t, Cvr_ReportColumnTitle(kind), col))
+    {
+        return TRUE;
+    }
+    if (kind == EE_CVRREP_BATCH)
+    {
+        return EeCvr_FindColumnByTitle(t, L"Batch Number", col);
+    }
+    return FALSE;
+}
+
+/* Command IDs for the CVR value reports, indexed by EE_CVRREP_*. */
 static const int k_CvrReportIds[EE_CVRREP_COUNT] = {IDM_CVR_REPORT_BATCH,
                                                     IDM_CVR_REPORT_PRECINCT,
-                                                    IDM_CVR_REPORT_BALLOTSTYLE};
+                                                    IDM_CVR_REPORT_BALLOTSTYLE,
+                                                    IDM_CVR_REPORT_POLLINGPLACE,
+                                                    IDM_CVR_REPORT_DEVICESERIAL,
+                                                    IDM_CVR_REPORT_VOTINGTYPE};
 
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -10650,6 +10691,15 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_CVR_REPORT_BALLOTSTYLE:
                     App_ShowCvrValueReport(cw, EE_CVRREP_BALLOTSTYLE);
+                    return 0;
+                case IDM_CVR_REPORT_POLLINGPLACE:
+                    App_ShowCvrValueReport(cw, EE_CVRREP_POLLINGPLACE);
+                    return 0;
+                case IDM_CVR_REPORT_DEVICESERIAL:
+                    App_ShowCvrValueReport(cw, EE_CVRREP_DEVICESERIAL);
+                    return 0;
+                case IDM_CVR_REPORT_VOTINGTYPE:
+                    App_ShowCvrValueReport(cw, EE_CVRREP_VOTINGTYPE);
                     return 0;
                 case IDM_CVR_OPTIONS:
                     App_ShowCvrOptions(cw);
@@ -10891,9 +10941,8 @@ static void App_CreateCvrWindow(AppState *app,
         for (k = 0; k < EE_CVRREP_COUNT; k++)
         {
             uint32_t col = 0;
-            cw->vreport_avail[k] =
-                EeCvr_FindColumnByTitle(&cw->table, Cvr_ReportColumnTitle(k), &col) &&
-                EeCvr_ColumnHasReportableData(&cw->table, col);
+            cw->vreport_avail[k] = Cvr_FindReportColumn(&cw->table, k, &col) &&
+                                   EeCvr_ColumnHasReportableData(&cw->table, col);
             cw->vreport_col[k] = col;
         }
     }
@@ -12356,6 +12405,15 @@ static void App_ExportCvrValueReport(CvrValueReportWindow *rw, BOOL selection_on
             break;
         case EE_CVRREP_BALLOTSTYLE:
             plural = L"Ballot_Styles";
+            break;
+        case EE_CVRREP_POLLINGPLACE:
+            plural = L"Polling_Places";
+            break;
+        case EE_CVRREP_DEVICESERIAL:
+            plural = L"Device_Serials";
+            break;
+        case EE_CVRREP_VOTINGTYPE:
+            plural = L"Voting_Types";
             break;
         default:
             plural = L"Precincts";

@@ -1,0 +1,1566 @@
+{
+  "title": "Arizona County Election Information",
+  "description": "For each of the 15 Arizona counties: the county elections director and the County Recorder (who maintains voter registration), per the Arizona SOS county election contact list; whether a registered-voter list can be downloaded; the elections website; the historical election-results location and the record types posted for 2020-present; the public-records route; and the voting equipment in use, per the SOS 2026 Election Cycle Voting Equipment list.",
+  "generated": "2026-10-09",
+  "state_resources": {
+    "county_election_contacts": "https://azsos.gov/elections/about-elections/county-election-contact-info",
+    "voting_equipment_by_county_2026": "https://azsos.gov/sites/default/files/docs/2026-Election-Cycle-Voting-Equipment--Primary-Election.pdf",
+    "voting_equipment_list_revised": "July 2026",
+    "voting_equipment_certification": "https://azsos.gov/elections/about-elections/elections-procedures/voting-equipment",
+    "elections_procedures_manual": "https://azsos.gov/elections/about-elections/elections-procedures/epm",
+    "post_election_procedures": "https://azsos.gov/elections/about-elections/elections-procedures/post-election-procedures",
+    "election_info_2026": "https://azsos.gov/elections/election-information/2026-election-info",
+    "election_info_2024": "https://azsos.gov/elections/election-information/2024-election-info",
+    "hand_count_audit_summary_2022_primary": "https://azsos.gov/elections/results-data/election-information/2022-election-information/summary-hand-count-audits",
+    "statewide_results": "https://results.arizona.vote/",
+    "voter_registration_statistics": "https://azsos.gov/elections/election-information/voter-registration-statistics"
+  },
+  "record_type_labels": {
+    "results": "Election results (summary / precinct / statement of votes cast)",
+    "canvass": "Official canvass",
+    "reconciliation": "Reconciliation reports",
+    "hand_count_audit": "Post-election hand count audit (A.R.S. 16-602)",
+    "voter_roster": "Voter rosters / lists of voters",
+    "results_tape": "Results tapes / zero & totals reports",
+    "hash_la_test": "Hash validation / L&A test reports",
+    "audit_log": "EMS audit / event or system logs",
+    "ballot_transfer_log": "Ballot transfer / chain-of-custody logs",
+    "cvr": "Cast vote records (CVR)",
+    "ballot_images": "Ballot images / scanned ballots",
+    "voter_file": "Full registered-voter file"
+  },
+  "notes": [
+    "Contacts come from the Arizona SOS county election contact page (https://azsos.gov/elections/about-elections/county-election-contact-info), retrieved 2026-10-09. Each county has two offices: the County Recorder, who handles voter registration and early voting (voter_registrar), and the elections department under the Board of Supervisors, which runs elections and tabulation (election_official). In Pinal County the Recorder now runs both. Maricopa lists two election directors; the second is named in historical_results.notes. The SOS page hides emails behind Cloudflare email protection; they were decoded, and names left in HTML comments (former officials) were ignored. Apache County's elections email is commented out on the SOS page, so it is null.",
+    "Voting equipment comes from the SOS '2026 Election Cycle / Voting Equipment' list (Primary Election, revised July 2026), which the SOS says may be updated before the next election. Vendors: Election Systems & Software (ES&S): 13; Liberty Vote (formerly Dominion Voting Systems): 1; Unisyn Voting Solutions: 1. Maricopa uses Liberty Vote (formerly Dominion) Democracy Suite 5.20 with ImageCast Precinct 2 vote-center tabulators and ImageCast Central scanners; Yavapai uses Unisyn OpenElect 2.2; the other 13 counties use ES&S ElectionWare (6.5, or 6.3 in Santa Cruz). Arizona voters mark paper ballots by hand, with ballot-marking devices for accessibility. tabulation.equipment lists each row of the SOS table with its firmware and software versions; quantities are not published.",
+    "Post-election hand count audits: after each primary and general election, A.R.S. 16-602 requires a hand count of a sample of precincts/vote centers and early ballots, by boards whose members are designated by the political parties. If the parties do not designate board members, the audit is not performed. The SOS posts each county's hand count report on its election-information pages; for the 2026 primary, reports for all 15 counties are linked from https://azsos.gov/elections/election-information/2026-election-info. Counties that also post the report on their own site are recorded under hand_count_audit.",
+    "Several counties post the EMS audit-event or system log for each election alongside their results: Cochise, Coconino, Maricopa, Mohave, Navajo, Pima, Pinal, Santa Cruz, Yavapai. No county was found posting cast vote records or ballot images.",
+    "Voter lists: there is no public voter-file download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists, for a fee and on a signed request, to candidates, political parties, committees and others for political or election purposes; the lists may not be used for commercial purposes.",
+    "Hand counting in place of machines: in 2022 Cochise County's Board of Supervisors voted to hand count all ballots; a court blocked the full hand count, and two supervisors were later charged over the delayed canvass. Tabulation in every county is by optical scan.",
+    "records_found_2020_present lists only records found posted on the county's own sites. It is not exhaustive, and absence means 'not found'. Years come from link text, file names and upload folders.",
+    "Public records: requests go to the county under A.R.S. 39-121 et seq. open_records.url is the county's online portal or request page where one was found.",
+    "Deep links change with site redesigns. Start from county_website or the SOS county election contact page if a link breaks."
+  ],
+  "counties": [
+    {
+      "county": "Apache",
+      "fips": "04001",
+      "county_website": "https://www.apachecountyaz.gov/",
+      "election_official": {
+        "title": "Apache County Elections Director",
+        "name": "Megan Hill",
+        "physical_address": "75 West Cleveland, St. Johns, Arizona 85936",
+        "mailing_address": "PO Box 428, St. Johns, Arizona 85936",
+        "phone": "928-337-7604",
+        "fax": "928-337-7538",
+        "email": null
+      },
+      "voter_registrar": {
+        "title": "Apache County Recorder",
+        "name": "Larry Noble",
+        "phone": "928-337-7516",
+        "email": "voterreg@apachecountyaz.gov",
+        "url": "https://www.apachecountyaz.gov/Recorder/"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.apachecountyaz.gov/Recorder/",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.apachecountyaz.gov/Elections/",
+      "historical_results": {
+        "url": "https://www.apachecountyaz.gov/historical-elections-results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2022",
+              "2024"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {},
+        "evidence": "browser check (site blocks scripted requests); Historical Elections Results page (official summary and precinct reports, canvass documents)",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Apache County Elections Director Megan Hill, PO Box 428, St. Johns, Arizona 85936, 928-337-7604."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD) 1.0; Central Count - Digital Scan: DS450; Central Count - Digital Scan: DS850",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 1.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS450",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Cochise",
+      "fips": "04003",
+      "county_website": "https://www.cochise.az.gov/",
+      "election_official": {
+        "title": "Cochise County, Elections Director",
+        "name": "Melissa Avant",
+        "physical_address": "1415 Melody Lane, Bldg. E, Bisbee, Arizona 85603",
+        "mailing_address": "1415 Melody Lane, Bldg. E, Bisbee, Arizona 85603",
+        "phone": "520-432-8975 or 1-888-316-8065",
+        "fax": "520-432-8995",
+        "email": "elections@cochise.az.gov"
+      },
+      "voter_registrar": {
+        "title": "Cochise County Recorder",
+        "name": "Billy Cloud",
+        "phone": "520-432-8358 or 1-888-457-4513",
+        "email": "voterreg@cochise.az.gov",
+        "url": "https://www.cochise.az.gov/recorder/home"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.cochise.az.gov/recorder/home",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.cochise.az.gov/292/Elections",
+      "historical_results": {
+        "url": "https://www.cochise.az.gov/353/Election-Results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": true
+          },
+          "audit_log": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": true
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://www.cochise.az.gov/DocumentCenter/View/27654"
+          ]
+        },
+        "evidence": "automated crawl plus browser check of the Election Results page (current results and an ElectionWare election audit events report; no archive of earlier elections found)",
+        "notes": "In 2022 the Cochise County Board of Supervisors voted to hand count all ballots; a court blocked the full hand count, and two supervisors were later charged over the delayed 2022 canvass."
+      },
+      "open_records": {
+        "url": "https://cochise-az.nextrequest.com/",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD) 1.0; Digital Scan: DS200; Central Count - Digital Scan: DS850; Central Count - Digital Scan: DS950",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 1.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS200",
+            "firmware": "3.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Coconino",
+      "fips": "04005",
+      "county_website": "https://www.coconino.az.gov/",
+      "election_official": {
+        "title": "Coconino County Elections Director",
+        "name": "Eslir Musta",
+        "physical_address": "1300 W. University Avenue, Suite 180, Flagstaff, Arizona 86001",
+        "mailing_address": "1300 W. University Avenue, Suite 180, Flagstaff, Arizona 86001",
+        "phone": "928-679-7896 or 1-800-793-6181",
+        "fax": "928-779-6466",
+        "email": "elections@coconino.az.gov"
+      },
+      "voter_registrar": {
+        "title": "Coconino County Recorder",
+        "name": "Aubrey Sonderegger",
+        "phone": "928-679-7860 or 1-800-793-6181",
+        "email": "voterservices@coconino.az.gov",
+        "url": "https://www.coconino.az.gov/319/Recorder"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.coconino.az.gov/319/Recorder",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.coconino.az.gov/195/Elections",
+      "historical_results": {
+        "url": "https://www.coconino.az.gov/205/Past-Election-Results",
+        "platforms": [
+          "Enhanced Voting"
+        ],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "audit_log": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://www.coconino.az.gov/DocumentCenter/View/74560/ElectionAuditEventsReport_7212026"
+          ]
+        },
+        "evidence": "browser check (site blocks scripted requests); Past Election Results page and current results page (Enhanced Voting results, write-in reports, ElectionWare audit events report)",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Coconino County Elections Director Eslir Musta, 1300 W. University Avenue, Suite 180, Flagstaff, Arizona 86001, 928-679-7896 or 1-800-793-6181, elections@coconino.az.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Central Count - Digital Scan: DS450; Central Count - Digital Scan: DS950",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS450",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Gila",
+      "fips": "04007",
+      "county_website": "https://www.gilacountyaz.gov/",
+      "election_official": {
+        "title": "Gila County Elections Director",
+        "name": "Eric A. Mariscal",
+        "physical_address": "5515 South Apache Avenue, Suite 900, Globe, Arizona 85501",
+        "mailing_address": "5515 South Apache Avenue, Suite 900, Globe, Arizona 85501",
+        "phone": "928-402-8709",
+        "fax": "928-402-4319",
+        "email": "emariscal@gilacountyaz.gov"
+      },
+      "voter_registrar": {
+        "title": "Gila County Recorder",
+        "name": "Wendy Mannigal-Smith",
+        "phone": "928-402-8740",
+        "email": "wmannigel-smith@gilacountyaz.gov",
+        "url": "https://www.gilacountyaz.gov/government/recorder/"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.gilacountyaz.gov/government/recorder/",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.gilacountyaz.gov/government/elections/",
+      "historical_results": {
+        "url": "https://www.gilacountyaz.gov/government/elections/election_results_-_historical.php",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2020",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {},
+        "evidence": "automated crawl plus browser check of the Past Election Results page (results and canvass PDFs by election) and the 2026 primary canvass linked from the elections page",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Gila County Elections Director Eric A. Mariscal, 5515 South Apache Avenue, Suite 900, Globe, Arizona 85501, 928-402-8709, emariscal@gilacountyaz.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Central Count - Digital Scan: DS850",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Graham",
+      "fips": "04009",
+      "county_website": "https://www.graham.az.gov/",
+      "election_official": {
+        "title": "Graham County Elections Director",
+        "name": "Hannah Duderstadt",
+        "physical_address": "921 Thatcher Boulevard, Safford, Arizona 85546",
+        "mailing_address": "921 Thatcher Boulevard, Safford, Arizona 85546",
+        "phone": "928-792-5037",
+        "fax": "928-428-5951",
+        "email": "taranda@graham.az.gov"
+      },
+      "voter_registrar": {
+        "title": "Graham County Recorder",
+        "name": "Polly Merriman",
+        "phone": "928-428-3560",
+        "email": "recordersoffice@graham.az.gov",
+        "url": "https://www.graham.az.gov/239/Recorder"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.graham.az.gov/239/Recorder",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.graham.az.gov/476/Elections",
+      "historical_results": {
+        "url": "https://www.graham.az.gov/509/Election-Results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2024",
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {},
+        "evidence": "browser check (site blocks scripted requests); Election Results page",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Graham County Elections Director Hannah Duderstadt, 921 Thatcher Boulevard, Safford, Arizona 85546, 928-792-5037, taranda@graham.az.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Digital Scan: DS200; Central Count - Digital Scan: DS850",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS200",
+            "firmware": "3.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Greenlee",
+      "fips": "04011",
+      "county_website": "https://greenlee.az.gov/",
+      "election_official": {
+        "title": "Greenlee County Elections Director",
+        "name": "Bianca Castañeda",
+        "physical_address": "253 5th Street, Clifton, Arizona 85533",
+        "mailing_address": "PO Box 908, Clifton, Arizona 85533",
+        "phone": "928-865-2072",
+        "fax": "928-865-9332",
+        "email": "bcastaneda@greenlee.az.gov"
+      },
+      "voter_registrar": {
+        "title": "Greenlee County Recorder",
+        "name": "Erin Miller",
+        "phone": "928-865-2632",
+        "email": "recorder@greenlee.az.gov",
+        "url": "https://greenlee.az.gov/elected-officials/recorder/"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://greenlee.az.gov/elected-officials/recorder/",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://greenlee.az.gov/ova_dep/elections/",
+      "historical_results": {
+        "url": "https://greenlee.az.gov/ova_dep/elections/",
+        "platforms": [
+          "Clarity ENR"
+        ],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {},
+        "evidence": "automated crawl plus browser check of the elections page (current summary and precinct reports, 2026 primary canvass, an election audit report, Clarity election-night reporting); no archive of earlier elections found",
+        "notes": null
+      },
+      "open_records": {
+        "url": "https://greenlee.az.gov/public-records-request-contacts/",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Digital Scan: DS200; Central Count - Digital Scan: DS950",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS200",
+            "firmware": "3.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "La Paz",
+      "fips": "04012",
+      "county_website": "https://www.lapaz.gov/",
+      "election_official": {
+        "title": "La Paz County Elections Director",
+        "name": "Tracy Page",
+        "physical_address": "1108 Joshua Avenue, Parker, Arizona 85344",
+        "mailing_address": "1108 Joshua Avenue, Parker, Arizona 85344",
+        "phone": "928-669-6149",
+        "fax": null,
+        "email": "tpage@lapaz.gov"
+      },
+      "voter_registrar": {
+        "title": "La Paz County Recorder",
+        "name": "Richard Garcia",
+        "phone": "928-669-6136 or 888-526-8685",
+        "email": "recorder@lapaz.gov",
+        "url": "https://www.lapaz.gov/213/Recorder"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.lapaz.gov/213/Recorder",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.lapaz.gov/162/Elections",
+      "historical_results": {
+        "url": "https://www.lapaz.gov/557/Election-Results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2022",
+              "2024",
+              "2025"
+            ],
+            "undated_items": true
+          },
+          "canvass": {
+            "years": [
+              "2020",
+              "2022",
+              "2024"
+            ],
+            "undated_items": true
+          },
+          "hand_count_audit": {
+            "years": [],
+            "undated_items": true
+          }
+        },
+        "example_links": {
+          "hand_count_audit": [
+            "https://www.lapaz.gov/DocumentCenter/View/9801/Election-Audit-Report--Primary-Election"
+          ]
+        },
+        "evidence": "automated crawl",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the La Paz County Elections Director Tracy Page, 1108 Joshua Avenue, Parker, Arizona 85344, 928-669-6149, tpage@lapaz.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD) 1.0; Accessible Ballot Marking Device: ExpressVote (BMD) 3.0; Digital Scan: DS200; Central Count - Digital Scan: DS450",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 1.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 3.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS200",
+            "firmware": "3.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS450",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Maricopa",
+      "fips": "04013",
+      "county_website": "https://www.maricopa.gov/",
+      "election_official": {
+        "title": "Maricopa County Director of Election Services and Early Voting",
+        "name": "Rey Valenzuela",
+        "physical_address": "510 S. Third Avenue, Phoenix, Arizona 85003",
+        "mailing_address": "510 S. Third Avenue, Phoenix, Arizona 85003",
+        "phone": "602-506-1511",
+        "fax": "602-506-5112",
+        "email": "voterinfo@maricopa.gov"
+      },
+      "voter_registrar": {
+        "title": "Maricopa County Recorder",
+        "name": "Justin Heap",
+        "phone": "602-506-1511",
+        "email": "voterinfo@maricopa.gov",
+        "url": "https://recorder.maricopa.gov/"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://recorder.maricopa.gov/",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://elections.maricopa.gov/",
+      "historical_results": {
+        "url": "https://elections.maricopa.gov/results-and-data/historic-results.html",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "audit_log": {
+            "years": [
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://elections.maricopa.gov/asset/jcr:dc0247ce-cc70-4c00-b320-c36df53bf9f8/EMSAuditLog_2024_03_27T12_59_05.pdf"
+          ]
+        },
+        "evidence": "browser check (site blocks scripted requests); Election Results Archives page by year (?year=YYYY): summary reports, final statements of votes and official canvass reports (PDF and TXT), EV-reject and provisional reports, and EMS audit event logs from 2024 on",
+        "notes": "The SOS also lists Scott Jarett, Maricopa County Director of Election Day and Emergency Voting, 602-506-1511, voterinfo@maricopa.gov."
+      },
+      "open_records": {
+        "url": "https://elections.maricopa.gov/news-and-information/public-records-request.html",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+        "ems_software": "Democracy Suite V5.20.2.6",
+        "equipment_summary": "Accessible Ballot Marking Device: ImageCast X (BMD); Accessible Ballot Marking Device: ICX ATI Unit; Ballot Marking Device Printer: HP LaserJet Pro M402dne; Digital Scan: Imagecast Precinct2 (ICP2); Central Count - Digital Scan: ICC Cannon DR-G1130; Central Count - Digital Scan: ICC Interscan HiPro 821",
+        "equipment": [
+          {
+            "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ImageCast X (BMD)",
+            "firmware": "V5.20.2.7",
+            "software": "Democracy Suite V5.20.2.6",
+            "quantity": null
+          },
+          {
+            "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ICX ATI Unit",
+            "firmware": "181-000036 Rev. A",
+            "software": "Democracy Suite V5.20.2.6",
+            "quantity": null
+          },
+          {
+            "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+            "type": "Ballot Marking Device Printer",
+            "model": "HP LaserJet Pro M402dne",
+            "firmware": "Unmodified COTS",
+            "software": "Democracy Suite V5.20.2.6",
+            "quantity": null
+          },
+          {
+            "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+            "type": "Digital Scan",
+            "model": "Imagecast Precinct2 (ICP2)",
+            "firmware": "5.20.2.2",
+            "software": "Democracy Suite V5.20.2.6",
+            "quantity": null
+          },
+          {
+            "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+            "type": "Central Count - Digital Scan",
+            "model": "ICC Cannon DR-G1130",
+            "firmware": "5.20.2.6",
+            "software": "Democracy Suite V5.20.2.6",
+            "quantity": null
+          },
+          {
+            "vendor": "Liberty Vote (formerly Dominion Voting Systems)",
+            "type": "Central Count - Digital Scan",
+            "model": "ICC Interscan HiPro 821",
+            "firmware": "1.0.1165 for 5.20",
+            "software": "Democracy Suite V5.20.2.6",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Mohave",
+      "fips": "04015",
+      "county_website": "https://www.mohave.gov/",
+      "election_official": {
+        "title": "Mohave County Elections Director",
+        "name": "Allen P. Tempert",
+        "physical_address": "700 West Beale Street, Kingman, Arizona 86401",
+        "mailing_address": "PO Box 7000, Kingman, Arizona 86402",
+        "phone": "928-753-0733",
+        "fax": "928-718-4956",
+        "email": "elections@mohave.gov"
+      },
+      "voter_registrar": {
+        "title": "Mohave County Recorder",
+        "name": "Lydia Henry",
+        "phone": "928-753-0767 or 888-607-0733",
+        "email": "voterregistration@mohave.gov",
+        "url": "https://www.mohave.gov/departments/recorder/"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.mohave.gov/departments/recorder/",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.mohave.gov/departments/elections",
+      "historical_results": {
+        "url": "https://www.mohave.gov/departments/elections/election-results/",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2024",
+              "2026"
+            ],
+            "undated_items": true
+          },
+          "canvass": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2024"
+            ],
+            "undated_items": true
+          },
+          "audit_log": {
+            "years": [],
+            "undated_items": true
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://www.mohave.gov/media/endfum0o/audit-log.pdf"
+          ]
+        },
+        "evidence": "automated crawl",
+        "notes": null
+      },
+      "open_records": {
+        "url": "https://mohavecountyaz.mycusthelp.com/WEBAPP/_rs/supporthome.aspx",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD) 1.0; Accessible Ballot Marking Device: ExpressVote (BMD) 2.1; Central Count - Digital Scan: DS850; Central Count - Digital Scan: DS950",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 1.0",
+            "firmware": "4.2.1.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 2.1",
+            "firmware": "4.2.1.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950",
+            "firmware": "4.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Navajo",
+      "fips": "04017",
+      "county_website": "https://www.navajocountyaz.gov/",
+      "election_official": {
+        "title": "Navajo County Elections Director",
+        "name": "Rayleen Richards",
+        "physical_address": "100 East Code Talkers Drive/South Hwy 77, Holbrook, Arizona 86025",
+        "mailing_address": "PO Box 668, Holbrook, Arizona 86025",
+        "phone": "928-524-4062",
+        "fax": "928-524-4048",
+        "email": "rayleen.richards@navajocountyaz.gov"
+      },
+      "voter_registrar": {
+        "title": "Navajo County Recorder",
+        "name": "David Marshall",
+        "phone": "928-524-4192",
+        "email": "voterregistration@navajocountyaz.gov",
+        "url": "https://www.navajocountyaz.gov/299/Recorder"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.navajocountyaz.gov/299/Recorder",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.navajocountyaz.gov/223/Elections",
+      "historical_results": {
+        "url": "https://www.navajocountyaz.gov/506/Election-Results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2024"
+            ],
+            "undated_items": true
+          },
+          "audit_log": {
+            "years": [],
+            "undated_items": true
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://www.navajocountyaz.gov/DocumentCenter/View/9791/Election-Audit-Events-Report-post"
+          ]
+        },
+        "evidence": "browser check (site blocks scripted requests); Election Results page (summary and precinct reports, canvass reports, ElectionWare election audit events reports)",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Navajo County Elections Director Rayleen Richards, PO Box 668, Holbrook, Arizona 86025, 928-524-4062, rayleen.richards@navajocountyaz.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Digital Scan: DS200; Central Count - Digital Scan: DS450; Central Count - Digital Scan: DS850",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS200",
+            "firmware": "3.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS450",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Pima",
+      "fips": "04019",
+      "county_website": "https://www.pima.gov/",
+      "election_official": {
+        "title": "Pima County Elections Director",
+        "name": "Constance Hargrove",
+        "physical_address": "6550 South Country Club Road, Tucson, Arizona 85756",
+        "mailing_address": "6550 South Country Club Road, Tucson, Arizona 85756",
+        "phone": "520-724-6830",
+        "fax": "520-724-6870",
+        "email": "constance.hargrove@pima.gov"
+      },
+      "voter_registrar": {
+        "title": "Pima County Recorder",
+        "name": "Gabriella Cázares-Kelly",
+        "phone": "520-724-4330",
+        "email": "voter@recorder.pima.gov",
+        "url": "https://www.recorder.pima.gov/RecorderHome"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.recorder.pima.gov/RequestVoterData.aspx",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.pima.gov/elections",
+      "historical_results": {
+        "url": "https://www.pima.gov/election-results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2020",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": true
+          },
+          "hand_count_audit": {
+            "years": [
+              "2020",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "audit_log": {
+            "years": [
+              "2025"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {
+          "hand_count_audit": [
+            "https://content.civicplus.com/api/assets/az-pimacounty/3f63c59c-e295-42ef-81b1-c2069f237ecf"
+          ],
+          "audit_log": [
+            "https://content.civicplus.com/api/assets/b9bc7f06-89f2-448c-a874-f3da1508c3fe"
+          ]
+        },
+        "evidence": "automated crawl plus browser check of the Election Results page (year tabs 2020-2026 with results, canvasses, hand count audit reports, an audit events report)",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Pima County Elections Director Constance Hargrove, 6550 South Country Club Road, Tucson, Arizona 85756, 520-724-6830, constance.hargrove@pima.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD) 1.0; Accessible Ballot Marking Device: ExpressVote (BMD) 2.0; Central Count - Digital Scan: DS850 Version 1.0; Central Count - Digital Scan: DS950 Version 1.0",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 1.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 2.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850 Version 1.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950 Version 1.0",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Pinal",
+      "fips": "04021",
+      "county_website": "https://www.pinal.gov/",
+      "election_official": {
+        "title": "County Recorder (runs Pinal County Elections)",
+        "name": "Dana Lewis",
+        "physical_address": "320 W Adamsville Rd, Florence, AZ 85132",
+        "mailing_address": "PO Box 1592, Florence, AZ 85132",
+        "phone": "520-866-7550",
+        "fax": "520-866-7551",
+        "email": "elections@pinal.gov"
+      },
+      "voter_registrar": {
+        "title": "Pinal County Recorder",
+        "name": "Dana Lewis",
+        "phone": "520-866-6854",
+        "email": "voter@pinal.gov",
+        "url": "https://www.pinal.gov/votes"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.pinal.gov/votes",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.pinal.gov/258/Elections",
+      "historical_results": {
+        "url": "https://www.pinal.gov/280/Election-Results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2025",
+              "2026"
+            ],
+            "undated_items": true
+          },
+          "audit_log": {
+            "years": [
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://www.pinal.gov/DocumentCenter/View/31480/Audit-Events-Log"
+          ]
+        },
+        "evidence": "browser check (site blocks scripted requests); Election Results page (results, canvass reports, ElectionWare audit events logs)",
+        "notes": "In Pinal County the County Recorder runs elections as well as voter registration."
+      },
+      "open_records": {
+        "url": "https://pinalcounty-az.nextrequest.com/",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Central Count - Digital Scan: DS850; Central Count - Digital Scan: DS950",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS850",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Santa Cruz",
+      "fips": "04023",
+      "county_website": "https://www.santacruzcountyaz.gov/",
+      "election_official": {
+        "title": "Santa Cruz County Elections Director",
+        "name": "Alma Schultz",
+        "physical_address": "2150 North Congress Drive, Suite 119, Nogales, Arizona 85621",
+        "mailing_address": "2150 North Congress Drive, Suite 119, Nogales, Arizona 85621",
+        "phone": "520-375-7808",
+        "fax": "520-761-7843",
+        "email": "aschultz@santacruzcountyaz.gov"
+      },
+      "voter_registrar": {
+        "title": "Santa Cruz County Recorder",
+        "name": "Anita Moreno",
+        "phone": "520-375-7990",
+        "email": null,
+        "url": "https://www.santacruzcountyaz.gov/287/Recorder"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.santacruzcountyaz.gov/287/Recorder",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.santacruzcountyaz.gov/173/Elections",
+      "historical_results": {
+        "url": "https://www.santacruzcountyaz.gov/175/Election-Results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2024",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "audit_log": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {},
+        "evidence": "automated crawl plus browser check of the Election Results page (canvass, statement of votes cast by precinct, summary reports, ElectionWare election audit events report)",
+        "notes": null
+      },
+      "open_records": {
+        "url": "https://www.santacruzcountyaz.gov/842/Public-Records-Request",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.3.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD) 3; Digital Scan: DS300; Central Count - Digital Scan: DS450; Central Count - Digital Scan: DS950",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD) 3",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.3.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS300",
+            "firmware": "3.0.0.0",
+            "software": "ElectionWare 6.3.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS450",
+            "firmware": "4.2.0.0",
+            "software": "ElectionWare 6.3.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS950",
+            "firmware": "4.2.0.0",
+            "software": "ElectionWare 6.3.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Yavapai",
+      "fips": "04025",
+      "county_website": "https://www.yavapaiaz.gov/",
+      "election_official": {
+        "title": "Yavapai County Director of Elections",
+        "name": "Laurin Custis",
+        "physical_address": "1015 Fair Street, Room # 228, Prescott, Arizona 86305",
+        "mailing_address": "1015 Fair Street, Room # 228, Prescott, Arizona 86305",
+        "phone": "928-771-3248 Option 8",
+        "fax": "928-771-3446",
+        "email": "elections@yavapaiaz.gov"
+      },
+      "voter_registrar": {
+        "title": "Yavapai County Recorder",
+        "name": "Michelle Burchill",
+        "phone": "928-771-3248, Option 9",
+        "email": "voter.registration@yavapaiaz.gov",
+        "url": "https://yavapaivotes.gov"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://yavapaivotes.gov",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.yavapaivotes.gov/",
+      "historical_results": {
+        "url": "https://www.yavapaivotes.gov/Elections/Election-Results-Livestream",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "canvass": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "hand_count_audit": {
+            "years": [
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "audit_log": {
+            "years": [
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          }
+        },
+        "example_links": {
+          "audit_log": [
+            "https://www.yavapaivotes.gov/files/assets/elections/v/1/documents/results/2024/november/slog.pdf"
+          ]
+        },
+        "evidence": "browser check (site blocks scripted requests); results pages per year with results summaries, statements of votes cast, system log files (2024 on) and a 2026 hand count report",
+        "notes": null
+      },
+      "open_records": {
+        "url": null,
+        "method": "No online request portal found. Submit a written public records request under A.R.S. 39-121 et seq. to the county - for election records, the Yavapai County Director of Elections Laurin Custis, 1015 Fair Street, Room # 228, Prescott, Arizona 86305, 928-771-3248 Option 8, elections@yavapaiaz.gov."
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan centrally",
+        "vendor": "Unisyn Voting Solutions",
+        "ems_software": "OCS OpenElect 2.2",
+        "equipment_summary": "Accessible Ballot Marking Device: FVT; Central Count - Digital Scan: OVCS",
+        "equipment": [
+          {
+            "vendor": "Unisyn Voting Solutions",
+            "type": "Accessible Ballot Marking Device",
+            "model": "FVT",
+            "firmware": "OpenElect 2.2",
+            "software": "OCS OpenElect 2.2",
+            "quantity": null
+          },
+          {
+            "vendor": "Unisyn Voting Solutions",
+            "type": "Central Count - Digital Scan",
+            "model": "OVCS",
+            "firmware": "1.55",
+            "software": "OCS OpenElect 2.2",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    },
+    {
+      "county": "Yuma",
+      "fips": "04027",
+      "county_website": "https://www.yumacountyaz.gov/",
+      "election_official": {
+        "title": "Director",
+        "name": "Desiree Phillips",
+        "physical_address": "102 S. Main Street, Yuma, Arizona 85364",
+        "mailing_address": "102 S. Main Street, Yuma, Arizona 85364",
+        "phone": "928-373-1014",
+        "fax": "928-373-6024",
+        "email": "elections@yumacountyaz.gov"
+      },
+      "voter_registrar": {
+        "title": "Yuma County Recorder",
+        "name": "David Lara",
+        "phone": "928-373-6034",
+        "email": "Recorder@yumacountyaz.gov",
+        "url": "https://www.yumacountyaz.gov/government/recorder"
+      },
+      "voter_list": {
+        "download_available": false,
+        "url": "https://www.yumacountyaz.gov/government/recorder",
+        "notes": "No public voter-list download. Under A.R.S. 16-168 the County Recorder (or the SOS) furnishes voter lists to candidates, political parties, committees and others for political or election purposes, for a fee, on a signed request; the lists may not be used for commercial purposes."
+      },
+      "elections_url": "https://www.yumacountyaz.gov/government/voter-election-services",
+      "historical_results": {
+        "url": "https://www.yumacountyaz.gov/government/voter-election-services/election-results",
+        "platforms": [],
+        "records_found_2020_present": {
+          "results": {
+            "years": [
+              "2020",
+              "2021",
+              "2022",
+              "2023",
+              "2024",
+              "2025",
+              "2026"
+            ],
+            "undated_items": false
+          },
+          "hand_count_audit": {
+            "years": [],
+            "undated_items": true
+          }
+        },
+        "example_links": {
+          "hand_count_audit": [
+            "https://www.yumacountyaz.gov/home/showpublisheddocument/60261/639208233994470000"
+          ]
+        },
+        "evidence": "browser check (site blocks scripted requests); Election Results Archive page (results by election, hand count / early ballot audit report)",
+        "notes": null
+      },
+      "open_records": {
+        "url": "https://www.yumacountyaz.gov/government/election-services/election-services-public-record-request",
+        "method": "County online portal / request page"
+      },
+      "tabulation": {
+        "method": "Machine - hand-marked paper ballots (BMDs for accessibility) tabulated by optical scan at polling places / vote centers and centrally",
+        "vendor": "Election Systems & Software (ES&S)",
+        "ems_software": "ElectionWare 6.5.0.0",
+        "equipment_summary": "Accessible Ballot Marking Device: ExpressVote (BMD); Digital Scan: DS200; Central Count - Digital Scan: DS450",
+        "equipment": [
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Accessible Ballot Marking Device",
+            "model": "ExpressVote (BMD)",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Digital Scan",
+            "model": "DS200",
+            "firmware": "3.2.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          },
+          {
+            "vendor": "Election Systems & Software (ES&S)",
+            "type": "Central Count - Digital Scan",
+            "model": "DS450",
+            "firmware": "4.4.0.0",
+            "software": "ElectionWare 6.5.0.0",
+            "quantity": null
+          }
+        ],
+        "notes": null
+      }
+    }
+  ]
+}

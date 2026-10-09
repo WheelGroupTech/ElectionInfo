@@ -83,6 +83,8 @@ decoded via ToUnicode, a CSV round trip, an object-index rebuild after a bogus
 zip), the value-report data behind Reports → Polling Place / Device Serial / Voting
 Type (`EeCvr_CollectColumnCounts` on those columns) and Hart's `Batch Number` (reportable
 for a zip with batches, not for a PDF with a blank Central Batch Id), and the error when
-a ZIP and PDF share no Cvr Id;
+a ZIP and PDF share no Cvr Id, and a county-redacted report (only Precinct + Cvr Id in
+the header -> 2 key columns; a vote-for-3 contest printed as repeated title rows merges
+into one grouped contest);
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally).)

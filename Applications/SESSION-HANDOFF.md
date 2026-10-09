@@ -6,7 +6,21 @@
 
 **Last updated:** 2026-10-08
 
-### In progress — Hart value reports (UNCOMMITTED, ready to commit)
+### In progress — redacted Hart PDFs (UNCOMMITTED, ready to commit)
+
+- Burnet County `Election_CVRs/Burnet_County_TX/L25 CVR.pdf` / `G25 CVR.pdf` were rejected:
+  the county's redaction deletes header text (L25 keeps only Precinct + Cvr Id). Now:
+  detection needs only the `CVR Report` title + `Cvr Id:` + Contest Title/Option header;
+  PDF key fields blank on every record get no column (`hart_key_layout` `present` mask;
+  `HartMeta.present` for ZIP+PDF) — note this also drops always-blank Batch Number /
+  Polling Place columns from Tarrant ED/EV/ABM PDF loads (tallies unchanged).
+- PDF vote-for-N = one row per seat with the title repeated: same-title rows on a sheet
+  merge (`sheet_find_contest`). Burnet L25 council: 957 marks = 3 × 319 ballots.
+- Burnet loads: L25 2,834 rows (2 keys), G25 8,374 (4 keys), P26 13,137 (unredacted).
+  Tarrant PDF-vs-ZIP tallies re-verified identical. `hartpdf` test extended (redacted
+  fixture). Smoke green; app builds clean Debug + Release. Not yet click-tested.
+
+### Committed — Hart value reports
 
 - CVR **Reports** menu adds **Display Polling Place / Device Serial / Voting Type
   Report…** (`IDM_CVR_REPORT_POLLINGPLACE/DEVICESERIAL/VOTINGTYPE` 40074–40076,
@@ -16,7 +30,7 @@
   (Hart) for the Batch report. Still greyed for PDF-only ED/EV loads (blank Central
   Batch Id) by design.
 - Help → Reports text updated; `hartpdf` test extended (value counts + Batch Number);
-  smoke suite green; app builds clean x64 Debug + Release. Not yet click-tested.
+  smoke suite green; app builds clean x64 Debug + Release.
 
 ### Committed — Hart PDF "CVR Report" import
 
@@ -51,7 +65,7 @@ Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
 - Perf: ~10–11k PDF pages/s per pass; PDF-only G24 ≈ 5 min (two passes), ZIP ≈ 1m40s.
 - Possible follow-up: single-pass PDF load (PDF-only G24 ≈ 5 min).
 
-**Branch:** main — **only the value-report work above is uncommitted; everything else is committed.** Store prep, the
+**Branch:** main — **only the redacted-PDF work above is uncommitted; everything else is committed.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR

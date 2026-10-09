@@ -5083,9 +5083,13 @@ static BOOL tpdf_header(TBuf *c, const TPdfHdr *h, int page, int pages)
     BOOL ok = tpdf_cell1(c, 20.0, 741.4, 147.2, 24.8, "CVR Report");
     StringCchPrintfA(tmp, ARRAYSIZE(tmp), "Page %d of %d", page, pages);
     ok = ok && tpdf_cell1(c, 172.2, 688.8, 269.6, 10.4, tmp);
+/* A NULL value models a county redaction: the label's cell is removed entirely. */
 #define TPDF_LABEL(x, y, label, val)                                                   \
-    StringCchPrintfA(tmp, ARRAYSIZE(tmp), "%s%s", label, val);                         \
-    ok = ok && tpdf_cell1(c, x, y, 270.8, 14.4, tmp)
+    if ((val) != NULL)                                                                 \
+    {                                                                                  \
+        StringCchPrintfA(tmp, ARRAYSIZE(tmp), "%s%s", label, val);                     \
+        ok = ok && tpdf_cell1(c, x, y, 270.8, 14.4, tmp);                              \
+    }
     TPDF_LABEL(23.0, 632.1, "Precinct: ", h->precinct);
     TPDF_LABEL(23.0, 617.7, "Party: ", h->party);
     TPDF_LABEL(23.0, 603.3, "Polling Place: ", h->pplace);
@@ -5347,11 +5351,50 @@ static long hart_value_count(const EeCvrTable *t, const wchar_t *title, const wc
     return found;
 }
 
+/* A redacted Hart report (Burnet County style): only Precinct and Cvr Id remain in the
+ * header, and a vote-for-3 contest is printed as one row per seat with its title
+ * repeated. Two records. */
+static BOOL tpdf_redacted_fixture(const wchar_t *path)
+{
+    static const char *o_under[] = {"Undervotes: 1", NULL};
+    static const char *o_ann[] = {"Ann", NULL};
+    static const char *o_ben[] = {"Ben", NULL};
+    static const char *o_cy[] = {"Cy", NULL};
+    static const char *o_dee[] = {"Dee", NULL};
+    static const char *o_yes[] = {"YES", NULL};
+    TBuf pg[2];
+    TPdfHdr h;
+    double y;
+    BOOL ok;
+    ZeroMemory(pg, sizeof(pg));
+    ZeroMemory(&h, sizeof(h)); /* every field NULL = redacted */
+    h.precinct = "BURNT";
+    h.cvrid = "DDDDDDDD-1111-2222-3333-444444444444";
+    ok = tpdf_header(&pg[0], &h, 1, 2);
+    y = 551.9;
+    ok = ok && tpdf_row(&pg[0], &y, "CITY COUNCIL MEMBERS", NULL, o_under);
+    ok = ok && tpdf_row(&pg[0], &y, "CITY COUNCIL MEMBERS", NULL, o_ann);
+    ok = ok && tpdf_row(&pg[0], &y, "CITY COUNCIL MEMBERS", NULL, o_ben);
+    ok = ok && tpdf_row(&pg[0], &y, "PROPOSITION A", NULL, o_yes);
+    h.precinct = "18 - 03";
+    h.cvrid = "EEEEEEEE-1111-2222-3333-444444444444";
+    ok = ok && tpdf_header(&pg[1], &h, 2, 2);
+    y = 551.9;
+    ok = ok && tpdf_row(&pg[1], &y, "CITY COUNCIL MEMBERS", NULL, o_ann);
+    ok = ok && tpdf_row(&pg[1], &y, "CITY COUNCIL MEMBERS", NULL, o_cy);
+    ok = ok && tpdf_row(&pg[1], &y, "CITY COUNCIL MEMBERS", NULL, o_dee);
+    ok = ok && tpdf_write(path, pg, 2, FALSE);
+    free(pg[0].p);
+    free(pg[1].p);
+    return ok;
+}
+
 /* Hart PDF CVR Report loading (tag: hartpdf): PDF-only rows/keys/tallies (incl. a
  * record continued across pages, a wrapped title, vote-for-2, overvote, undervote,
  * write-in, and a ToUnicode-mapped accented name); object-index rebuild after a bogus
- * startxref; rejection of a non-Hart PDF; ZIP+PDF decoration by Cvr Id; and an error
- * when a ZIP and PDF share no Cvr Id. */
+ * startxref; rejection of a non-Hart PDF; ZIP+PDF decoration by Cvr Id; an error
+ * when a ZIP and PDF share no Cvr Id; and a county-redacted report (header fields
+ * removed -> no columns for them; a vote-for-3 contest printed as repeated rows). */
 static int test_hart_pdf(void)
 {
     static const char *k_GuidA = "AAAAAAAA-1111-2222-3333-444444444444";
@@ -5373,7 +5416,7 @@ static int test_hart_pdf(void)
         "<Party><Name>Democratic Party Ballot</Name><Id>y</Id></Party>"
         "<CvrGuid>cccccccc-1111-2222-3333-444444444444</CvrGuid><IsBlank>false</IsBlank></Cvr>";
     wchar_t pdf[MAX_PATH], pdf_broken[MAX_PATH], pdf_other[MAX_PATH], zip_ok[MAX_PATH],
-        zip_none[MAX_PATH];
+        zip_none[MAX_PATH], pdf_redacted[MAX_PATH];
     wchar_t err[512] = L"";
     wchar_t buf[256];
     const wchar_t *paths[2];
@@ -5382,7 +5425,7 @@ static int test_hart_pdf(void)
     EeCvrTable t;
     EeLoadStatus s;
     EeCvrTally *items = NULL;
-    uint32_t nt = 0, col = 0;
+    uint32_t nt = 0, col = 0, col2 = 0;
     int rc = 1;
 
     EeCvr_Init(&t);
@@ -5390,13 +5433,15 @@ static int test_hart_pdf(void)
         !cvr_temp_path(pdf_broken, ARRAYSIZE(pdf_broken), L"ee_hart_broken.pdf") ||
         !cvr_temp_path(pdf_other, ARRAYSIZE(pdf_other), L"ee_other.pdf") ||
         !cvr_temp_path(zip_ok, ARRAYSIZE(zip_ok), L"ee_hart_pdf.zip") ||
-        !cvr_temp_path(zip_none, ARRAYSIZE(zip_none), L"ee_hart_pdf_none.zip"))
+        !cvr_temp_path(zip_none, ARRAYSIZE(zip_none), L"ee_hart_pdf_none.zip") ||
+        !cvr_temp_path(pdf_redacted, ARRAYSIZE(pdf_redacted), L"ee_hart_redacted.pdf"))
     {
         wprintf(L"hartpdf: temp path failed\n");
         return 1;
     }
     if (!tpdf_hart_fixture(pdf, k_GuidA, k_GuidB, FALSE) ||
-        !tpdf_hart_fixture(pdf_broken, k_GuidA, k_GuidB, TRUE) || !tpdf_other_fixture(pdf_other))
+        !tpdf_hart_fixture(pdf_broken, k_GuidA, k_GuidB, TRUE) || !tpdf_other_fixture(pdf_other) ||
+        !tpdf_redacted_fixture(pdf_redacted))
     {
         wprintf(L"hartpdf: write pdf failed\n");
         goto done;
@@ -5429,11 +5474,14 @@ static int test_hart_pdf(void)
         wprintf(L"hartpdf: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
         goto done;
     }
-    /* CvrGuid, Batch Number, Precinct, Party, Voting Type, Polling Place, Device Type,
-     * Device Serial, Device Data Id */
-    if (t.frozen_count != 9 || !EeCvr_FindColumnByTitle(&t, L"Polling Place", &col))
+    /* CvrGuid, Precinct, Party, Voting Type, Polling Place, Device Type, Device Serial,
+     * Device Data Id -- no Batch Number: the fixture's Central Batch Id is blank on every
+     * record, so (like a redacted field) it gets no column. */
+    if (t.frozen_count != 8 || !EeCvr_FindColumnByTitle(&t, L"Polling Place", &col) ||
+        EeCvr_FindColumnByTitle(&t, L"Batch Number", &col2))
     {
-        wprintf(L"hartpdf: frozen=%u (want 9) / no Polling Place\n", t.frozen_count);
+        wprintf(L"hartpdf: frozen=%u (want 8) / Polling Place / Batch Number\n",
+                t.frozen_count);
         goto done;
     }
     EeCvr_GetCellW(&t, 0, 0, buf, ARRAYSIZE(buf));
@@ -5496,8 +5544,8 @@ static int test_hart_pdf(void)
     items = NULL;
     nt = 0;
     /* Value reports on the PDF key columns (Reports -> Polling Place / Device Serial /
-     * Voting Type). The fixture's Central Batch Id is blank, so its Batch Number column
-     * has nothing to report (the Batch report is greyed). */
+     * Voting Type). The fixture's Central Batch Id is blank, so there is no Batch Number
+     * column (the Batch report is greyed). */
     if (hart_value_count(&t, L"Polling Place", L"Central Library") != 1 ||
         hart_value_count(&t, L"Polling Place", L"EV - Town Hall") != 1 ||
         hart_value_count(&t, L"Device Serial", L"S1902990909") != 2 ||
@@ -5514,7 +5562,7 @@ static int test_hart_pdf(void)
         goto done;
     }
     /* The PDF key columns must stay frozen (not tabulated) after a CSV round trip. */
-    if (!hart_csv_roundtrip_ok(&t, 9))
+    if (!hart_csv_roundtrip_ok(&t, 8))
     {
         goto done;
     }
@@ -5604,6 +5652,49 @@ static int test_hart_pdf(void)
         wprintf(L"hartpdf: mismatched zip+pdf s=%d err=%s\n", (int)s, err);
         goto done;
     }
+    /* ---- county-redacted report ---- */
+    if (!EeCvr_IsHartCvrPdf(pdf_redacted, err, ARRAYSIZE(err)))
+    {
+        wprintf(L"hartpdf: redacted report not detected: %s\n", err);
+        goto done;
+    }
+    paths[0] = pdf_redacted;
+    s = EeCvr_LoadFromHartFiles(paths, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"hartpdf: redacted load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Only CvrGuid + Precinct survive redaction; the removed fields get no column. */
+    if (t.frozen_count != 2 || EeCvr_FindColumnByTitle(&t, L"Polling Place", &col))
+    {
+        wprintf(L"hartpdf: redacted frozen=%u (want 2)\n", t.frozen_count);
+        goto done;
+    }
+    /* Repeated "CITY COUNCIL MEMBERS" rows are one vote-for-3 contest: a titled column
+     * plus two continuation columns, tallied together. */
+    if (!EeCvr_FindColumnByTitle(&t, L"CITY COUNCIL MEMBERS", &col) ||
+        t.col_group[col + 1] != col || t.col_group[col + 2] != col ||
+        (col + 3 < t.ncols && t.col_group[col + 3] == col))
+    {
+        wprintf(L"hartpdf: vote-for-3 columns not grouped\n");
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt) ||
+        hart_find_count(items, nt, L"CITY COUNCIL MEMBERS", L"Ann") != 2 ||
+        hart_find_count(items, nt, L"CITY COUNCIL MEMBERS", L"Ben") != 1 ||
+        hart_find_count(items, nt, L"CITY COUNCIL MEMBERS", L"Cy") != 1 ||
+        hart_find_count(items, nt, L"CITY COUNCIL MEMBERS", L"Dee") != 1 ||
+        hart_find_count(items, nt, L"CITY COUNCIL MEMBERS", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"PROPOSITION A", L"YES") != 1 ||
+        hart_value_count(&t, L"Precinct", L"18-03") != 1)
+    {
+        wprintf(L"hartpdf: redacted tallies\n");
+        goto done;
+    }
+    EeCvr_FreeTally(items, nt);
+    items = NULL;
+    nt = 0;
     rc = 0;
     wprintf(L"hartpdf ok\n");
 
@@ -5615,6 +5706,7 @@ done:
     DeleteFileW(pdf_other);
     DeleteFileW(zip_ok);
     DeleteFileW(zip_none);
+    DeleteFileW(pdf_redacted);
     if (rc != 0)
     {
         wprintf(L"hartpdf test failed\n");

@@ -515,9 +515,9 @@ Is Blank, but it does carry the device and polling-place fields the XML lacks.
   +4 GiB multiples (32-bit offsets wrapped past 4 GiB). If the xref is unusable the object
   table is rebuilt by scanning for `N G obj` headers and the last `/Root`.
   Not supported (not needed for these reports): encryption, filters other than Flate.
-- **Detection** (`EeCvr_IsHartCvrPdf`): page 1 must have the `Cvr Id:`, `Device Serial:`,
-  `Device Data Id:` and `Central Batch Id:` labels **and** the `Contest Title` / `Option`
-  table header. Every selected PDF is checked before any work, so another vendor's PDF
+- **Detection** (`EeCvr_IsHartCvrPdf`): page 1 must have the `CVR Report` title, a
+  `Cvr Id:` label **and** the `Contest Title` / `Option` table header — only the fields
+  that survive county redaction (see below). Every selected PDF is checked before any work, so another vendor's PDF
   (or an unrelated PDF) aborts the load with "<file>: not a Hart Cast Vote Record report…".
 - **Page → sheet**: runs inside one clip rectangle form a **cell** (a wrapped contest
   title is two runs in one taller cell, joined directly — SSRS keeps the trailing space on
@@ -529,11 +529,23 @@ Is Blank, but it does carry the device and polling-place fields the XML lacks.
   export contains a valid multi-selection, so this rendering is assumed. Consecutive pages
   with the same Cvr Id are one sheet. The Cvr Id is lower-cased and `"3156 - 008"` precinct
   splits are normalized to the XML's `"3156-008"`, so both sources key identically.
+- **Redacted reports** (Burnet County L25/G25): the county's redaction tool deletes the
+  header text (no black boxes) — L25 keeps only Precinct and Cvr Id; G25 also keeps
+  Party, Device Data Id and Central Batch Id — and strips the document Info. Any
+  PDF-sourced key field (Batch Number, Voting Type, Polling Place, Device Type/Serial/
+  Data Id) that is blank on **every** record gets no column (so Tarrant ED/EV PDFs have
+  no Batch Number column and ABM PDFs no Polling Place). Redacted clip paths are
+  polygons; the reader uses their bounding box.
+- **Vote-for-N in the PDF**: a multi-seat contest is printed as **one row per seat with
+  the title repeated** (Burnet L25 "CITY OF BURNET COUNCIL MEMBERS": `Undervotes: 1`,
+  `Ricky Langley`, `Dennis Langley`). Rows with the same title on one sheet are merged
+  into one contest (`sheet_find_contest`), so the seat count and tally match the XML
+  model (Burnet council: 957 marks = 3 seats × 319 ballots).
 - **Load modes** (`EeCvr_LoadFromHartFiles`, any mix of `.zip`/`.pdf`; anything else is
   rejected, and the load thread refuses to mix Hart and ES&S files):
   - **PDF only** — two passes over the PDFs (discover, fill). Frozen keys: `CvrGuid,
-    Batch Number, Precinct, [Party], Voting Type, Polling Place, Device Type,
-    Device Serial, Device Data Id`.
+    [Batch Number], Precinct, [Party], [Voting Type], [Polling Place], [Device Type],
+    [Device Serial], [Device Data Id]` (bracketed = only when non-blank on some record).
   - **ZIP + PDF** — one pass over the PDFs builds a lowercase-Cvr-Id → header-field map
     (`HartMeta`: interned values in a `StrMap`), then the usual two ZIP passes; pass 2
     decorates each row by Cvr Id (rows with no PDF record leave the fields blank). Votes

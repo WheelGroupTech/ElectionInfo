@@ -19,9 +19,13 @@
  *    publish only the PDF);
  *  - ZIPs + PDFs: the votes come from the ZIPs; the PDFs supply Voting Type, Polling
  *    Place, Device Type, Device Serial and Device Data Id, matched by Cvr Id.
- * A PDF is accepted only if its first page has the Hart CVR Report header labels
- * (Cvr Id, Device Serial, Device Data Id, Central Batch Id) and the Contest Title /
- * Option table header, so other vendors' PDFs are rejected with a clear message.
+ * A PDF is accepted only if its first page has the "CVR Report" title, a Cvr Id label
+ * and the Contest Title / Option table header, so other vendors' PDFs are rejected with
+ * a clear message. Counties may redact the other header fields (Burnet County removes
+ * Polling Place, Voting Type and the device fields, and sometimes Party and Central
+ * Batch Id): a PDF field that is blank on every record gets no column. A vote-for-N
+ * contest is printed as one row per seat with the contest title repeated; rows with
+ * the same title on one sheet are merged into one contest.
  *
  * A Hart CVR ZIP export is one or more ZIP files, each containing one XML file per
  * scanned ballot SHEET (the first/only sheet is named `1_<guid>.xml`; later sheets
@@ -711,6 +715,21 @@ static int sheet_add_contest(HartSheet *s, const char *name, size_t len)
     return s->nct++;
 }
 
+/* Index of the contest on @p s named exactly [name,len), or -1. */
+static int sheet_find_contest(const HartSheet *s, const char *name, size_t len)
+{
+    int i;
+    for (i = 0; i < s->nct; i++)
+    {
+        const char *nm = s->arena + s->ct[i].name_off;
+        if (strlen(nm) == len && memcmp(nm, name, len) == 0)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
 /* Add selection text [v,len) to contest @p idx. FALSE on OOM. */
 static BOOL sheet_add_selection(HartSheet *s, int idx, const char *v, size_t len)
 {
@@ -1338,6 +1357,7 @@ typedef struct HartMeta
     uint32_t *ent; /* META_COUNT value offsets per entry */
     uint32_t n;
     uint32_t cap;
+    unsigned present; /* (1u << META_*) for fields non-blank on any record */
 } HartMeta;
 
 static void meta_free(HartMeta *m)
@@ -1394,6 +1414,10 @@ static BOOL meta_add(HartMeta *m, const HartSheet *s)
     e = &m->ent[(size_t)m->n * META_COUNT];
     for (k = 0; k < META_COUNT; k++)
     {
+        if (f[k][0] != '\0')
+        {
+            m->present |= 1u << k;
+        }
         if (!strmap_put(&m->vals, f[k], 0, &e[k]))
         {
             return FALSE;
@@ -1621,7 +1645,8 @@ static void normalize_precinct(char *p)
 typedef struct HartPdfPage
 {
     int is_cvr_page;   /* has the Contest Title / Option table header */
-    int has_labels;    /* has the Hart header labels (Cvr Id, Device Serial, ...) */
+    int has_labels;    /* has the "CVR Report" title and a Cvr Id label (the fields that
+                        * survive county redaction) */
     char guid[80];
     char precinct[192];
     char party[192];
@@ -1666,14 +1691,16 @@ static void pdf_parse_header(const HartPdfCtx *c, HartPdfPage *pg)
             continue;
         }
         s = cell_trim(c, cell, &n);
-        if (take_label(s, n, "Cvr Id:", pg->guid, sizeof(pg->guid)))
+        if (text_is(s, n, "CVR Report"))
+            found |= 2;
+        else if (take_label(s, n, "Cvr Id:", pg->guid, sizeof(pg->guid)))
             found |= 1;
         else if (take_label(s, n, "Device Serial:", pg->dserial, sizeof(pg->dserial)))
-            found |= 2;
+            ;
         else if (take_label(s, n, "Device Data Id:", pg->ddata, sizeof(pg->ddata)))
-            found |= 4;
+            ;
         else if (take_label(s, n, "Central Batch Id:", pg->batch, sizeof(pg->batch)))
-            found |= 8;
+            ;
         else if (take_label(s, n, "Precinct:", pg->precinct, sizeof(pg->precinct)))
             normalize_precinct(pg->precinct);
         else if (take_label(s, n, "Party:", pg->party, sizeof(pg->party)))
@@ -1685,7 +1712,7 @@ static void pdf_parse_header(const HartPdfCtx *c, HartPdfPage *pg)
         else if (take_label(s, n, "Device Type:", pg->dtype, sizeof(pg->dtype)))
             ;
     }
-    pg->has_labels = (found == 15);
+    pg->has_labels = (found == 3);
     ascii_lower(pg->guid);
 }
 
@@ -1788,7 +1815,13 @@ static BOOL pdf_add_rows(HartPdfCtx *c, const HartPdfPage *pg, HartSheet *s)
     {
         size_t n;
         const char *t = cell_trim(c, &c->cells[titles[i]], &n);
-        title_idx[i] = sheet_add_contest(s, t, n);
+        /* The PDF prints a vote-for-N contest as one row per seat with the title
+         * repeated: rows with the same title on one sheet are the same contest. */
+        title_idx[i] = sheet_find_contest(s, t, n);
+        if (title_idx[i] < 0)
+        {
+            title_idx[i] = sheet_add_contest(s, t, n);
+        }
         ok = (title_idx[i] >= 0);
     }
     for (i = 0; i < no && ok; i++)
@@ -1904,7 +1937,7 @@ static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, wchar_t *err, size
     {
         set_pdf_err(err, errcch, path,
                     L"not a Hart Cast Vote Record report (expected the Hart \"CVR Report\" "
-                    L"with Cvr Id, Device Serial and Contest Title / Option columns).");
+                    L"with a Cvr Id and Contest Title / Option columns).");
         pdfctx_free(c);
         return FALSE;
     }
@@ -2054,29 +2087,36 @@ static const char *hart_key_value(const HartSheet *s, int key)
     }
 }
 
-/* Choose the frozen key columns for a load. */
-static uint32_t hart_key_layout(int *keys, BOOL has_zip, BOOL has_pdf, BOOL has_party)
+/* Choose the frozen key columns for a load. @p present has (1u << HK_*) set for each
+ * PDF-sourced field that is non-blank on at least one record: a field blank on every
+ * record (redacted by the county, or never filled) gets no column. The ZIP's own
+ * columns, including its Batch Number, are always kept. */
+static uint32_t hart_key_layout(int *keys, BOOL has_zip, BOOL has_pdf, BOOL has_party,
+                                unsigned present)
 {
-    uint32_t n = 0;
+    static const int k_PdfKeys[] = {HK_VTYPE, HK_PPLACE, HK_DTYPE, HK_DSERIAL, HK_DDATA};
+    uint32_t n = 0, k;
     keys[n++] = HK_GUID;
     if (has_zip)
     {
         keys[n++] = HK_SHEET;
         keys[n++] = HK_BSEQ;
     }
-    keys[n++] = HK_BNUM;
+    if (has_zip || (present & (1u << HK_BNUM)))
+    {
+        keys[n++] = HK_BNUM;
+    }
     keys[n++] = HK_PRECINCT;
     if (has_party)
     {
         keys[n++] = HK_PARTY;
     }
-    if (has_pdf)
+    for (k = 0; has_pdf && k < ARRAYSIZE(k_PdfKeys); k++)
     {
-        keys[n++] = HK_VTYPE;
-        keys[n++] = HK_PPLACE;
-        keys[n++] = HK_DTYPE;
-        keys[n++] = HK_DSERIAL;
-        keys[n++] = HK_DDATA;
+        if (present & (1u << k_PdfKeys[k]))
+        {
+            keys[n++] = k_PdfKeys[k];
+        }
     }
     if (has_zip)
     {
@@ -2096,6 +2136,7 @@ typedef struct
     int global_has_party;
     const HartMeta *meta; /* ZIP+PDF: count Cvr Ids found in the PDFs */
     uint64_t meta_hits;
+    unsigned present; /* (1u << HK_*) for PDF-sourced fields seen non-blank */
 } Pass1Ctx;
 
 static BOOL pass1_sheet(void *vctx, HartSheet *sheet)
@@ -2105,6 +2146,18 @@ static BOOL pass1_sheet(void *vctx, HartSheet *sheet)
     if (sheet->has_party)
     {
         p->global_has_party = 1;
+    }
+    {
+        static const int k_Fields[] = {HK_BNUM, HK_VTYPE, HK_PPLACE, HK_DTYPE, HK_DSERIAL,
+                                       HK_DDATA};
+        uint32_t k;
+        for (k = 0; k < ARRAYSIZE(k_Fields); k++)
+        {
+            if (hart_key_value(sheet, k_Fields[k])[0] != '\0')
+            {
+                p->present |= 1u << k_Fields[k];
+            }
+        }
     }
     if (p->meta != NULL)
     {
@@ -2394,7 +2447,22 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     }
 
     /* ---- Build the ordered column layout ---- */
-    frozen = hart_key_layout(keys, nzip > 0, npdf > 0, p1.global_has_party != 0);
+    if (nzip > 0 && npdf > 0)
+    {
+        /* PDF fields come from the metadata index; map META_* bits to HK_* bits. */
+        static const int k_MetaKey[META_COUNT] = {HK_VTYPE, HK_PPLACE, HK_DTYPE, HK_DSERIAL,
+                                                  HK_DDATA};
+        uint32_t k;
+        p1.present = 0;
+        for (k = 0; k < META_COUNT; k++)
+        {
+            if (meta.present & (1u << k))
+            {
+                p1.present |= 1u << k_MetaKey[k];
+            }
+        }
+    }
+    frozen = hart_key_layout(keys, nzip > 0, npdf > 0, p1.global_has_party != 0, p1.present);
     order = (uint32_t *)malloc((size_t)dict.n * sizeof(uint32_t));
     if (order == NULL)
     {

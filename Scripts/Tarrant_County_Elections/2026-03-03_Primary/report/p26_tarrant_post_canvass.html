@@ -1,0 +1,237 @@
+<title>Tarrant P26 Post-Canvass Audit</title>
+<style>
+/* Layout: one reading column of findings, with wide ledger tables that scroll inside their own frame */
+:root{
+  --bg:#f6f7f4; --panel:#ffffff; --fg:#1d2321; --muted:#5d6763; --rule:#d9ddd7;
+  --accent:#1f5f8b; --ok:#2e7d4f; --warn:#a86a12; --bad:#b03a2e; --tint:#eef2ee;
+  --display:"Source Serif 4", Georgia, "Times New Roman", serif;
+  --body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#131716; --panel:#1b201f; --fg:#e4e8e5; --muted:#9aa5a0; --rule:#2e3633;
+  --accent:#6fb0dc; --ok:#62b884; --warn:#e0a548; --bad:#e6796c; --tint:#202826; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#131716; --panel:#1b201f; --fg:#e4e8e5; --muted:#9aa5a0; --rule:#2e3633;
+  --accent:#6fb0dc; --ok:#62b884; --warn:#e0a548; --bad:#e6796c; --tint:#202826; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.6 var(--body)}
+.wrap{max-width:1040px;margin:0 auto;padding-inline:20px;padding-block:28px 64px}
+header{border-bottom:2px solid var(--fg);padding-bottom:16px;margin-bottom:24px}
+.eyebrow{font:600 12px/1.2 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font:600 clamp(28px,4vw,40px)/1.15 var(--display);margin:.25em 0 .2em;text-wrap:balance}
+h2{font:600 24px/1.25 var(--display);margin:40px 0 10px;text-wrap:balance;border-top:1px solid var(--rule);padding-top:22px}
+h3{font:600 16px/1.3 var(--body);margin:22px 0 6px}
+p,li{max-width:72ch}
+.sub{color:var(--muted);margin:0}
+a{color:var(--accent)}
+code,.num{font-family:var(--mono);font-size:.92em}
+.answers{display:grid;gap:12px;margin:18px 0 8px}
+.answer{display:grid;grid-template-columns:7.5rem 1fr;gap:14px;background:var(--panel);border:1px solid var(--rule);padding:14px 16px;border-radius:6px}
+.answer>div{min-width:0}
+.answer .q{font-weight:600;margin-bottom:2px}
+.pill{align-self:start;font:600 12px/1 var(--mono);letter-spacing:.04em;text-transform:uppercase;padding:6px 8px;border-radius:4px;text-align:center;border:1px solid currentColor}
+.pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
+@media (max-width:560px){.answer{grid-template-columns:1fr}.pill{justify-self:start}}
+.tbl{overflow-x:auto;margin:10px 0 6px;border:1px solid var(--rule);border-radius:6px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+th,td{padding:7px 10px;border-bottom:1px solid var(--rule);text-align:left;vertical-align:top}
+th{font:600 12px/1.3 var(--body);color:var(--muted);background:var(--tint);white-space:nowrap}
+td.n,th.n{text-align:right;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.v-ok{color:var(--ok);font-weight:600}.v-warn{color:var(--warn);font-weight:600}.v-bad{color:var(--bad);font-weight:600}
+.note{color:var(--muted);font-size:13px}
+.callout{border-left:3px solid var(--bad);background:var(--panel);padding:10px 14px;margin:12px 0;border-radius:0 6px 6px 0}
+.callout.warn{border-color:var(--warn)}
+.callout.ok{border-color:var(--ok)}
+footer{margin-top:44px;border-top:1px solid var(--rule);padding-top:14px;color:var(--muted);font-size:13px}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,600&display=swap">
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Post-canvass audit · Tarrant County, Texas · Primary of March 3, 2026</div>
+  <h1>Tarrant County March 2026 Primary: Post-Canvass Reconciliation</h1>
+  <p class="sub">Independent check of the official canvass against the county's own cast vote records, scanner results tapes, voter rosters, audit reports, and a third-party reconciliation chart. All source files were published by Tarrant County Elections Administration.</p>
+</header>
+
+<h2 id="answers">Answers</h2>
+<div class="answers">
+  <div class="answer"><span class="pill ok">Match</span><div><div class="q">Do the CVRs match the official published results?</div>Yes, exactly. All 1,307 candidate/vote-type totals, every undervote and overvote total, and every precinct-level figure in the official Clarity detail file equal a tabulation of the 488,862 Hart CVR records (337,054 ballots). The 199 per-polling-place Election Day reports also match the CVRs on all 134,643 lines.</div></div>
+  <div class="answer"><span class="pill bad">Exposed</span><div><div class="q">Were roster entries redacted to protect ballot secrecy, and does it hold up?</div>The county redacted voters whose precinct had only one or two ballots of their party by that method. That rule held in the March roster reports, but the April "Redacted" full roster names the voters again. In 133 precinct/method/party groups exactly one ballot was cast and the full roster names that voter, so the public CVR shows how they voted. The county did not redact for polling-place uniqueness: 16,031 in-person ballots were the only ballot of their precinct cast at that vote center.</div></div>
+  <div class="answer"><span class="pill warn">Small gaps</span><div><div class="q">Are there more votes cast than voters?</div>Not countywide against poll-book check-ins, but yes in places: 21 polling sites counted more ballots than they checked in voters (largest: New Beginnings Church, Democratic Election Day, 95 ballots for 86 check-ins). The county's own state reconciliation form shows 20 more Republican mail ballots counted than accepted mail voters and 48 more Democratic early-voting ballots than early voters. The published full rosters list 221 fewer Republican and 240 fewer Democratic voters than ballots counted.</div></div>
+  <div class="answer" id="tape-answer"><span class="pill warn">Match, gaps</span><div><div class="q">Do the polling-place results tapes match the CVRs?</div>Every published tape with results matches the CVRs of its scanner. No vote count on any tape was found to differ from the CVR. But the published set is incomplete: 38 scanners that counted 36,544 in-person ballots have no tape with results (7 early-voting units with 28,543 ballots, 31 Election Day units with 8,001), and 2 more Republican tapes are torn off after the header. Two Election Day tapes show ballots that were later rescanned on other units, and the county filed several tapes under the wrong site or party.</div></div>
+  <div class="answer"><span class="pill warn">Mostly</span><div><div class="q">Is the "Election Reconciliation Chart – Official Totals 3-3-2026" correct?</div>Most cells trace correctly to their sources. Three need correction: the 11,693 mail figure is ballots <em>sent</em>, not counted; the Republican Election Day "Scanner Voter Tapes" figure (45,574) does not reproduce, and every tape figure leaves out ballots on scanners with no published tape; and the "Daily Count Total" of 51,065 is the report's unlabeled Verity scanner total, not check-ins minus provisionals (51,103). The CVR column includes provisional ballots, so it is not comparable to the counted columns without that adjustment. See the cell-by-cell check below.</div></div>
+</div>
+
+<h2 id="totals">Official totals and where each ballot sits in the CVR</h2>
+<p>The CVR exports count one record per ballot sheet. Republican ballots were two sheets; Democratic ballots one. Counting sheet 1 gives ballots. Provisional and limited ballots appear in the early-voting and Election Day CVR files under their own polling-place names.</p>
+<div class="tbl"><table>
+<thead><tr><th>Party / method</th><th class="n">Official counted</th><th class="n">CVR sheet-1 ballots</th><th>CVR breakdown</th></tr></thead>
+<tbody>
+<tr><td>Republican mail</td><td class="n">4,487</td><td class="n">4,487</td><td>central count</td></tr>
+<tr><td>Republican early voting</td><td class="n">91,717</td><td class="n">91,846</td><td>91,667 at 40 vote centers + 50 "EV – Limited" + 129 "EV REP – Prov"</td></tr>
+<tr><td>Republican Election Day</td><td class="n">51,065</td><td class="n">51,138</td><td>51,065 at 199 vote centers + 73 "ED REP PROV"</td></tr>
+<tr><td>Republican provisional</td><td class="n">202</td><td class="n">(in rows above)</td><td>129 EV + 73 ED</td></tr>
+<tr><td><strong>Republican total</strong></td><td class="n"><strong>147,471</strong></td><td class="n"><strong>147,471</strong></td><td></td></tr>
+<tr><td>Democratic mail</td><td class="n">4,835</td><td class="n">4,835</td><td>central count</td></tr>
+<tr><td>Democratic early voting</td><td class="n">122,371</td><td class="n">122,480</td><td>122,229 at 40 vote centers + 142 "EV – Limited" + 109 "EV DEM – Prov"</td></tr>
+<tr><td>Democratic Election Day</td><td class="n">62,058</td><td class="n">62,268</td><td>62,058 at 199 vote centers + 210 "ED DEM PROV"</td></tr>
+<tr><td>Democratic provisional</td><td class="n">319</td><td class="n">(in rows above)</td><td>109 EV + 210 ED</td></tr>
+<tr><td><strong>Democratic total</strong></td><td class="n"><strong>189,583</strong></td><td class="n"><strong>189,583</strong></td><td></td></tr>
+</tbody></table></div>
+<p class="note">Official counted figures are from the county's SOS "Election Reconciliation – Official Totals" forms and the Clarity results (337,054 ballots cast). 331 Republican ballots have a sheet 1 with no matching sheet 2 in the CVR (2 mail, 244 EV, 85 ED); contest totals are unaffected because each contest is counted from the sheet that carries it.</p>
+
+<h2 id="cvr">CVRs against the official results</h2>
+<ul>
+<li>Source: six Hart Verity CVR export ZIPs (one XML per sheet) and the matching six "CVR Report" PDFs, which add polling place, scanner serial and voting type. Every CVR ID appears in both, with the same precinct.</li>
+<li>Official comparison: Clarity <code>detail.xml</code> (181 contests: 104 Republican, 77 Democratic) by contest, choice, vote type (Absentee, Early Voting, Election) and precinct, plus undervotes and overvotes by precinct. <strong>Zero differences.</strong></li>
+<li>Second source: the county's "ED Locations Cumulative Reports" (one report per Election Day site, run 3/23/2026) match the CVRs grouped by polling place on every line: 78,139 Republican and 56,504 Democratic lines.</li>
+<li>Hand-count audit: the certification shows three lines one vote above the electronic tally (Cornyn at Arlington South Service Center; Chip Roy and Phil Sorrels at Como Community Center, all Republican early voting), the same three the county's PEHCA letter attributes to tally errors. The electronic figures on the certification equal the CVR.</li>
+</ul>
+<div class="callout warn"><strong>Report defects found along the way.</strong>
+<ul>
+<li>The ED location report file contains two reports titled "Tarrant County Plaza Building". The second (270 Republican / 218 Democratic ballots) is the "Tarrant County Precinct 1" site; its votes match that site's CVRs exactly.</li>
+<li>Four Election Day sites appear in the CVR and on their own tapes only as "ED Location 201–204". Ballot counts identify them as Agape United Christian Fellowship, Alpha International Seventh-Day Adventist Church, House of Prayer &amp; Praise Church and James Starrett Elementary School.</li>
+<li>Edify Community Fellowship Church (Democratic, Election Day) has 189 CVR ballots against a Verity count of 187. The extra 2 came from a second scanner, S1902551408, which also scanned 1 Republican ballot at Dover Fellowship Hall. This is the source of the 62,058 vs 62,056 difference in the chart.</li>
+<li>Some CVR Report PDF pages omit the precinct and device type (16,692 Republican EV, 4,223 Democratic EV and 2,207 Republican ED records). The XML export carries the precinct for all of them.</li>
+</ul></div>
+
+<h2 id="voters">Voters versus ballots</h2>
+<h3>County SOS reconciliation forms</h3>
+<p>The arithmetic on both forms is internally correct. The line items show where ballots exceed voters:</p>
+<div class="tbl"><table>
+<thead><tr><th>Line</th><th class="n">Rep voters</th><th class="n">Rep counted</th><th class="n">Rep diff.</th><th class="n">Dem voters</th><th class="n">Dem counted</th><th class="n">Dem diff.</th></tr></thead>
+<tbody>
+<tr><td>Early voting in person</td><td class="n">91,732</td><td class="n">91,717</td><td class="n">15 fewer ballots</td><td class="n">122,323</td><td class="n">122,371</td><td class="n v-bad">48 more ballots</td></tr>
+<tr><td>Election Day in person</td><td class="n">51,129</td><td class="n">51,065</td><td class="n">64 fewer</td><td class="n">62,190</td><td class="n">62,058</td><td class="n">132 fewer</td></tr>
+<tr><td>Mail (returned − rejected)</td><td class="n">4,467</td><td class="n">4,487</td><td class="n v-bad">20 more ballots</td><td class="n">4,851</td><td class="n">4,835</td><td class="n">16 fewer</td></tr>
+<tr><td>Provisional (submitted − rejected)</td><td class="n">201</td><td class="n">202</td><td class="n v-bad">1 more ballot</td><td class="n">343</td><td class="n">319</td><td class="n">24 fewer</td></tr>
+<tr><td>Net (form line N)</td><td class="n"></td><td class="n"></td><td class="n">58</td><td class="n"></td><td class="n"></td><td class="n">124</td></tr>
+</tbody></table></div>
+<p class="note">The Republican explanation lists 15 EV and 64 ED walk-aways and a 20-ballot mail "discrepancy – no verifiable explanation"; the Democratic form notes in handwriting that it is "unknown why VRS check-ins and ballots returned in EV are different." The Democratic mail section is also inconsistent: 5,983 sent − 860 not returned = 5,123, not the 4,922 mail voters reported.</p>
+
+<h3>Poll-book check-ins by site</h3>
+<p>The Election Day cross-check report's "EPB Checkins" excludes provisional check-ins (ballots equal check-ins at sites with provisionals, site after site). Against it:</p>
+<ul>
+<li><strong>Election Day, Republican:</strong> 51,214 check-ins, 51,065 ballots (149 fewer ballots). 13 sites had more ballots than check-ins (17 extra), led by Bethlehem Baptist Church (174 ballots, 169 check-ins).</li>
+<li><strong>Election Day, Democratic:</strong> 62,350 check-ins, 62,058 ballots (292 fewer). 5 sites had more ballots than check-ins (13 extra), led by New Beginnings Church (95 ballots, 86 check-ins).</li>
+<li><strong>Early voting (both parties):</strong> the 40 site rows total 213,992 check-ins and 213,896 Verity ballots, which equal the CVR at every site. Three sites counted more ballots than check-ins: Tarrant County Plaza Building (+4), Sheriff's Office North Patrol Division (+1), TCC Southeast Campus (+1).</li>
+</ul>
+<div class="callout warn">The Early Voting Audit Report's printed grand totals (358,778 check-ins, 538 provisional, 358,619 Verity) do not equal the sum of its own 40 rows (213,992 / 327 / 213,896). The rows reconcile to the CVR; the total line does not.</div>
+
+<h3>Published rosters</h3>
+<div class="tbl"><table>
+<thead><tr><th>File</th><th class="n">Republican</th><th class="n">Democratic</th></tr></thead>
+<tbody>
+<tr><td>Full "Redacted" roster (Apr 28), all vote types</td><td class="n">147,250</td><td class="n">189,343</td></tr>
+<tr><td>Ballots counted</td><td class="n">147,471</td><td class="n">189,583</td></tr>
+<tr><td>Ballots without a roster entry</td><td class="n v-bad">221</td><td class="n v-bad">240</td></tr>
+<tr><td>Roster vote type Y (Election Day) / E (early) / A (mail)</td><td class="n">51,059 / 91,486 / 4,459</td><td class="n">62,066 / 122,028 / 4,806</td></tr>
+<tr><td>Roster vote types F / Z / L (undocumented)</td><td class="n">128 / 70 / 48</td><td class="n">164 / 145 / 134</td></tr>
+</tbody></table></div>
+<p class="note">No voter appears in both parties' rosters or under two methods. The full roster file contains 3 rows marked "DEM" inside the Republican roster, and the EV report has 1. Precinct-level comparisons with the full roster are unreliable: 461–1,504 voters per file show a different precinct in April than in the March reports.</p>
+
+<h2 id="tapes">Results tapes against the CVRs</h2>
+<p>The three tape ZIPs hold 425 TIFF images: 57 early voting, 183 Democratic and 185 Republican Election Day. Hart Verity Scan tapes print the polling place, scanner serial, ballot counter, every contest and a ballot count by party. Each tape was read with OCR and paired to its scanner in the CVR Report PDFs. Pairing used the polling place and party first, then the printed serial and ballot counter, because OCR often misreads a serial digit. Every count was then compared with the CVR tally for that scanner and voting method.</p>
+<div class="tbl"><table>
+<thead><tr><th>Step</th><th class="n">Tape lines</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>Tape lines aligned to a CVR count</td><td class="n">163,760</td><td>429 tape reports from the 425 images (one recovered from a damaged TIFF)</td></tr>
+<tr><td>Equal to the CVR on first OCR</td><td class="n">157,523</td><td class="v-ok">96.2%</td></tr>
+<tr><td>Equal after re-reading the count from the image (3&times; scale, digits-only, several thresholds)</td><td class="n">5,268</td><td class="v-ok">cumulative 99.4%</td></tr>
+<tr><td>Proposition lines where OCR alignment slipped to a neighbouring proposition; the tape value equals the CVR value for that proposition</td><td class="n">209</td><td class="v-ok">explained</td></tr>
+<tr><td>Explained by scanner use (the Limited tape's extra zero reports; Handley-Meadowbrook #2, below)</td><td class="n">230</td><td class="v-ok">explained</td></tr>
+<tr><td>Not machine-resolved</td><td class="n">530</td><td>Faint or speckled digits. A random sample of 48 and the two largest clusters (Mansfield Subcourthouse, North Richland Hills Public Library) were checked by eye, and every one shows the CVR value on the tape.</td></tr>
+</tbody></table></div>
+<p>The ballot counters and "Total Ballots Cast" by party agree with the CVR for every tape where they could be read. The apparent exceptions (Countryside Bible Church 412 vs 112, Como Community Center 5660 vs 526, Westworth Village 562 vs 552 and others) were each checked against the image and are OCR misreads.</p>
+
+<h3>Rescanned ballots</h3>
+<p>When ballots are rescanned at central count, the CVRs carry the rescanning unit's serial while the original tape stays in the records. Two Election Day tapes show this:</p>
+<ul>
+<li><strong>Dover Fellowship Hall (Republican):</strong> the tape is from S1902990209, a serial that appears nowhere in the CVR, and reports 457 ballots. The CVR spreads the site's 457 ballots across S1902994209 (283), S1903069109 (91), S1902533708 (82) and S1902551408 (1). The two middle units are early-voting scanners (Handley-Meadowbrook #2, Bagsby #3). The tape's vote counts equal the site's CVR totals.</li>
+<li><strong>The Pentecostals of Fort Worth (Democratic):</strong> the tape is from S1902663108 (188 ballots); all 188 CVRs carry S1902544208. Votes match.</li>
+<li>S1902551408 also carries 2 Democratic ballots at Edify Community Fellowship Church that are not on Edify's tape (187). That is why the official Election Day count (62,058) is 2 above the cross-check report (62,056).</li>
+<li>Handley-Meadowbrook #2 (S1903069109) printed 4 Republican early-voting ballots. The CVR gives that serial 5, one of them labelled "EV – Benbrook Community Center".</li>
+<li>Scanner S1902552008 carries the 142 Democratic limited ballots (its tape matches) and the 73 Republican and 210 Democratic Election Day provisional ballots, which have no tape. S1902846009 carries 129 + 109 early-voting provisionals and 50 Republican limited ballots, also with no tape.</li>
+</ul>
+
+<h3>Scanners with no published results tape</h3>
+<div class="tbl"><table>
+<thead><tr><th>Group</th><th class="n">Scanners</th><th class="n">Ballots</th><th>Sites</th></tr></thead>
+<tbody>
+<tr><td>Early voting</td><td class="n">7</td><td class="n">28,543</td><td>Crouch Event Center (only scanner), Saginaw Public Library (only scanner), Southwest Community Center (image holds only power-on self-test reports), and the second scanner at Keller Town Hall, Elzie Odom Athletic Center, Grapevine Public Library (the "2" image repeats the first scanner's tape) and Tarrant County Subcourthouse in Arlington</td></tr>
+<tr><td>Election Day, Republican</td><td class="n">15</td><td class="n">3,491</td><td>Dionne Phillips Bagsby Southwest Subcourthouse (718), Grapevine Public Library main unit (661), North Richland Hills City Hall (373), Betsy Price Community Center (316), R. L. Paschal High School (299), Asia Times Square (254), East Regional Library (221), MISD Student Nutrition Department (198), First Baptist Watauga (193), St. Andrews United Methodist Church (122), Vivian J. Lincoln Branch Library (57), Atwood McDonald Elementary (43), M. G. Ellis (14), Beth Eden Missionary Baptist Church (14), Rising Star Baptist Church (8)</td></tr>
+<tr><td>Election Day, Republican, torn after the header</td><td class="n">2</td><td class="n">533</td><td>Church of the Holy Apostles (counter 195), Lighthouse Fellowship (338): ballot counters match the CVR, no vote totals</td></tr>
+<tr><td>Election Day, Democratic</td><td class="n">16</td><td class="n">4,510</td><td>Tarrant County Subcourthouse in Arlington (905), Bob Duncan Center (598), Southside Community Center (449), Southeast Branch Library (381), Daggs Building (360), St. Matthew's Lutheran Church (293), Alpha International SDA Church ("ED Location 204", 257), J. M. Farrell Elementary (240), Destiny Center (215), Victory Forest Community Center (158), Lake Country Church (154), Lighthouse Fellowship (148), Grace Community Church (141), W. M. Green Elementary (100), Agape United Christian Fellowship ("ED Location 201", 63), The Word @ Lakeside (48)</td></tr>
+</tbody></table></div>
+
+<h3>Filing errors in the tape ZIPs</h3>
+<ul>
+<li>"EEC#271 Sunrise-McMillian Elementary School" in the Republican ZIP is the Democratic tape (172 ballots), and "EEC#272" in the Democratic ZIP is the Republican tape (11 ballots).</li>
+<li>"EEC#156 Foster Village Elementary School" is the tape for <em>Foster Elementary School</em> (S1902547608, 52 ballots); Foster Village's own tape is EEC#158.</li>
+<li>"Northpark YMCA.tif" (early voting) is a TIFF written without its image directory, so ordinary viewers cannot open it. Its pixels are intact; read as 490-pixel-wide raw grayscale, it is S1902993409 with 6,479 ballots, matching the CVR.</li>
+<li>Duplicate images: "Grapevine Public Library 2.tif" and "City of Forest Hill City Hall 2.tif" (early voting) repeat the first scanner's tape; "EEC#149 Elks Lodge" and "EEC#621 Tanglewood" each contain the same report twice. "Limted 2.tif" is an empty tape from S1902850409, a serial with no CVRs.</li>
+</ul>
+<p class="note">Because about 11% of in-person ballots (37,077 of 327,732) were counted on scanners with no published tape, a tape-to-CVR comparison cannot independently confirm those ballots. Requesting the missing tapes, or the poll-closing reports for those units, would close the gap.</p>
+
+<h2 id="redaction">Roster redactions and ballot secrecy</h2>
+<p>Under countywide polling, a ballot is identifiable when it is the only one of its style in a group anyone can see. The CVR Report PDFs publish each ballot's precinct, party, voting method and polling place.</p>
+<h3>What the county redacted</h3>
+<div class="tbl"><table>
+<thead><tr><th>Voter's precinct had this many ballots (party + method)</th><th class="n">Mail: redacted / named</th><th class="n">Early: redacted / named</th><th class="n">Election Day: redacted / named</th></tr></thead>
+<tbody>
+<tr><td>1</td><td class="n">113 / 3</td><td class="n">22 / 0</td><td class="n">32 / 0</td></tr>
+<tr><td>2</td><td class="n">181 / 15</td><td class="n">42 / 0</td><td class="n">66 / 3</td></tr>
+<tr><td>3</td><td class="n">47 / 332</td><td class="n">9 / 45</td><td class="n">10 / 69</td></tr>
+<tr><td>4 or more</td><td class="n">210 / 8,592</td><td class="n">143 / 213,434</td><td class="n">157 / 112,961</td></tr>
+</tbody></table></div>
+<p class="note">Both parties combined, from the March roster reports (absentee returned, early in person, Election Day in person). The redactions at 4+ ballots are likely protected voters.</p>
+<div class="callout"><strong>The April full roster undoes the redactions.</strong> In the "Election Roster_Redacted" files only 45 Republican and 26 Democratic rows are redacted. Of the precincts with one or two ballots of a party by a method, the full roster names voters in 106 of 108 (Republican mail), 98 of 100 (Democratic mail), 14 of 28 and 5 of 17 (early), and 22 of 35 and 19 of 29 (Election Day). In <strong>133</strong> of these groups exactly one ballot was cast and the voter is named, so that voter's selections can be read from the CVR: 57 Republican mail, 51 Democratic mail, 3 + 1 early, 10 + 11 Election Day.</div>
+<div class="callout warn"><strong>Polling-place uniqueness was not redacted.</strong> 16,031 in-person ballots (Republican: 2,059 EV, 3,598 ED; Democratic: 3,820 EV, 6,554 ED) were the only ballot of their precinct and party cast at that vote center. The rosters do not carry a polling place, so these are not identifiable from the rosters alone, but anyone who knows where a voter voted (poll watchers, election workers, a sign-in list, or the voter's own account) can find the ballot.</div>
+
+<h2 id="chart">The reconciliation chart, cell by cell</h2>
+<p>Each cell of the chart compared with the source it cites. <span class="v-ok">Correct</span> means the figure appears in that source; notes say what it actually measures.</p>
+<div class="tbl"><table>
+<thead><tr><th>Row</th><th>Column</th><th class="n">Chart</th><th>Verdict</th><th>Note</th></tr></thead>
+<tbody>
+<tr><td rowspan="8">Election Day Republican</td><td>EPB check-ins / provisional</td><td class="n">51,214 / 111</td><td class="v-ok">Correct</td><td>Cross-check report totals; its 199 rows sum to the same figures.</td></tr>
+<tr><td>Daily count</td><td class="n">51,214 / 111 / "Total 51,065"</td><td class="v-warn">Mislabeled</td><td>51,065 is the report's unlabeled Verity scanner total. Check-ins less provisionals would be 51,103.</td></tr>
+<tr><td>Cast vote records (sheet 1)</td><td class="n">51,138</td><td class="v-ok">Correct</td><td>Includes 73 provisional ballots counted ("ED REP PROV"); 51,065 without them.</td></tr>
+<tr><td>Election roster</td><td class="n">51,059</td><td class="v-ok">Correct</td><td>Vote type Y in the April full roster.</td></tr>
+<tr><td>ED cross-check totals</td><td class="n">51,065</td><td class="v-ok">Correct</td><td>Equals the CVR at every site.</td></tr>
+<tr><td>Scanner voter tapes</td><td class="n">45,574</td><td class="v-bad">Not reproducible</td><td>Published Republican Election Day tapes with results cover 46,867 ballots; 2 more tapes are torn after the header (533 ballots) and 15 scanners (3,491 ballots) plus 3 rescan units have no tape. The 1,293 gap could not be traced to specific tapes.</td></tr>
+<tr><td>Official ballots counted</td><td class="n">51,065 / prov. 202</td><td class="v-ok">Correct</td><td>202 is the party's total provisionals (129 EV + 73 ED), not Election Day only.</td></tr>
+<tr><td>SOS unofficial cumulative</td><td class="n">51,069</td><td>Not checked</td><td>Secretary of State source, not in county files.</td></tr>
+<tr><td rowspan="8">Election Day Democratic</td><td>EPB check-ins / provisional</td><td class="n">62,350 / 210</td><td class="v-ok">Correct</td><td></td></tr>
+<tr><td>Daily count</td><td class="n">62,350 / 210 / "Total 62,056"</td><td class="v-warn">Mislabeled</td><td>62,056 is the Verity scanner total, not check-ins less provisionals (62,140).</td></tr>
+<tr><td>Cast vote records</td><td class="n">62,268</td><td class="v-ok">Correct</td><td>Includes 210 provisional ballots; 62,058 without them.</td></tr>
+<tr><td>Election roster</td><td class="n">62,066</td><td class="v-ok">Correct</td><td>Vote type Y.</td></tr>
+<tr><td>ED cross-check totals</td><td class="n">62,056</td><td class="v-ok">Correct</td><td>2 below official because Edify's 2 ballots on a second scanner are not in the Verity count.</td></tr>
+<tr><td>Scanner voter tapes</td><td class="n">57,546</td><td class="v-ok">Correct as a sum of published tapes</td><td>17 scanners with 4,512 ballots have no published tape, so the column cannot reach 62,058 (the 2 Edify rescans are also untaped).</td></tr>
+<tr><td>Official ballots counted</td><td class="n">62,058 / prov. 319</td><td class="v-ok">Correct</td><td>319 = 109 EV + 210 ED provisionals.</td></tr>
+<tr><td>SOS unofficial cumulative</td><td class="n">61,944</td><td>Not checked</td><td></td></tr>
+<tr><td rowspan="5">Early voting Republican</td><td>EPB / daily count</td><td class="n">91,684</td><td class="v-ok">Correct</td><td>From the daily totals report; the EV audit report is not split by party.</td></tr>
+<tr><td>Cast vote records</td><td class="n">91,846</td><td class="v-ok">Correct</td><td>Includes 129 provisional and 50 limited ballots.</td></tr>
+<tr><td>Election roster</td><td class="n">91,486</td><td class="v-ok">Correct</td><td>Vote type E.</td></tr>
+<tr><td>Scanner voter tapes</td><td class="n">79,229</td><td class="v-ok">Correct as a sum of published tapes</td><td>CVR ballots on published tapes: 79,230 (the Handley-Meadowbrook #2 tape shows 4 REP ballots, the CVR 5). 12,437 ballots are on 7 scanners without tapes.</td></tr>
+<tr><td>Official ballots counted</td><td class="n">91,717</td><td class="v-ok">Correct</td><td></td></tr>
+<tr><td rowspan="5">Early voting Democratic</td><td>EPB / daily count</td><td class="n">122,184</td><td class="v-ok">Correct</td><td>Daily totals report.</td></tr>
+<tr><td>Cast vote records</td><td class="n">122,480</td><td class="v-ok">Correct</td><td>Includes 109 provisional and 142 limited ballots.</td></tr>
+<tr><td>Election roster</td><td class="n">122,028</td><td class="v-ok">Correct</td><td>Vote type E.</td></tr>
+<tr><td>Scanner voter tapes</td><td class="n">106,123</td><td class="v-ok">Correct as a sum of published tapes</td><td>16,106 ballots are on 7 scanners without tapes.</td></tr>
+<tr><td>Official ballots counted</td><td class="n">122,371</td><td class="v-ok">Correct</td><td></td></tr>
+<tr><td rowspan="3">Mail</td><td>Daily count</td><td class="n">11,693</td><td class="v-bad">Wrong measure</td><td>11,693 is absentee ballots <em>sent</em> (both parties). The same report shows 9,502 received. Counted: 4,487 + 4,835 = 9,322.</td></tr>
+<tr><td>Official counted</td><td class="n">R 4,487 / D 4,835</td><td class="v-ok">Correct</td><td>Equal to the mail CVRs.</td></tr>
+<tr><td>SOS unofficial cumulative</td><td class="n">R 2,828 / D 2,335</td><td>Not checked</td><td>Far below the counted figures, so likely an early snapshot.</td></tr>
+<tr><td>Totals</td><td>Official</td><td class="n">R 147,471 / D 189,583</td><td class="v-ok">Correct</td><td>Include provisionals; together they equal the 337,054 ballots cast.</td></tr>
+</tbody></table></div>
+<p class="note">The chart leaves the early-voting cross-check column blank. The county's EV audit report exists but combines both parties, and its printed totals are wrong (see above).</p>
+
+<h2 id="sources">Sources and method</h2>
+<ul>
+<li>County files: <code>M:\Elections\TX - Tarrant County Election Results and Data\2026-03 Primary</code>, as downloaded from the <a href="https://www.tarrantcountytx.gov/en/elections/past-election-information/2026-archives/march-3--2026--primary-elections-results.html">county's March 3, 2026 results page</a>. Chart: "Election Reconciliation Chart – Official Totals 3-3-2026.pdf".</li>
+<li>Scripts (repository <code>Scripts/Tarrant_County_Elections/2026-03-03_Primary</code>): <code>extract_hart_cvr_zip.py</code>, <code>extract_hart_cvr_pdf.py</code>, <code>parse_clarity_detail.py</code>, <code>compare_cvr_to_official.py</code>, <code>ocr_hart_results_tapes.py</code>, <code>parse_hart_tapes.py</code>, <code>compare_tapes_to_cvr.py</code>, <code>reread_tape_mismatches.py</code>, <code>parse_ed_location_reports.py</code>, <code>compare_ed_location_reports.py</code>, <code>analyze_roster_redactions.py</code>.</li>
+<li>Not verifiable from county files: the chart's "SOS Unofficial Cumulative Totals" column, which comes from the Secretary of State's turnout site.</li>
+</ul>
+<footer>Prepared October 8, 2026. Counts are reproducible from the county's published files with the scripts listed above.</footer>
+</div>

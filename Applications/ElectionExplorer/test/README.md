@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c ^
-  src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
+  src\dominion_cvr.c src\ee_rcv.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
 test\smoke_load.exe
 ```
 
@@ -87,4 +87,21 @@ a ZIP and PDF share no Cvr Id, and a county-redacted report (only Precinct + Cvr
 the header -> 2 key columns; a vote-for-3 contest printed as repeated title rows merges
 into one grouped contest);
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
--> `John Cornyn`, trimmed ends, merged tally).)
+-> `John Cornyn`, trimmed ends, merged tally);
+`dominion` covers the Dominion loader (`EeCvr_LoadFromDominionZips`,
+`EeCvr_IsDominionZip`; needs `src\dominion_cvr.c`): authors JSON-export zips with miniz
+(a 5.10-style export whose `CvrExport_10.json` precedes `CvrExport_2.json` in the zip,
+and a 5.2-style export without Cards) and checks row order by export number, the key
+columns (Record Id from ImageMask, tabulator-batch, Polling Place, Card, Adjudicated),
+the adjudicated `Modified` version winning, a disabled contest left out, vote-for-2 with
+overvote/undervote, an ambiguous mark ignored, ranked-choice `(Rank N)` columns (a
+duplicate ranking, an overvoted rank, two write-in lines at one rank = overvote), a
+county-redacted contest and ballot type (`<Redacted>`), a `\u00C9` JSON escape,
+multi-card via `Card`, the 5.2 rules (lower rankings and overvoted marks flagged
+`IsVote=false`), Hart-zip rejection by detection, a multi-zip layout mismatch, and a CSV
+round trip that keeps the Dominion key columns frozen;
+`rcv` covers ranked-choice tabulation (`EeCvr_FindRcvContests`, `EeCvr_TabulateRcv`):
+rounds and transfers, ties for last broken by name and by an earlier round (flagged), a
+skipped first ranking, an overvoted ranking stopping a ballot, an unresolved write-in
+excluded (blank), exhausted ballots, the majority round, finishing order, and a filtered
+subset.)

@@ -4,9 +4,47 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-08
+**Last updated:** 2026-10-09
 
-### In progress — redacted Hart PDFs (UNCOMMITTED, ready to commit)
+### In progress — Dominion CVRs + ranked-choice tabulation (UNCOMMITTED, ready to commit)
+
+- **Dominion (now Liberty Vote) CVR exports** load via File → Load Cast Vote Records
+  (`.zip` of JSON: manifests + `CvrExport*.json`). New `src/dominion_cvr.c`
+  (`EeCvr_LoadFromDominionZips`, `EeCvr_IsDominionZip`): own streaming JSON parser +
+  miniz `extract_iter` (never holds an entry in memory); handles the 5.2 (2019), 5.10
+  and 5.19 schemas; one row per session (≈ one card); adjudicated `Modified` used; only
+  `IsVote` marks count (5.2 RCV: non-ambiguous marks — 5.2 flags only the round-1 vote);
+  write-in lines distinct by `WriteinIndex`; SF's `"*** REDACTED ***"` → `<Redacted>`.
+  Keys: [Cvr Number], Record Id (image name), Tabulator, Batch (tab-batch), Counting
+  Group, Polling Place, Precinct Portion, Ballot Type, [Session Type], [Card],
+  Adjudicated. RCV contests → `<contest> (Rank N)` columns. `main.c` dispatch sniffs
+  Dominion vs Hart zips; open dialog has a Dominion filter; Precinct / Ballot Style /
+  Voting Type reports map to Precinct Portion / Ballot Type / Counting Group;
+  `cvr_is_key_header` + `EeCvr_HasMultiCard` (Card ≥ 2) know the Dominion columns.
+- **RCV rounds (user asked for it in this change):** new `src/ee_rcv.c`
+  (`EeCvr_FindRcvContests`, `EeCvr_TabulateRcv`, `EeCvr_FreeRcvResult`) — IRV with SF's
+  official Dominion options (single elimination, until 2 remain; overvoted ranking stops
+  the ballot; skipped ranking passed over; unresolved write-ins excluded; ties broken by
+  earlier round then name, flagged). Reports → **Tabulate (Filtered) Ranked-Choice
+  Contests…** (`IDM_CVR_TABULATE_RCV[_FILTERED]` 40077/40078) → `CvrRcvWindow`
+  (Contest | Candidate | Result | Round 1…N + Continuing/Blanks/Exhausted/Overvotes/Non
+  Transferable rows; Copy/Export `-…_RCV_Rounds`). Help → Reports text updated.
+- **Validated vs SF official results** (12 SF exports in
+  `Election_CVRs/CA_San_Francisco_County/`; official summary.xml + RCV short reports from
+  sfelections.org — curl works with a browser UA, WebFetch is 403): every contest exact
+  for G19, P20, G20, O21, L22, PR22, P22, G22, P24, G24; G25/P26 differ only by the
+  county-redacted records. **All 25 official RCV reports match every round exactly**
+  (G24 Mayor 14 rounds). G24 = 5 GB JSON / 1,603,908 sessions loads in ~32 s.
+- Tests `dominion` + `rcv`; smoke suite green; x64 Debug builds clean; Release compiles
+  (link was blocked by a running Release instance). **Not yet GUI click-tested.**
+- Docs: `docs/cvr-design.md` (Dominion + RCV sections), `test/README.md`.
+- `STORE-LISTING.txt` updated (Dominion/Liberty Vote, Hart PDF, new RANKED-CHOICE VOTING
+  paragraph, trademark line) and `TRADEMARKS.md` gained a "Third-party marks" section.
+- Possible follow-ups: RCV for other jurisdictions' rule variants
+  (e.g. stop at majority, batch elimination, skipped-ranking limits) as options; P26
+  official RCV reports for the 06-25 CVR weren't on the site to compare.
+
+### Committed — redacted Hart PDFs
 
 - Burnet County `Election_CVRs/Burnet_County_TX/L25 CVR.pdf` / `G25 CVR.pdf` were rejected:
   the county's redaction deletes header text (L25 keeps only Precinct + Cvr Id). Now:
@@ -65,7 +103,7 @@ Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
 - Perf: ~10–11k PDF pages/s per pass; PDF-only G24 ≈ 5 min (two passes), ZIP ≈ 1m40s.
 - Possible follow-up: single-pass PDF load (PDF-only G24 ≈ 5 min).
 
-**Branch:** main — **only the redacted-PDF work above is uncommitted; everything else is committed.** Store prep, the
+**Branch:** main — **only the Dominion/RCV work above is uncommitted; everything else is committed.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR
@@ -937,6 +975,9 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
+- **Dominion + RCV (uncommitted, see top):** click-test loading an SF zip (e.g.
+  `G24_CVR_Export_20241202143051.zip`), Reports → Tabulate Ranked-Choice Contests,
+  filtered RCV, export; then commit.
 - **CVR is complete and committed** (Phases 1 & 2 — load/view/tabulate, write-in
   image + `No image found` variants, "vote for N" contests, multi-card detection —
   click-tested and validated exactly against nine official elections across Travis &

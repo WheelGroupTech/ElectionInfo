@@ -42,6 +42,7 @@ static const wchar_t k_DiffClassName[] = L"ElectionExplorerDiff";
 static const wchar_t k_CvrClassName[] = L"ElectionExplorerCvr";
 static const wchar_t k_CvrReportClassName[] = L"ElectionExplorerCvrReport";
 static const wchar_t k_CvrValueReportClassName[] = L"ElectionExplorerCvrValueReport";
+static const wchar_t k_CvrRcvClassName[] = L"ElectionExplorerCvrRcv";
 static const wchar_t k_CvrFilterClassName[] = L"ElectionExplorerCvrFilter";
 
 static const int k_DefaultWidth = 1100;
@@ -8328,13 +8329,30 @@ static const wchar_t k_CvrHelpReports[] =
     L"•  Tabulate Filtered CVR Votes — the same tabulation, but counting only the "
     L"records currently shown by the active filter. It is unavailable (greyed) when no "
     L"filter is applied, since that would duplicate Tabulate All.\r\n\r\n"
+    L"•  Tabulate Ranked-Choice Contests — for a ranked-choice contest (one column per "
+    L"rank, \"<contest> (Rank 1)\", \"(Rank 2)\", …, as in Dominion exports), runs the "
+    L"instant runoff round by round: each round a ballot counts for its highest-ranked "
+    L"candidate still in the race; a skipped ranking is passed over; reaching an "
+    L"overvoted ranking stops the ballot (Overvotes); unresolved write-ins are left out; "
+    L"and the candidate with the fewest votes is eliminated until two remain. Each "
+    L"contest lists its candidates (Winner first, with the round in which a majority "
+    L"was reached, then by elimination round) and the Continuing, Blanks, Exhausted, "
+    L"Overvotes and Non Transferable totals per round. These are the options used by "
+    L"San Francisco's official Dominion RCV reports. A tie for last place is broken by "
+    L"the earlier round and marked \"(tie)\" — officials resolve real ties by lot. "
+    L"Tabulate Filtered Ranked-Choice Contests counts only the filtered records. In the "
+    L"ordinary tabulation each rank is its own contest, so \"(Rank 1)\" shows the "
+    L"first choices.\r\n\r\n"
     L"•  Display Batch / Precinct / Ballot Style Report — one row per distinct value "
     L"in that column with the number of ballot records carrying it. The Batch report "
-    L"uses the \"Batch\" column (ES&S) or the \"Batch Number\" column (Hart).\r\n\r\n"
+    L"uses the \"Batch\" column (ES&S, Dominion) or the \"Batch Number\" column "
+    L"(Hart); for Dominion the Precinct and Ballot Style reports use the \"Precinct "
+    L"Portion\" and \"Ballot Type\" columns.\r\n\r\n"
     L"•  Display Polling Place / Device Serial / Voting Type Report — the same, for the "
     L"columns a Hart PDF CVR Report adds (load the PDF alone, or with its ZIP): where "
     L"ballots were cast, which scanner counted them, and Election Day / Early Voting / "
-    L"Absentee.\r\n\r\n"
+    L"Absentee. For Dominion, Polling Place is the tabulator's voting location and "
+    L"Voting Type is the \"Counting Group\" (Election Day, Vote by Mail, …).\r\n\r\n"
     L"A report is unavailable (greyed) when the CVR has no such column or its data is "
     L"blank or redacted.\r\n\r\n"
     L"Each report opens in its own window; empty values group into a \"(blank)\" row. "
@@ -9969,6 +9987,7 @@ static AppState *App_CreateViewer(HINSTANCE instance,
 
 typedef struct CvrReportWindow CvrReportWindow;
 typedef struct CvrValueReportWindow CvrValueReportWindow;
+typedef struct CvrRcvWindow CvrRcvWindow;
 
 /* Per-column value reports opened from the CVR Reports menu (Batch / Precinct /
  * Ballot Style, plus the Hart PDF report's Polling Place / Device Serial / Voting
@@ -9995,6 +10014,8 @@ typedef struct CvrWindow
     BOOL sort_asc;
     BOOL multi_card;         /* CVR looks like one row per ballot card/page */
     CvrReportWindow *report; /* tabulation report tied to this window, or NULL */
+    CvrRcvWindow *rcv_report; /* ranked-choice rounds report, or NULL */
+    uint32_t rcv_count;       /* ranked-choice contests in the table (set at load) */
     EeFilterSet filters;     /* applied filter rules (is / is not, include/exclude) */
     uint32_t *disp;          /* filtered physical rows in sort order (when filtered) */
     uint32_t disp_count;
@@ -10009,6 +10030,7 @@ typedef struct CvrWindow
 } CvrWindow;
 
 static void App_ShowCvrReport(CvrWindow *cw, BOOL filtered);
+static void App_ShowCvrRcvReport(CvrWindow *cw, BOOL filtered);
 static void App_ShowCvrValueReport(CvrWindow *cw, int kind);
 static void App_ShowCvrOptions(CvrWindow *cw);
 static BOOL App_ShowCvrFilter(CvrWindow *cw);
@@ -10049,6 +10071,23 @@ struct CvrValueReportWindow
     BOOL numeric;            /* sort the value column numerically        */
     int sort_col;            /* 0 = value, 1 = count                     */
     BOOL sort_asc;
+};
+
+/* Ranked-choice (instant-runoff) rounds report: one block of rows per contest. */
+struct CvrRcvWindow
+{
+    CvrWindow *owner;
+    AppState *app;
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    EeRcvResult *res;    /* one per ranked-choice contest */
+    uint32_t nres;
+    uint32_t *row_res;   /* display row -> contest (index into res) */
+    int32_t *row_kind;   /* display row -> candidate index (>= 0) or RCVROW_* */
+    uint32_t nrows;
+    uint32_t max_rounds; /* round columns shown */
+    BOOL filtered;       /* TRUE = tabulate only the filtered rows */
 };
 
 static void Cvr_UpdateStatus(CvrWindow *cw)
@@ -10155,6 +10194,14 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE, L"&Tabulate All CVR Votes…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_TABULATE_FILTERED,
                 L"Tabulate F&iltered CVR Votes…");
+    AppendMenuW(reports_menu,
+                MF_STRING,
+                IDM_CVR_TABULATE_RCV,
+                L"Tabulate &Ranked-Choice Contests…");
+    AppendMenuW(reports_menu,
+                MF_STRING,
+                IDM_CVR_TABULATE_RCV_FILTERED,
+                L"Tabulate Filtered Ra&nked-Choice Contests…");
     AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_BATCH, L"Display &Batch Report…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_PRECINCT, L"Display &Precinct Report…");
@@ -10508,7 +10555,8 @@ static const wchar_t *Cvr_ReportColumnTitle(int kind)
 
 /* Find the CVR column a value-report kind reports on. Vendors name some key columns
  * differently: ES&S calls the batch column "Batch", Hart calls it "Batch Number", so
- * the Batch report accepts either (the report keeps the "Batch" label). */
+ * the Batch report accepts either (the report keeps the "Batch" label); Dominion's
+ * names are mapped below. */
 static BOOL Cvr_FindReportColumn(const EeCvrTable *t, int kind, uint32_t *col)
 {
     if (EeCvr_FindColumnByTitle(t, Cvr_ReportColumnTitle(kind), col))
@@ -10518,6 +10566,20 @@ static BOOL Cvr_FindReportColumn(const EeCvrTable *t, int kind, uint32_t *col)
     if (kind == EE_CVRREP_BATCH)
     {
         return EeCvr_FindColumnByTitle(t, L"Batch Number", col);
+    }
+    /* Dominion names its precinct, ballot style and voting-method columns after its
+     * manifests: Precinct Portion, Ballot Type, Counting Group. */
+    if (kind == EE_CVRREP_PRECINCT)
+    {
+        return EeCvr_FindColumnByTitle(t, L"Precinct Portion", col);
+    }
+    if (kind == EE_CVRREP_BALLOTSTYLE)
+    {
+        return EeCvr_FindColumnByTitle(t, L"Ballot Type", col);
+    }
+    if (kind == EE_CVRREP_VOTINGTYPE)
+    {
+        return EeCvr_FindColumnByTitle(t, L"Counting Group", col);
     }
     return FALSE;
 }
@@ -10664,6 +10726,15 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 EnableMenuItem((HMENU)wParam,
                                IDM_CVR_TABULATE_FILTERED,
                                MF_BYCOMMAND | (cw->filt_active ? MF_ENABLED : MF_GRAYED));
+                /* Ranked-choice rounds need a ranked-choice contest (and, for the
+                 * filtered form, an active filter). */
+                EnableMenuItem((HMENU)wParam,
+                               IDM_CVR_TABULATE_RCV,
+                               MF_BYCOMMAND | (cw->rcv_count > 0 ? MF_ENABLED : MF_GRAYED));
+                EnableMenuItem((HMENU)wParam,
+                               IDM_CVR_TABULATE_RCV_FILTERED,
+                               MF_BYCOMMAND |
+                                   (cw->rcv_count > 0 && cw->filt_active ? MF_ENABLED : MF_GRAYED));
             }
             break;
 
@@ -10682,6 +10753,12 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_CVR_TABULATE_FILTERED:
                     App_ShowCvrReport(cw, TRUE);
+                    return 0;
+                case IDM_CVR_TABULATE_RCV:
+                    App_ShowCvrRcvReport(cw, FALSE);
+                    return 0;
+                case IDM_CVR_TABULATE_RCV_FILTERED:
+                    App_ShowCvrRcvReport(cw, TRUE);
                     return 0;
                 case IDM_CVR_REPORT_BATCH:
                     App_ShowCvrValueReport(cw, EE_CVRREP_BATCH);
@@ -10828,6 +10905,10 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 {
                     DestroyWindow(cw->report->hwnd);
                 }
+                if (cw->rcv_report != NULL)
+                {
+                    DestroyWindow(cw->rcv_report->hwnd);
+                }
                 if (cw->hwnd_filter != NULL)
                 {
                     DestroyWindow(cw->hwnd_filter);
@@ -10933,6 +11014,7 @@ static void App_CreateCvrWindow(AppState *app,
     cw->sort_col = -1;
     cw->sort_asc = TRUE;
     cw->multi_card = EeCvr_HasMultiCard(&cw->table);
+    cw->rcv_count = EeCvr_FindRcvContests(&cw->table, NULL, 0);
     App_BaseNameNoExt(first_path, cw->base_name, ARRAYSIZE(cw->base_name));
 
     /* Resolve which per-column reports are available once, up front. */
@@ -11533,6 +11615,754 @@ static void App_ShowCvrReport(CvrWindow *cw, BOOL filtered)
         return;
     }
     cw->report = rw;
+    ShowWindow(rw->hwnd, SW_SHOW);
+    SetForegroundWindow(rw->hwnd);
+}
+
+/* -------------------------------------------------------------------------- */
+/* CVR ranked-choice (instant-runoff) rounds report                           */
+/* -------------------------------------------------------------------------- */
+
+/* Display rows per contest: one per candidate (in finishing order), then these totals,
+ * matching the rows of the official Dominion RCV reports. */
+enum
+{
+    RCVROW_CONTINUING = -1,
+    RCVROW_BLANKS = -2,
+    RCVROW_EXHAUSTED = -3,
+    RCVROW_OVERVOTES = -4,
+    RCVROW_NONTRANSFER = -5
+};
+
+#define RCV_FIXED_COLS 3 /* Contest | Candidate | Result, then Round 1..N */
+
+static WNDPROC g_old_cvr_rcv_list_proc = NULL;
+
+static void CvrRcv_FreeResults(CvrRcvWindow *rw)
+{
+    uint32_t i;
+    for (i = 0; i < rw->nres; i++)
+    {
+        EeCvr_FreeRcvResult(&rw->res[i]);
+    }
+    free(rw->res);
+    free(rw->row_res);
+    free(rw->row_kind);
+    rw->res = NULL;
+    rw->row_res = NULL;
+    rw->row_kind = NULL;
+    rw->nres = 0;
+    rw->nrows = 0;
+    rw->max_rounds = 0;
+}
+
+/* Run the instant runoff for every ranked-choice contest (all rows, or the filtered
+ * rows) and build the display rows. Returns FALSE on OOM (rw left empty). */
+static BOOL CvrRcv_Compute(CvrRcvWindow *rw)
+{
+    CvrWindow *cw = rw->owner;
+    uint32_t n = EeCvr_FindRcvContests(&cw->table, NULL, 0);
+    uint32_t *cols;
+    const uint32_t *rows = NULL;
+    uint32_t nrows = 0;
+    uint32_t i;
+    uint32_t total = 0;
+
+    CvrRcv_FreeResults(rw);
+    if (n == 0)
+    {
+        return TRUE;
+    }
+    if (rw->filtered && cw->filt_active)
+    {
+        rows = cw->disp;
+        nrows = cw->disp_count;
+    }
+    cols = (uint32_t *)malloc(n * sizeof(uint32_t));
+    rw->res = (EeRcvResult *)calloc(n, sizeof(EeRcvResult));
+    if (cols == NULL || rw->res == NULL)
+    {
+        free(cols);
+        CvrRcv_FreeResults(rw);
+        return FALSE;
+    }
+    EeCvr_FindRcvContests(&cw->table, cols, n);
+    for (i = 0; i < n; i++)
+    {
+        EeRcvResult *r = &rw->res[i];
+        BOOL ok;
+        if (rows != NULL)
+        {
+            ok = EeCvr_TabulateRcv(&cw->table, cols[i], rows, nrows, r);
+        }
+        else
+        {
+            ok = EeCvr_TabulateRcv(&cw->table, cols[i], NULL, 0, r);
+        }
+        if (!ok)
+        {
+            free(cols);
+            CvrRcv_FreeResults(rw);
+            return FALSE;
+        }
+        rw->nres++;
+        total += r->ncand + 5;
+        if (r->nrounds > rw->max_rounds)
+        {
+            rw->max_rounds = r->nrounds;
+        }
+    }
+    free(cols);
+    rw->row_res = (uint32_t *)malloc((total ? total : 1) * sizeof(uint32_t));
+    rw->row_kind = (int32_t *)malloc((total ? total : 1) * sizeof(int32_t));
+    if (rw->row_res == NULL || rw->row_kind == NULL)
+    {
+        CvrRcv_FreeResults(rw);
+        return FALSE;
+    }
+    for (i = 0; i < rw->nres; i++)
+    {
+        uint32_t c;
+        int32_t k;
+        for (c = 0; c < rw->res[i].ncand; c++)
+        {
+            rw->row_res[rw->nrows] = i;
+            rw->row_kind[rw->nrows++] = (int32_t)c;
+        }
+        for (k = RCVROW_CONTINUING; k >= RCVROW_NONTRANSFER; k--)
+        {
+            rw->row_res[rw->nrows] = i;
+            rw->row_kind[rw->nrows++] = k;
+        }
+    }
+    return TRUE;
+}
+
+/* Text of display row @p row, column @p col (0 Contest, 1 Candidate, 2 Result, 3.. the
+ * rounds). Used for the list, Copy and Export alike. */
+static void CvrRcv_CellText(const CvrRcvWindow *rw,
+                            uint32_t row,
+                            uint32_t col,
+                            wchar_t *buf,
+                            size_t cch)
+{
+    const EeRcvResult *r;
+    int32_t kind;
+    buf[0] = L'\0';
+    if (row >= rw->nrows)
+    {
+        return;
+    }
+    r = &rw->res[rw->row_res[row]];
+    kind = rw->row_kind[row];
+    if (col == 0)
+    {
+        StringCchCopyW(buf, cch, r->contest);
+        return;
+    }
+    if (col == 1)
+    {
+        static const wchar_t *const k_Totals[] = {L"Continuing Ballots Total",
+                                                  L"Blanks",
+                                                  L"Exhausted",
+                                                  L"Overvotes",
+                                                  L"Non Transferable Total"};
+        StringCchCopyW(buf, cch, (kind >= 0) ? r->cand[kind] : k_Totals[-kind - 1]);
+        return;
+    }
+    if (col == 2)
+    {
+        uint32_t k;
+        if (kind < 0)
+        {
+            return;
+        }
+        if (kind == r->winner)
+        {
+            if (r->majority_round > 0)
+            {
+                StringCchPrintfW(buf, cch, L"Winner (majority in round %u)", r->majority_round);
+            }
+            else
+            {
+                StringCchCopyW(buf, cch, L"Winner");
+            }
+            return;
+        }
+        for (k = 0; k < r->nrounds; k++)
+        {
+            if (r->eliminated[k] == kind)
+            {
+                StringCchPrintfW(buf,
+                                 cch,
+                                 r->elim_tie[k] ? L"Eliminated round %u (tie)"
+                                                : L"Eliminated round %u",
+                                 k + 1);
+                return;
+            }
+        }
+        StringCchCopyW(buf, cch, L"Runner-up");
+        return;
+    }
+    {
+        uint32_t rnd = col - RCV_FIXED_COLS;
+        uint32_t v;
+        if (rnd >= r->nrounds)
+        {
+            return;
+        }
+        if (kind >= 0)
+        {
+            uint32_t k;
+            /* Leave a candidate's cells blank after the round they were eliminated. */
+            for (k = 0; k < rnd; k++)
+            {
+                if (r->eliminated[k] == kind)
+                {
+                    return;
+                }
+            }
+            v = r->votes[(size_t)rnd * r->ncand + (uint32_t)kind];
+        }
+        else if (kind == RCVROW_CONTINUING)
+        {
+            v = r->continuing[rnd];
+        }
+        else if (kind == RCVROW_BLANKS)
+        {
+            v = r->blanks[rnd];
+        }
+        else if (kind == RCVROW_EXHAUSTED)
+        {
+            v = r->exhausted[rnd];
+        }
+        else if (kind == RCVROW_OVERVOTES)
+        {
+            v = r->overvotes[rnd];
+        }
+        else
+        {
+            v = r->blanks[rnd] + r->exhausted[rnd] + r->overvotes[rnd];
+        }
+        StringCchPrintfW(buf, cch, L"%u", v);
+    }
+}
+
+static LRESULT CALLBACK CvrRcvListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        CvrRcvWindow *rw = (CvrRcvWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (rw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(rw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_cvr_rcv_list_proc, hwnd, msg, wParam, lParam);
+}
+
+/* (Re)build the list columns: Contest | Candidate | Result | Round 1..max_rounds. */
+static void CvrRcv_BuildColumns(CvrRcvWindow *rw)
+{
+    LVCOLUMNW col;
+    uint32_t i;
+    HWND header = ListView_GetHeader(rw->list);
+    int existing = (header != NULL) ? Header_GetItemCount(header) : 0;
+    while (existing-- > 0)
+    {
+        ListView_DeleteColumn(rw->list, 0);
+    }
+    ZeroMemory(&col, sizeof(col));
+    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+    col.fmt = LVCFMT_LEFT;
+    col.pszText = L"Contest";
+    col.cx = Scale(rw->app, 230);
+    ListView_InsertColumn(rw->list, 0, &col);
+    col.pszText = L"Candidate";
+    col.cx = Scale(rw->app, 210);
+    ListView_InsertColumn(rw->list, 1, &col);
+    col.pszText = L"Result";
+    col.cx = Scale(rw->app, 190);
+    ListView_InsertColumn(rw->list, 2, &col);
+    col.fmt = LVCFMT_RIGHT;
+    col.cx = Scale(rw->app, 78);
+    for (i = 0; i < rw->max_rounds; i++)
+    {
+        wchar_t title[24];
+        StringCchPrintfW(title, ARRAYSIZE(title), L"Round %u", i + 1);
+        col.pszText = title;
+        ListView_InsertColumn(rw->list, (int)(RCV_FIXED_COLS + i), &col);
+    }
+}
+
+static void CvrRcv_UpdateStatus(CvrRcvWindow *rw)
+{
+    wchar_t st[160];
+    if (rw->status == NULL)
+    {
+        return;
+    }
+    StringCchPrintfW(st,
+                     ARRAYSIZE(st),
+                     L"%u ranked-choice contest%s — instant runoff, single elimination — "
+                     L"right-click to copy",
+                     rw->nres,
+                     rw->nres == 1 ? L"" : L"s");
+    SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
+}
+
+static void CvrRcv_Layout(CvrRcvWindow *rw, int width, int height)
+{
+    int sb_h = 0;
+    if (rw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(rw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(rw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (rw->list != NULL)
+    {
+        MoveWindow(rw->list, 0, 0, width, (height > sb_h) ? height - sb_h : 0, TRUE);
+    }
+}
+
+/* Copy the selected rows as tab-separated UTF-8 (every column). */
+static void CvrRcv_CopySelected(CvrRcvWindow *rw)
+{
+    Utf8Export ex;
+    int i;
+    BOOL ok = TRUE;
+    uint32_t ncols = RCV_FIXED_COLS + rw->max_rounds;
+
+    if (rw == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    ZeroMemory(&ex, sizeof(ex));
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0 && ok)
+    {
+        uint32_t c;
+        for (c = 0; c < ncols && ok; c++)
+        {
+            wchar_t cell[512];
+            CvrRcv_CellText(rw, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            if (c > 0)
+            {
+                ok = Utf8Export_AppendChar(&ex, '\t');
+            }
+            ok = ok && Utf8Export_AppendFieldW(&ex, cell, '\t');
+        }
+        ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (ok && ex.data != NULL && Utf8Export_AppendChar(&ex, '\0'))
+    {
+        App_SetClipboardUtf8(rw->hwnd, ex.data);
+    }
+    free(ex.data);
+}
+
+/* Cell provider for the RCV report export. */
+typedef struct CvrRcvExportCtx
+{
+    CvrRcvWindow *rw;
+    const uint32_t *idx;
+} CvrRcvExportCtx;
+
+static void CvrRcv_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    CvrRcvExportCtx *c = (CvrRcvExportCtx *)user;
+    CvrRcv_CellText(c->rw, (c->idx != NULL) ? c->idx[row] : row, col, buf, cch);
+}
+
+static void App_ExportCvrRcvReport(CvrRcvWindow *rw, BOOL selection_only)
+{
+    uint32_t ncols;
+    wchar_t **headers = NULL;
+    wchar_t suggested[256];
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    uint32_t i;
+    CvrRcvExportCtx ctx;
+
+    if (rw == NULL || rw->owner == NULL || rw->nrows == 0)
+    {
+        return;
+    }
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(rw->list, rw->nrows, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = rw->nrows;
+    }
+    ncols = RCV_FIXED_COLS + rw->max_rounds;
+    headers = (wchar_t **)calloc(ncols, sizeof(wchar_t *));
+    if (headers == NULL)
+    {
+        free(idx);
+        return;
+    }
+    for (i = 0; i < ncols; i++)
+    {
+        headers[i] = (wchar_t *)malloc(24 * sizeof(wchar_t));
+        if (headers[i] == NULL)
+        {
+            goto done;
+        }
+        if (i < RCV_FIXED_COLS)
+        {
+            static const wchar_t *const k_Fixed[RCV_FIXED_COLS] = {L"Contest",
+                                                                   L"Candidate",
+                                                                   L"Result"};
+            StringCchCopyW(headers[i], 24, k_Fixed[i]);
+        }
+        else
+        {
+            StringCchPrintfW(headers[i], 24, L"Round %u", i - RCV_FIXED_COLS + 1);
+        }
+    }
+    ctx.rw = rw;
+    ctx.idx = idx;
+    StringCchPrintfW(suggested,
+                     ARRAYSIZE(suggested),
+                     L"%s-%s_RCV_Rounds",
+                     rw->owner->base_name,
+                     selection_only ? L"Selected" : L"All");
+    App_ExportReportModel(rw->hwnd,
+                          suggested,
+                          ncols,
+                          (const wchar_t *const *)headers,
+                          n,
+                          CvrRcv_ExportCell,
+                          &ctx);
+done:
+    for (i = 0; i < ncols; i++)
+    {
+        free(headers[i]);
+    }
+    free(headers);
+    free(idx);
+}
+
+static void CvrRcv_OnContextMenu(CvrRcvWindow *rw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+
+    if (rw == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    if (item >= 0 && !(ListView_GetItemState(rw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(rw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(rw->list,
+                              item,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
+    cmd = (UINT)
+        TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_EDIT_COPY)
+    {
+        CvrRcv_CopySelected(rw);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED)
+    {
+        App_ExportCvrRcvReport(rw, TRUE);
+    }
+    else if (cmd == IDM_EXPORT_ALL)
+    {
+        App_ExportCvrRcvReport(rw, FALSE);
+    }
+}
+
+static LRESULT CALLBACK CvrRcvWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    CvrRcvWindow *rw = (CvrRcvWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            RECT rc;
+            rw = (CvrRcvWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)rw);
+            rw->hwnd = hwnd;
+
+            GetClientRect(hwnd, &rc);
+            rw->list = CreateWindowExW(0,
+                                       WC_LISTVIEWW,
+                                       L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SHOWSELALWAYS,
+                                       0,
+                                       0,
+                                       rc.right,
+                                       rc.bottom,
+                                       hwnd,
+                                       NULL,
+                                       rw->app->instance,
+                                       NULL);
+            if (rw->list == NULL)
+            {
+                return -1;
+            }
+            {
+                WNDPROC old = (WNDPROC)SetWindowLongPtrW(rw->list,
+                                                         GWLP_WNDPROC,
+                                                         (LONG_PTR)CvrRcvListSubclass);
+                if (g_old_cvr_rcv_list_proc == NULL)
+                {
+                    g_old_cvr_rcv_list_proc = old;
+                }
+            }
+            ListView_SetExtendedListViewStyle(rw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES);
+            if (rw->app->font_ui)
+            {
+                SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            CvrRcv_BuildColumns(rw);
+
+            rw->status = CreateWindowExW(0,
+                                         STATUSCLASSNAMEW,
+                                         NULL,
+                                         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0,
+                                         0,
+                                         0,
+                                         0,
+                                         hwnd,
+                                         NULL,
+                                         rw->app->instance,
+                                         NULL);
+            if (rw->status != NULL && rw->app->font_ui)
+            {
+                SendMessageW(rw->status, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            CvrRcv_UpdateStatus(rw);
+            ListView_SetItemCountEx(rw->list, (int)rw->nrows, LVSICF_NOINVALIDATEALL);
+            CvrRcv_Layout(rw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (rw != NULL)
+            {
+                CvrRcv_Layout(rw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (rw != NULL && rw->list != NULL)
+            {
+                SetFocus(rw->list);
+            }
+            return 0;
+
+        case WM_COMMAND:
+            /* Ctrl+C is routed here by the shared accelerator table. */
+            if (rw != NULL && LOWORD(wParam) == IDM_EDIT_COPY)
+            {
+                CvrRcv_CopySelected(rw);
+                return 0;
+            }
+            break;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (rw == NULL || hdr->hwndFrom != rw->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_GETDISPINFOW)
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0 && di->item.iSubItem >= 0)
+                {
+                    CvrRcv_CellText(rw,
+                                    (uint32_t)di->item.iItem,
+                                    (uint32_t)di->item.iSubItem,
+                                    di->item.pszText,
+                                    (size_t)di->item.cchTextMax);
+                }
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(rw->list, &screen);
+                CvrRcv_OnContextMenu(rw, ia->iItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (rw != NULL)
+            {
+                if (rw->owner != NULL && rw->owner->rcv_report == rw)
+                {
+                    rw->owner->rcv_report = NULL;
+                }
+                CvrRcv_FreeResults(rw);
+                free(rw);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void Cvr_RcvReportTitle(CvrWindow *cw, BOOL filtered, wchar_t *title, size_t cch)
+{
+    wchar_t base[128];
+    base[0] = L'\0';
+    GetWindowTextW(cw->hwnd, base, ARRAYSIZE(base));
+    if (base[0] != L'\0')
+    {
+        StringCchPrintfW(title,
+                         cch,
+                         filtered ? L"RCV Tabulation (Filtered) — %s" : L"RCV Tabulation — %s",
+                         base);
+    }
+    else
+    {
+        StringCchCopyW(title, cch, filtered ? L"RCV Tabulation (Filtered)" : L"RCV Tabulation");
+    }
+}
+
+/* Run the ranked-choice tabulation and open (or refresh + re-focus) the RCV report tied
+ * to @p cw. */
+static void App_ShowCvrRcvReport(CvrWindow *cw, BOOL filtered)
+{
+    CvrRcvWindow *rw;
+    wchar_t title[MAX_PATH + 64];
+    HCURSOR old_cursor;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    BOOL ok;
+
+    if (cw == NULL)
+    {
+        return;
+    }
+    if (cw->rcv_count == 0)
+    {
+        MessageBoxW(cw->hwnd,
+                    L"These Cast Vote Records have no ranked-choice contests.",
+                    L"Tabulate Ranked-Choice Contests",
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    rw = cw->rcv_report;
+    if (rw == NULL)
+    {
+        rw = (CvrRcvWindow *)calloc(1, sizeof(CvrRcvWindow));
+        if (rw == NULL)
+        {
+            return;
+        }
+        rw->owner = cw;
+        rw->app = cw->app;
+    }
+    rw->filtered = filtered;
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    ok = CvrRcv_Compute(rw);
+    SetCursor(old_cursor);
+    if (!ok)
+    {
+        MessageBoxW(cw->hwnd,
+                    L"Out of memory while tabulating the ranked-choice contests.",
+                    L"Tabulate Ranked-Choice Contests",
+                    MB_ICONERROR | MB_OK);
+        if (cw->rcv_report == NULL)
+        {
+            free(rw);
+        }
+        else
+        {
+            ListView_SetItemCountEx(rw->list, 0, 0);
+        }
+        return;
+    }
+    Cvr_RcvReportTitle(cw, filtered, title, ARRAYSIZE(title));
+
+    if (cw->rcv_report != NULL)
+    {
+        /* Already open: show the new results in place. */
+        SetWindowTextW(rw->hwnd, title);
+        CvrRcv_BuildColumns(rw);
+        ListView_SetItemCountEx(rw->list, (int)rw->nrows, 0);
+        InvalidateRect(rw->list, NULL, TRUE);
+        CvrRcv_UpdateStatus(rw);
+        SetForegroundWindow(rw->hwnd);
+        return;
+    }
+
+    if (GetWindowRect(cw->hwnd, &pr))
+    {
+        x = pr.left + Scale(cw->app, 64);
+        y = pr.top + Scale(cw->app, 64);
+    }
+    /* Unowned top-level window like the tabulation report; tracked in cw->rcv_report and
+     * closed when the CVR window closes. */
+    rw->hwnd = CreateWindowExW(0,
+                               k_CvrRcvClassName,
+                               title,
+                               WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                               x,
+                               y,
+                               Scale(cw->app, 1000),
+                               Scale(cw->app, 600),
+                               NULL,
+                               NULL,
+                               cw->app->instance,
+                               rw);
+    if (rw->hwnd == NULL)
+    {
+        CvrRcv_FreeResults(rw);
+        free(rw);
+        return;
+    }
+    cw->rcv_report = rw;
     ShowWindow(rw->hwnd, SW_SHOW);
     SetForegroundWindow(rw->hwnd);
 }
@@ -13505,21 +14335,52 @@ static BOOL path_is_hart(const wchar_t *path)
            (_wcsicmp(path + (n - 4), L".zip") == 0 || _wcsicmp(path + (n - 4), L".pdf") == 0);
 }
 
+/* TRUE if @p path is a Dominion CVR export: a ".zip" holding ContestManifest.json and
+ * CvrExport*.json files (a Hart zip holds per-sheet XML instead). */
+static BOOL path_is_dominion(const wchar_t *path)
+{
+    size_t n = (path != NULL) ? wcslen(path) : 0;
+    return n >= 4 && _wcsicmp(path + (n - 4), L".zip") == 0 && EeCvr_IsDominionZip(path);
+}
+
 static DWORD WINAPI CvrLoadThreadProc(void *param)
 {
     CvrLoadJob *j = (CvrLoadJob *)param;
-    int i, nhart = 0;
-    /* Hart CVRs come as .zip and/or .pdf (loaded together: PDF-only, or ZIP votes
-     * decorated with the PDF's device/polling-place fields); ES&S come as
-     * .xlsx/.csv/.tsv. The two vendors' files cannot be mixed in one load. */
+    int i, nhart = 0, ndominion = 0;
+    /* Dominion CVRs come as .zip exports of JSON files; Hart CVRs as .zip (per-sheet XML)
+     * and/or .pdf (loaded together: PDF-only, or ZIP votes decorated with the PDF's
+     * device/polling-place fields); ES&S as .xlsx/.csv/.tsv. One vendor per load. */
     for (i = 0; i < j->count; i++)
     {
-        if (path_is_hart(j->paths[i]))
+        if (path_is_dominion(j->paths[i]))
+        {
+            ndominion++;
+        }
+        else if (path_is_hart(j->paths[i]))
         {
             nhart++;
         }
     }
-    if (nhart > 0 && nhart < j->count)
+    if (ndominion > 0 && ndominion < j->count)
+    {
+        j->status = EeLoadStatus_Error;
+        StringCchCopyW(j->err,
+                       ARRAYSIZE(j->err),
+                       L"Dominion CVR exports (.zip) cannot be loaded together with other "
+                       L"vendors' files. Select files from one vendor.");
+    }
+    else if (ndominion > 0)
+    {
+        j->status = EeCvr_LoadFromDominionZips(j->paths,
+                                               j->count,
+                                               j->table,
+                                               &j->cancel,
+                                               CvrLoadProgressCb,
+                                               j,
+                                               j->err,
+                                               ARRAYSIZE(j->err));
+    }
+    else if (nhart > 0 && nhart < j->count)
     {
         j->status = EeLoadStatus_Error;
         StringCchCopyW(j->err,
@@ -13765,6 +14626,7 @@ static void App_BeginOpenCvr(AppState *app)
         L"*.xlsx;*.csv;*.tsv;*.txt;*.zip;*.pdf\0"
         L"ES&S (*.xlsx;*.csv;*.tsv;*.txt)\0*.xlsx;*.csv;*.tsv;*.txt\0"
         L"Hart (*.zip;*.pdf)\0*.zip;*.pdf\0"
+        L"Dominion (*.zip)\0*.zip\0"
         L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 32768;
@@ -14039,6 +14901,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         rcw.hIcon = wc.hIcon;
         rcw.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&rcw) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW rrc;
+        ZeroMemory(&rrc, sizeof(rrc));
+        rrc.cbSize = sizeof(rrc);
+        rrc.lpfnWndProc = CvrRcvWndProc;
+        rrc.hInstance = hInstance;
+        rrc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        rrc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        rrc.lpszClassName = k_CvrRcvClassName;
+        rrc.hIcon = wc.hIcon;
+        rrc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&rrc) == 0)
         {
             return 1;
         }

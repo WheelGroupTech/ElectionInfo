@@ -134,6 +134,30 @@ extern "C"
                                         wchar_t *error_message,
                                         size_t error_cch);
 
+    /**
+     * Load Dominion (Democracy Suite / Liberty Vote) Cast Vote Record exports into
+     * @p out. Each path is a `.zip` CVR export holding the JSON manifests
+     * (ContestManifest.json, CandidateManifest.json, ...) and one or more
+     * CvrExport*.json files. One row per tabulation session (normally one ballot card);
+     * the adjudicated version of a session is used when present and only marks Dominion
+     * counts as votes (IsVote) are recorded. A ranked-choice contest becomes one column
+     * per rank, titled "<contest> (Rank N)". Several zips load together only when their
+     * contest layouts are identical; otherwise the load fails naming the file. Same
+     * status/cancel/progress contract as EeCvr_LoadFromFiles. See dominion_cvr.c.
+     */
+    EeLoadStatus EeCvr_LoadFromDominionZips(const wchar_t *const *paths,
+                                            int count,
+                                            EeCvrTable *out,
+                                            volatile LONG *cancel_flag,
+                                            EeLoadProgressFn progress_fn,
+                                            void *progress_user,
+                                            wchar_t *error_message,
+                                            size_t error_cch);
+
+    /** TRUE if @p path is a Dominion CVR export zip (it holds ContestManifest.json and at
+     *  least one CvrExport*.json). Never fails loudly: an unreadable file is FALSE. */
+    BOOL EeCvr_IsDominionZip(const wchar_t *path);
+
     /* --- Table builder (used by the Hart loader; layout is caller-computed) ------ */
 
     /** Clear @p t and establish a column layout from UTF-8 @p header_cells (blank ""
@@ -311,6 +335,64 @@ extern "C"
      * it stays correct even when many ballot styles are multi-page.
      */
     BOOL EeCvr_HasMultiCard(const EeCvrTable *t);
+
+    /* --- Ranked-choice (instant-runoff) tabulation -- see ee_rcv.c ------------- */
+
+    /**
+     * Find the ranked-choice contests in @p t. A ranked-choice contest is a run of
+     * consecutive contest columns titled "<contest> (Rank 1)", "<contest> (Rank 2)", ...
+     * (the layout the Dominion loader produces, preserved by CSV/TSV export). Writes up
+     * to @p cap first-column ("Rank 1") indices to @p first_cols (may be NULL) and
+     * returns the total number found.
+     */
+    uint32_t EeCvr_FindRcvContests(const EeCvrTable *t, uint32_t *first_cols, uint32_t cap);
+
+    /** Round-by-round result of one ranked-choice contest. */
+    typedef struct EeRcvResult
+    {
+        wchar_t *contest;        /* contest title without the " (Rank N)" suffix */
+        uint32_t nranks;         /* rank columns in the contest */
+        uint32_t ncand;          /* candidates (every name ranked at least once) */
+        wchar_t **cand;          /* names in finishing order: winner, runner-up, then
+                              * the remaining candidates latest-eliminated first */
+        uint32_t nrounds;
+        uint32_t *votes;         /* [round * ncand + cand]; 0 once eliminated */
+        uint32_t *continuing;    /* per round: ballots counting for a candidate */
+        uint32_t *blanks;        /* per round: ballots with the contest but no ranking */
+        uint32_t *exhausted;     /* per round: ballots with no continuing candidate left */
+        uint32_t *overvotes;     /* per round: ballots stopped by an overvoted ranking */
+        int32_t *eliminated;     /* per round: candidate eliminated after it, or -1 */
+        BOOL *elim_tie;          /* per round: that elimination broke a tie for last */
+        int32_t winner;          /* candidate index (0 when decided), -1 if none */
+        uint32_t majority_round; /* first round (1-based) in which the leader held a
+                                  * majority of continuing ballots; 0 = never */
+    } EeRcvResult;
+
+    /**
+     * Tabulate the ranked-choice contest whose "Rank 1" column is @p first_col by
+     * single-winner instant runoff, using the rules of San Francisco's official Dominion
+     * tabulation: each round a ballot counts for its highest-ranked continuing candidate;
+     * skipped rankings ("undervote") are passed over; reaching an overvoted ranking
+     * stops the ballot (counted under overvotes); unresolved write-ins are excluded (the
+     * ranking is passed over); a ballot with no candidate ranking at all is a blank.
+     * After each round the single candidate with the fewest votes is eliminated (a tie
+     * for last is broken by the lower total in the most recent earlier round that
+     * differs, then by name, and flagged in elim_tie, since officials resolve true ties
+     * by lot). Rounds continue until two candidates remain; the winner has the most votes
+     * in the final round.
+     *
+     * Counts only the @p nrows physical rows in @p rows, or every row when @p rows is
+     * NULL. Rows that do not carry the contest are ignored. On success @p out is filled
+     * (free with EeCvr_FreeRcvResult). Returns FALSE on OOM or bad args.
+     */
+    BOOL EeCvr_TabulateRcv(const EeCvrTable *t,
+                           uint32_t first_col,
+                           const uint32_t *rows,
+                           uint32_t nrows,
+                           EeRcvResult *out);
+
+    /** Release an EeRcvResult filled by EeCvr_TabulateRcv (safe on a zeroed struct). */
+    void EeCvr_FreeRcvResult(EeRcvResult *r);
 
 #ifdef __cplusplus
 }

@@ -20,4 +20,12 @@ example, "compatible with Election Explorer"). You may **not**:
 Distributions of unmodified builds may use the marks to identify the software.
 Modified versions must use a different name and logo.
 
+## Third-party marks
+
+ES&S, Hart InterCivic, Dominion Voting Systems, Democracy Suite, and Liberty Vote
+are trademarks of their respective owners. Election Explorer reads the cast vote
+record files these voting systems export; it is not affiliated with, sponsored by,
+or endorsed by any of them, and the names are used only to identify those file
+formats.
+
 Questions or permission requests: dan@teals.org

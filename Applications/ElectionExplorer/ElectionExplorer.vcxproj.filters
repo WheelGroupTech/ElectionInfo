@@ -42,6 +42,12 @@
     <ClCompile Include="src\pdf_reader.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\dominion_cvr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ee_rcv.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\third_party\miniz\miniz.c">
       <Filter>Source Files</Filter>
     </ClCompile>

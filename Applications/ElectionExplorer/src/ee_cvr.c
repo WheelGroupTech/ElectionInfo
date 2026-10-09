@@ -297,7 +297,13 @@ static BOOL cvr_is_key_header(const wchar_t *s)
            wcieq_trimmed(s, L"party") || wcieq_trimmed(s, L"is blank") ||
            wcieq_trimmed(s, L"voting type") || wcieq_trimmed(s, L"polling place") ||
            wcieq_trimmed(s, L"device type") || wcieq_trimmed(s, L"device serial") ||
-           wcieq_trimmed(s, L"device data id");
+           wcieq_trimmed(s, L"device data id") ||
+           /* Dominion key columns (see dominion_cvr.c). */
+           wcieq_trimmed(s, L"cvr number") || wcieq_trimmed(s, L"record id") ||
+           wcieq_trimmed(s, L"tabulator") || wcieq_trimmed(s, L"counting group") ||
+           wcieq_trimmed(s, L"precinct portion") || wcieq_trimmed(s, L"ballot type") ||
+           wcieq_trimmed(s, L"session type") || wcieq_trimmed(s, L"card") ||
+           wcieq_trimmed(s, L"adjudicated");
 }
 
 /* True if a header cell is blank (empty or only whitespace). */
@@ -2004,12 +2010,16 @@ BOOL EeCvr_HasMultiCard(const EeCvrTable *t)
         return FALSE;
     }
     /* Hart CVRs record one row per ballot SHEET with an explicit "Sheet Number" key
-     * column, so multi-card is exact: any sheet numbered >= 2 means multi-card. */
+     * column, and Dominion one row per scanned card with a "Card" column, so multi-card
+     * is exact: any sheet/card numbered >= 2 means multi-card. (A Dominion ballot-marking
+     * device session that holds every card of a ballot reads "1,2,..." -- one row per
+     * ballot, so it does not count.) */
     for (c = 0; c < t->frozen_count && c < t->ncols; c++)
     {
         const wchar_t *title = t->col_titles[c];
-        if (title != NULL && (wcs_contains_ci(title, L"sheet number") ||
-                              wcs_contains_ci(title, L"sheetnumber")))
+        if (title != NULL &&
+            (wcs_contains_ci(title, L"sheet number") || wcs_contains_ci(title, L"sheetnumber") ||
+             wcieq_trimmed_both(title, L"card")))
         {
             wchar_t buf[32];
             for (r = 0; r < t->nrows; r++)

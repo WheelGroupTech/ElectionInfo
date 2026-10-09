@@ -568,6 +568,122 @@ Is Blank, but it does carry the device and polling-place fields the XML lacks.
   overvote, undervote, write-in; plus a bogus-`startxref` variant, a non-Hart PDF, ZIP+PDF
   decoration and a no-common-Cvr-Id error).
 
+## Dominion voting-system CVRs (`dominion_cvr.c`)
+
+Dominion Voting Systems (Democracy Suite; the company is now **Liberty Vote**) exports
+CVRs as a `.zip` of JSON files. Developed and validated against twelve San Francisco
+County exports, 2019–2026 (`Election_CVRs/CA_San_Francisco_County/`).
+
+- **Format:** manifests `{"Version":..,"List":[..]}` — `ContestManifest` (Id,
+  Description, VoteFor, NumOfRanks, Disabled), `CandidateManifest` (Id, Description,
+  ContestId, Type = Regular / WriteIn / QualifiedWriteIn), `PrecinctPortionManifest`,
+  `BallotTypeManifest`, `CountingGroupManifest` (Election Day / Vote by Mail),
+  `TabulatorManifest` (Description, VotingLocationName) — plus the records: one
+  `CvrExport.json` or one `CvrExport_<n>.json` per batch, each
+  `{"Sessions":[..]}`. A **session** is one tabulation of one scanned card (a
+  4-card ballot is 4 sessions); a ballot-marking-device (`QRVote`) session can hold every
+  card of its ballot. Each session has `Original` and, when adjudicated, `Modified`
+  (whichever has `IsCurrent`), each with `Cards[] → Contests[] → Marks[]`
+  (`CandidateId`, `Rank`, `IsAmbiguous`, `IsVote`, `WriteinIndex`).
+- **Three schema generations:** 5.2 (2019: no `Cards` — `Contests` sit directly under
+  `Original`; no `SessionType`; no contest `Undervotes`/`Overvotes`; one 500 MB
+  `CvrExport.json`), 5.10 (2020–2024: `Cards`, one file per batch), 5.19 (2025–2026:
+  adds `CastVoteRecordId`, `BallotLayoutManifest`). The column layout is decided from
+  the manifests plus the first session's shape.
+- **Which marks count:** only `IsVote = true` marks — exactly what Dominion tabulates
+  (ambiguous marks the adjudicator did not accept stay `IsVote = false`). Exception: 5.2
+  sets `IsVote` only on the mark counted in the first round, so in a 5.2 ranked-choice
+  contest every lower ranking and every overvoted mark is `IsVote = false`; there a
+  ranking is any non-ambiguous mark. Separate write-in lines (`WriteinIndex` 0, 1, …)
+  are separate marks, so two write-ins at one rank are an overvote.
+- **Rows / key columns:** one row per session. Frozen keys: `Cvr Number` (5.19's
+  CastVoteRecordId), `Record Id` (the ballot-image name from `ImageMask`, e.g.
+  `00005_01198_000022` — still unique where the county redacted `RecordId` to `"X"`, as
+  in Nov 2024), `Tabulator`, `Batch` (`<tabulator>-<batch>`, zero-padded — batch ids
+  repeat across tabulators), `Counting Group`, `Polling Place` (the tabulator's
+  VotingLocationName), `Precinct Portion`, `Ballot Type`, `Session Type`, `Card`
+  (1-based PaperIndex; `1,2,3,4` for a session holding several cards), `Adjudicated`
+  (Yes = the Modified version). Fields a version lacks get no column.
+  `cvr_is_key_header` knows these names (CSV/TSV re-import keeps them frozen);
+  `Cvr_FindReportColumn` maps the Precinct / Ballot Style / Voting Type reports to
+  `Precinct Portion` / `Ballot Type` / `Counting Group`; `EeCvr_HasMultiCard` is exact
+  via `Card` ≥ 2.
+- **Contest columns** in ContestManifest order (disabled contests omitted). Vote-for-N:
+  N columns (blank continuation headers → `col_group`), selections then `undervote`s;
+  every column `overvote` when the contest's `Overvotes` > 0 (5.2: more non-ambiguous
+  marks than seats). Unresolved write-ins read `Write-in` (the manifest name); qualified
+  write-ins carry the candidate's name (SF's summary report folds those into its
+  "Write-in" row).
+- **Ranked choice:** a contest with `NumOfRanks` > 0 becomes one column per rank titled
+  `<contest> (Rank N)` holding the candidate ranked there, `undervote` (nothing at that
+  rank) or `overvote` (several candidates at that rank). Each rank is its own contest
+  in the ordinary tabulation, so `(Rank 1)` gives the first-choice counts that match
+  the official summary.
+- **Redaction:** SF replaces some sessions' contest data (and potentially ids) with the
+  text `"*** REDACTED ***"` (15 sessions in Nov 2025, 317 contests in Jun 2026). Such
+  cells read `<Redacted>` (the existing redaction marker), never `undervote`.
+- **Several zips** load together only when their key fields and contest columns are
+  identical (error naming the file otherwise).
+- **Parsing:** a small streaming JSON parser (no third party): each zip entry is
+  inflated in 256 KB chunks via miniz's `mz_zip_reader_extract_iter_*`; each session is
+  parsed into a reusable index-based DOM, turned into a row, and discarded. One pass.
+  Speed ≈ 150 MB of JSON/s: Nov 2024 (5.0 GB JSON, 27,554 files, 1,603,908 sessions,
+  42.5 M cells) loads in ~32 s; the 500 MB single-file 2019 export in ~3.5 s.
+- **Detection / dispatch:** `EeCvr_IsDominionZip` (ContestManifest.json + a
+  CvrExport*.json); `CvrLoadThreadProc` routes Dominion zips to
+  `EeCvr_LoadFromDominionZips`, Hart zips/PDFs to the Hart loader, and refuses a mix of
+  vendors.
+
+### Ranked-choice (instant-runoff) tabulation (`ee_rcv.c`)
+
+CVR **Reports → Tabulate Ranked-Choice Contests…** / **Tabulate Filtered Ranked-Choice
+Contests…** (greyed without RCV contests / without a filter).
+
+- **Engine:** `EeCvr_FindRcvContests` recognizes a run of `<base> (Rank 1)`,
+  `(Rank 2)`, … columns (≥ 2 ranks) — from the Dominion loader or a CSV/TSV re-import.
+  `EeCvr_TabulateRcv(t, first_col, rows|NULL, n, &result)` runs single-winner IRV with
+  the options printed on SF's official Dominion RCV reports: single elimination;
+  threshold = continuing ballots; **Exclude unresolved write-ins = True** (the ranking
+  is passed over; a ballot with only write-ins is a Blank); **Declare winners by
+  threshold = False** (continue until two candidates remain); **Skip overvoted rankings
+  = False** (reaching an overvoted ranking stops the ballot, counted under Overvotes);
+  **Assign skipped rankings to exhausted = False** (a skipped rank is passed over).
+  Rows without the contest are ignored. A tie for last is broken by the most recent
+  earlier round that separates the tied candidates, then by name, and flagged
+  (`elim_tie`) — officials break real ties by lot. `EeRcvResult` holds per-round votes
+  per candidate (finishing order: winner, runner-up, then latest-eliminated first),
+  continuing / blanks / exhausted / overvotes, the eliminated candidate per round, the
+  winner and the first round with a majority.
+- **UI:** `CvrRcvWindow` (class `k_CvrRcvClassName`): owner-data list **Contest |
+  Candidate | Result | Round 1…N**; per contest one row per candidate ("Winner (majority
+  in round k)", "Runner-up", "Eliminated round k [(tie)]"; cells blank after
+  elimination) then Continuing Ballots Total, Blanks, Exhausted, Overvotes and Non
+  Transferable Total rows (as in the official report). Right-click Copy / Export
+  Selected / Export All (`-…_RCV_Rounds`), Ctrl+C; one per CVR window
+  (`CvrWindow.rcv_report`), closed with it; `CvrWindow.rcv_count` gates the menu.
+- **Validated:** all 25 official SF RCV short reports available for the test exports
+  match **exactly, every round** — every candidate, Continuing, Blanks, Exhausted and
+  Overvotes value: Nov 2019 (Mayor, D5, DA — the 5.2 format), Nov 2020 (D1, D3, D5, D7,
+  D9, D11), Nov 2022 (D4, D6, D8, D10, DA, Public Defender) and Nov 2024 (Mayor — 14
+  rounds, Lurie 182,364 / Breed 149,113, Exhausted 57,859, Overvotes 2,229 — City
+  Attorney, DA, Sheriff, D1, D3, D5, D7, D9, D11).
+
+### Dominion validation (summary reports)
+
+Tabulation compared contest-by-contest with SF's official `summary.xml` (candidate
+totals, undervotes, overvotes): exact for every contest of Nov 2019 (15), Mar 2020
+(23), Nov 2020 (41), Sep 2021 recall (2), Feb 2022 (5), Apr 2022 (1), Jun 2022 (24),
+Nov 2022 (61), Mar 2024 (27) and Nov 2024 (48). Nov 2025 and Jun 2026 differ only by
+the ballots the county redacted in the CVR (15 and 317 contest records, shown as
+`<Redacted>`), which the official count includes. Qualified write-ins are compared
+after folding them into the summary's "Write-in" row.
+
+Tests `dominion` (synthetic 5.10 + 5.2 exports: entry ordering, keys, adjudication,
+vote-for-2, ambiguous marks, RCV columns incl. duplicate/overvoted rankings and two
+write-in lines, redaction, multi-card, a `É` escape, multi-zip mismatch, CSV round
+trip) and `rcv` (rounds, transfers, ties, skipped/overvoted rankings, write-in exclusion,
+blanks, exhausted ballots, majority round, filtered subset).
+
 ## Testing
 
 Author small `.xlsx` files with miniz's writer (as the XLSX tests do): two files

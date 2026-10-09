@@ -29,6 +29,9 @@
 #define IDM_CVR_REPORT_POLLINGPLACE 40074
 #define IDM_CVR_REPORT_DEVICESERIAL 40075
 #define IDM_CVR_REPORT_VOTINGTYPE   40076
+/* Ranked-choice (instant-runoff) round-by-round tabulation (CVR Reports menu). */
+#define IDM_CVR_TABULATE_RCV          40077
+#define IDM_CVR_TABULATE_RCV_FILTERED 40078
 /* Export "All" for report context menus. */
 #define IDM_EXPORT_ALL            40072
 

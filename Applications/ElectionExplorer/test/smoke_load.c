@@ -5950,6 +5950,563 @@ done:
     return rc;
 }
 
+/* Copy @p s replacing ' with " so JSON fixtures stay readable in C source. */
+static char *dom_json(const char *s)
+{
+    size_t n = strlen(s);
+    char *d = (char *)malloc(n + 1);
+    size_t i;
+    if (d == NULL)
+    {
+        return NULL;
+    }
+    for (i = 0; i <= n; i++)
+    {
+        d[i] = (s[i] == '\'') ? '"' : s[i];
+    }
+    return d;
+}
+
+/* Write a zip of JSON entries given with ' for ". */
+static BOOL dom_write_zip(const wchar_t *path,
+                          const char *const *names,
+                          const char *const *json,
+                          int n)
+{
+    char *conv[16];
+    int i;
+    BOOL ok = TRUE;
+    if (n > 16)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        conv[i] = dom_json(json[i]);
+        ok = ok && conv[i] != NULL;
+    }
+    ok = ok && hart_write_zip(path, names, (const char *const *)conv, n);
+    for (i = 0; i < n; i++)
+    {
+        free(conv[i]);
+    }
+    return ok;
+}
+
+/* Cell text of physical row @p r, column titled @p title ("" if absent). */
+static void dom_cell(const EeCvrTable *t,
+                     uint32_t r,
+                     const wchar_t *title,
+                     wchar_t *buf,
+                     size_t cch)
+{
+    uint32_t col = 0;
+    buf[0] = L'\0';
+    if (EeCvr_FindColumnByTitle(t, title, &col))
+    {
+        EeCvr_GetCellW(t, r, col, buf, cch);
+    }
+}
+
+/* Dominion CVR export loading (tag: dominion): manifests + CvrExport_<n>.json ordering,
+ * key columns, adjudicated (Modified) sessions, vote-for-2 with overvote/undervote,
+ * an ambiguous mark ignored, ranked-choice columns (duplicate ranking, overvoted
+ * rank, two write-in lines at one rank = overvote), a county-redacted contest and
+ * ballot type, multi-card via the Card column, a 5.2-format export (no Cards; lower
+ * rankings and overvoted marks flagged IsVote=false), detection, a multi-zip layout
+ * mismatch, and a CSV round trip that keeps the key columns frozen and the RCV
+ * contest recognizable. */
+static int test_dominion_cvr(void)
+{
+    static const char *k_contests =
+        "{'Version':'5.10.50.85','List':["
+        "{'Description':'GOVERNOR','Id':1,'ExternalId':'','DistrictId':1,'VoteFor':1,"
+        "'NumOfRanks':0,'Disabled':0},"
+        "{'Description':'BOARD','Id':2,'VoteFor':2,'NumOfRanks':0,'Disabled':0},"
+        "{'Description':'OLD CONTEST','Id':4,'VoteFor':1,'NumOfRanks':0,'Disabled':1},"
+        "{'Description':' MAYOR ','Id':3,'VoteFor':1,'NumOfRanks':3,'Disabled':0}]}";
+    static const char *k_cands =
+        "{'Version':'5.10.50.85','List':["
+        "{'Description':'ANN','Id':10,'ContestId':1,'Type':'Regular'},"
+        "{'Description':'BOB','Id':11,'ContestId':1,'Type':'Regular'},"
+        "{'Description':'CY','Id':20,'ContestId':2,'Type':'Regular'},"
+        "{'Description':'DI','Id':21,'ContestId':2,'Type':'Regular'},"
+        "{'Description':'ED','Id':22,'ContestId':2,'Type':'Regular'},"
+        "{'Description':'FAY','Id':30,'ContestId':3,'Type':'Regular'},"
+        "{'Description':'GUS','Id':31,'ContestId':3,'Type':'Regular'},"
+        "{'Description':'HAL \\u00c9','Id':32,'ContestId':3,'Type':'Regular'},"
+        "{'Description':'Write-in','Id':33,'ContestId':3,'Type':'WriteIn'}]}";
+    static const char *k_portions =
+        "{'Version':'x','List':[{'Description':'PCT 1101','Id':1,'ExternalId':'1101-1'}]}";
+    static const char *k_btypes =
+        "{'Version':'x','List':[{'Description':'Ballot Type 1','Id':1,'ExternalId':'VBM'}]}";
+    static const char *k_groups = "{'Version':'x','List':[{'Description':'Election Day','Id':1},"
+                                  "{'Description':'Vote by Mail','Id':2}]}";
+    static const char *k_tabs =
+        "{'Version':'x','List':[{'Description':'ICC01 Vote by Mail','Id':5,"
+        "'VotingLocationNumber':1,'VotingLocationName':'City Hall','Type':'ImagecastCentral'}]}";
+    /* CvrExport_2.json: S1 (plain), S2 (adjudicated: Modified is current). */
+    static const char *k_cvr2 =
+        "{'Version':'5.10.50.85','ElectionId':'Test','Sessions':["
+        "{'TabulatorId':5,'BatchId':1,'RecordId':1,'CountingGroupId':2,"
+        "'ImageMask':'D:\\\\NAS\\\\Batch001\\\\00005_00001_000001*.*','SessionType':'ScannedVote',"
+        "'VotingSessionIdentifier':'','UniqueVotingIdentifier':'',"
+        "'Original':{'PrecinctPortionId':1,'BallotTypeId':1,'IsCurrent':true,'Cards':[{'Id':1,"
+        "'KeyInId':1,'PaperIndex':0,'Contests':["
+        "{'Id':1,'Undervotes':0,'Overvotes':0,'OutstackConditionIds':[],'Marks':[{'CandidateId':10,"
+        "'Rank':1,'MarkDensity':90,'IsAmbiguous':false,'IsVote':true,'OutstackConditionIds':[]}]},"
+        "{'Id':2,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':20,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true},{'CandidateId':21,'Rank':1,'IsAmbiguous':false,"
+        "'IsVote':true}]},"
+        "{'Id':3,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':30,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true},{'CandidateId':31,'Rank':2,'IsAmbiguous':false,"
+        "'IsVote':true},{'CandidateId':31,'Rank':3,'IsAmbiguous':false,'IsVote':true}]}],"
+        "'OutstackConditionIds':[]}]}},"
+        "{'TabulatorId':5,'BatchId':1,'RecordId':2,'CountingGroupId':2,"
+        "'ImageMask':'D:\\\\NAS\\\\Batch001\\\\00005_00001_000002*.*','SessionType':'ScannedVote',"
+        "'Original':{'PrecinctPortionId':1,'BallotTypeId':1,'IsCurrent':false,'Cards':[{'PaperIndex':0,"
+        "'Contests':[{'Id':1,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':11,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true}]}]}]},"
+        "'Modified':{'PrecinctPortionId':1,'BallotTypeId':1,'IsCurrent':true,'Cards':[{'PaperIndex':0,"
+        "'Contests':["
+        "{'Id':1,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':10,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true}]},"
+        "{'Id':2,'Undervotes':0,'Overvotes':1,'Marks':[{'CandidateId':20,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':false},{'CandidateId':21,'Rank':1,'IsAmbiguous':false,"
+        "'IsVote':false},{'CandidateId':22,'Rank':1,'IsAmbiguous':false,'IsVote':false}]},"
+        "{'Id':3,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':30,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true},{'CandidateId':31,'Rank':1,'IsAmbiguous':false,"
+        "'IsVote':true},{'CandidateId':32,'Rank':2,'IsAmbiguous':false,'IsVote':true}]}]}]}}]}";
+    /* CvrExport_10.json: S3 (card 2; ambiguous mark; write-in), S4 (redacted contest and
+     * ballot type), S5 (two write-in lines at rank 1). */
+    static const char *k_cvr10 =
+        "{'Version':'5.10.50.85','ElectionId':'Test','Sessions':["
+        "{'TabulatorId':5,'BatchId':2,'RecordId':'X','CountingGroupId':1,"
+        "'ImageMask':'D:\\\\NAS\\\\Batch002\\\\00005_00002_000007*.*','SessionType':'QRVote',"
+        "'Original':{'PrecinctPortionId':1,'BallotTypeId':1,'IsCurrent':true,'Cards':[{'PaperIndex':1,"
+        "'Contests':["
+        "{'Id':1,'Undervotes':1,'Overvotes':0,'Marks':[{'CandidateId':11,'Rank':1,"
+        "'IsAmbiguous':true,'IsVote':false}]},"
+        "{'Id':2,'Undervotes':1,'Overvotes':0,'Marks':[{'CandidateId':22,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true}]},"
+        "{'Id':3,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':33,'Rank':1,'WriteinIndex':0,"
+        "'IsAmbiguous':false,'IsVote':true},{'CandidateId':32,'Rank':2,'IsAmbiguous':false,"
+        "'IsVote':true}]}]}]}},"
+        "{'TabulatorId':5,'BatchId':2,'RecordId':'X','CountingGroupId':1,"
+        "'ImageMask':'D:\\\\NAS\\\\Batch002\\\\00005_00002_000008*.*','SessionType':'ScannedVote',"
+        "'Original':{'PrecinctPortionId':1,'BallotTypeId':'*** REDACTED ***','IsCurrent':true,"
+        "'Cards':[{'PaperIndex':0,'Contests':["
+        "{'Id':1,'Undervotes':0,'Overvotes':0,'Marks':[{'CandidateId':11,'Rank':1,"
+        "'IsAmbiguous':false,'IsVote':true}]},"
+        "{'Id':3,'Undervotes':'*** REDACTED ***','Overvotes':'*** REDACTED ***',"
+        "'OutstackConditionIds':'*** REDACTED ***','Marks':'*** REDACTED ***'}]}]}},"
+        "{'TabulatorId':5,'BatchId':2,'RecordId':'X','CountingGroupId':1,"
+        "'ImageMask':'D:\\\\NAS\\\\Batch002\\\\00005_00002_000009*.*','SessionType':'ScannedVote',"
+        "'Original':{'PrecinctPortionId':1,'BallotTypeId':1,'IsCurrent':true,'Cards':[{'PaperIndex':0,"
+        "'Contests':[{'Id':3,'Undervotes':0,'Overvotes':1,'Marks':[{'CandidateId':33,'Rank':1,"
+        "'WriteinIndex':0,'IsAmbiguous':false,'IsVote':true},{'CandidateId':33,'Rank':1,"
+        "'WriteinIndex':1,'IsAmbiguous':false,'IsVote':true}]}]}]}}]}";
+    /* A 5.2-format export: no Cards/SessionType, no contest counts; lower rankings and
+     * overvoted marks carry IsVote=false. */
+    static const char *k_old_contests =
+        "{'Version':'5.2.18.2','List':[{'Description':'MAYOR','Id':1,'VoteFor':1,'NumOfRanks':2},"
+        "{'Description':'PROP A','Id':2,'VoteFor':1,'NumOfRanks':0}]}";
+    static const char *k_old_cands =
+        "{'Version':'5.2.18.2','List':[{'Description':'FAY','Id':30,'ContestId':1,'Type':'Regular'},"
+        "{'Description':'GUS','Id':31,'ContestId':1,'Type':'Regular'},"
+        "{'Description':'YES','Id':40,'ContestId':2,'Type':'Regular'},"
+        "{'Description':'NO','Id':41,'ContestId':2,'Type':'Regular'}]}";
+    static const char *k_old_tabs =
+        "{'Version':'5.2.18.2','List':[{'Description':'BSM 1101','Id':1101}]}";
+    static const char *k_old_cvr =
+        "{'Version':'5.2.18.2','ElectionId':'Old','Sessions':["
+        "{'TabulatorId':1101,'BatchId':1,'RecordId':1,'CountingGroupId':1,"
+        "'ImageMask':'D:\\\\NAS\\\\01101_00001_000001*.*','Original':{'PrecinctPortionId':1,"
+        "'BallotTypeId':1,'IsCurrent':true,'Contests':["
+        "{'Id':1,'Marks':[{'CandidateId':30,'PartyId':0,'Rank':1,'MarkDensity':85,"
+        "'IsAmbiguous':false,'IsVote':true},{'CandidateId':31,'Rank':2,'IsAmbiguous':false,"
+        "'IsVote':false}]},"
+        "{'Id':2,'Marks':[{'CandidateId':40,'Rank':1,'IsAmbiguous':false,'IsVote':false},"
+        "{'CandidateId':41,'Rank':1,'IsAmbiguous':false,'IsVote':false}]}]}},"
+        "{'TabulatorId':1101,'BatchId':1,'RecordId':2,'CountingGroupId':1,"
+        "'ImageMask':'D:\\\\NAS\\\\01101_00001_000002*.*','Original':{'PrecinctPortionId':1,"
+        "'BallotTypeId':1,'IsCurrent':true,'Contests':["
+        "{'Id':1,'Marks':[{'CandidateId':30,'Rank':1,'IsAmbiguous':false,'IsVote':false},"
+        "{'CandidateId':31,'Rank':1,'IsAmbiguous':false,'IsVote':false}]},"
+        "{'Id':2,'Marks':[{'CandidateId':40,'Rank':1,'IsAmbiguous':false,'IsVote':true}]}]}}]}";
+    /* Entry order deliberately puts _10 before _2: rows must follow the export number. */
+    const char *names[8] = {"ContestManifest.json",
+                            "CandidateManifest.json",
+                            "PrecinctPortionManifest.json",
+                            "BallotTypeManifest.json",
+                            "CountingGroupManifest.json",
+                            "TabulatorManifest.json",
+                            "CvrExport_10.json",
+                            "CvrExport_2.json"};
+    const char *json[8];
+    const char *old_names[6] = {"ContestManifest.json",
+                                "CandidateManifest.json",
+                                "PrecinctPortionManifest.json",
+                                "BallotTypeManifest.json",
+                                "TabulatorManifest.json",
+                                "CvrExport.json"};
+    const char *old_json[6];
+    wchar_t zpath[MAX_PATH];
+    wchar_t opath[MAX_PATH];
+    wchar_t hpath[MAX_PATH];
+    wchar_t cpath[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[128];
+    const wchar_t *paths[2];
+    EeCvrTable t;
+    EeCvrTable t2;
+    EeLoadStatus s;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0;
+    uint32_t rcv[4];
+    int rc = 1;
+
+    json[0] = k_contests;
+    json[1] = k_cands;
+    json[2] = k_portions;
+    json[3] = k_btypes;
+    json[4] = k_groups;
+    json[5] = k_tabs;
+    json[6] = k_cvr10;
+    json[7] = k_cvr2;
+    old_json[0] = k_old_contests;
+    old_json[1] = k_old_cands;
+    old_json[2] = k_portions;
+    old_json[3] = k_btypes;
+    old_json[4] = k_old_tabs;
+    old_json[5] = k_old_cvr;
+
+    EeCvr_Init(&t);
+    EeCvr_Init(&t2);
+    if (!cvr_temp_path(zpath, ARRAYSIZE(zpath), L"ee_dominion.zip") ||
+        !cvr_temp_path(opath, ARRAYSIZE(opath), L"ee_dominion_52.zip") ||
+        !cvr_temp_path(hpath, ARRAYSIZE(hpath), L"ee_dominion_not.zip") ||
+        !cvr_temp_path(cpath, ARRAYSIZE(cpath), L"ee_dominion_rt.csv") ||
+        !dom_write_zip(zpath, names, json, 8) || !dom_write_zip(opath, old_names, old_json, 6))
+    {
+        wprintf(L"dominion: fixture write failed\n");
+        return 1;
+    }
+    {
+        const char *hn[1] = {"1_AAA.xml"};
+        const char *hx[1] = {"<Cvr><Contests /></Cvr>"};
+        if (!hart_write_zip(hpath, hn, hx, 1))
+        {
+            wprintf(L"dominion: hart fixture write failed\n");
+            return 1;
+        }
+    }
+    if (!EeCvr_IsDominionZip(zpath) || !EeCvr_IsDominionZip(opath) || EeCvr_IsDominionZip(hpath))
+    {
+        wprintf(L"dominion: detection wrong\n");
+        return 1;
+    }
+
+    paths[0] = zpath;
+    s = EeCvr_LoadFromDominionZips(paths, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 5)
+    {
+        wprintf(L"dominion: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    /* Keys: Record Id, Tabulator, Batch, Counting Group, Polling Place, Precinct Portion,
+     * Ballot Type, Session Type, Card, Adjudicated; then GOVERNOR, BOARD x2, MAYOR x3
+     * (the disabled contest has no column). */
+    if (t.frozen_count != 10 || t.ncols != 16 || wcscmp(t.col_titles[0], L"Record Id") != 0 ||
+        wcscmp(t.col_titles[11], L"BOARD") != 0 || wcscmp(t.col_titles[12], L"BOARD (2)") != 0 ||
+        wcscmp(t.col_titles[13], L"MAYOR (Rank 1)") != 0 ||
+        wcscmp(t.col_titles[15], L"MAYOR (Rank 3)") != 0)
+    {
+        wprintf(L"dominion: layout frozen=%u ncols=%u\n", t.frozen_count, t.ncols);
+        goto done;
+    }
+    dom_cell(&t, 0, L"Record Id", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"00005_00001_000001") != 0)
+    {
+        wprintf(L"dominion: row order / record id = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 0, L"Batch", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"00005-00001") != 0)
+    {
+        wprintf(L"dominion: batch = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 0, L"Polling Place", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"City Hall") != 0)
+    {
+        wprintf(L"dominion: polling place = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 1, L"Adjudicated", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"Yes") != 0)
+    {
+        wprintf(L"dominion: adjudicated = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 2, L"Card", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2") != 0)
+    {
+        wprintf(L"dominion: card = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 3, L"Ballot Type", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"<Redacted>") != 0)
+    {
+        wprintf(L"dominion: redacted ballot type = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 0, L"MAYOR (Rank 3)", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"GUS") != 0)
+    {
+        wprintf(L"dominion: duplicate ranking = %s\n", buf);
+        goto done;
+    }
+    dom_cell(&t, 1, L"MAYOR (Rank 2)", buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"HAL \x00C9") != 0) /* \u escape decoded to UTF-8 */
+    {
+        wprintf(L"dominion: unicode name = %s\n", buf);
+        goto done;
+    }
+    if (!EeCvr_HasMultiCard(&t))
+    {
+        wprintf(L"dominion: multi-card (Card 2) not detected\n");
+        goto done;
+    }
+    if (EeCvr_FindRcvContests(&t, rcv, 4) != 1 || rcv[0] != 13)
+    {
+        wprintf(L"dominion: rcv contests\n");
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, FALSE, &items, &nt))
+    {
+        wprintf(L"dominion: tabulate failed\n");
+        goto done;
+    }
+    /* GOVERNOR: adjudicated ANN, ANN, BOB; S3's ambiguous mark is not a vote. */
+    if (hart_find_count(items, nt, L"GOVERNOR", L"ANN") != 2 ||
+        hart_find_count(items, nt, L"GOVERNOR", L"BOB") != 1 ||
+        hart_find_count(items, nt, L"GOVERNOR", L"undervote") != 1 ||
+        /* BOARD (vote for 2): CY+DI, overvoted (2 cells), ED + one unused vote. */
+        hart_find_count(items, nt, L"BOARD", L"CY") != 1 ||
+        hart_find_count(items, nt, L"BOARD", L"ED") != 1 ||
+        hart_find_count(items, nt, L"BOARD", L"overvote") != 2 ||
+        hart_find_count(items, nt, L"BOARD", L"undervote") != 1 ||
+        /* MAYOR rank 1: FAY, overvote (FAY+GUS), Write-in, <Redacted>, overvote (two
+         * write-in lines). */
+        hart_find_count(items, nt, L"MAYOR (Rank 1)", L"FAY") != 1 ||
+        hart_find_count(items, nt, L"MAYOR (Rank 1)", L"overvote") != 2 ||
+        hart_find_count(items, nt, L"MAYOR (Rank 1)", L"Write-in") != 1 ||
+        hart_find_count(items, nt, L"MAYOR (Rank 1)", L"<Redacted>") != 1)
+    {
+        wprintf(L"dominion: tallies wrong\n");
+        goto done;
+    }
+
+    /* Two exports with different contests do not load together. */
+    paths[1] = opath;
+    s = EeCvr_LoadFromDominionZips(paths, 2, &t2, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Error || wcsstr(err, L"ee_dominion_52.zip") == NULL)
+    {
+        wprintf(L"dominion: mismatch not rejected s=%d err=%s\n", (int)s, err);
+        goto done;
+    }
+
+    /* 5.2 format. */
+    paths[0] = opath;
+    s = EeCvr_LoadFromDominionZips(paths, 1, &t2, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t2.nrows != 2 || t2.frozen_count != 7)
+    {
+        wprintf(L"dominion: 5.2 load s=%d rows=%u frozen=%u err=%s\n",
+                (int)s,
+                t2.nrows,
+                t2.frozen_count,
+                err);
+        goto done;
+    }
+    {
+        wchar_t r2[64], ov[64], pa[64], pb[64];
+        dom_cell(&t2, 0, L"MAYOR (Rank 2)", r2, ARRAYSIZE(r2));
+        dom_cell(&t2, 1, L"MAYOR (Rank 1)", ov, ARRAYSIZE(ov));
+        dom_cell(&t2, 0, L"PROP A", pa, ARRAYSIZE(pa));
+        dom_cell(&t2, 1, L"PROP A", pb, ARRAYSIZE(pb));
+        if (wcscmp(r2, L"GUS") != 0 || wcscmp(ov, L"overvote") != 0 ||
+            wcscmp(pa, L"overvote") != 0 || wcscmp(pb, L"YES") != 0)
+        {
+            wprintf(L"dominion: 5.2 cells r2=%s ov=%s pa=%s pb=%s\n", r2, ov, pa, pb);
+            goto done;
+        }
+    }
+    EeCvr_Clear(&t2);
+
+    /* CSV round trip: the Dominion key columns stay frozen; the RCV contest survives. */
+    {
+        uint32_t *rows = (uint32_t *)malloc(t.nrows * sizeof(uint32_t));
+        char *text = NULL;
+        size_t len = 0;
+        FILE *fp = NULL;
+        uint32_t i;
+        BOOL ok = rows != NULL;
+        for (i = 0; ok && i < t.nrows; i++)
+        {
+            rows[i] = i;
+        }
+        ok = ok && EeCvr_FormatDelimitedUtf8(&t, rows, t.nrows, ',', TRUE, &text, &len);
+        ok = ok && _wfopen_s(&fp, cpath, L"wb") == 0 && fp != NULL &&
+             fwrite(text, 1, len, fp) == len;
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+        free(rows);
+        free(text);
+        paths[0] = cpath;
+        if (!ok ||
+            EeCvr_LoadFromFiles(paths, 1, &t2, NULL, NULL, NULL, err, ARRAYSIZE(err)) !=
+                EeLoadStatus_Ok ||
+            t2.frozen_count != 10 || EeCvr_FindRcvContests(&t2, NULL, 0) != 1)
+        {
+            wprintf(L"dominion: csv round trip frozen=%u err=%s\n", t2.frozen_count, err);
+            goto done;
+        }
+    }
+    wprintf(L"dominion ok\n");
+    rc = 0;
+
+done:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    EeCvr_Clear(&t2);
+    DeleteFileW(zpath);
+    DeleteFileW(opath);
+    DeleteFileW(hpath);
+    DeleteFileW(cpath);
+    return rc;
+}
+
+/* Ranked-choice instant runoff (tag: rcv): rounds, transfers, a tie for last broken by
+ * name then by the earlier round, a skipped first ranking, an overvoted ranking (stops
+ * the ballot when reached), an unresolved write-in (excluded -> blank), blanks, rows
+ * without the contest, exhausted ballots, majority round, finishing order, and a
+ * filtered subset. */
+static int test_rcv(void)
+{
+    static const char *k_hdr[6] =
+        {"Id", "X (Rank 1)", "X (Rank 2)", "X (Rank 3)", "Solo (Rank 1)", "Other"};
+    /* ballots: rank1, rank2, rank3 ("" = contest absent) */
+    static const char *k_rows[][3] = {{"A", "undervote", "undervote"},
+                                      {"A", "undervote", "undervote"},
+                                      {"A", "undervote", "undervote"},
+                                      {"A", "undervote", "undervote"},
+                                      {"B", "C", "undervote"},
+                                      {"B", "C", "undervote"},
+                                      {"B", "C", "undervote"},
+                                      {"C", "B", "undervote"},
+                                      {"C", "B", "undervote"},
+                                      {"D", "overvote", "A"},
+                                      {"undervote", "D", "C"},
+                                      {"Write-in", "undervote", "undervote"},
+                                      {"undervote", "undervote", "undervote"},
+                                      {"overvote", "A", "B"},
+                                      {"", "", ""}};
+    const uint32_t nrows = (uint32_t)ARRAYSIZE(k_rows);
+    EeCvrTable t;
+    EeRcvResult r;
+    uint32_t i;
+    uint32_t first[4];
+    uint32_t sub[7] = {0, 1, 2, 3, 4, 5, 6};
+    int rc = 1;
+
+    EeCvr_Init(&t);
+    ZeroMemory(&r, sizeof(r));
+    if (!EeCvr_BuildBegin(&t, k_hdr, 6, 1))
+    {
+        wprintf(L"rcv: build failed\n");
+        return 1;
+    }
+    for (i = 0; i < nrows; i++)
+    {
+        char id[8];
+        const char *cells[6];
+        StringCchPrintfA(id, ARRAYSIZE(id), "%u", i + 1);
+        cells[0] = id;
+        cells[1] = k_rows[i][0];
+        cells[2] = k_rows[i][1];
+        cells[3] = k_rows[i][2];
+        cells[4] = "";
+        cells[5] = (i == nrows - 1) ? "yes" : "";
+        if (!EeCvr_BuildAppendRow(&t, cells, 6))
+        {
+            wprintf(L"rcv: append failed\n");
+            goto done;
+        }
+    }
+    /* "Solo (Rank 1)" without a Rank 2 is not a ranked-choice contest. */
+    if (EeCvr_FindRcvContests(&t, first, 4) != 1 || first[0] != 1)
+    {
+        wprintf(L"rcv: find contests\n");
+        goto done;
+    }
+    if (!EeCvr_TabulateRcv(&t, 1, NULL, 0, &r))
+    {
+        wprintf(L"rcv: tabulate failed\n");
+        goto done;
+    }
+    /* Round 1: A4 B3 C2 D2 (D via the skipped rank 1), blanks 2 (all-undervote and the
+     * write-in-only ballot), overvotes 1. C/D tie -> D (later name) out, flagged.
+     * Round 2: the D,overvote ballot stops (overvotes 2); the skip,D,C ballot moves to C:
+     * A4 B3 C3 -> B/C tie broken by round 1 (C had 2) -> C out. Round 3: B5 A4, the
+     * skip,D,C ballot exhausts. Finishing order B, A, C, D. */
+    if (wcscmp(r.contest, L"X") != 0 || r.nranks != 3 || r.ncand != 4 || r.nrounds != 3 ||
+        r.winner != 0 || wcscmp(r.cand[0], L"B") != 0 || wcscmp(r.cand[1], L"A") != 0 ||
+        wcscmp(r.cand[2], L"C") != 0 || wcscmp(r.cand[3], L"D") != 0)
+    {
+        wprintf(L"rcv: shape rounds=%u ncand=%u\n", r.nrounds, r.ncand);
+        goto done;
+    }
+    if (r.votes[0 * 4 + 0] != 3 || r.votes[0 * 4 + 1] != 4 || r.votes[0 * 4 + 2] != 2 ||
+        r.votes[0 * 4 + 3] != 2 || r.votes[1 * 4 + 2] != 3 || r.votes[1 * 4 + 3] != 0 ||
+        r.votes[2 * 4 + 0] != 5 || r.votes[2 * 4 + 1] != 4)
+    {
+        wprintf(L"rcv: votes wrong\n");
+        goto done;
+    }
+    if (r.continuing[0] != 11 || r.blanks[0] != 2 || r.overvotes[0] != 1 || r.exhausted[0] != 0 ||
+        r.continuing[1] != 10 || r.overvotes[1] != 2 || r.continuing[2] != 9 ||
+        r.exhausted[2] != 1 || r.blanks[2] != 2)
+    {
+        wprintf(L"rcv: totals wrong\n");
+        goto done;
+    }
+    if (r.eliminated[0] != 3 || !r.elim_tie[0] || r.eliminated[1] != 2 || !r.elim_tie[1] ||
+        r.eliminated[2] != -1 || r.majority_round != 3)
+    {
+        wprintf(L"rcv: eliminations wrong\n");
+        goto done;
+    }
+    EeCvr_FreeRcvResult(&r);
+    /* Filtered subset (the A and B,C ballots): C (ranked only second) has no first-round
+     * votes and goes out after round 1; A wins with a majority from round 1. */
+    if (!EeCvr_TabulateRcv(&t, 1, sub, 7, &r) || r.nrounds != 2 || r.winner != 0 ||
+        wcscmp(r.cand[0], L"A") != 0 || r.majority_round != 1 || r.continuing[0] != 7)
+    {
+        wprintf(L"rcv: filtered subset wrong\n");
+        goto done;
+    }
+    wprintf(L"rcv ok\n");
+    rc = 0;
+
+done:
+    EeCvr_FreeRcvResult(&r);
+    EeCvr_Clear(&t);
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -6002,5 +6559,7 @@ int wmain(void)
     failed |= test_hart_pdf();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
+    failed |= test_dominion_cvr();
+    failed |= test_rcv();
     return failed == 0 ? 0 : 1;
 }

@@ -98,6 +98,39 @@ extern "C"
      */
     BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out);
 
+    /** Kinds of page image returned by EePdf_GetPageImage. */
+    enum
+    {
+        EE_PDF_IMAGE_NONE = 0,    /* the page draws no image */
+        EE_PDF_IMAGE_ENCODED = 1, /* data = encoded file bytes (JPEG / DCTDecode) */
+        EE_PDF_IMAGE_PIXELS = 2   /* data = raw 8-bit samples, top-down rows */
+    };
+
+    /** The largest image drawn on a page (for image-only / scanned pages). */
+    typedef struct EePdfImage
+    {
+        int kind;          /* EE_PDF_IMAGE_* */
+        uint32_t width;    /* pixels */
+        uint32_t height;
+        uint32_t channels; /* PIXELS: 1 (gray) or 3 (RGB) */
+        uint32_t stride;   /* PIXELS: bytes per row */
+        unsigned char *data;
+        size_t len;
+        size_t cap;
+    } EePdfImage;
+
+    /**
+     * Find the largest image XObject drawn on page @p page_index and return its data:
+     * JPEG (DCTDecode) images as their encoded bytes, Flate-compressed 8-bit gray/RGB
+     * images as raw pixels. @p out (zero-initialize before first use; reused across
+     * calls) gets kind EE_PDF_IMAGE_NONE when the page draws no image. Returns FALSE on
+     * a read error or an unsupported image encoding (e.g. JPX, CCITT, indexed color).
+     */
+    BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out);
+
+    /** Release an EePdfImage's buffer. */
+    void EePdf_ImageFree(EePdfImage *img);
+
 #ifdef __cplusplus
 }
 #endif

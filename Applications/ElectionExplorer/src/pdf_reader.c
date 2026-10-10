@@ -848,6 +848,7 @@ struct EePdf
     Arena tmp_arena; /* per font / tree node / xref section */
     Arena os_arena;  /* object stream dictionaries */
     ByteBuf content; /* decoded page content */
+    EePdfPageText scratch_text; /* text sink for EePdf_GetPageImage */
     ByteBuf part;    /* one decoded stream */
 };
 
@@ -1243,7 +1244,8 @@ static uint64_t find_endstream(EePdf *pdf, uint64_t from)
 
 /* Decode the stream whose dictionary is @p dict and data starts at @p data_off into
  * @p out (replaced). Supports no filter and FlateDecode (+ PNG predictors). */
-static BOOL stream_decode(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t data_off, ByteBuf *out)
+static BOOL stream_decode_ex(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t data_off,
+                             ByteBuf *out, int *is_dct)
 {
     PdfObj tmp;
     const PdfObj *lenobj = resolve(pdf, a, dict_get(dict, "Length"), &tmp);
@@ -1255,6 +1257,10 @@ static BOOL stream_decode(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t dat
     size_t avail = 0;
 
     out->len = 0;
+    if (is_dct != NULL)
+    {
+        *is_dct = 0;
+    }
     if (filt != NULL && filt->t == PO_ARRAY)
     {
         if (filt->n == 0)
@@ -1279,6 +1285,10 @@ static BOOL stream_decode(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t dat
         if (obj_is_name(filt, "FlateDecode") || obj_is_name(filt, "Fl"))
         {
             flate = 1;
+        }
+        else if (is_dct != NULL && (obj_is_name(filt, "DCTDecode") || obj_is_name(filt, "DCT")))
+        {
+            *is_dct = 1; /* JPEG: returned as the encoded bytes */
         }
         else
         {
@@ -1372,6 +1382,12 @@ static BOOL stream_decode(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t dat
         }
     }
     return TRUE;
+}
+
+static BOOL stream_decode(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t data_off,
+                          ByteBuf *out)
+{
+    return stream_decode_ex(pdf, a, dict, data_off, out, NULL);
 }
 
 /* Load and index object stream @p osnum into the single-entry cache. */
@@ -2710,6 +2726,9 @@ typedef struct Interp
     double px0, py0, px1, py1;
     int pending_clip;
     uint32_t next_clip;
+    /* largest XObject drawn with "Do" (for image-only pages) */
+    char best_xobj[128];
+    double best_area;
 } Interp;
 
 static void path_add(Interp *in, double x, double y)
@@ -2985,6 +3004,25 @@ static BOOL interpret(Interp *in, const unsigned char *data, size_t len)
                         skip_inline_image(&lx);
                     }
                     break;
+                case 'D':
+                    if (op[1] == 'o' && op[2] == 0 && nops >= 1 && ops[nops - 1].t == PO_NAME)
+                    {
+                        /* XObject painted in the unit square under the CTM: keep the
+                         * largest (a scanned page is one full-page image). */
+                        const double *m = g->ctm;
+                        double area = m[0] * m[3] - m[1] * m[2];
+                        if (area < 0)
+                        {
+                            area = -area;
+                        }
+                        if (area > in->best_area)
+                        {
+                            in->best_area = area;
+                            StringCchCopyA(in->best_xobj, ARRAYSIZE(in->best_xobj),
+                                           (const char *)ops[nops - 1].u.s);
+                        }
+                    }
+                    break;
                 case 'T':
                     if (op[1] == 'f' && op[2] == 0 && nops >= 2 && ops[nops - 2].t == PO_NAME)
                     {
@@ -3095,6 +3133,7 @@ void EePdf_Close(EePdf *pdf)
     arena_free(&pdf->os_arena);
     bb_free(&pdf->content);
     bb_free(&pdf->part);
+    EePdf_PageTextFree(&pdf->scratch_text);
     free(pdf);
 }
 
@@ -3298,7 +3337,12 @@ static BOOL content_append(EePdf *pdf, const PdfObj *c)
            bb_append(&pdf->content, "\n", 1);
 }
 
-BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out)
+/* Load page @p page_index, decode its content and interpret it into @p out. When
+ * @p best_xobj is given it receives the name of the largest XObject drawn (or "") and
+ * @p xobjects the page's resolved /XObject resource dictionary (valid until the next
+ * page call). */
+static BOOL page_interpret(EePdf *pdf, uint32_t page_index, EePdfPageText *out,
+                           char *best_xobj, size_t best_cap, const PdfObj **xobjects)
 {
     PdfObj page, tmp;
     const PdfObj *res = NULL, *contents, *fonts = NULL;
@@ -3306,6 +3350,14 @@ BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out)
     BOOL ok = FALSE;
     int depth;
 
+    if (best_xobj != NULL && best_cap > 0)
+    {
+        best_xobj[0] = 0;
+    }
+    if (xobjects != NULL)
+    {
+        *xobjects = NULL;
+    }
     if (pdf == NULL || out == NULL || page_index >= pdf->npages)
     {
         return FALSE;
@@ -3366,6 +3418,20 @@ BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out)
             *keep = *fonts;
             fonts = keep;
         }
+        if (xobjects != NULL)
+        {
+            const PdfObj *xo = resolve(pdf, &pdf->arena, dict_get(res, "XObject"), NULL);
+            if (xo != NULL && xo->t == PO_DICT)
+            {
+                PdfObj *keep = (PdfObj *)arena_alloc(&pdf->arena, sizeof(PdfObj));
+                if (keep == NULL)
+                {
+                    return FALSE;
+                }
+                *keep = *xo;
+                *xobjects = keep;
+            }
+        }
     }
     contents = resolve(pdf, &pdf->arena, dict_get(&page, "Contents"), &tmp);
     if (contents != NULL)
@@ -3406,6 +3472,99 @@ BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out)
     mat_ident(in->tm);
     mat_ident(in->tlm);
     ok = interpret(in, pdf->content.p, pdf->content.len);
+    if (ok && best_xobj != NULL && best_cap > 0)
+    {
+        StringCchCopyA(best_xobj, best_cap, in->best_xobj);
+    }
     free(in);
     return ok;
+}
+
+BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out)
+{
+    return page_interpret(pdf, page_index, out, NULL, 0, NULL);
+}
+
+void EePdf_ImageFree(EePdfImage *img)
+{
+    if (img != NULL)
+    {
+        free(img->data);
+        ZeroMemory(img, sizeof(*img));
+    }
+}
+
+BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out)
+{
+    char name[128];
+    const PdfObj *xobjects = NULL;
+    const PdfObj *ref, *sub, *cs, *bpc;
+    PdfObj d;
+    uint64_t soff = 0;
+    int is_dct = 0;
+    uint32_t w, h, ch;
+    if (pdf == NULL || out == NULL)
+    {
+        return FALSE;
+    }
+    out->kind = EE_PDF_IMAGE_NONE;
+    out->len = 0;
+    out->width = out->height = out->channels = out->stride = 0;
+    if (!page_interpret(pdf, page_index, &pdf->scratch_text, name, sizeof(name), &xobjects))
+    {
+        return FALSE;
+    }
+    if (name[0] == 0 || xobjects == NULL)
+    {
+        return TRUE; /* no image on the page */
+    }
+    ref = dict_get(xobjects, name);
+    if (ref == NULL || ref->t != PO_REF ||
+        !pdf_load(pdf, ref->u.ref.num, &pdf->arena, &d, &soff) || soff == 0 || d.t != PO_DICT)
+    {
+        return TRUE; /* not a stream XObject: treat as no image */
+    }
+    sub = dict_get(&d, "Subtype");
+    if (!obj_is_name(sub, "Image"))
+    {
+        return TRUE; /* a form XObject (not followed) */
+    }
+    w = (uint32_t)obj_num(resolve(pdf, &pdf->arena, dict_get(&d, "Width"), NULL));
+    h = (uint32_t)obj_num(resolve(pdf, &pdf->arena, dict_get(&d, "Height"), NULL));
+    cs = resolve(pdf, &pdf->arena, dict_get(&d, "ColorSpace"), NULL);
+    bpc = resolve(pdf, &pdf->arena, dict_get(&d, "BitsPerComponent"), NULL);
+    {
+        ByteBuf b;
+        b.p = out->data;
+        b.len = 0;
+        b.cap = out->cap;
+        if (!stream_decode_ex(pdf, &pdf->arena, &d, soff, &b, &is_dct))
+        {
+            out->data = b.p;
+            out->cap = b.cap;
+            return FALSE; /* unsupported filter (e.g. JPX, CCITT) */
+        }
+        out->data = b.p;
+        out->cap = b.cap;
+        out->len = b.len;
+    }
+    out->width = w;
+    out->height = h;
+    if (is_dct)
+    {
+        out->kind = EE_PDF_IMAGE_ENCODED;
+        return TRUE;
+    }
+    /* Raw samples: support 8-bit gray / RGB. */
+    ch = obj_is_name(cs, "DeviceGray") ? 1u : (obj_is_name(cs, "DeviceRGB") ? 3u : 0u);
+    if (ch == 0 || (bpc != NULL && obj_num(bpc) != 8.0) || w == 0 || h == 0 ||
+        (uint64_t)w * h * ch > out->len)
+    {
+        out->len = 0;
+        return FALSE;
+    }
+    out->kind = EE_PDF_IMAGE_PIXELS;
+    out->channels = ch;
+    out->stride = w * ch;
+    return TRUE;
 }

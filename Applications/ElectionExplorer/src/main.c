@@ -11066,6 +11066,12 @@ static void App_CreateCvrWindow(AppState *app,
     CvrWindow_Register(h);
     ShowWindow(h, SW_SHOWNORMAL);
     UpdateWindow(h);
+    if (cw->table.load_note != NULL)
+    {
+        /* e.g. the OCR summary of a scanned Hart PDF: what was repaired / needs review */
+        MessageBoxW(h, cw->table.load_note, L"Cast Vote Records Loaded",
+                    MB_ICONINFORMATION | MB_OK);
+    }
 }
 
 /* -------------------------------------------------------------------------- */

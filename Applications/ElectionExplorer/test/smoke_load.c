@@ -7,6 +7,7 @@
 #include "settings.h"
 #include "voter_table.h"
 #include "ee_cvr.h"
+#include "ocr_win.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -5714,6 +5715,322 @@ done:
     return rc;
 }
 
+/* ---- Scanned (image-only) Hart CVR Report: OCR path ----------------------------- */
+
+/* A gray page bitmap drawn with GDI at 144 dpi (2 px per PDF point, letter size). */
+typedef struct TPage
+{
+    HDC dc;
+    HBITMAP bmp;
+    HGDIOBJ old_bmp;
+    HFONT font;
+    HGDIOBJ old_font;
+    unsigned char *bits; /* 24bpp top-down BGR */
+    int w, h, stride;
+} TPage;
+
+static BOOL tpage_begin(TPage *p)
+{
+    BITMAPINFO bi;
+    ZeroMemory(p, sizeof(*p));
+    p->w = 1224;
+    p->h = 1584;
+    p->stride = ((p->w * 3) + 3) & ~3;
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = p->w;
+    bi.bmiHeader.biHeight = -p->h; /* top-down */
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 24;
+    bi.bmiHeader.biCompression = BI_RGB;
+    p->dc = CreateCompatibleDC(NULL);
+    if (p->dc == NULL)
+    {
+        return FALSE;
+    }
+    p->bmp = CreateDIBSection(p->dc, &bi, DIB_RGB_COLORS, (void **)&p->bits, NULL, 0);
+    if (p->bmp == NULL)
+    {
+        DeleteDC(p->dc);
+        return FALSE;
+    }
+    p->old_bmp = SelectObject(p->dc, p->bmp);
+    PatBlt(p->dc, 0, 0, p->w, p->h, WHITENESS);
+    p->font = CreateFontW(-22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                          DEFAULT_PITCH, L"Segoe UI");
+    p->old_font = SelectObject(p->dc, p->font);
+    SetBkMode(p->dc, TRANSPARENT);
+    SetTextColor(p->dc, RGB(0, 0, 0));
+    return TRUE;
+}
+
+static void tpage_text(TPage *p, int x, int y, const wchar_t *s)
+{
+    TextOutW(p->dc, x, y, s, (int)wcslen(s));
+}
+
+/* Copy the page out as 8-bit gray (caller frees) and release GDI objects. */
+static unsigned char *tpage_end(TPage *p)
+{
+    unsigned char *g = (unsigned char *)malloc((size_t)p->w * p->h);
+    int x, y;
+    GdiFlush();
+    if (g != NULL)
+    {
+        for (y = 0; y < p->h; y++)
+        {
+            const unsigned char *row = p->bits + (size_t)y * p->stride;
+            for (x = 0; x < p->w; x++)
+            {
+                g[(size_t)y * p->w + x] =
+                    (unsigned char)((row[3 * x] + row[3 * x + 1] + row[3 * x + 2]) / 3);
+            }
+        }
+    }
+    SelectObject(p->dc, p->old_font);
+    SelectObject(p->dc, p->old_bmp);
+    DeleteObject(p->font);
+    DeleteObject(p->bmp);
+    DeleteDC(p->dc);
+    return g;
+}
+
+/* Hart page banner (dropped by the reader as page furniture). */
+static void tpage_banner(TPage *p, const wchar_t *page_of)
+{
+    tpage_text(p, 40, 56, L"CVR Report");
+    tpage_text(p, 456, 64, L"COUNTY OF EXAMPLE");
+    tpage_text(p, 560, 188, page_of);
+    tpage_text(p, 1010, 116, L"10 of 20 = 50.00%");
+}
+
+/* Header block at y (5 rows, 29 px apart) and the table header below it; returns the
+ * y of the first table row. */
+static int tpage_header(TPage *p, int y, const wchar_t *precinct, const wchar_t *cvrid,
+                        const wchar_t *batch)
+{
+    wchar_t buf[128];
+    StringCchPrintfW(buf, ARRAYSIZE(buf), L"Precinct: %s", precinct);
+    tpage_text(p, 47, y, buf);
+    tpage_text(p, 637, y, L"Device Type: Central");
+    tpage_text(p, 47, y + 29, L"Party:");
+    tpage_text(p, 637, y + 29, L"Device Serial: S1902990909");
+    tpage_text(p, 47, y + 58, L"Polling Place:");
+    tpage_text(p, 637, y + 58, L"Device Data Id: KQ7");
+    tpage_text(p, 47, y + 87, L"Voting Type: Vote-By-Mail");
+    StringCchPrintfW(buf, ARRAYSIZE(buf), L"Cvr Id: %s", cvrid);
+    tpage_text(p, 637, y + 87, buf);
+    StringCchPrintfW(buf, ARRAYSIZE(buf), L"Central Batch Id: %s", batch);
+    tpage_text(p, 47, y + 116, buf);
+    tpage_text(p, 259, y + 152, L"Contest Title");
+    tpage_text(p, 873, y + 152, L"Option");
+    return y + 190;
+}
+
+static int tpage_row(TPage *p, int y, const wchar_t *title, const wchar_t *option)
+{
+    tpage_text(p, 56, y, title);
+    tpage_text(p, 630, y, option);
+    return y + 35;
+}
+
+/* Write a PDF whose pages are each one full-page 8-bit gray Flate image (no text). */
+static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, int npages,
+                              int w, int h)
+{
+    TBuf b = {0};
+    uint64_t offs[64];
+    uint64_t xref_off;
+    int i, nobj = 2 + npages * 3;
+    BOOL ok = TRUE;
+    FILE *fp = NULL;
+    if (nobj + 1 >= (int)ARRAYSIZE(offs))
+    {
+        return FALSE;
+    }
+#define IOBJ(n) (offs[n] = b.len, ok = ok && tb_printf(&b, "%d 0 obj\n", n))
+    ok = tb_printf(&b, "%%PDF-1.6\n");
+    IOBJ(1);
+    ok = ok && tb_printf(&b, "<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    IOBJ(2);
+    ok = ok && tb_printf(&b, "<< /Type /Pages /Count %d /Kids [", npages);
+    for (i = 0; i < npages; i++)
+    {
+        ok = ok && tb_printf(&b, " %d 0 R", 3 + i * 3);
+    }
+    ok = ok && tb_printf(&b, " ] >>\nendobj\n");
+    for (i = 0; i < npages && ok; i++)
+    {
+        static const char k_Content[] = "q 612 0 0 792 0 0 cm /Im0 Do Q ";
+        int pn = 3 + i * 3;
+        mz_ulong clen = mz_compressBound((mz_ulong)((size_t)w * h));
+        unsigned char *z = (unsigned char *)malloc(clen);
+        if (z == NULL || mz_compress(z, &clen, pages[i], (mz_ulong)((size_t)w * h)) != MZ_OK)
+        {
+            free(z);
+            ok = FALSE;
+            break;
+        }
+        IOBJ(pn);
+        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                                 "/Contents %d 0 R /Resources << /XObject << /Im0 %d 0 R >> "
+                                 ">> >>\nendobj\n", pn + 1, pn + 2);
+        IOBJ(pn + 1);
+        ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n%s\nendstream\nendobj\n",
+                             (unsigned)strlen(k_Content), k_Content);
+        IOBJ(pn + 2);
+        ok = ok && tb_printf(&b, "<< /Type /XObject /Subtype /Image /Width %d /Height %d "
+                                 "/ColorSpace /DeviceGray /BitsPerComponent 8 "
+                                 "/Filter /FlateDecode /Length %lu >>\nstream\n",
+                             w, h, (unsigned long)clen);
+        ok = ok && tb_add(&b, z, clen) && tb_printf(&b, "\nendstream\nendobj\n");
+        free(z);
+    }
+    /* classic xref table */
+    xref_off = b.len;
+    ok = ok && tb_printf(&b, "xref\n0 %d\n0000000000 65535 f \n", nobj + 1);
+    for (i = 1; i <= nobj && ok; i++)
+    {
+        ok = tb_printf(&b, "%010lu 00000 n \n", (unsigned long)offs[i]);
+    }
+    ok = ok && tb_printf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%lu\n%%%%EOF\n",
+                         nobj + 1, (unsigned long)xref_off);
+#undef IOBJ
+    if (ok)
+    {
+        ok = (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL && fwrite(b.p, 1, b.len, fp) == b.len);
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    free(b.p);
+    return ok;
+}
+
+/* Scanned Hart CVR Report (tag: hartocr): a PDF of page images with two records on
+ * page 1, the second continued on page 2 under a repeated header; loaded through Windows
+ * OCR -- one row per ballot sheet, a vote-for-2 contest from repeated title rows, an
+ * undervote, the OCR Status key column and the load note. Skipped (passes) when Windows
+ * OCR is unavailable on the machine. */
+static int test_hart_ocr(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[512] = L"";
+    unsigned char *pages[2] = {NULL, NULL};
+    const wchar_t *one[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0, col = 0;
+    TPage p;
+    EeLoadStatus s;
+    int y, rc = 1;
+    {
+        /* skip when the machine has no OCR language */
+        EeOcr *probe = NULL;
+        if (!EeOcr_Create(&probe, err, ARRAYSIZE(err)))
+        {
+            wprintf(L"hartocr skipped (%s)\n", err);
+            return 0;
+        }
+        EeOcr_Destroy(probe);
+    }
+    EeCvr_Init(&t);
+    if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_hart_scanned.pdf"))
+    {
+        return 1;
+    }
+    /* page 1: record A complete, record B starts */
+    if (!tpage_begin(&p))
+    {
+        goto done;
+    }
+    tpage_banner(&p, L"Page 1 of 2");
+    y = tpage_header(&p, 300, L"Downtown", L"59B5246A-B349-4D4E-9CD4-0018DFAEDCC7", L"11");
+    y = tpage_row(&p, y, L"PRESIDENT AND VICE PRESIDENT", L"ALICE SMITH");
+    y = tpage_row(&p, y, L"UNITED STATES SENATOR", L"Undervotes: 1");
+    y = tpage_row(&p, y, L"CITY COUNCIL", L"BOB JONES");
+    y = tpage_row(&p, y, L"CITY COUNCIL", L"CAROL WHITE");
+    y = tpage_row(&p, y, L"PROPOSITION 2", L"YES");
+    y = tpage_header(&p, y + 10, L"Uptown", L"266421B9-A1A2-46FA-A503-00318FFB990A", L"18");
+    y = tpage_row(&p, y, L"PRESIDENT AND VICE PRESIDENT", L"DAVID BROWN");
+    tpage_row(&p, y, L"UNITED STATES SENATOR", L"EVE GREEN");
+    pages[0] = tpage_end(&p);
+    /* page 2: repeated header of record B, its remaining contests */
+    if (!tpage_begin(&p))
+    {
+        goto done;
+    }
+    tpage_banner(&p, L"Page 2 of 2");
+    y = tpage_header(&p, 300, L"Uptown", L"266421B9-A1A2-46FA-A503-00318FFB990A", L"18");
+    y = tpage_row(&p, y, L"CITY COUNCIL", L"BOB JONES");
+    y = tpage_row(&p, y, L"CITY COUNCIL", L"Undervotes: 1");
+    tpage_row(&p, y, L"PROPOSITION 2", L"NO");
+    pages[1] = tpage_end(&p);
+    if (pages[0] == NULL || pages[1] == NULL ||
+        !tpdf_write_images(path, pages, 2, 1224, 1584))
+    {
+        wprintf(L"hartocr: write pdf failed\n");
+        goto done;
+    }
+    if (!EeCvr_IsHartCvrPdf(path, err, ARRAYSIZE(err)))
+    {
+        wprintf(L"hartocr: scanned report not detected: %s\n", err);
+        goto done;
+    }
+    one[0] = path;
+    s = EeCvr_LoadFromHartFiles(one, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.nrows != 2)
+    {
+        wprintf(L"hartocr: load s=%d rows=%u err=%s\n", (int)s, t.nrows, err);
+        goto done;
+    }
+    if (!EeCvr_FindColumnByTitle(&t, L"OCR Status", &col) || t.load_note == NULL ||
+        wcsstr(t.load_note, L"Windows OCR") == NULL)
+    {
+        wprintf(L"hartocr: OCR Status column / load note missing\n");
+        goto done;
+    }
+    if (!EeCvr_FindColumnByTitle(&t, L"CITY COUNCIL", &col) || t.col_group[col + 1] != col)
+    {
+        wprintf(L"hartocr: vote-for-2 contest not grouped\n");
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt) ||
+        hart_find_count(items, nt, L"PRESIDENT AND VICE PRESIDENT", L"ALICE SMITH") != 1 ||
+        hart_find_count(items, nt, L"PRESIDENT AND VICE PRESIDENT", L"DAVID BROWN") != 1 ||
+        hart_find_count(items, nt, L"UNITED STATES SENATOR", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"UNITED STATES SENATOR", L"EVE GREEN") != 1 ||
+        hart_find_count(items, nt, L"CITY COUNCIL", L"BOB JONES") != 2 ||
+        hart_find_count(items, nt, L"CITY COUNCIL", L"CAROL WHITE") != 1 ||
+        hart_find_count(items, nt, L"CITY COUNCIL", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"PROPOSITION 2", L"YES") != 1 ||
+        hart_find_count(items, nt, L"PROPOSITION 2", L"NO") != 1)
+    {
+        uint32_t k;
+        wprintf(L"hartocr: tally mismatch\n");
+        for (k = 0; k < nt; k++)
+        {
+            wprintf(L"   %s | %s | %u\n", items[k].contest, items[k].selection, items[k].count);
+        }
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"hartocr ok\n");
+done:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    free(pages[0]);
+    free(pages[1]);
+    DeleteFileW(path);
+    if (rc != 0)
+    {
+        wprintf(L"hartocr test failed\n");
+    }
+    return rc;
+}
+
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
  * equivalent selections share one tally (tag: cvrws). */
@@ -6557,6 +6874,7 @@ int wmain(void)
     failed |= test_cvr_roundtrip();
     failed |= test_hart_cvr();
     failed |= test_hart_pdf();
+    failed |= test_hart_ocr();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
     failed |= test_dominion_cvr();

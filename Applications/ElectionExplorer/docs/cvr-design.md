@@ -568,6 +568,64 @@ Is Blank, but it does carry the device and polling-place fields the XML lacks.
   overvote, undervote, write-in; plus a bogus-`startxref` variant, a non-Hart PDF, ZIP+PDF
   decoration and a no-common-Cvr-Id error).
 
+### Scanned (image-only) Hart CVR Reports — OCR (`ocr_win.c` + `hart_ocr.c`)
+
+Some counties publish the Hart CVR Report with every page flattened to a picture (Sierra
+County, CA, G24: a redacted copy, 1,272 pages, each one 1224×1584 JPEG — or raw pixels on
+pages the county blacked out — with no text objects at all). Such a PDF is read through the
+**Windows built-in OCR engine**.
+
+- **`ocr_win.{c,h}`** — thin C wrapper over `Windows.Media.Ocr` (WinRT C ABI headers;
+  interface IIDs defined locally because the SDK only declares them) + WIC: decode (or wrap
+  raw pixels) → optional scale → 8bpp gray → `ISoftwareBitmapNativeFactory` →
+  `SoftwareBitmap` → `OcrEngine.RecognizeAsync` (polled) → words/lines with pixel boxes.
+  Works unpackaged (developer build) and in the MSIX package; needs an OCR-capable Windows
+  language (else a clear error). Links `ole32.lib` + `runtimeobject.lib`. ~0.15 s/page.
+- **`pdf_reader`**: `EePdf_GetPageImage` returns the largest image drawn on a page (the
+  interpreter records `Do` operators with their CTM area): JPEG bytes as is, 8-bit
+  gray/RGB Flate images as raw pixels.
+- **Detection**: page 1 has no text runs but draws an image → OCR page 1 and require the
+  `CVR Report` title, a `Contest Title` table header and a Cvr Id that repairs into a
+  GUID (`HartOcr_ProbeHart`). The engine is created lazily, only for scanned PDFs.
+- **Layout (`hart_ocr.c`)**: this report version packs **several records per page**; a
+  record cut by the page bottom continues on the next page under a **repeated header
+  block**. OCR lines are split into cells at wide gaps; the page banner (down to the last
+  `"<n> of <m>"` counter) is dropped; each `Contest Title` header starts a table whose
+  header block lies just above it; the Option header's centre sets the column split; title
+  and option cells pair by vertical position; a wrapped title merges when its second line
+  has no option beside it. Coordinates scale by image height / 792.
+- **OCR repairs** (counted, never silent):
+  - labels matched loosely (`Cvr ld`, `Cw ld`, `Pa rty`); the Cvr Id is any header value
+    that repairs into a GUID (I/l→1, O→0, S→5, …, spaces dropped);
+  - a page with problems (unreadable Cvr Id, contest without option, orphan option) is
+    re-OCR'd at 1.5× and 2× and the reading with the fewest problems is kept (resolved
+    e.g. `DOI 9+66-…` → `d0194f66-…`);
+  - continuation: same Cvr Id within 3 hex digits; or, when one side's Cvr Id is
+    unreadable, a header first on its page with the same Precinct + Batch whose first
+    contest is not already on the record (or is its last, vote-for-N seat row);
+  - after all pages: rare spellings snap to a common one in the same contest/field when
+    their **OCR-look-alike-folded** forms are equal (`JOY MARKI_JM` → `JOY MARKUM`, read
+    that way on 52 of 122 ballots), or when within a small edit distance with identical
+    digits and ≥4× rarer and unambiguous, or a long fragment of exactly one value
+    (`D. HARRIS TIM WALZ`); special options (`Undervotes: N`, `Overvote`, `Write-in`)
+    are normalized; header values with no letter/digit (a redaction box read as `?`) are
+    blank.
+- **Records → table**: OCR'd once into a `HartOcrStore` (strings + rows) per PDF; the loader's
+  passes then read the store, so OCR runs once per load. Rows with the same title on one
+  sheet merge into a vote-for-N contest as for text PDFs. New key column **OCR Status**:
+  `OK`, `Corrected`, `Review` (unreadable Cvr Id, missing/orphan option, rare unmatched
+  value) or `No Votes Read` (a header with no contest rows — the county blacked out the
+  whole table). `EeCvrTable.load_note` carries a per-file summary that the app shows when
+  the CVR window opens.
+- **Validated** against Sierra County's official canvass (`Canvass Results.pdf`, per
+  precinct × contest × choice, 1,760 cells): **1,780 records = 1,780 ballots**, and every
+  cell matches exactly except the 4 Long Valley ballots, whose votes the county redacted
+  (all 30 differing county-total cells equal Long Valley's canvass row). Load ≈ 3 min.
+
+  Test `hartocr` (GDI-drawn Hart pages embedded as Flate gray images; two records on
+  page 1, one continued under a repeated header, vote-for-2, undervote, OCR Status, load
+  note; skipped when the machine has no OCR language).
+
 ## Dominion voting-system CVRs (`dominion_cvr.c`)
 
 Dominion Voting Systems (Democracy Suite; the company is now **Liberty Vote**) exports

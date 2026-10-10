@@ -26,8 +26,8 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
+  src\dominion_cvr.c src\ee_rcv.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -88,6 +88,13 @@ the header -> 2 key columns; a vote-for-3 contest printed as repeated title rows
 into one grouped contest);
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally);
+`hartocr` covers scanned (image-only) Hart CVR Reports read through Windows OCR
+(needs `src\ocr_win.c`, `src\hart_ocr.c` and `ole32.lib`/`runtimeobject.lib`): draws two
+Hart-style pages with GDI, embeds them as Flate gray images in a PDF with no text, and
+checks detection, one row per sheet (two records on page 1, the second continued on
+page 2 under a repeated header), a vote-for-2 contest from repeated title rows, an
+undervote, the `OCR Status` key column and the load note. It prints `hartocr skipped`
+(and passes) on a machine with no OCR-capable Windows language;
 `dominion` covers the Dominion loader (`EeCvr_LoadFromDominionZips`,
 `EeCvr_IsDominionZip`; needs `src\dominion_cvr.c`): authors JSON-export zips with miniz
 (a 5.10-style export whose `CvrExport_10.json` precedes `CvrExport_2.json` in the zip,

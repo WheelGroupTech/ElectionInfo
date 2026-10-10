@@ -27,6 +27,11 @@
  * contest is printed as one row per seat with the contest title repeated; rows with
  * the same title on one sheet are merged into one contest.
  *
+ * A PDF whose pages are only images (a redacted copy flattened to pictures, e.g.
+ * Sierra County, CA) is read through Windows OCR (hart_ocr.c): the records are OCR'd
+ * once into memory, then fed through the same passes; an "OCR Status" key column
+ * (OK / Corrected / Review) and a load note summarize what OCR had to repair.
+ *
  * A Hart CVR ZIP export is one or more ZIP files, each containing one XML file per
  * scanned ballot SHEET (the first/only sheet is named `1_<guid>.xml`; later sheets
  * of a multi-sheet ballot are `<guid>.xml`). There is not enough information to link
@@ -66,6 +71,7 @@
  */
 
 #include "ee_cvr.h"
+#include "hart_ocr.h"
 #include "pdf_reader.h"
 
 #include <windows.h>
@@ -418,6 +424,7 @@ typedef struct
     char dtype[64];
     char dserial[64];
     char ddata[96];
+    char ocr[16]; /* OCR Status for a scanned-PDF record ("" otherwise) */
 
     char *arena; /* decoded strings, NUL-terminated, referenced by offset */
     size_t arena_len;
@@ -486,6 +493,7 @@ static BOOL parse_sheet(HartSheet *s, char *xml)
     s->guid[0] = s->sheet[0] = s->batchseq[0] = s->batchnum[0] = s->isblank[0] = '\0';
     s->precinct[0] = s->party[0] = '\0';
     s->vtype[0] = s->pplace[0] = s->dtype[0] = s->dserial[0] = s->ddata[0] = '\0';
+    s->ocr[0] = '\0';
 
     if (contests != NULL)
     {
@@ -1478,6 +1486,7 @@ typedef struct HartPdfCtx
     size_t text_cap;
     uint32_t *order; /* scratch index array */
     uint32_t cap_order;
+    int image_only; /* pages are images: read through OCR (hart_ocr.c) */
 } HartPdfCtx;
 
 static void pdfctx_free(HartPdfCtx *c)
@@ -1876,6 +1885,7 @@ static void pdf_begin_sheet(HartSheet *s, const HartPdfPage *pg)
 {
     s->arena_len = 0;
     s->nct = 0;
+    s->ocr[0] = '\0';
     s->sheet[0] = s->batchseq[0] = s->isblank[0] = '\0';
     StringCchCopyA(s->guid, ARRAYSIZE(s->guid), pg->guid);
     StringCchCopyA(s->batchnum, ARRAYSIZE(s->batchnum), pg->batch);
@@ -1914,7 +1924,11 @@ static void set_pdf_err(wchar_t *err, size_t cch, const wchar_t *path, const wch
 
 /* Open @p path and verify page 1 is a Hart CVR Report page. On success the context
  * holds the open document. */
-static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, wchar_t *err, size_t errcch)
+/* Open @p path and verify page 1 is a Hart CVR Report page. A PDF of page images is
+ * checked by OCR'ing page 1 (the engine is created into *@p ocr on first need) and is
+ * flagged image_only. On success the context holds the open document. */
+static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, EeOcr **ocr, wchar_t *err,
+                          size_t errcch)
 {
     wchar_t perr[256] = L"";
     HartPdfPage pg;
@@ -1933,30 +1947,94 @@ static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, wchar_t *err, size
         return FALSE;
     }
     pdf_parse_header(c, &pg);
-    if (!pg.is_cvr_page || !pg.has_labels || pg.guid[0] == '\0')
+    if (pg.is_cvr_page && pg.has_labels && pg.guid[0] != '\0')
     {
-        set_pdf_err(err, errcch, path,
-                    L"not a Hart Cast Vote Record report (expected the Hart \"CVR Report\" "
-                    L"with a Cvr Id and Contest Title / Option columns).");
-        pdfctx_free(c);
-        return FALSE;
+        return TRUE;
     }
-    return TRUE;
+    if (c->pt.nruns == 0 && HartOcr_PageIsImageOnly(c->pdf, 0))
+    {
+        wchar_t msg[512];
+        if (ocr == NULL || (*ocr == NULL && !EeOcr_Create(ocr, perr, ARRAYSIZE(perr))))
+        {
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"the report's pages are scanned images, which need Windows OCR. %s",
+                             perr);
+            set_pdf_err(err, errcch, path, msg);
+            pdfctx_free(c);
+            return FALSE;
+        }
+        if (!HartOcr_ProbeHart(*ocr, c->pdf, 0, perr, ARRAYSIZE(perr)))
+        {
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"not a Hart Cast Vote Record report (%s)", perr);
+            set_pdf_err(err, errcch, path, msg);
+            pdfctx_free(c);
+            return FALSE;
+        }
+        c->image_only = 1;
+        return TRUE;
+    }
+    set_pdf_err(err, errcch, path,
+                L"not a Hart Cast Vote Record report (expected the Hart \"CVR Report\" "
+                L"with a Cvr Id and Contest Title / Option columns).");
+    pdfctx_free(c);
+    return FALSE;
 }
 
 BOOL EeCvr_IsHartCvrPdf(const wchar_t *path, wchar_t *error_message, size_t error_cch)
 {
     HartPdfCtx c;
+    EeOcr *ocr = NULL;
+    BOOL ok;
     if (path == NULL)
     {
         hart_set_err(error_message, error_cch, L"Invalid arguments.");
         return FALSE;
     }
-    if (!hart_pdf_open(&c, path, error_message, error_cch))
+    ok = hart_pdf_open(&c, path, &ocr, error_message, error_cch);
+    if (ok)
     {
-        return FALSE;
+        pdfctx_free(&c);
     }
-    pdfctx_free(&c);
+    EeOcr_Destroy(ocr);
+    return ok;
+}
+
+/* Fill @p s from an OCR'd record (header fields, OCR status, contests/options). */
+static BOOL ocr_record_to_sheet(const HartOcrStore *st, const HartOcrRecord *r, HartSheet *s,
+                                BOOL want_rows)
+{
+    static const char *const k_Status[] = {"OK", "Corrected", "Review", "No Votes Read"};
+    uint32_t q;
+    s->arena_len = 0;
+    s->nct = 0;
+    s->sheet[0] = s->batchseq[0] = s->isblank[0] = '\0';
+    StringCchCopyA(s->guid, ARRAYSIZE(s->guid), HartOcr_Str(st, r->f[HOF_GUID]));
+    StringCchCopyA(s->batchnum, ARRAYSIZE(s->batchnum), HartOcr_Str(st, r->f[HOF_BATCH]));
+    StringCchCopyA(s->precinct, ARRAYSIZE(s->precinct), HartOcr_Str(st, r->f[HOF_PRECINCT]));
+    StringCchCopyA(s->party, ARRAYSIZE(s->party), HartOcr_Str(st, r->f[HOF_PARTY]));
+    s->has_party = (s->party[0] != '\0');
+    StringCchCopyA(s->vtype, ARRAYSIZE(s->vtype), HartOcr_Str(st, r->f[HOF_VTYPE]));
+    StringCchCopyA(s->pplace, ARRAYSIZE(s->pplace), HartOcr_Str(st, r->f[HOF_PPLACE]));
+    StringCchCopyA(s->dtype, ARRAYSIZE(s->dtype), HartOcr_Str(st, r->f[HOF_DTYPE]));
+    StringCchCopyA(s->dserial, ARRAYSIZE(s->dserial), HartOcr_Str(st, r->f[HOF_DSERIAL]));
+    StringCchCopyA(s->ddata, ARRAYSIZE(s->ddata), HartOcr_Str(st, r->f[HOF_DDATA]));
+    StringCchCopyA(s->ocr, ARRAYSIZE(s->ocr), k_Status[r->status <= HOCR_NOVOTES ? r->status : HOCR_REVIEW]);
+    for (q = r->first_row; want_rows && q < r->first_row + r->nrows; q++)
+    {
+        const char *t = HartOcr_Str(st, st->rows[q].title);
+        const char *v = HartOcr_Str(st, st->rows[q].option);
+        size_t tn = strlen(t);
+        int idx = sheet_find_contest(s, t, tn);
+        if (idx < 0)
+        {
+            idx = sheet_add_contest(s, t, tn);
+        }
+        if (idx < 0 || !add_option_text(s, idx, v, strlen(v)))
+        {
+            return FALSE;
+        }
+    }
     return TRUE;
 }
 
@@ -1966,6 +2044,7 @@ typedef BOOL (*HartSheetFn)(void *ctx, HartSheet *sheet);
  * same Cvr Id into one sheet record, and call @p fn per record. When @p rows_only is
  * FALSE (metadata scan) the contest table is skipped. */
 static EeLoadStatus hart_iterate_pdf(const wchar_t *path,
+                                     const HartOcrStore *store,
                                      HartSheet *sheet,
                                      HartSheetFn fn,
                                      void *ctx,
@@ -1979,7 +2058,20 @@ static EeLoadStatus hart_iterate_pdf(const wchar_t *path,
     BOOL open_rec = FALSE;
     EeLoadStatus status = EeLoadStatus_Ok;
 
-    if (!hart_pdf_open(&c, path, err, errcch))
+    if (store != NULL)
+    {
+        /* Scanned PDF: its records were OCR'd once into memory. */
+        for (i = 0; i < store->nrecs; i++)
+        {
+            if (!ocr_record_to_sheet(store, &store->recs[i], sheet, want_rows) || !fn(ctx, sheet))
+            {
+                hart_set_err(err, errcch, L"Out of memory building the CVR table.");
+                return EeLoadStatus_Error;
+            }
+        }
+        return EeLoadStatus_Ok;
+    }
+    if (!hart_pdf_open(&c, path, NULL, err, errcch))
     {
         return EeLoadStatus_Error;
     }
@@ -2058,6 +2150,7 @@ enum
     HK_DTYPE,
     HK_DSERIAL,
     HK_DDATA,
+    HK_OCR,
     HK_ISBLANK,
     HK_COUNT
 };
@@ -2065,7 +2158,8 @@ enum
 static const char *const k_HartKeyNames[HK_COUNT] = {
     "CvrGuid",       "Sheet Number",  "Batch Sequence", "Batch Number",
     "Precinct",      "Party",         "Voting Type",    "Polling Place",
-    "Device Type",   "Device Serial", "Device Data Id", "Is Blank"};
+    "Device Type",   "Device Serial", "Device Data Id", "OCR Status",
+    "Is Blank"};
 
 static const char *hart_key_value(const HartSheet *s, int key)
 {
@@ -2082,6 +2176,7 @@ static const char *hart_key_value(const HartSheet *s, int key)
         case HK_DTYPE: return s->dtype;
         case HK_DSERIAL: return s->dserial;
         case HK_DDATA: return s->ddata;
+        case HK_OCR: return s->ocr;
         case HK_ISBLANK: return s->isblank;
         default: return "";
     }
@@ -2092,7 +2187,7 @@ static const char *hart_key_value(const HartSheet *s, int key)
  * record (redacted by the county, or never filled) gets no column. The ZIP's own
  * columns, including its Batch Number, are always kept. */
 static uint32_t hart_key_layout(int *keys, BOOL has_zip, BOOL has_pdf, BOOL has_party,
-                                unsigned present)
+                                unsigned present, BOOL has_ocr)
 {
     static const int k_PdfKeys[] = {HK_VTYPE, HK_PPLACE, HK_DTYPE, HK_DSERIAL, HK_DDATA};
     uint32_t n = 0, k;
@@ -2117,6 +2212,10 @@ static uint32_t hart_key_layout(int *keys, BOOL has_zip, BOOL has_pdf, BOOL has_
         {
             keys[n++] = k_PdfKeys[k];
         }
+    }
+    if (has_ocr)
+    {
+        keys[n++] = HK_OCR;
     }
     if (has_zip)
     {
@@ -2298,6 +2397,12 @@ static BOOL meta_sheet(void *vctx, HartSheet *sheet)
     return meta_add((HartMeta *)vctx, sheet);
 }
 
+/* Per-page progress/cancel for the OCR pass. */
+static BOOL ocr_tick(void *ctx)
+{
+    return hart_tick((HartProgress *)ctx);
+}
+
 static BOOL path_has_ext_w(const wchar_t *path, const wchar_t *ext)
 {
     size_t n = wcslen(path);
@@ -2328,7 +2433,11 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     const wchar_t **zips = NULL;
     const wchar_t **pdfs = NULL;
     int keys[HK_COUNT];
-    uint64_t pdf_pages = 0;
+    uint64_t pdf_pages = 0, img_pages = 0;
+    EeOcr *ocr = NULL;
+    HartOcrStore *stores = NULL; /* per PDF; used when that PDF is scanned images */
+    BOOL *is_img = NULL;
+    BOOL any_img = FALSE;
     Pass1Ctx p1;
     Pass2Ctx p2;
 
@@ -2346,7 +2455,9 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
 
     zips = (const wchar_t **)calloc((size_t)count, sizeof(wchar_t *));
     pdfs = (const wchar_t **)calloc((size_t)count, sizeof(wchar_t *));
-    if (zips == NULL || pdfs == NULL)
+    stores = (HartOcrStore *)calloc((size_t)count, sizeof(HartOcrStore));
+    is_img = (BOOL *)calloc((size_t)count, sizeof(BOOL));
+    if (zips == NULL || pdfs == NULL || stores == NULL || is_img == NULL)
     {
         hart_set_err(error_message, error_cch, L"Out of memory.");
         s = EeLoadStatus_Error;
@@ -2376,12 +2487,21 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     for (f = 0; f < npdf; f++)
     {
         HartPdfCtx c;
-        if (!hart_pdf_open(&c, pdfs[f], error_message, error_cch))
+        if (!hart_pdf_open(&c, pdfs[f], &ocr, error_message, error_cch))
         {
             s = EeLoadStatus_Error;
             goto cleanup;
         }
-        pdf_pages += EePdf_PageCount(c.pdf);
+        is_img[f] = (c.image_only != 0);
+        if (is_img[f])
+        {
+            img_pages += EePdf_PageCount(c.pdf);
+            any_img = TRUE;
+        }
+        else
+        {
+            pdf_pages += EePdf_PageCount(c.pdf);
+        }
         pdfctx_free(&c);
     }
 
@@ -2389,7 +2509,40 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     pg.fn = progress_fn;
     pg.user = progress_user;
     pg.last_pct = 101;
-    pg.total = hart_count_entries(zips, nzip) * 2ull + pdf_pages * (nzip > 0 ? 1ull : 2ull);
+    pg.total = hart_count_entries(zips, nzip) * 2ull + pdf_pages * (nzip > 0 ? 1ull : 2ull) +
+               img_pages;
+
+    /* ---- Scanned PDFs: OCR every page once into memory ---- */
+    pg.rows = NULL;
+    for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
+    {
+        EePdf *doc = NULL;
+        BOOL cancelled = FALSE;
+        wchar_t oerr[256] = L"";
+        if (!is_img[f])
+        {
+            continue;
+        }
+        if (!EePdf_Open(pdfs[f], &doc, oerr, ARRAYSIZE(oerr)) ||
+            !HartOcr_ReadPdf(ocr, doc, &stores[f], ocr_tick, &pg, &cancelled, oerr,
+                             ARRAYSIZE(oerr)))
+        {
+            if (cancelled)
+            {
+                s = EeLoadStatus_Cancelled;
+            }
+            else
+            {
+                set_pdf_err(error_message, error_cch, pdfs[f], oerr);
+                s = EeLoadStatus_Error;
+            }
+        }
+        EePdf_Close(doc);
+    }
+    if (s != EeLoadStatus_Ok)
+    {
+        goto cleanup;
+    }
 
     /* ---- ZIP+PDF: index the PDFs' header fields by Cvr Id ---- */
     if (nzip > 0 && npdf > 0)
@@ -2397,8 +2550,8 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
         pg.rows = NULL;
         for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
         {
-            s = hart_iterate_pdf(pdfs[f], &sheet, meta_sheet, &meta, FALSE, &pg, error_message,
-                                 error_cch);
+            s = hart_iterate_pdf(pdfs[f], is_img[f] ? &stores[f] : NULL, &sheet, meta_sheet,
+                                 &meta, FALSE, &pg, error_message, error_cch);
         }
         if (s != EeLoadStatus_Ok)
         {
@@ -2424,8 +2577,8 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     {
         for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
         {
-            s = hart_iterate_pdf(pdfs[f], &sheet, pass1_sheet, &p1, TRUE, &pg, error_message,
-                                 error_cch);
+            s = hart_iterate_pdf(pdfs[f], is_img[f] ? &stores[f] : NULL, &sheet, pass1_sheet,
+                                 &p1, TRUE, &pg, error_message, error_cch);
         }
     }
     if (s != EeLoadStatus_Ok)
@@ -2462,7 +2615,9 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
             }
         }
     }
-    frozen = hart_key_layout(keys, nzip > 0, npdf > 0, p1.global_has_party != 0, p1.present);
+    /* OCR Status only where the votes themselves came from OCR (PDF-only loads). */
+    frozen = hart_key_layout(keys, nzip > 0, npdf > 0, p1.global_has_party != 0, p1.present,
+                             any_img && nzip == 0);
     order = (uint32_t *)malloc((size_t)dict.n * sizeof(uint32_t));
     if (order == NULL)
     {
@@ -2536,8 +2691,8 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     {
         for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
         {
-            s = hart_iterate_pdf(pdfs[f], &sheet, pass2_sheet, &p2, TRUE, &pg, error_message,
-                                 error_cch);
+            s = hart_iterate_pdf(pdfs[f], is_img[f] ? &stores[f] : NULL, &sheet, pass2_sheet,
+                                 &p2, TRUE, &pg, error_message, error_cch);
         }
     }
 
@@ -2549,6 +2704,39 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     {
         hart_set_err(error_message, error_cch, L"No Cast Vote Records were found.");
         s = EeLoadStatus_Error;
+    }
+    if (s == EeLoadStatus_Ok && any_img)
+    {
+        /* Tell the user what OCR had to repair or could not resolve. */
+        size_t cap = 512 * (size_t)npdf + 512;
+        wchar_t *note = (wchar_t *)calloc(cap, sizeof(wchar_t));
+        if (note != NULL)
+        {
+            for (f = 0; f < npdf; f++)
+            {
+                wchar_t line[512];
+                if (!is_img[f])
+                {
+                    continue;
+                }
+                StringCchPrintfW(line, ARRAYSIZE(line),
+                                 L"%s: %u scanned pages were read with Windows OCR into %u ballot "
+                                 L"records -- %u corrected automatically (%u values), %u need "
+                                 L"review.\r\n",
+                                 path_leaf(pdfs[f]), stores[f].pages, stores[f].nrecs,
+                                 stores[f].corrected_records, stores[f].corrected_values,
+                                 stores[f].review_records);
+                StringCchCatW(note, cap, line);
+            }
+            StringCchCatW(note, cap,
+                          (nzip == 0)
+                              ? L"\r\nOCR can misread text. Filter on OCR Status = Review to "
+                                L"check those records against the PDF; Corrected records had a "
+                                L"misread Cvr Id or spelling repaired."
+                              : L"\r\nThe votes come from the ZIP files; OCR supplied only the "
+                                L"PDF header fields (Voting Type, Polling Place, devices).");
+            out->load_note = note;
+        }
     }
 
 cleanup:
@@ -2562,6 +2750,16 @@ cleanup:
     free(buf);
     free((void *)zips);
     free((void *)pdfs);
+    if (stores != NULL)
+    {
+        for (f = 0; f < count; f++)
+        {
+            HartOcr_StoreFree(&stores[f]);
+        }
+        free(stores);
+    }
+    free(is_img);
+    EeOcr_Destroy(ocr);
     sheet_free(&sheet);
     dict_free(&dict);
     meta_free(&meta);

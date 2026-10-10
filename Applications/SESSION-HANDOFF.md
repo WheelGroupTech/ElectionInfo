@@ -4,9 +4,34 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-09
+**Last updated:** 2026-10-10
 
-### In progress — Dominion CVRs + ranked-choice tabulation (UNCOMMITTED, ready to commit)
+### In progress — scanned Hart CVR Reports via Windows OCR (UNCOMMITTED, ready to commit)
+
+- Sierra County, CA `M:\Elections\CA - Sierra County Results and Data\2024-11-05\CVR
+  Report-November 2024 Gen Election_Redacted.pdf` (1,272 pages) is **page images only**
+  (redacted copy flattened to JPEGs; Long Valley's 4 ballots blacked out entirely). Now
+  loads through Windows' built-in OCR:
+  - **`src/ocr_win.{c,h}`** — `Windows.Media.Ocr` + WIC from C (WinRT C ABI; local IIDs);
+    works unpackaged + MSIX; links `ole32.lib runtimeobject.lib` (added to the vcxproj).
+  - **`pdf_reader`**: `EePdf_GetPageImage` (largest `Do` image: JPEG bytes or raw pixels).
+  - **`src/hart_ocr.{c,h}`** — multi-record-per-page layout, repeated headers on
+    continuation pages, loose labels, GUID repair, 1.5×/2× re-OCR of problem pages,
+    continuation without a readable Cvr Id, post-pass spelling correction (look-alike
+    folding, edit distance, fragment), redaction-box noise blanked.
+  - `hart_cvr.c`: scanned PDF detected by OCR'ing page 1 (engine created lazily); OCR'd
+    once into a store, then the usual passes; new key column **OCR Status** (OK /
+    Corrected / Review / No Votes Read); `EeCvrTable.load_note` summary shown by `main.c`
+    when the CVR window opens (`cvr_is_key_header` knows "OCR Status").
+- **Validated vs Sierra's official canvass per precinct × contest × choice: 1,780
+  records = 1,780 ballots; every cell exact except Long Valley (votes redacted by the
+  county).** Load ≈ 3 min (≈0.15 s/page OCR).
+- Test **`hartocr`** (GDI-drawn image-only PDF; skips without an OCR language). Smoke suite
+  green (incl. hart/hartpdf/hartocr/dominion/rcv); x64 Debug builds clean; Release
+  compiled (link blocked by a running Release instance). **Not yet GUI click-tested.**
+- Docs: `docs/cvr-design.md` (OCR section), `test/README.md` (build line + `hartocr`).
+
+### Committed — Dominion CVRs + ranked-choice tabulation
 
 - **Dominion (now Liberty Vote) CVR exports** load via File → Load Cast Vote Records
   (`.zip` of JSON: manifests + `CvrExport*.json`). New `src/dominion_cvr.c`
@@ -35,8 +60,7 @@
   for G19, P20, G20, O21, L22, PR22, P22, G22, P24, G24; G25/P26 differ only by the
   county-redacted records. **All 25 official RCV reports match every round exactly**
   (G24 Mayor 14 rounds). G24 = 5 GB JSON / 1,603,908 sessions loads in ~32 s.
-- Tests `dominion` + `rcv`; smoke suite green; x64 Debug builds clean; Release compiles
-  (link was blocked by a running Release instance). **Not yet GUI click-tested.**
+- Tests `dominion` + `rcv`; smoke suite green; x64 Debug builds clean.
 - Docs: `docs/cvr-design.md` (Dominion + RCV sections), `test/README.md`.
 - `STORE-LISTING.txt` updated (Dominion/Liberty Vote, Hart PDF, new RANKED-CHOICE VOTING
   paragraph, trademark line) and `TRADEMARKS.md` gained a "Third-party marks" section.
@@ -103,7 +127,7 @@ Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
 - Perf: ~10–11k PDF pages/s per pass; PDF-only G24 ≈ 5 min (two passes), ZIP ≈ 1m40s.
 - Possible follow-up: single-pass PDF load (PDF-only G24 ≈ 5 min).
 
-**Branch:** main — **only the Dominion/RCV work above is uncommitted; everything else is committed.** Store prep, the
+**Branch:** main — **only the scanned-PDF OCR work above is uncommitted; everything else is committed.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR

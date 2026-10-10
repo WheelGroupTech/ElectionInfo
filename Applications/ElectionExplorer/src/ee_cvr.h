@@ -56,6 +56,10 @@ extern "C"
         uint32_t val_cap_ids;
         uint32_t *val_hash; /* open addressing: slot -> id + 1 (0 = empty) */
         uint32_t val_hash_cap;
+
+        /* Optional owned note from the loader for the user (e.g. the OCR summary of a
+         * scanned Hart PDF); NULL when there is nothing to report. */
+        wchar_t *load_note;
     } EeCvrTable;
 
     /** Initialize an empty table. */

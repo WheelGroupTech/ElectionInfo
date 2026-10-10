@@ -239,6 +239,7 @@ void EeCvr_Clear(EeCvrTable *t)
     free(t->val_pool);
     free(t->val_off);
     free(t->val_hash);
+    free(t->load_note);
     ZeroMemory(t, sizeof(*t));
 }
 
@@ -297,7 +298,7 @@ static BOOL cvr_is_key_header(const wchar_t *s)
            wcieq_trimmed(s, L"party") || wcieq_trimmed(s, L"is blank") ||
            wcieq_trimmed(s, L"voting type") || wcieq_trimmed(s, L"polling place") ||
            wcieq_trimmed(s, L"device type") || wcieq_trimmed(s, L"device serial") ||
-           wcieq_trimmed(s, L"device data id") ||
+           wcieq_trimmed(s, L"device data id") || wcieq_trimmed(s, L"ocr status") ||
            /* Dominion key columns (see dominion_cvr.c). */
            wcieq_trimmed(s, L"cvr number") || wcieq_trimmed(s, L"record id") ||
            wcieq_trimmed(s, L"tabulator") || wcieq_trimmed(s, L"counting group") ||

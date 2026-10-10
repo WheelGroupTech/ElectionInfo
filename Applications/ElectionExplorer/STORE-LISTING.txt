@@ -18,7 +18,7 @@ COMPARE TWO LISTS
 Open two versions of a list (for example, before and after an update) and compare them by Voter ID. Election Explorer shows who's only in one file, who's unchanged, and who changed, grading name and address edits as minor or major and flagging precinct changes. A side-by-side Differences view lets you review every changed field and copy the results.
 
 EXPLORE CAST VOTE RECORDS
-Load the cast vote records exported by ES&S, Hart InterCivic, and Dominion (now Liberty Vote) voting systems: Excel, CSV, or TSV files from ES&S, the ZIP archives of ballot files and PDF CVR Reports produced by Hart, and the ZIP exports produced by Dominion's Democracy Suite. Combine several files from the same election, such as early voting, Election Day, and mail ballots, into a single view. Large exports, including multi-gigabyte Hart and Dominion archives, load in the background with live progress.
+Load the cast vote records exported by ES&S, Hart InterCivic, and Dominion (now Liberty Vote) voting systems: Excel, CSV, or TSV files from ES&S, the ZIP archives of ballot files and PDF CVR Reports produced by Hart (including scanned, image-only reports, read with the OCR built into Windows), and the ZIP exports produced by Dominion's Democracy Suite. Combine several files from the same election, such as early voting, Election Day, and mail ballots, into a single view. Large exports, including multi-gigabyte Hart and Dominion archives, load in the background with live progress.
 
 Every ballot record appears in a sortable grid with a column for each contest. Filter on any value, such as a precinct, a batch, or a vote in a particular race, to focus on just the ballots you care about.
 

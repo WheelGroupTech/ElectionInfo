@@ -42,6 +42,12 @@
     <ClCompile Include="src\pdf_reader.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ocr_win.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\hart_ocr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\dominion_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -75,6 +81,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\pdf_reader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ocr_win.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\hart_ocr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\third_party\miniz\miniz.h">

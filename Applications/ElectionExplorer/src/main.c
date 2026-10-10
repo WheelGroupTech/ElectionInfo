@@ -2693,6 +2693,7 @@ static HMENU App_CreateMenu(void)
      * It MUST stay at index k_CompareMenuPos in the bar. */
     HMENU compare_menu = CreatePopupMenu();
     HMENU help_menu = CreatePopupMenu();
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Voter Lists");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
@@ -8194,6 +8195,31 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 /* Help / About                                                               */
 /* -------------------------------------------------------------------------- */
 
+static const wchar_t k_HelpLoading[] =
+    L"Load Voter List (File menu, or Ctrl+O) opens a county voter-registration export: "
+    L"comma- or tab-delimited text (.csv, .txt) or an Excel workbook (.xlsx — if it has "
+    L"several sheets you pick one). Large lists load in the background with a progress "
+    L"bar and can be canceled.\r\n\r\n"
+    L"Counties lay out their files differently, so Election Explorer reads the header "
+    L"row and recognizes the columns it needs by name — for example the Travis, Dallas "
+    L"and El Paso County, Texas, layouts. From them it builds four normalized columns, "
+    L"shown first; every original column follows, unchanged.\r\n\r\n"
+    L"•  Voter ID — the statewide voter ID (VUID, State Voter ID, SOS Voter ID, …). A "
+    L"generic \"VoterID\" or a county ID column is used only when there is no statewide "
+    L"ID column.\r\n\r\n"
+    L"•  Precinct — the leading precinct number (\"P 204\" and \"204.3\" both become "
+    L"204).\r\n\r\n"
+    L"•  Name — built from the first, middle, last and suffix columns, or a full-name "
+    L"column (see Options for surname-first order).\r\n\r\n"
+    L"•  Address — \"street, City, ST ZIP\". The street comes from the house number (and "
+    L"a suffix such as 1/2), directions, street name and type, and the apartment, unit "
+    L"or space number — or from a full-address column. When the file has no residence "
+    L"state column, the state is taken from the residence ZIP codes (a list belongs to "
+    L"one state). Columns that only look like city or state fields — district codes "
+    L"such as a \"CITY\" column holding \"C10\", or \"STATE BOARD OF EDUCATION\" — are "
+    L"ignored. A confidential (masked) address is kept exactly as the county masked "
+    L"it.";
+
 static const wchar_t k_HelpOptions[] =
     L"Options (Edit → Options) control display and copy behavior. Settings "
     L"apply to the current window and become the defaults for windows opened "
@@ -8285,6 +8311,33 @@ static const wchar_t k_HelpExport[] =
     L"quote, or line break are quoted automatically.";
 
 /* CVR-window help topics (parallel to the voter-list topics above). */
+static const wchar_t k_CvrHelpLoading[] =
+    L"Load Cast Vote Records (File menu) opens one or more CVR files from a single voting "
+    L"system; files from different vendors can't be combined in one load. Large files "
+    L"load in the background with a progress bar and can be canceled.\r\n\r\n"
+    L"•  ES&S — Excel (.xlsx), CSV, TSV or tab-delimited text exports. Several files from "
+    L"one export (for example early voting, Election Day and mail ballots) are combined "
+    L"when they share the same columns; a file with different columns is rejected.\r\n\r\n"
+    L"•  Hart InterCivic — the CVR .zip (one file per ballot sheet), the PDF \"CVR "
+    L"Report\", or both. Loading a ZIP together with its PDF report keeps the votes from "
+    L"the ZIP and adds each ballot's Voting Type, Polling Place, Device Type, Device "
+    L"Serial and Device Data Id from the report, matched by Cvr Id. Reports a county has "
+    L"redacted load too.\r\n\r\n"
+    L"•  Scanned Hart PDFs (page images with no text) are read with the OCR built into "
+    L"Windows, which needs an OCR language such as English installed (Settings → Time & "
+    L"language → Language & region). OCR takes roughly 0.15 seconds per page, and the "
+    L"progress shows the page being read. An OCR Status column grades each record: OK; "
+    L"Corrected (a misread value was repaired); Review (something could not be confirmed "
+    L"— check it against the PDF); or No Votes Read (no readable contest rows, such as "
+    L"votes the county redacted). A summary appears when the window opens.\r\n\r\n"
+    L"•  Dominion (Liberty Vote) — the Democracy Suite CVR export .zip. A ranked-choice "
+    L"contest gets one column per rank, \"<contest> (Rank 1)\", \"(Rank 2)\", …; see "
+    L"Reports for the instant-runoff tabulation. Values the county redacted show as "
+    L"\"<Redacted>\".\r\n\r\n"
+    L"In ES&S and Hart primaries each party's contests are separate columns, prefixed "
+    L"\"REP\" or \"DEM\". Each row is one ballot record; when ballots span several cards "
+    L"or sheets, each card is its own record and the status bar says so.";
+
 static const wchar_t k_CvrHelpOptions[] =
     L"Options (Edit → Options) control how the Cast Vote Records are tabulated. The "
     L"setting is saved and applies to future windows.\r\n\r\n"
@@ -8315,8 +8368,9 @@ static const wchar_t k_CvrHelpFilters[] =
     L"Exclude rules.\r\n\r\n"
     L"Right-click a cell (or a report row) and choose Include/Exclude to add a rule "
     L"for that value. The status bar shows how many records are shown; Reset Filter "
-    L"clears all rules. Filtering never changes the tabulation, which always counts "
-    L"every ballot record.";
+    L"clears all rules. Filtering does not change Tabulate All CVR Votes or the "
+    L"per-column reports; Tabulate Filtered CVR Votes and Tabulate Filtered "
+    L"Ranked-Choice Contests count only the records the filter shows.";
 
 static const wchar_t k_CvrHelpReports[] =
     L"Reports (Reports menu) summarize the loaded Cast Vote Records.\r\n\r\n"
@@ -8376,8 +8430,9 @@ static const wchar_t k_CvrHelpExport[] =
     L"\"-All_Ballot_Styles\").\r\n\r\n"
     L"Choose CSV or TSV in the Save dialog's file-type list. Files are written with a "
     L"byte-order mark so Excel opens them as UTF-8; fields containing a comma, tab, "
-    L"quote, or line break are quoted automatically. (Write-in images are not stored "
-    L"in a text export — export to .xlsx is unaffected.)";
+    L"quote, or line break are quoted automatically. An ES&S write-in that was a "
+    L"scanned image is written as \"[write-in]\", which is still counted as a write-in "
+    L"when the exported file is loaded again.";
 
 static const wchar_t k_RepoUrl[] = L"https://github.com/WheelGroupTech/ElectionInfo";
 static const wchar_t k_PrivacyUrl[] =
@@ -9526,6 +9581,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_REPORT_ADDRESS:
                     App_ShowReport(app, EE_REPORT_ADDRESS);
                     return 0;
+                case IDM_HELP_LOADING:
+                    App_ShowHelpTopic(app, L"Help — Loading Voter Lists", k_HelpLoading);
+                    return 0;
                 case IDM_HELP_OPTIONS:
                     App_ShowHelpTopic(app, L"Help — Options", k_HelpOptions);
                     return 0;
@@ -10213,6 +10271,7 @@ static HMENU App_CreateCvrMenu(void)
                 L"Display &Device Serial Report…");
     AppendMenuW(reports_menu, MF_STRING, IDM_CVR_REPORT_VOTINGTYPE,
                 L"Display &Voting Type Report…");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Cast Vote Records");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
@@ -10802,6 +10861,10 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_FILE_EXIT:
                     App_ExitAll();
+                    return 0;
+                case IDM_HELP_LOADING:
+                    App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Loading Cast Vote Records",
+                                        k_CvrHelpLoading);
                     return 0;
                 case IDM_HELP_OPTIONS:
                     App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Options", k_CvrHelpOptions);

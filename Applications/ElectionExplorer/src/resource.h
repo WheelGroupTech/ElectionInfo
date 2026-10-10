@@ -64,6 +64,7 @@
 #define IDM_HELP_COMPARE       40093
 #define IDM_HELP_ABOUT         40094
 #define IDM_HELP_EXPORT        40095
+#define IDM_HELP_LOADING       40096
 
 /* Help / About dialog child controls. */
 #define IDC_HELP_TEXT     41200

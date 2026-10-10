@@ -6,7 +6,27 @@
 
 **Last updated:** 2026-10-10
 
-### In progress — unplated small-logo images for the MSIX package (UNCOMMITTED)
+### In progress — version 1.3.0.0 + Store bundle (UNCOMMITTED, ready to upload)
+
+- Version **1.2.0.0 → 1.3.0.0** in `res/ElectionExplorer.rc` (FILEVERSION/PRODUCTVERSION +
+  strings), `res/app.manifest`, `ElectionExplorer.Package/Package.appxmanifest`.
+- **Help:** new topic in each Help menu (`IDM_HELP_LOADING` 40096): **Loading Voter Lists**
+  (`k_HelpLoading` — file types, column recognition incl. Travis/Dallas/El Paso layouts,
+  how the normalized Voter ID / Precinct / Name / Address are built, inferred state,
+  district-code columns ignored, masked addresses kept) and **Loading Cast Vote Records**
+  (`k_CvrHelpLoading` — ES&S, Hart ZIP / PDF / ZIP+PDF, scanned PDFs via Windows OCR +
+  OCR Status values, Dominion + RCV rank columns, no mixing vendors). Fixed two stale
+  sentences: CVR Filters ("filtering never changes the tabulation" — Tabulate Filtered
+  exists) and CVR Export (claimed an .xlsx export; now explains `[write-in]`).
+- **Store listing** (`ElectionExplorer/STORE-LISTING.txt`, 4,598 chars): county-layout
+  recognition (Travis/Dallas/El Paso), Hart ZIP + PDF report, and the Polling Place /
+  Device Serial / Voting Type reports. Hart PDF, OCR, Dominion and RCV were already there.
+- **Built** `Build/msix/ElectionExplorer.Package_1.3.0.0_x64_arm64_bundle.msixupload`
+  (3.8 MB). Verified: bundle + both packages `WheelGroupTech.ElectionExplorer` /
+  `CN=19C9DED9-…980D6` / v1.3.0.0; both EXEs File/ProductVersion 1.3.0.0 and contain the new
+  help topics; each package has all 19 logo images incl. the 8 unplated variants.
+
+### Committed — unplated small-logo images for the MSIX package
 
 - Investigated a blank Election Explorer icon in Task Manager's Details view. The
   unpackaged Release EXE is fine: its icon resource is present, the shell returns it, and

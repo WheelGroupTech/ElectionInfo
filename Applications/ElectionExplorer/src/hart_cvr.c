@@ -1017,14 +1017,18 @@ typedef struct HartProgress
     uint64_t total;
     uint32_t last_pct;
     const uint32_t *rows; /* ballot records so far, or NULL during a scan pass */
+    uint64_t ocr_done;    /* OCR pass: pages read so far / pages to read (0 = not OCR) */
+    uint64_t ocr_total;
 } HartProgress;
 
-/* Count one unit of work; every 1024 units check cancel and report. Returns FALSE when
- * the load should stop (cancelled). */
+/* Count one unit of work; every 1024 units check cancel and report. During the OCR pass
+ * (ocr_total != 0) every unit is a page taking ~0.15 s, so cancel is checked and progress
+ * reported on every page instead -- otherwise a scanned report shows no progress for
+ * minutes. Returns FALSE when the load should stop (cancelled). */
 static BOOL hart_tick(HartProgress *pg)
 {
     pg->done++;
-    if ((pg->done & 0x3FF) != 0)
+    if (pg->ocr_total == 0 && (pg->done & 0x3FF) != 0)
     {
         return TRUE;
     }
@@ -1039,7 +1043,7 @@ static BOOL hart_tick(HartProgress *pg)
         {
             pct = 99u;
         }
-        if (pct != pg->last_pct)
+        if (pct != pg->last_pct || pg->ocr_total != 0)
         {
             EeLoadProgress pr;
             pg->last_pct = pct;
@@ -1048,8 +1052,15 @@ static BOOL hart_tick(HartProgress *pg)
             pr.bytes_read = pg->done;
             pr.bytes_total = pg->total;
             /* A discovery pass (rows == NULL) has no rows yet -- flag it so the UI can
-             * show "Scanning ballots...". */
+             * show "Scanning ballots..."; the OCR pass (2) reports pages read / total in
+             * bytes_read / bytes_total so the UI can show "Reading scanned page N of M". */
             pr.scanning = (pg->rows == NULL) ? 1 : 0;
+            if (pg->ocr_total != 0)
+            {
+                pr.scanning = 2;
+                pr.bytes_read = pg->ocr_done;
+                pr.bytes_total = pg->ocr_total;
+            }
             if (!pg->fn(&pr, pg->user) && pg->cancel_flag != NULL)
             {
                 InterlockedExchange(pg->cancel_flag, 1);
@@ -2400,7 +2411,9 @@ static BOOL meta_sheet(void *vctx, HartSheet *sheet)
 /* Per-page progress/cancel for the OCR pass. */
 static BOOL ocr_tick(void *ctx)
 {
-    return hart_tick((HartProgress *)ctx);
+    HartProgress *pg = (HartProgress *)ctx;
+    pg->ocr_done++;
+    return hart_tick(pg);
 }
 
 static BOOL path_has_ext_w(const wchar_t *path, const wchar_t *ext)
@@ -2514,6 +2527,8 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
 
     /* ---- Scanned PDFs: OCR every page once into memory ---- */
     pg.rows = NULL;
+    pg.ocr_done = 0;
+    pg.ocr_total = img_pages;
     for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
     {
         EePdf *doc = NULL;
@@ -2539,6 +2554,7 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
         }
         EePdf_Close(doc);
     }
+    pg.ocr_total = 0; /* later passes are fast: back to coarse progress */
     if (s != EeLoadStatus_Ok)
     {
         goto cleanup;

@@ -6,7 +6,16 @@
 
 **Last updated:** 2026-10-10
 
-### In progress — scanned Hart CVR Reports via Windows OCR (UNCOMMITTED, ready to commit)
+### In progress — OCR load progress (UNCOMMITTED, ready to commit)
+
+- The OCR pass of a scanned Hart PDF showed 0% for ~2½ min: `hart_tick` only reported
+  every 1,024 units and an OCR page takes ~0.15 s. Now during the OCR pass
+  (`HartProgress.ocr_total != 0`) progress + cancel run every page; `EeLoadProgress.scanning
+  = 2` carries pages read/total in `bytes_read/bytes_total`; the load dialog shows
+  "Reading scanned page N of M (OCR)…" (`CvrLoadJob.ocr_pages_total`). Verified on Sierra:
+  first update at 0.4 s, then every page; cancel works. Smoke green; Debug builds clean.
+
+### Committed — scanned Hart CVR Reports via Windows OCR
 
 - Sierra County, CA `M:\Elections\CA - Sierra County Results and Data\2024-11-05\CVR
   Report-November 2024 Gen Election_Redacted.pdf` (1,272 pages) is **page images only**
@@ -27,8 +36,7 @@
   records = 1,780 ballots; every cell exact except Long Valley (votes redacted by the
   county).** Load ≈ 3 min (≈0.15 s/page OCR).
 - Test **`hartocr`** (GDI-drawn image-only PDF; skips without an OCR language). Smoke suite
-  green (incl. hart/hartpdf/hartocr/dominion/rcv); x64 Debug builds clean; Release
-  compiled (link blocked by a running Release instance). **Not yet GUI click-tested.**
+  green; click-tested by the user on the Sierra CVR.
 - Docs: `docs/cvr-design.md` (OCR section), `test/README.md` (build line + `hartocr`).
 
 ### Committed — Dominion CVRs + ranked-choice tabulation
@@ -127,7 +135,7 @@ Records now accepts Hart `.pdf` as well as `.zip`, alone or together:
 - Perf: ~10–11k PDF pages/s per pass; PDF-only G24 ≈ 5 min (two passes), ZIP ≈ 1m40s.
 - Possible follow-up: single-pass PDF load (PDF-only G24 ≈ 5 min).
 
-**Branch:** main — **only the scanned-PDF OCR work above is uncommitted; everything else is committed.** Store prep, the
+**Branch:** main — **only the OCR load-progress change above is uncommitted; everything else is committed.** Store prep, the
 Travis address fix, the full **XLSX import** feature, and the complete **CVR support**
 (incl. the CVR **Filter** menu) are committed in `main`. CVR =
 the sparse Cast Vote Record engine + multi-file loader (`src/ee_cvr.{c,h}`), the CVR

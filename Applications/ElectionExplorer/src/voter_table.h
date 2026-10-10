@@ -97,7 +97,8 @@ extern "C"
         int scanning; /* TRUE during a preliminary discovery pass that has not yet
                        * produced any rows (e.g. the Hart loader's pass 1); rows_loaded
                        * is 0 while this holds. Producers that have no scan pass leave
-                       * it 0. */
+                       * it 0. The value 2 marks the OCR pass of a scanned Hart PDF:
+                       * bytes_read / bytes_total then hold pages read / pages total. */
     } EeLoadProgress;
 
     /**

@@ -14314,6 +14314,7 @@ typedef struct CvrLoadJob
     HWND dlg;
     HWND count_label; /* shows "N ballot records" (or "Scanning ballots…") during load */
     HWND bar;         /* determinate progress bar (0..100) */
+    volatile LONG ocr_pages_total; /* pages in the OCR pass of a scanned Hart PDF */
     HANDLE thread;
 } CvrLoadJob;
 
@@ -14326,8 +14327,15 @@ static BOOL CvrLoadProgressCb(const EeLoadProgress *pr, void *user)
     if (j != NULL && j->dlg != NULL)
     {
         uint32_t pct = (pr->percent > 100u) ? 100u : pr->percent;
-        PostMessageW(j->dlg, EEM_CVR_LOAD_PROGRESS, (WPARAM)pr->rows_loaded,
-                     MAKELPARAM((WORD)pct, (WORD)(pr->scanning ? 1 : 0)));
+        WPARAM n = (WPARAM)pr->rows_loaded;
+        if (pr->scanning == 2)
+        {
+            /* OCR pass of a scanned PDF: report the page being read instead of rows. */
+            InterlockedExchange(&j->ocr_pages_total, (LONG)pr->bytes_total);
+            n = (WPARAM)pr->bytes_read;
+        }
+        PostMessageW(j->dlg, EEM_CVR_LOAD_PROGRESS, n,
+                     MAKELPARAM((WORD)pct, (WORD)(pr->scanning == 2 ? 2 : (pr->scanning ? 1 : 0))));
     }
     return TRUE; /* cancellation is driven by j->cancel, checked by the loader */
 }
@@ -14520,15 +14528,22 @@ static INT_PTR CALLBACK CvrLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM
             {
                 unsigned long n = (unsigned long)wParam;
                 int pct = (int)LOWORD(lParam);
-                BOOL scanning = HIWORD(lParam) != 0;
+                int mode = (int)HIWORD(lParam); /* 0 rows, 1 scanning, 2 OCR pages */
                 if (j->bar != NULL)
                 {
                     SendMessageW(j->bar, PBM_SETPOS, (WPARAM)pct, 0);
                 }
                 if (j->count_label != NULL)
                 {
-                    wchar_t txt[64];
-                    if (scanning)
+                    wchar_t txt[96];
+                    if (mode == 2)
+                    {
+                        /* Scanned Hart PDF: OCR runs ~0.15 s per page. */
+                        StringCchPrintfW(txt, ARRAYSIZE(txt),
+                                         L"Reading scanned page %lu of %ld (OCR)…", n,
+                                         (long)j->ocr_pages_total);
+                    }
+                    else if (mode == 1)
                     {
                         /* Discovery pass: no rows produced yet. */
                         StringCchCopyW(txt, ARRAYSIZE(txt), L"Scanning ballots…");

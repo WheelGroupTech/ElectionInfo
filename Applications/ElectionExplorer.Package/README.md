@@ -59,6 +59,13 @@ tiles and taskbar/Start icons). The manifest `BackgroundColor` is `#FFFFFF`; it
 shows through behind the logo on plated tiles and the splash screen — change it to
 a brand color if preferred.
 
+The small app icon (`Square44x44Logo`) ships at target sizes 16, 24, 32 and 48, each
+as plated, `altform-unplated` and `altform-lightunplated` images. The shell uses the
+unplated variants for the taskbar, Start, Alt+Tab and Task Manager, and falls back to
+a plated tile or a blank icon when a size is missing. Every generated image must
+also be listed as a `<Content>` + `<Link>` item in the `.wapproj`, or it is silently
+left out of the package.
+
 The generator auto-detects the source: an opaque source is instead rendered on
 its sampled background color. A different source can be passed with
 `-SourcePng path\to\logo.png`. (No 256px small-logo target size is emitted: it can

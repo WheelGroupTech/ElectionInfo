@@ -130,8 +130,15 @@ New-Asset "Square44x44Logo.targetsize-16.png"                  16 16 1.0
 New-Asset "Square44x44Logo.targetsize-24.png"                  24 24 1.0
 New-Asset "Square44x44Logo.targetsize-32.png"                  32 32 1.0
 New-Asset "Square44x44Logo.targetsize-48.png"                  48 48 1.0
-New-Asset "Square44x44Logo.targetsize-24_altform-unplated.png" 24 24 1.0
-New-Asset "Square44x44Logo.targetsize-48_altform-unplated.png" 48 48 1.0
+# Unplated (transparent, no tile plate) variants for every target size: the shell
+# uses these for the taskbar, Start, Alt+Tab and Task Manager, and falls back to a
+# plated tile or a blank icon when a size is missing. "lightunplated" is the same
+# image for light taskbar themes. (With a transparent source these match the plated
+# images pixel for pixel; the qualifier is what tells Windows no plate is needed.)
+foreach ($ts in 16, 24, 32, 48) {
+    New-Asset "Square44x44Logo.targetsize-${ts}_altform-unplated.png"      $ts $ts 1.0
+    New-Asset "Square44x44Logo.targetsize-${ts}_altform-lightunplated.png" $ts $ts 1.0
+}
 
 $src.Dispose()
 Write-Host "Done."

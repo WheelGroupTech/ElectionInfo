@@ -68,20 +68,38 @@
     <Content Include="Images\Square44x44Logo.targetsize-16.png">
       <Link>Images\Square44x44Logo.targetsize-16.png</Link>
     </Content>
+    <Content Include="Images\Square44x44Logo.targetsize-16_altform-unplated.png">
+      <Link>Images\Square44x44Logo.targetsize-16_altform-unplated.png</Link>
+    </Content>
+    <Content Include="Images\Square44x44Logo.targetsize-16_altform-lightunplated.png">
+      <Link>Images\Square44x44Logo.targetsize-16_altform-lightunplated.png</Link>
+    </Content>
     <Content Include="Images\Square44x44Logo.targetsize-24.png">
       <Link>Images\Square44x44Logo.targetsize-24.png</Link>
     </Content>
     <Content Include="Images\Square44x44Logo.targetsize-24_altform-unplated.png">
       <Link>Images\Square44x44Logo.targetsize-24_altform-unplated.png</Link>
     </Content>
+    <Content Include="Images\Square44x44Logo.targetsize-24_altform-lightunplated.png">
+      <Link>Images\Square44x44Logo.targetsize-24_altform-lightunplated.png</Link>
+    </Content>
     <Content Include="Images\Square44x44Logo.targetsize-32.png">
       <Link>Images\Square44x44Logo.targetsize-32.png</Link>
+    </Content>
+    <Content Include="Images\Square44x44Logo.targetsize-32_altform-unplated.png">
+      <Link>Images\Square44x44Logo.targetsize-32_altform-unplated.png</Link>
+    </Content>
+    <Content Include="Images\Square44x44Logo.targetsize-32_altform-lightunplated.png">
+      <Link>Images\Square44x44Logo.targetsize-32_altform-lightunplated.png</Link>
     </Content>
     <Content Include="Images\Square44x44Logo.targetsize-48.png">
       <Link>Images\Square44x44Logo.targetsize-48.png</Link>
     </Content>
     <Content Include="Images\Square44x44Logo.targetsize-48_altform-unplated.png">
       <Link>Images\Square44x44Logo.targetsize-48_altform-unplated.png</Link>
+    </Content>
+    <Content Include="Images\Square44x44Logo.targetsize-48_altform-lightunplated.png">
+      <Link>Images\Square44x44Logo.targetsize-48_altform-lightunplated.png</Link>
     </Content>
     <Content Include="Images\Square71x71Logo.png">
       <Link>Images\Square71x71Logo.png</Link>

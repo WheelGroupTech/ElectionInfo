@@ -6,7 +6,15 @@
 
 **Last updated:** 2026-10-10
 
-### In progress — version 1.3.0.0 + Store bundle (UNCOMMITTED, ready to upload)
+### In progress — release notes file (UNCOMMITTED)
+
+- New `ElectionExplorer/RELEASES.md`: the Store "What's new" text for every release,
+  newest first — 1.3.0.0 (submitted 2026-10-10), 1.2.0.0 (submitted 2026-10-02), 1.1.0.0
+  (built 2026-09-20), 1.0.1.0 (initial release; first bundle built 2026-09-11). Each note
+  is under the Store's 1,500-character limit. Add the next release's note here when
+  bumping the version.
+
+### Committed — version 1.3.0.0 + Store bundle (submitted to the Store 2026-10-10)
 
 - Version **1.2.0.0 → 1.3.0.0** in `res/ElectionExplorer.rc` (FILEVERSION/PRODUCTVERSION +
   strings), `res/app.manifest`, `ElectionExplorer.Package/Package.appxmanifest`.

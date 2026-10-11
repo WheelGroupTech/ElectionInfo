@@ -178,6 +178,7 @@
     <ClCompile Include="src\hart_ocr.c" />
     <ClCompile Include="src\dominion_cvr.c" />
     <ClCompile Include="src\ee_rcv.c" />
+    <ClCompile Include="src\voter_roster.c" />
     <!-- Vendored third-party: build quietly (its warnings are not ours to fix). -->
     <ClCompile Include="src\third_party\miniz\miniz.c">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
@@ -197,6 +198,7 @@
     <ClInclude Include="src\pdf_reader.h" />
     <ClInclude Include="src\ocr_win.h" />
     <ClInclude Include="src\hart_ocr.h" />
+    <ClInclude Include="src\voter_roster.h" />
     <ClInclude Include="src\third_party\miniz\miniz.h" />
     <ClInclude Include="src\resource.h" />
   </ItemGroup>

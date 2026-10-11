@@ -1,4 +1,4 @@
-Election Explorer is a fast, private desktop tool for working with the election data counties publish: voter-registration lists and cast vote records (CVRs). Open files with millions of voters or hundreds of thousands of ballots, and browse, search, filter, tabulate, and compare them in seconds, all on your own computer.
+Election Explorer is a fast, private desktop tool for working with the election data counties publish: voter-registration lists, voter rosters (who has voted), and cast vote records (CVRs). Open files with millions of voters or hundreds of thousands of ballots, and browse, search, filter, tabulate, and compare them in seconds, all on your own computer.
 
 Everything happens locally. Election Explorer has no accounts, no ads, and no telemetry, and it never uploads your files. Your data stays on your machine.
 
@@ -9,13 +9,18 @@ FIND WHAT YOU NEED
 Sort by any column and apply flexible, rule-based filters to narrow a list down to exactly the voters you're looking for. Addresses are automatically normalized to a consistent format, so the same address written different ways lines up.
 
 CHECK DATA QUALITY
-Spot problems quickly: find duplicate Voter IDs, or duplicate voter records that share the same name and date of birth.
+Spot problems quickly: find duplicate Voter IDs, or duplicate voter records that share the same name and date of birth, including those who voted under different Voter IDs in an election's voter roster.
 
 SEE THE BIG PICTURE
 Generate instant summary reports, such as the number of voters per precinct or per address, to understand the shape of a list at a glance.
 
 COMPARE TWO LISTS
-Open two versions of a list (for example, before and after an update) and compare them by Voter ID. Election Explorer shows who's only in one file, who's unchanged, and who changed, grading name and address edits as minor or major and flagging precinct changes. A side-by-side Differences view lets you review every changed field and copy the results.
+Open two versions of a list (for example, before and after an update) and compare them by Voter ID. Election Explorer shows who's only in one file, who's unchanged, and who changed, grading name and address edits as minor or major and flagging precinct changes. A side-by-side Differences view lets you review every changed field and copy the results. Rows are paired one to one, so a voter a county lists twice is reported as a repeated Voter ID instead of throwing off the counts. Export the summary, every compared record, or the differences to CSV or TSV.
+
+TRACK WHO HAS VOTED
+Load the voter rosters a county publishes during an election, the daily lists of who voted by mail, early, on Election Day, provisionally, or by limited ballot. Election Explorer reads Travis County, Texas, roster ZIP files as published (or their Excel, CSV, and TSV files) into a Voter Roster window showing each voter's Voter ID, precinct, name, voting method, and date voted. Real rosters contain clerical errors, and Election Explorer handles them: corrected files replace the originals, misnamed duplicate files and rows that aren't voters are skipped, a sheet missing its header row is recovered, and duplicate Voter IDs are kept and flagged, with a load summary of everything it found.
+
+The Voting Totals report counts voters per day and voting method, each voter once, split by party in primaries. Filter by method, date, or precinct, compare a roster with a later roster or with the voter list (matching names on first and last name), and export the roster to CSV or TSV.
 
 EXPLORE CAST VOTE RECORDS
 Load the cast vote records exported by ES&S, Hart InterCivic, and Dominion (now Liberty Vote) voting systems: Excel, CSV, or TSV files from ES&S, the ZIP archives of ballot files and PDF CVR Reports produced by Hart (including scanned, image-only reports, read with the OCR built into Windows), and the ZIP exports produced by Dominion's Democracy Suite. Load a Hart ZIP together with its PDF report to add each ballot's polling place, voting type, and scanning device. Combine several files from the same election, such as early voting, Election Day, and mail ballots, into a single view. Large exports, including multi-gigabyte Hart and Dominion archives, load in the background with live progress.

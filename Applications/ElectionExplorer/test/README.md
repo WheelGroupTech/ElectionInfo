@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
+  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -111,4 +111,29 @@ round trip that keeps the Dominion key columns frozen;
 rounds and transfers, ties for last broken by name and by an earlier round (flagged), a
 skipped first ranking, an overvoted ranking stopping a ballot, an unresolved write-in
 excluded (blank), exhausted ballots, the majority round, finishing order, and a filtered
-subset.)
+subset;
+`roster` covers the voter roster loader (`EeRoster_LoadFiles`, needs `src\voter_roster.c`):
+authors a Travis-style ZIP of workbooks in memory with title rows and several header
+layouts, an `_Updated` correction replacing its original, a primary workbook whose
+Republican sheet lacks its header row (recovered from the Democrat sheet), pasted
+Voter IDs, "No ballots received." and footer totals rows, blank and 9-digit Voter IDs,
+an unlabeled notes column, a combined `LAST,FIRST MIDDLE` name, a Limited Ballot form,
+a misnamed Early Vote copy of the Election Day roster (skipped), and a PDF (listed, not
+read); checks rows, methods, dates, party, extras and the load-summary counts; then
+exports TSV, reloads it, and requires every cell to match;
+`rtotals` covers `EeRoster_ComputeTotals` (Voting Totals): a builder-made roster with a
+Voter ID repeated later and earlier (each counted once, on the earliest record), a blank
+Voter ID (counted), a record with no date, an unrecognized Voting Method, two parties, and
+a table without a Party column;
+`rcmp` covers voter roster compares (`EeVoterTable_CompareByVoterIdEx`): roster↔roster
+(Voting Method / Date Voted changes, repeated Voter IDs in a different order paired with
+their closest record, blank Voter IDs matched, "0101" == "101", an only-in-B voter,
+`CollectDifferencesEx`), roster↔list with the first + last name rule (middle names
+ignored, no address), a Travis-style list with one full-name column and "P nnn"
+precincts, one-to-one pairing (a voter repeated in one list leaves a "Voter ID
+repeated" row and equal identical counts; the 8-bit API reports it as only-here), and
+the voter-list defaults for contrast;
+`dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
+two voters with the same name and DOB who both voted, a group where only one voted, one
+Voter ID on two rows (not two people), the same DOB written two ways, and a list without
+birth dates.)

@@ -81,6 +81,28 @@ extern "C"
                                   wchar_t *error_message,
                                   size_t error_cch);
 
+    /** EeXlsx_ListSheets for a workbook already in memory (e.g. a ZIP entry). The
+     *  buffer is only read and must stay valid for the call. */
+    EeLoadStatus EeXlsx_ListSheetsMem(const void *data,
+                                      size_t size,
+                                      wchar_t names[][EE_XLSX_SHEET_NAME_CCH],
+                                      int max_sheets,
+                                      int *out_count,
+                                      wchar_t *error_message,
+                                      size_t error_cch);
+
+    /** EeXlsx_ReadSheet for a workbook already in memory (e.g. a ZIP entry). */
+    EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
+                                     size_t size,
+                                     int sheet_index,
+                                     EeXlsxRowSink sink,
+                                     void *sink_ctx,
+                                     volatile LONG *cancel_flag,
+                                     EeLoadProgressFn progress_fn,
+                                     void *progress_user,
+                                     wchar_t *error_message,
+                                     size_t error_cch);
+
 #ifdef __cplusplus
 }
 #endif

@@ -65,6 +65,11 @@
 #define IDM_HELP_ABOUT         40094
 #define IDM_HELP_EXPORT        40095
 #define IDM_HELP_LOADING       40096
+/* Voter Roster window (1.4). */
+#define IDM_FILE_OPEN_ROSTER    40100
+#define IDM_REPORT_LOAD_SUMMARY 40101
+#define IDM_REPORT_VOTING_TOTALS 40102
+#define IDM_FILTER_DUP_VOTERS_VOTING 40103
 
 /* Help / About dialog child controls. */
 #define IDC_HELP_TEXT     41200
@@ -79,6 +84,8 @@
 
 /* Compare / Differences window child controls. */
 #define IDC_CMP_DIFF 41210
+#define IDC_CMP_EXPORT_SUMMARY 41211
+#define IDC_CMP_EXPORT_ALL 41212
 
 #define IDC_FLT_PROMPT   41100
 #define IDC_FLT_COLUMN   41101

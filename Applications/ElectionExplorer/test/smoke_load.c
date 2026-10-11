@@ -8,6 +8,7 @@
 #include "voter_table.h"
 #include "ee_cvr.h"
 #include "ocr_win.h"
+#include "voter_roster.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -6824,6 +6825,820 @@ done:
     return rc;
 }
 
+/* ---- Voter roster helpers: author .xlsx workbooks and a .zip in memory ---- */
+
+typedef struct RtBuf
+{
+    char *p;
+    size_t len;
+    size_t cap;
+} RtBuf;
+
+static void rt_cat(RtBuf *b, const char *s, size_t n)
+{
+    if (b->len + n + 1 > b->cap)
+    {
+        size_t nc = b->cap ? b->cap * 2 : 4096;
+        char *np;
+        while (b->len + n + 1 > nc)
+        {
+            nc *= 2;
+        }
+        np = (char *)realloc(b->p, nc);
+        if (np == NULL)
+        {
+            return;
+        }
+        b->p = np;
+        b->cap = nc;
+    }
+    memcpy(b->p + b->len, s, n);
+    b->len += n;
+    b->p[b->len] = '\0';
+}
+
+static void rt_cats(RtBuf *b, const char *s)
+{
+    rt_cat(b, s, strlen(s));
+}
+
+/* Worksheet XML from rows whose cells are separated by '|' (inline strings). */
+static char *rt_sheet_xml(const char *const *rows, int nrows)
+{
+    RtBuf b = {0};
+    int r;
+    rt_cats(&b,
+            "<?xml version=\"1.0\"?><worksheet "
+            "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");
+    for (r = 0; r < nrows; r++)
+    {
+        char tmp[64];
+        const char *p = rows[r];
+        int c = 0;
+        StringCchPrintfA(tmp, ARRAYSIZE(tmp), "<row r=\"%d\">", r + 1);
+        rt_cats(&b, tmp);
+        for (;;)
+        {
+            const char *e = strchr(p, '|');
+            size_t n = (e != NULL) ? (size_t)(e - p) : strlen(p);
+            if (n > 0)
+            {
+                size_t i;
+                StringCchPrintfA(tmp, ARRAYSIZE(tmp), "<c r=\"%c%d\" t=\"inlineStr\"><is><t>", 'A' + c,
+                                 r + 1);
+                rt_cats(&b, tmp);
+                for (i = 0; i < n; i++)
+                {
+                    if (p[i] == '&')
+                        rt_cats(&b, "&amp;");
+                    else if (p[i] == '<')
+                        rt_cats(&b, "&lt;");
+                    else
+                        rt_cat(&b, p + i, 1);
+                }
+                rt_cats(&b, "</t></is></c>");
+            }
+            c++;
+            if (e == NULL)
+            {
+                break;
+            }
+            p = e + 1;
+        }
+        rt_cats(&b, "</row>");
+    }
+    rt_cats(&b, "</sheetData></worksheet>");
+    return b.p;
+}
+
+/* A workbook (heap bytes, free with mz_free) with @p n sheets. */
+static BOOL rt_xlsx(const char *const *names, char *const *sheets, int n, void **out, size_t *out_size)
+{
+    RtBuf wb = {0};
+    RtBuf rels = {0};
+    mz_zip_archive zip;
+    BOOL ok;
+    int i;
+    char tmp[256];
+    rt_cats(&wb,
+            "<?xml version=\"1.0\"?><workbook "
+            "xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>");
+    rt_cats(&rels,
+            "<?xml version=\"1.0\"?><Relationships "
+            "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    for (i = 0; i < n; i++)
+    {
+        StringCchPrintfA(tmp, ARRAYSIZE(tmp), "<sheet name=\"%s\" sheetId=\"%d\" r:id=\"rId%d\"/>", names[i],
+                         i + 1, i + 1);
+        rt_cats(&wb, tmp);
+        StringCchPrintfA(tmp,
+                         ARRAYSIZE(tmp),
+                         "<Relationship Id=\"rId%d\" Type=\"http://schemas.openxmlformats.org/"
+                         "officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet%d.xml\"/>",
+                         i + 1,
+                         i + 1);
+        rt_cats(&rels, tmp);
+    }
+    rt_cats(&wb, "</sheets></workbook>");
+    rt_cats(&rels, "</Relationships>");
+    mz_zip_zero_struct(&zip);
+    ok = mz_zip_writer_init_heap(&zip, 0, 0) &&
+         mz_zip_writer_add_mem(&zip, "xl/workbook.xml", wb.p, wb.len, MZ_DEFAULT_COMPRESSION) &&
+         mz_zip_writer_add_mem(&zip, "xl/_rels/workbook.xml.rels", rels.p, rels.len, MZ_DEFAULT_COMPRESSION);
+    for (i = 0; ok && i < n; i++)
+    {
+        StringCchPrintfA(tmp, ARRAYSIZE(tmp), "xl/worksheets/sheet%d.xml", i + 1);
+        ok = mz_zip_writer_add_mem(&zip, tmp, sheets[i], strlen(sheets[i]), MZ_DEFAULT_COMPRESSION);
+    }
+    ok = ok && mz_zip_writer_finalize_heap_archive(&zip, out, out_size);
+    mz_zip_writer_end(&zip);
+    free(wb.p);
+    free(rels.p);
+    return ok;
+}
+
+/* One-sheet workbook from rows. */
+static BOOL rt_xlsx1(const char *sheet_name, const char *const *rows, int nrows, void **out, size_t *out_size)
+{
+    char *xml = rt_sheet_xml(rows, nrows);
+    BOOL ok = (xml != NULL) && rt_xlsx(&sheet_name, &xml, 1, out, out_size);
+    free(xml);
+    return ok;
+}
+
+/* Value of the column titled @p title (wide) at view row @p row, into @p buf. */
+static void rt_cell(const EeVoterTable *t, uint32_t row, const wchar_t *title, wchar_t *buf, size_t cch)
+{
+    uint32_t c;
+    buf[0] = L'\0';
+    for (c = EE_FROZEN_COLUMN_COUNT; c < t->column_count; c++)
+    {
+        if (t->column_titles[c] != NULL && wcscmp(t->column_titles[c], title) == 0)
+        {
+            EeVoterTable_GetViewCellW(t, row, c, buf, cch);
+            return;
+        }
+    }
+}
+
+/* View row whose Last Name and First Name are @p last / @p first, or UINT32_MAX. */
+static uint32_t rt_find(const EeVoterTable *t, const wchar_t *last, const wchar_t *first)
+{
+    uint32_t r;
+    for (r = 0; r < t->row_count; r++)
+    {
+        wchar_t l[64], f[64];
+        rt_cell(t, r, L"Last Name", l, ARRAYSIZE(l));
+        rt_cell(t, r, L"First Name", f, ARRAYSIZE(f));
+        if (wcscmp(l, last) == 0 && wcscmp(f, first) == 0)
+        {
+            return r;
+        }
+    }
+    return UINT32_MAX;
+}
+
+/* Expect column @p title at the row of @p last/@p first to equal @p want. */
+static BOOL rt_expect(const EeVoterTable *t, const wchar_t *last, const wchar_t *first, const wchar_t *title,
+                      const wchar_t *want)
+{
+    wchar_t got[256];
+    uint32_t r = rt_find(t, last, first);
+    if (r == UINT32_MAX)
+    {
+        wprintf(L"roster: no row for %s, %s\n", last, first);
+        return FALSE;
+    }
+    rt_cell(t, r, title, got, ARRAYSIZE(got));
+    if (wcscmp(got, want) != 0)
+    {
+        wprintf(L"roster: %s, %s [%s] = '%s' (want '%s')\n", last, first, title, got, want);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* Voter roster loader: a Travis-style ZIP with every clerical quirk found in the
+ * survey -- title rows, several header layouts, a correction (_Updated) replacing its
+ * original, a primary workbook whose Republican sheet lacks its header row, pasted
+ * Voter IDs, "No ballots received." and footer totals rows, blank / 9-digit Voter IDs,
+ * an unlabeled notes column, a combined "LAST,FIRST MIDDLE" name, a Limited Ballot form,
+ * a misnamed Early Vote copy of the Election Day roster, and a PDF -- then a TSV export
+ * reloaded into an identical table (tag: roster). */
+static int test_voter_roster(void)
+{
+    static const char *mail[] = {"Travis County Ballot By Mail Roster",
+                                 "2024-10-21",
+                                 "November 5, 2024 Joint General and Special Elections",
+                                 "VUID|Precinct|First Name|Last Name",
+                                 "1000000001|101|ALICE|ADAMS",
+                                 "1000000002|102|BOB|BROWN|CHAPTER 102",
+                                 "1000000003",
+                                 "No ballots received.",
+                                 "|103|CAROL|CLARK",
+                                 "100000004|104|DAN|DAVIS"};
+    static const char *ev_orig[] = {"Travis County Early Vote Roster", "2024-10-22", "Election",
+                                    "VUID|Last Name|First Name|PCT", "1000000010|EVANS|ERIN|110"};
+    static const char *ev_upd[] = {"Travis County Early Vote Roster", "2024-10-22", "Election",
+                                   "VUID|Last Name|First Name|PCT", "1000000010|EVANS|ERIN|110",
+                                   "1000000011|FOX|FRANK|111"};
+    static const char *dem[] = {"Travis County Early Vote Roster", "2024-02-27", "Democratic Primary",
+                                "March 5, 2024 Primary Election", "VUID|PCT|First Name|Last Name|Party Ballot",
+                                "1000000020|120|GINA|GREEN|DEM"};
+    static const char *rep[] = {"Travis County Early Vote Roster", "2024-02-27", "Republican Primary",
+                                "March 5, 2024 Primary Election", "1000000021|121|HANK|HILL|REP"};
+    static const char *combined[] = {"Travis County Early Vote Roster", "2024-11-01", "Election",
+                                     "Precinct|VUID|Voter Name", "130|1000000030|IVES,IRENE MAE",
+                                     "Total Voters|Total Suspense|Total Early Voting", "16|0|0"};
+    static const char *limited[] = {"Limited Ballot Roster",
+                                    "2024-11-04",
+                                    "Election",
+                                    "||Information on Person Assisting Voter",
+                                    "No.|Name of Voter|Name|Address",
+                                    "1|JANE Q PUBLIC|HELPER PERSON|1 MAIN ST",
+                                    "2|JOHN DOE JR||",
+                                    "3|||"};
+    const char *entry[9] = {"10.21.2024 Ballot By Mail.xlsx",   "10.22.2024 Early Vote.xlsx",
+                            "10.22.2024 Early Vote_Updated.xlsx", "02.27.2024 Early Vote.xlsx",
+                            "11.01.2024 Early Vote.xlsx",       "11.04.2024 Limited Ballot.xlsx",
+                            "11.05.2024 Election Day.xlsx",     "11.05.2024 Early Vote.xlsx",
+                            "10.23.2024 Limited Ballot.pdf"};
+    void *data[9] = {0};
+    size_t size[9] = {0};
+    char *big_rows[124];
+    char big_buf[120][48];
+    char *prim_xml[2] = {NULL, NULL};
+    const char *prim_names[2] = {"Democrat", "Republican"};
+    wchar_t zpath[MAX_PATH], tpath[MAX_PATH], err[512] = L"";
+    const wchar_t *one[1];
+    EeVoterTable t, t2;
+    EeRosterLoadInfo info, info2;
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    char *text = NULL;
+    size_t text_len = 0;
+    uint32_t *rows = NULL;
+    BOOL ok;
+    int rc = 1;
+    int i;
+
+    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&info2, sizeof(info2));
+    EeVoterTable_Init(&t);
+    EeVoterTable_Init(&t2);
+    if (!cvr_temp_path(zpath, ARRAYSIZE(zpath), L"ee_roster.zip") ||
+        !cvr_temp_path(tpath, ARRAYSIZE(tpath), L"ee_roster.tsv"))
+    {
+        wprintf(L"roster: temp path failed\n");
+        return 1;
+    }
+    /* 120 Election Day voters, and the same 120 again in a misnamed Early Vote file. */
+    big_rows[0] = "Travis County Election Day Roster";
+    big_rows[1] = "2024-11-05";
+    big_rows[2] = "Election";
+    big_rows[3] = "VUID|PCT|First Name|Last Name";
+    for (i = 0; i < 120; i++)
+    {
+        StringCchPrintfA(big_buf[i], ARRAYSIZE(big_buf[i]), "2000000%03d|200|VOTER%d|COPY", i, i);
+        big_rows[4 + i] = big_buf[i];
+    }
+    prim_xml[0] = rt_sheet_xml(dem, ARRAYSIZE(dem));
+    prim_xml[1] = rt_sheet_xml(rep, ARRAYSIZE(rep));
+    ok = rt_xlsx1("report", mail, ARRAYSIZE(mail), &data[0], &size[0]) &&
+         rt_xlsx1("EarlyVote", ev_orig, ARRAYSIZE(ev_orig), &data[1], &size[1]) &&
+         rt_xlsx1("EarlyVote", ev_upd, ARRAYSIZE(ev_upd), &data[2], &size[2]) &&
+         rt_xlsx(prim_names, prim_xml, 2, &data[3], &size[3]) &&
+         rt_xlsx1("EarlyVote", combined, ARRAYSIZE(combined), &data[4], &size[4]) &&
+         rt_xlsx1("Limited Ballot Roster", limited, ARRAYSIZE(limited), &data[5], &size[5]) &&
+         rt_xlsx1("ElectionDay", (const char *const *)big_rows, 124, &data[6], &size[6]) &&
+         rt_xlsx1("EarlyVote", (const char *const *)big_rows, 124, &data[7], &size[7]);
+    data[8] = (void *)"%PDF-1.4 not really a pdf";
+    size[8] = strlen((const char *)data[8]);
+    mz_zip_zero_struct(&zip);
+    ok = ok && mz_zip_writer_init_heap(&zip, 0, 0);
+    for (i = 0; ok && i < 9; i++)
+    {
+        ok = mz_zip_writer_add_mem(&zip, entry[i], data[i], size[i], MZ_DEFAULT_COMPRESSION);
+    }
+    ok = ok && mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize);
+    mz_zip_writer_end(&zip);
+    ok = ok && cvr_write_bytes(zpath, zbuf, zsize);
+    if (!ok)
+    {
+        wprintf(L"roster: could not author the test zip\n");
+        goto done;
+    }
+
+    one[0] = zpath;
+    if (EeRoster_LoadFiles(one, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"roster: load failed: %s\n", err);
+        goto done;
+    }
+    /* 4 mail + 2 corrected EV + 2 primary EV + 1 combined-name EV + 2 limited + 120 ED */
+    if (t.row_count != 131 || info.method_rows[EE_VM_MAIL] != 4 || info.method_rows[EE_VM_EARLY] != 5 ||
+        info.method_rows[EE_VM_ELECTION_DAY] != 120 || info.method_rows[EE_VM_LIMITED] != 2)
+    {
+        wprintf(L"roster: rows=%u mail=%u ev=%u ed=%u ltd=%u\n%s\n", t.row_count, info.method_rows[EE_VM_MAIL],
+                info.method_rows[EE_VM_EARLY], info.method_rows[EE_VM_ELECTION_DAY],
+                info.method_rows[EE_VM_LIMITED], info.note ? info.note : L"");
+        goto done;
+    }
+    if (info.superseded_files != 1 || info.copy_files != 1 || info.unsupported_files != 1 ||
+        info.recovered_sheets != 1 || info.rows_vuid_only != 1 || info.rows_non_voter != 3 ||
+        info.vuids_malformed != 1 || info.vuids_missing != 1 || info.vuids_duplicated != 0 ||
+        !info.has_party || !info.method_source[EE_VM_LIMITED])
+    {
+        wprintf(L"roster: info sup=%u copy=%u pdf=%u rec=%u vonly=%u nonv=%u bad=%u miss=%u dup=%u\n%s\n",
+                info.superseded_files, info.copy_files, info.unsupported_files, info.recovered_sheets,
+                info.rows_vuid_only, info.rows_non_voter, info.vuids_malformed, info.vuids_missing,
+                info.vuids_duplicated, info.note ? info.note : L"");
+        goto done;
+    }
+    if (!rt_expect(&t, L"ADAMS", L"ALICE", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"ADAMS", L"ALICE", L"Date Voted", L"10/21/2024") ||
+        !rt_expect(&t, L"BROWN", L"BOB", L"Notes", L"CHAPTER 102") ||
+        !rt_expect(&t, L"CLARK", L"CAROL", L"VUID", L"") ||
+        !rt_expect(&t, L"FOX", L"FRANK", L"Source File", L"10.22.2024 Early Vote_Updated.xlsx") ||
+        !rt_expect(&t, L"GREEN", L"GINA", L"Party", L"DEM") ||
+        !rt_expect(&t, L"HILL", L"HANK", L"Party", L"REP") ||
+        !rt_expect(&t, L"HILL", L"HANK", L"Date Voted", L"02/27/2024") ||
+        !rt_expect(&t, L"IVES", L"IRENE", L"Middle Name", L"MAE") ||
+        !rt_expect(&t, L"PUBLIC", L"JANE", L"Voting Method", L"Limited") ||
+        !rt_expect(&t, L"PUBLIC", L"JANE", L"Assisting Person", L"HELPER PERSON") ||
+        !rt_expect(&t, L"DOE", L"JOHN", L"Name Suffix", L"JR") ||
+        !rt_expect(&t, L"COPY", L"VOTER7", L"Voting Method", L"Election Day In-Person"))
+    {
+        goto done;
+    }
+    {
+        wchar_t nm[64];
+        EeVoterTable_GetViewCellW(&t, rt_find(&t, L"IVES", L"IRENE"), EE_COL_NAME, nm, ARRAYSIZE(nm));
+        if (wcscmp(nm, L"IVES, IRENE MAE") != 0)
+        {
+            wprintf(L"roster: normalized name '%s'\n", nm);
+            goto done;
+        }
+    }
+
+    /* Round trip: export every source column as TSV, reload, compare cell by cell. */
+    rows = (uint32_t *)malloc(t.row_count * sizeof(uint32_t));
+    for (i = 0; rows != NULL && i < (int)t.row_count; i++)
+    {
+        rows[i] = (uint32_t)i;
+    }
+    if (rows == NULL ||
+        !EeVoterTable_FormatDelimitedUtf8(&t, rows, t.row_count, FALSE, '\t', TRUE, &text, &text_len) ||
+        !cvr_write_bytes(tpath, text, text_len))
+    {
+        wprintf(L"roster: export failed\n");
+        goto done;
+    }
+    one[0] = tpath;
+    if (EeRoster_LoadFiles(one, 1, &t2, &info2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"roster: reload failed: %s\n", err);
+        goto done;
+    }
+    if (t2.row_count != t.row_count || t2.column_count != t.column_count)
+    {
+        wprintf(L"roster: reload shape %ux%u vs %ux%u\n", t2.row_count, t2.column_count, t.row_count,
+                t.column_count);
+        goto done;
+    }
+    {
+        uint32_t r, c;
+        for (c = 0; c < t.column_count; c++)
+        {
+            if (wcscmp(t.column_titles[c], t2.column_titles[c]) != 0)
+            {
+                wprintf(L"roster: reload column %u '%s' vs '%s'\n", c, t2.column_titles[c], t.column_titles[c]);
+                goto done;
+            }
+        }
+        for (r = 0; r < t.row_count; r++)
+        {
+            for (c = 0; c < t.column_count; c++)
+            {
+                wchar_t a[256], b[256];
+                EeVoterTable_GetViewCellW(&t, r, c, a, ARRAYSIZE(a));
+                EeVoterTable_GetViewCellW(&t2, r, c, b, ARRAYSIZE(b));
+                if (wcscmp(a, b) != 0)
+                {
+                    wprintf(L"roster: reload row %u col %s: '%s' vs '%s'\n", r, t.column_titles[c], b, a);
+                    goto done;
+                }
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"roster ok\n");
+
+done:
+    for (i = 0; i < 8; i++)
+    {
+        if (data[i] != NULL)
+        {
+            mz_free(data[i]);
+        }
+    }
+    free(prim_xml[0]);
+    free(prim_xml[1]);
+    if (zbuf != NULL)
+    {
+        mz_free(zbuf);
+    }
+    free(text);
+    free(rows);
+    EeRoster_FreeInfo(&info);
+    EeRoster_FreeInfo(&info2);
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Clear(&t2);
+    DeleteFileW(zpath);
+    DeleteFileW(tpath);
+    if (rc != 0)
+    {
+        wprintf(L"roster test failed\n");
+    }
+    return rc;
+}
+
+/* Build a roster-shaped table through the builder from '|'-separated rows. */
+static BOOL tot_build(EeVoterTable *t, const char *header, const char *const *rows, int nrows)
+{
+    char hbuf[512];
+    const char *cols[16];
+    int ncols = 0;
+    char *p;
+    int i;
+    wchar_t err[256];
+    EeVoterTableBuilder *b;
+    StringCchCopyA(hbuf, sizeof(hbuf), header);
+    for (p = hbuf; ncols < 16;)
+    {
+        char *bar = strchr(p, '|');
+        cols[ncols++] = p;
+        if (bar == NULL)
+            break;
+        *bar = '\0';
+        p = bar + 1;
+    }
+    b = EeVoterTable_BuilderBegin(t, cols, (uint32_t)ncols, err, ARRAYSIZE(err));
+    if (b == NULL)
+        return FALSE;
+    for (i = 0; i < nrows; i++)
+    {
+        char rbuf[512];
+        const char *cells[16];
+        int n = 0;
+        StringCchCopyA(rbuf, sizeof(rbuf), rows[i]);
+        for (p = rbuf; n < 16;)
+        {
+            char *bar = strchr(p, '|');
+            cells[n++] = p;
+            if (bar == NULL)
+                break;
+            *bar = '\0';
+            p = bar + 1;
+        }
+        if (!EeVoterTable_BuilderAppend(b, cells, (uint32_t)n, err, ARRAYSIZE(err)))
+        {
+            EeVoterTable_BuilderEnd(b, FALSE);
+            return FALSE;
+        }
+    }
+    EeVoterTable_BuilderEnd(b, TRUE);
+    return TRUE;
+}
+
+static int test_roster_totals(void)
+{
+    static const char *rows[] = {
+        "1000000001|101|ADAMS|ALICE|Mail Ballot|10/21/2024|DEM|a.xlsx",
+        "1000000002|102|BROWN|BOB|Early Vote In-Person|10/22/2024|DEM|b.xlsx",
+        "1000000003|103|CLARK|CAROL|Early Vote In-Person|10/22/2024|REP|b.xlsx",
+        "1000000002|102|BROWN|BOB|Election Day In-Person|11/05/2024|DEM|c.xlsx",
+        "1000000004|104|DAVIS|DAN|Election Day In-Person|11/05/2024|REP|c.xlsx",
+        "1000000004|104|DAVIS|DAN|Early Vote In-Person|10/22/2024|REP|b.xlsx",
+        "|105|EVANS|ERIN|Provisional|11/05/2024|REP|d.xlsx",
+        "1000000005|106|FOX|FRANK|Limited||DEM|e.xlsx",
+        "1000000006|107|GRAY|GUS|Curbside|11/05/2024|REP|f.xlsx"};
+    static const char *plain[] = {"1000000001|101|ADAMS|ALICE|Mail Ballot|10/21/2024|a.xlsx",
+                                  "1000000001|101|ADAMS|ALICE|Mail Ballot|10/21/2024|a.xlsx"};
+    EeVoterTable t;
+    EeRosterTotals tot;
+    int rc = 1;
+#define TOT(d, p, m) tot.counts[((size_t)(d) * tot.nparties + (p)) * EE_VM_COUNT + (m)]
+
+    EeVoterTable_Init(&t);
+    ZeroMemory(&tot, sizeof(tot));
+    if (!tot_build(&t, "VUID|Precinct|Last Name|First Name|Voting Method|Date Voted|Party|Source File",
+                   rows, 9) ||
+        !EeRoster_ComputeTotals(&t, &tot))
+    {
+        wprintf(L"totals: build/compute failed\n");
+        goto done;
+    }
+    if (tot.records != 9 || tot.counted != 7 || tot.repeats != 2 || tot.repeated_ids != 2 ||
+        tot.ndates != 4 || tot.dates[0] != 0 || tot.dates[1] != 20241021u ||
+        tot.dates[3] != 20241105u || tot.nparties != 2 || !tot.has_party ||
+        strcmp(tot.parties[0], "DEM") != 0 || strcmp(tot.parties[1], "REP") != 0)
+    {
+        wprintf(L"totals: shape records=%u counted=%u repeats=%u ids=%u dates=%u parties=%u\n",
+                tot.records, tot.counted, tot.repeats, tot.repeated_ids, tot.ndates, tot.nparties);
+        goto done;
+    }
+    if (TOT(0, 0, EE_VM_LIMITED) != 1 || TOT(1, 0, EE_VM_MAIL) != 1 || TOT(2, 0, EE_VM_EARLY) != 1 ||
+        TOT(2, 1, EE_VM_EARLY) != 2 || TOT(3, 0, EE_VM_ELECTION_DAY) != 0 ||
+        TOT(3, 1, EE_VM_ELECTION_DAY) != 0 || TOT(3, 1, EE_VM_PROVISIONAL) != 1 ||
+        TOT(3, 1, EE_VM_NONE) != 1 || !tot.method_present[EE_VM_ELECTION_DAY] ||
+        !tot.method_present[EE_VM_NONE])
+    {
+        wprintf(L"totals: counts wrong\n");
+        goto done;
+    }
+    EeRoster_FreeTotals(&tot);
+    EeVoterTable_Clear(&t);
+    if (!tot_build(&t, "VUID|Precinct|Last Name|First Name|Voting Method|Date Voted|Source File", plain, 2) ||
+        !EeRoster_ComputeTotals(&t, &tot) || tot.has_party || tot.nparties != 1 || tot.counted != 1 ||
+        tot.method_present[EE_VM_PROVISIONAL])
+    {
+        wprintf(L"totals: no-party table wrong\n");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"rtotals ok\n");
+done:
+#undef TOT
+    EeRoster_FreeTotals(&tot);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"rtotals test failed\n");
+    }
+    return rc;
+}
+
+static int test_roster_compare(void)
+{
+    static const char *ra[] = {
+        "1000000001|0101|ADAMS|ALICE|MAE|Mail Ballot|10/21/2024|a.xlsx",
+        "1000000002|102|BROWN|BOB||Early Vote In-Person|10/22/2024|b.xlsx",
+        "1000000002|102|BROWN|BOB||Election Day In-Person|11/05/2024|c.xlsx",
+        "1000000003|103|CLARK|CAROL||Early Vote In-Person|10/22/2024|b.xlsx",
+        "1000000004|104|DAVIS|DAN||Early Vote In-Person|10/23/2024|b.xlsx",
+        "|106|FOX|FAY||Provisional|11/05/2024|d.xlsx",
+        "1000000006|107|GRAY|GUS||Election Day In-Person|11/05/2024|c.xlsx",
+        "1000000006|108|GRAY|GUS||Election Day In-Person|11/05/2024|c.xlsx"};
+    static const char *rb[] = {
+        "1000000002|102|BROWN|BOB||Election Day In-Person|11/05/2024|c.xlsx",
+        "1000000002|102|BROWN|BOB||Early Vote In-Person|10/22/2024|b.xlsx",
+        "1000000001|101|ADAMS|ALICE|MAE|Mail Ballot|10/21/2024|a.xlsx",
+        "1000000003|103|CLARK|CAROL||Mail Ballot|10/22/2024|a.xlsx",
+        "1000000004|104|DAVIS|DAN||Early Vote In-Person|10/24/2024|b.xlsx",
+        "1000000005|105|EVANS|ERIN||Mail Ballot|10/21/2024|a.xlsx",
+        "1000000006|108|GRAY|GUS||Election Day In-Person|11/05/2024|c.xlsx",
+        "1000000006|107|GRAY|GUS||Election Day In-Person|11/05/2024|c.xlsx",
+        "|106|FOX|FAY||Provisional|11/05/2024|d.xlsx"};
+    static const char *rl[] = {"1000000001|101|ADAMS|ALICE||1 MAIN ST",
+                               "1000000002|102|BROWN|ROBERT||2 MAIN ST",
+                               "1000000003|999|CLARK|CAROL||3 MAIN ST"};
+    /* Travis list style: one full-name column, "P nnn" precincts. */
+    static const char *rf[] = {"1000000001,\"ADAMS, ALICE MAE \",P 101,1 MAIN ST",
+                               "1000000003,\"CLARK, CAROLINE\",P 0103,3 MAIN ST",
+                               "1000000004,DAN Q DAVIS JR,P 104,4 MAIN ST"};
+    static const char *k_roster_hdr =
+        "VUID|Precinct|Last Name|First Name|Middle Name|Voting Method|Date Voted|Source File";
+    EeVoterTable a, b, l, f;
+    uint16_t ca[16], cb[16];
+    EeCompareResult r;
+    EeCompareOptions o;
+    EeCompareDiff *diffs = NULL;
+    uint32_t nd = 0;
+    int rc = 1;
+
+    EeVoterTable_Init(&a);
+    EeVoterTable_Init(&b);
+    EeVoterTable_Init(&l);
+    EeVoterTable_Init(&f);
+    if (!tot_build(&a, k_roster_hdr, ra, 8) || !tot_build(&b, k_roster_hdr, rb, 9) ||
+        !tot_build(&l, "Voter ID|Precinct|Last Name|First Name|Middle Name|Address", rl, 3))
+    {
+        wprintf(L"rcmp: build failed\n");
+        goto done;
+    }
+
+    /* Roster vs roster: voting records compared; a repeated Voter ID pairs with its closest
+     * row (by method + date, then precinct); blank Voter IDs match identical blank-ID rows. */
+    ZeroMemory(&o, sizeof(o));
+    o.loose_precinct = TRUE;
+    o.names = EE_CMP_NAMES_PARTS;
+    o.compare_vote = TRUE;
+    if (!EeVoterTable_CompareByVoterIdEx(&a, &b, &o, ca, cb, &r, NULL, NULL, NULL))
+    {
+        wprintf(L"rcmp: compare failed\n");
+        goto done;
+    }
+    if (ca[0] != EE_CMP_MATCHED || ca[1] != EE_CMP_MATCHED || ca[2] != EE_CMP_MATCHED ||
+        ca[3] != (EE_CMP_MATCHED | EE_CMP_METHOD_CHANGED) ||
+        ca[4] != (EE_CMP_MATCHED | EE_CMP_DATE_CHANGED) || cb[5] != EE_CMP_ONLY_HERE ||
+        ca[5] != EE_CMP_MATCHED || ca[6] != EE_CMP_MATCHED || ca[7] != EE_CMP_MATCHED ||
+        cb[8] != EE_CMP_MATCHED || r.identical_a != 6 || r.method_changed_a != 1 ||
+        r.date_changed_a != 1 || r.only_a != 0 || r.only_b != 1 || r.identical_b != 6)
+    {
+        wprintf(L"rcmp: roster classes %X %X %X %X %X / %X\n", ca[0], ca[1], ca[2], ca[3], ca[4], cb[5]);
+        goto done;
+    }
+    if (!EeVoterTable_CollectDifferencesEx(&a, &b, &o, &diffs, &nd, NULL, NULL, NULL) || nd != 2 ||
+        diffs[0].row_a != 3 || diffs[0].row_b != 3 || diffs[0].bits != (EE_CMP_MATCHED | EE_CMP_METHOD_CHANGED) ||
+        diffs[1].row_a != 4)
+    {
+        wprintf(L"rcmp: roster differences (%u)\n", nd);
+        goto done;
+    }
+
+    /* Roster vs voter list (D3): first + last decide; no address; "0101" == "101". */
+    ZeroMemory(&o, sizeof(o));
+    o.loose_precinct = TRUE;
+    o.names = EE_CMP_NAMES_FIRST_LAST;
+    if (!EeVoterTable_CompareByVoterIdEx(&a, &l, &o, ca, cb, &r, NULL, NULL, NULL))
+    {
+        wprintf(L"rcmp: list compare failed\n");
+        goto done;
+    }
+    /* BROWN is on two roster rows but one list row: one row pairs, the other is
+     * "Voter ID repeated" (rows pair one to one). */
+    if (ca[0] != EE_CMP_MATCHED || !(ca[1] & (EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR)) ||
+        (ca[1] & EE_CMP_ADDR_MAJOR) || ca[2] != EE_CMP_REPEATED ||
+        ca[3] != (EE_CMP_MATCHED | EE_CMP_PCT_CHANGED) || ca[4] != EE_CMP_ONLY_HERE ||
+        r.identical_a != 1 || r.only_a != 4 || r.identical_b != 1 || r.repeated_a != 1 ||
+        r.repeated_b != 0)
+    {
+        wprintf(L"rcmp: list classes %X %X %X %X %X\n", ca[0], ca[1], ca[2], ca[3], ca[4]);
+        goto done;
+    }
+    /* A full-name list: "ADAMS, ALICE MAE" and "DAN Q DAVIS JR" split into first + last;
+     * "P 101" == "0101"; CAROLINE vs CAROL is a name change. */
+    {
+        char *csv = NULL;
+        wchar_t fpath[MAX_PATH];
+        wchar_t ferr[256];
+        size_t k;
+        const char *hdr = "VUID,NAME,Precinct,Residential Address\r\n";
+        size_t len = strlen(hdr);
+        for (k = 0; k < 3; k++)
+            len += strlen(rf[k]) + 2;
+        csv = (char *)malloc(len + 1);
+        if (csv == NULL)
+            goto done;
+        StringCchCopyA(csv, len + 1, hdr);
+        for (k = 0; k < 3; k++)
+        {
+            StringCchCatA(csv, len + 1, rf[k]);
+            StringCchCatA(csv, len + 1, "\r\n");
+        }
+        GetTempPathW(MAX_PATH, fpath);
+        StringCchCatW(fpath, MAX_PATH, L"ee_rcmp_list.csv");
+        if (!cvr_write_bytes(fpath, csv, strlen(csv)) ||
+            EeVoterTable_LoadFromFile(fpath, &f, NULL, NULL, NULL, ferr, ARRAYSIZE(ferr)) != EeLoadStatus_Ok)
+        {
+            free(csv);
+            DeleteFileW(fpath);
+            wprintf(L"rcmp: full-name list load failed\n");
+            goto done;
+        }
+        free(csv);
+        DeleteFileW(fpath);
+    }
+    if (!EeVoterTable_CompareByVoterIdEx(&a, &f, &o, ca, cb, &r, NULL, NULL, NULL) ||
+        ca[0] != EE_CMP_MATCHED || ca[3] != (EE_CMP_MATCHED | EE_CMP_NAME_MINOR) ||
+        ca[4] != EE_CMP_MATCHED || ca[1] != EE_CMP_ONLY_HERE)
+    {
+        wprintf(L"rcmp: full-name classes %X %X %X %X\n", ca[0], ca[1], ca[3], ca[4]);
+        goto done;
+    }
+
+    /* Voter lists with a duplicated voter (a county export repeats a row): both files
+     * count the same identical voters; the extra row is "Voter ID repeated". */
+    {
+        static const char *rl2[] = {"1000000001|101|ADAMS|ALICE||1 MAIN ST",
+                                    "1000000002|102|BROWN|ROBERT||2 MAIN ST",
+                                    "1000000001|101|ADAMS|ALICE||1 MAIN ST",
+                                    "1000000003|999|CLARK|CAROL||3 MAIN ST"};
+        EeVoterTable l2;
+        uint8_t c8a[8], c8b[8];
+        EeVoterTable_Init(&l2);
+        if (!tot_build(&l2, "Voter ID|Precinct|Last Name|First Name|Middle Name|Address", rl2, 4) ||
+            !EeVoterTable_CompareByVoterIdEx(&l2, &l, NULL, ca, cb, &r, NULL, NULL, NULL) ||
+            r.identical_a != 3 || r.identical_b != 3 || r.repeated_a != 1 || r.repeated_b != 0 ||
+            ca[2] != EE_CMP_REPEATED ||
+            !EeVoterTable_CompareByVoterId(&l2, &l, c8a, c8b, &r, NULL, NULL, NULL) ||
+            c8a[2] != EE_CMP_ONLY_HERE)
+        {
+            wprintf(L"rcmp: duplicated list voter: ident %u/%u repeated %u/%u\n", r.identical_a,
+                    r.identical_b, r.repeated_a, r.repeated_b);
+            EeVoterTable_Clear(&l2);
+            goto done;
+        }
+        EeVoterTable_Clear(&l2);
+    }
+
+    /* The voter-list default (full names + address) would see the middle name and address. */
+    if (!EeVoterTable_CompareByVoterIdEx(&a, &l, NULL, ca, cb, &r, NULL, NULL, NULL) ||
+        ca[0] == EE_CMP_MATCHED)
+    {
+        wprintf(L"rcmp: default options should differ\n");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"rcmp ok\n");
+done:
+    free(diffs);
+    EeVoterTable_Clear(&a);
+    EeVoterTable_Clear(&b);
+    EeVoterTable_Clear(&l);
+    EeVoterTable_Clear(&f);
+    if (rc != 0)
+    {
+        wprintf(L"rcmp test failed\n");
+    }
+    return rc;
+}
+
+static int test_dup_voters_voting(void)
+{
+    static const char *list_rows[] = {"1000000001|101|SMITH|JOHN||01/02/1980",
+                                      "1000000002|102|SMITH|JOHN||01/02/1980",
+                                      "1000000003|103|SMITH|JOHN||01/02/1980",
+                                      "1000000004|104|JONES|MARY||03/04/1990",
+                                      "1000000005|105|JONES|MARY||03/04/1990",
+                                      "1000000006|106|LEE|BOB||05/06/1970",
+                                      "1000000006|106|LEE|BOB||05/06/1970",
+                                      "1000000007|107|KIM|ANN||1985-07-08",
+                                      "1000000008|108|KIM|ANN||07/08/1985"};
+    static const char *roster_rows[] = {
+        "1000000001|101|SMITH|JOHN|Early Vote In-Person|02/20/2026|a.xlsx",
+        "1000000002|102|SMITH|JOHN|Mail Ballot|02/21/2026|b.xlsx",
+        "1000000002|102|SMITH|JOHN|Mail Ballot|02/21/2026|b.xlsx",
+        "1000000004|104|JONES|MARY|Early Vote In-Person|02/20/2026|a.xlsx",
+        "1000000006|106|LEE|BOB|Early Vote In-Person|02/20/2026|a.xlsx",
+        "1000000007|107|KIM|ANN|Election Day In-Person|03/03/2026|c.xlsx",
+        "1000000008|108|KIM|ANN|Election Day In-Person|03/03/2026|c.xlsx"};
+    EeVoterTable list, roster, nodob;
+    uint8_t marks[16];
+    uint32_t count = 0, groups = 0;
+    int rc = 1;
+
+    EeVoterTable_Init(&list);
+    EeVoterTable_Init(&roster);
+    EeVoterTable_Init(&nodob);
+    ZeroMemory(marks, sizeof(marks));
+    if (!tot_build(&list, "Voter ID|Precinct|Last Name|First Name|Middle Name|Date of Birth", list_rows, 9) ||
+        !tot_build(&roster, "VUID|Precinct|Last Name|First Name|Voting Method|Date Voted|Source File",
+                   roster_rows, 7))
+    {
+        wprintf(L"dupvote: build failed\n");
+        goto done;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&list) < 0)
+    {
+        wprintf(L"dupvote: no DOB column recognized\n");
+        goto done;
+    }
+    /* SMITH 1001 + 1002 voted (1003 did not); JONES: one voted; LEE: one Voter ID on two
+     * rows; KIM: two Voter IDs, same DOB written two ways. */
+    if (!EeVoterTable_MarkDuplicateVotersVoting(&list, &roster, marks, &count, &groups, NULL, NULL, NULL) ||
+        count != 4 || groups != 2 || !marks[0] || !marks[1] || marks[2] || marks[3] || marks[4] ||
+        marks[5] || marks[6] || !marks[7] || !marks[8])
+    {
+        wprintf(L"dupvote: count %u groups %u marks %d%d%d%d%d%d%d%d%d\n", count, groups, marks[0],
+                marks[1], marks[2], marks[3], marks[4], marks[5], marks[6], marks[7], marks[8]);
+        goto done;
+    }
+    /* A list without birth dates: nothing to find. */
+    ZeroMemory(marks, sizeof(marks));
+    if (!tot_build(&nodob, "Voter ID|Precinct|Last Name|First Name|Middle Name|Address", list_rows, 9) ||
+        !EeVoterTable_MarkDuplicateVotersVoting(&nodob, &roster, marks, &count, &groups, NULL, NULL, NULL) ||
+        count != 0)
+    {
+        wprintf(L"dupvote: no-DOB list should mark nothing\n");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"dupvote ok\n");
+done:
+    EeVoterTable_Clear(&list);
+    EeVoterTable_Clear(&roster);
+    EeVoterTable_Clear(&nodob);
+    if (rc != 0)
+    {
+        wprintf(L"dupvote test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -6839,6 +7654,10 @@ int wmain(void)
     failed |= test_district_codes_not_appended();
     failed |= test_infer_residence_state();
     failed |= test_el_paso_layout();
+    failed |= test_voter_roster();
+    failed |= test_roster_totals();
+    failed |= test_roster_compare();
+    failed |= test_dup_voters_voting();
     failed |= test_res_addr_zip_dash_and_unit();
     failed |= test_house_number_dot_zero();
     failed |= test_lot_unit_ignored();

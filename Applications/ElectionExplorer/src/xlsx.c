@@ -1792,6 +1792,40 @@ EeLoadStatus EeXlsx_ListSheets(const wchar_t *path,
 {
     unsigned char *file = NULL;
     size_t file_size = 0;
+    EeLoadStatus status;
+
+    if (out_count != NULL)
+    {
+        *out_count = 0;
+    }
+    if (path == NULL)
+    {
+        xlsx_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    if (!read_entire_file(path, &file, &file_size, error_message, error_cch))
+    {
+        return EeLoadStatus_Error;
+    }
+    status = EeXlsx_ListSheetsMem(file,
+                                  file_size,
+                                  names,
+                                  max_sheets,
+                                  out_count,
+                                  error_message,
+                                  error_cch);
+    free(file);
+    return status;
+}
+
+EeLoadStatus EeXlsx_ListSheetsMem(const void *data,
+                                  size_t size,
+                                  wchar_t names[][EE_XLSX_SHEET_NAME_CCH],
+                                  int max_sheets,
+                                  int *out_count,
+                                  wchar_t *error_message,
+                                  size_t error_cch)
+{
     mz_zip_archive zip;
     char *wb = NULL;
     size_t wb_size = 0;
@@ -1804,19 +1838,14 @@ EeLoadStatus EeXlsx_ListSheets(const wchar_t *path,
     {
         *out_count = 0;
     }
-    if (path == NULL || names == NULL || out_count == NULL || max_sheets <= 0)
+    if (data == NULL || size == 0 || names == NULL || out_count == NULL || max_sheets <= 0)
     {
         xlsx_err(error_message, error_cch, L"Invalid arguments.");
         return EeLoadStatus_Error;
     }
-    if (!read_entire_file(path, &file, &file_size, error_message, error_cch))
-    {
-        return EeLoadStatus_Error;
-    }
     mz_zip_zero_struct(&zip);
-    if (!mz_zip_reader_init_mem(&zip, file, file_size, 0))
+    if (!mz_zip_reader_init_mem(&zip, data, size, 0))
     {
-        free(file);
         xlsx_err(error_message, error_cch, L"Not a valid .xlsx (ZIP) file.");
         return EeLoadStatus_Error;
     }
@@ -1858,7 +1887,6 @@ cleanup:
         mz_free(wb);
     }
     mz_zip_reader_end(&zip);
-    free(file);
     return status;
 }
 
@@ -1874,6 +1902,42 @@ EeLoadStatus EeXlsx_ReadSheet(const wchar_t *path,
 {
     unsigned char *file = NULL;
     size_t file_size = 0;
+    EeLoadStatus status;
+
+    if (path == NULL)
+    {
+        xlsx_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    if (!read_entire_file(path, &file, &file_size, error_message, error_cch))
+    {
+        return EeLoadStatus_Error;
+    }
+    status = EeXlsx_ReadSheetMem(file,
+                                 file_size,
+                                 sheet_index,
+                                 sink,
+                                 sink_ctx,
+                                 cancel_flag,
+                                 progress_fn,
+                                 progress_user,
+                                 error_message,
+                                 error_cch);
+    free(file);
+    return status;
+}
+
+EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
+                                 size_t size,
+                                 int sheet_index,
+                                 EeXlsxRowSink sink,
+                                 void *sink_ctx,
+                                 volatile LONG *cancel_flag,
+                                 EeLoadProgressFn progress_fn,
+                                 void *progress_user,
+                                 wchar_t *error_message,
+                                 size_t error_cch)
+{
     mz_zip_archive zip;
     char *wb = NULL, *rels = NULL, *shared_xml = NULL, *sheet_xml = NULL, *styles_xml = NULL;
     size_t wb_size = 0, rels_size = 0, shared_size = 0, sheet_size = 0, styles_size = 0;
@@ -1888,19 +1952,14 @@ EeLoadStatus EeXlsx_ReadSheet(const wchar_t *path,
     ImgCell *img = NULL;
     size_t nimg = 0;
 
-    if (path == NULL || sink == NULL || sheet_index < 0)
+    if (data == NULL || size == 0 || sink == NULL || sheet_index < 0)
     {
         xlsx_err(error_message, error_cch, L"Invalid arguments.");
         return EeLoadStatus_Error;
     }
-    if (!read_entire_file(path, &file, &file_size, error_message, error_cch))
-    {
-        return EeLoadStatus_Error;
-    }
     mz_zip_zero_struct(&zip);
-    if (!mz_zip_reader_init_mem(&zip, file, file_size, 0))
+    if (!mz_zip_reader_init_mem(&zip, data, size, 0))
     {
-        free(file);
         xlsx_err(error_message, error_cch, L"Not a valid .xlsx (ZIP) file.");
         return EeLoadStatus_Error;
     }
@@ -2025,6 +2084,5 @@ cleanup:
     if (wb != NULL)
         mz_free(wb);
     mz_zip_reader_end(&zip);
-    free(file);
     return status;
 }

@@ -6,6 +6,7 @@
 #include "voter_table.h"
 #include "xlsx.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1890,72 +1891,711 @@ static uint8_t field_change_bits(const char *a,
     return major_bit;
 }
 
-/* EE_CMP_MATCHED plus any change bits for a matched voter pair. Name and Address
- * grade minor/major; Precinct is a binary changed flag. */
-static uint8_t classify_matched(const EeVoterTable *a,
-                                uint32_t ra,
-                                const EeVoterTable *b,
-                                uint32_t rb)
+int EeVoterTable_FindColumnByTitle(const EeVoterTable *table, const wchar_t *title)
 {
-    uint8_t bits = EE_CMP_MATCHED;
-    uint8_t addr_bits;
+    uint32_t c;
+    if (table == NULL || title == NULL)
+    {
+        return -1;
+    }
+    for (c = EE_FROZEN_COLUMN_COUNT; c < table->column_count; c++)
+    {
+        if (table->column_titles[c] != NULL && _wcsicmp(table->column_titles[c], title) == 0)
+        {
+            return (int)c;
+        }
+    }
+    return -1;
+}
 
-    bits |= field_change_bits(EeVoterTable_GetCellUtf8(a, ra, EE_COL_NAME),
-                              EeVoterTable_GetCellUtf8(b, rb, EE_COL_NAME),
-                              EE_CMP_NAME_MINOR,
-                              EE_CMP_NAME_MAJOR,
-                              FALSE);
-    addr_bits = field_change_bits(EeVoterTable_GetCellUtf8(a, ra, EE_COL_ADDRESS),
-                                  EeVoterTable_GetCellUtf8(b, rb, EE_COL_ADDRESS),
-                                  EE_CMP_ADDR_MINOR,
-                                  EE_CMP_ADDR_MAJOR,
-                                  TRUE);
-    bits |= addr_bits;
+/* A compare's options plus the per-table columns they use. */
+typedef struct CmpSetup
+{
+    EeCompareOptions o;
+    int method_col[2]; /* [0] = table A, [1] = table B; -1 = absent */
+    int date_col[2];
+} CmpSetup;
+
+static void cmp_setup(const EeVoterTable *a, const EeVoterTable *b, const EeCompareOptions *opt,
+                      CmpSetup *cs)
+{
+    memset(cs, 0, sizeof(*cs));
+    if (opt != NULL)
+    {
+        cs->o = *opt;
+    }
+    else
+    {
+        cs->o.compare_address = TRUE;
+        cs->o.names = EE_CMP_NAMES_FULL;
+    }
+    cs->method_col[0] = EeVoterTable_FindColumnByTitle(a, L"Voting Method");
+    cs->method_col[1] = EeVoterTable_FindColumnByTitle(b, L"Voting Method");
+    cs->date_col[0] = EeVoterTable_FindColumnByTitle(a, L"Date Voted");
+    cs->date_col[1] = EeVoterTable_FindColumnByTitle(b, L"Date Voted");
+    if (cs->method_col[0] < 0 || cs->method_col[1] < 0 || cs->date_col[0] < 0 || cs->date_col[1] < 0)
+    {
+        cs->o.compare_vote = FALSE;
+    }
+}
+
+static const char *cmp_cell(const EeVoterTable *t, uint32_t r, int col)
+{
+    return (col >= 0) ? EeVoterTable_GetCellUtf8(t, r, (uint32_t)col) : "";
+}
+
+/* "LAST FIRST [MIDDLE SUFFIX]" from the name-part columns; a table with no first /
+ * last columns gives its full-name column as loaded ("LAST, FIRST MIDDLE" in Texas
+ * lists), which canonicalizes the same way. */
+static void cmp_compose_name(const EeVoterTable *t, uint32_t r, char *out, size_t cap)
+{
+    const int cols[4] = {t->name_last_col, t->name_first_col, t->name_middle_col, t->name_suffix_col};
+    size_t o = 0;
+    int k;
+    if (cap == 0)
+    {
+        return;
+    }
+    out[0] = '\0';
+    if (t->name_first_col < 0 || t->name_last_col < 0)
+    {
+        StringCchCopyA(out, cap,
+                       (t->name_full_col >= 0) ? EeVoterTable_GetCellUtf8(t, r, (uint32_t)t->name_full_col)
+                                               : EeVoterTable_GetCellUtf8(t, r, EE_COL_NAME));
+        return;
+    }
+    for (k = 0; k < 4; k++)
+    {
+        const char *v = cmp_cell(t, r, cols[k]);
+        size_t n = strlen(v);
+        if (n == 0)
+        {
+            continue;
+        }
+        if (o > 0 && o + 1 < cap)
+        {
+            out[o++] = ' ';
+        }
+        if (n > cap - 1 - o)
+        {
+            n = cap - 1 - o;
+        }
+        memcpy(out + o, v, n);
+        o += n;
+        out[o] = '\0';
+    }
+}
+
+/* Copy the first space-separated word of @p s (trimmed) into @p out. */
+static void cmp_first_word(const char *s, char *out, size_t cap)
+{
+    size_t n = 0;
+    while (*s == ' ')
+        s++;
+    while (s[n] != '\0' && s[n] != ' ' && n + 1 < cap)
+    {
+        out[n] = s[n];
+        n++;
+    }
+    out[n] = '\0';
+}
+
+static BOOL cmp_is_suffix_word(const char *w, size_t n)
+{
+    static const char *const k_sfx[] = {"JR", "SR", "II", "III", "IV", "V", "JR.", "SR."};
+    size_t k;
+    for (k = 0; k < sizeof(k_sfx) / sizeof(k_sfx[0]); k++)
+    {
+        if (strlen(k_sfx[k]) == n && _strnicmp(w, k_sfx[k], n) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* First name's first word and the last name of row @p r: from the name-part columns,
+ * else parsed from the full name ("LAST, FIRST MIDDLE [SFX]" or "FIRST ... LAST [SFX]"). */
+static void cmp_first_last(const EeVoterTable *t, uint32_t r, char *first, char *last, size_t cap)
+{
+    const char *full;
+    const char *comma;
+    first[0] = '\0';
+    last[0] = '\0';
+    if (t->name_first_col >= 0 && t->name_last_col >= 0)
+    {
+        cmp_first_word(cmp_cell(t, r, t->name_first_col), first, cap);
+        StringCchCopyA(last, cap, cmp_cell(t, r, t->name_last_col));
+        return;
+    }
+    full = (t->name_full_col >= 0) ? EeVoterTable_GetCellUtf8(t, r, (uint32_t)t->name_full_col)
+                                   : EeVoterTable_GetCellUtf8(t, r, EE_COL_NAME);
+    comma = strchr(full, ',');
+    if (comma != NULL)
+    {
+        size_t n = (size_t)(comma - full);
+        if (n >= cap)
+            n = cap - 1;
+        memcpy(last, full, n);
+        last[n] = '\0';
+        cmp_first_word(comma + 1, first, cap);
+        return;
+    }
+    {
+        /* FIRST [MIDDLE...] LAST [SUFFIX...] */
+        const char *w[16];
+        size_t wl[16];
+        int nw = 0;
+        const char *p = full;
+        while (*p != '\0' && nw < 16)
+        {
+            while (*p == ' ')
+                p++;
+            if (*p == '\0')
+                break;
+            w[nw] = p;
+            while (*p != '\0' && *p != ' ')
+                p++;
+            wl[nw] = (size_t)(p - w[nw]);
+            nw++;
+        }
+        while (nw > 2 && cmp_is_suffix_word(w[nw - 1], wl[nw - 1]))
+            nw--;
+        if (nw >= 1)
+        {
+            size_t n = (wl[0] < cap) ? wl[0] : cap - 1;
+            memcpy(first, w[0], n);
+            first[n] = '\0';
+        }
+        if (nw >= 2)
+        {
+            size_t n = (wl[nw - 1] < cap) ? wl[nw - 1] : cap - 1;
+            memcpy(last, w[nw - 1], n);
+            last[n] = '\0';
+        }
+    }
+}
+
+/* TRUE when two name parts have the same letters and digits, ignoring case, spaces and
+ * punctuation ("TAFOLLA -ACOSTA" == "Tafolla-Acosta" == "TAFOLLA ACOSTA"). Non-ASCII
+ * bytes compare exactly. */
+static BOOL cmp_part_equal(const char *a, const char *b)
+{
+    for (;;)
+    {
+        while (*a != '\0' && (unsigned char)*a < 0x80 && !isalnum((unsigned char)*a))
+            a++;
+        while (*b != '\0' && (unsigned char)*b < 0x80 && !isalnum((unsigned char)*b))
+            b++;
+        if (*a == '\0' || *b == '\0')
+            return *a == *b;
+        if (toupper((unsigned char)*a) != toupper((unsigned char)*b))
+            return FALSE;
+        a++;
+        b++;
+    }
+}
+
+/* The number of a precinct written as an optional letter prefix and digits ("P 267",
+ * "PCT 0267", "267") without leading zeros; FALSE for any other form ("267.1", "12A"). */
+static BOOL cmp_precinct_number(const char *s, const char **out, size_t *out_len)
+{
+    const char *d;
+    const char *e;
+    while (*s == ' ' || (*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') || *s == '#' ||
+           *s == '-')
+        s++;
+    d = s;
+    while (*s >= '0' && *s <= '9')
+        s++;
+    e = s;
+    while (*s == ' ')
+        s++;
+    if (d == e || *s != '\0')
+        return FALSE;
+    while (*d == '0' && d + 1 < e)
+        d++;
+    *out = d;
+    *out_len = (size_t)(e - d);
+    return TRUE;
+}
+
+/* Precincts equal: case-insensitive, and with loose_precinct the same number with any
+ * letter prefix or leading zeros ("P 267" == "0267" == "267"). */
+static BOOL cmp_precinct_equal(const char *a, const char *b, BOOL loose)
+{
+    const char *na;
+    const char *nb;
+    size_t la;
+    size_t lb;
+    if (_stricmp(a, b) == 0)
+    {
+        return TRUE;
+    }
+    return loose && cmp_precinct_number(a, &na, &la) && cmp_precinct_number(b, &nb, &lb) &&
+           la == lb && memcmp(na, nb, la) == 0;
+}
+
+/* EE_CMP_MATCHED plus any change bits for a matched voter pair (@p x row @p rx of table
+ * side @p sx, against @p y row @p ry). Name and Address grade minor/major; Precinct,
+ * Voting Method and Date Voted are binary changed flags. */
+static uint16_t classify_matched(const CmpSetup *cs,
+                                 const EeVoterTable *x,
+                                 uint32_t rx,
+                                 int sx,
+                                 const EeVoterTable *y,
+                                 uint32_t ry)
+{
+    uint16_t bits = EE_CMP_MATCHED;
+    uint8_t addr_bits = 0;
+    int sy = 1 - sx;
+    BOOL same_first_last = FALSE;
+
+    if (cs->o.names == EE_CMP_NAMES_FIRST_LAST)
+    {
+        /* D3: equal when first + last match; otherwise graded on "LAST FIRST" alone, so a
+         * middle name never counts. */
+        char fx[256], lx[256], fy[256], ly[256];
+        cmp_first_last(x, rx, fx, lx, sizeof(fx));
+        cmp_first_last(y, ry, fy, ly, sizeof(fy));
+        same_first_last = cmp_part_equal(fx, fy) && cmp_part_equal(lx, ly);
+        if (!same_first_last)
+        {
+            char nx[520];
+            char ny[520];
+            StringCchPrintfA(nx, sizeof(nx), "%s %s", lx, fx);
+            StringCchPrintfA(ny, sizeof(ny), "%s %s", ly, fy);
+            bits |= field_change_bits(nx, ny, EE_CMP_NAME_MINOR, EE_CMP_NAME_MAJOR, FALSE);
+        }
+    }
+    else if (cs->o.names != EE_CMP_NAMES_FULL)
+    {
+        char nx[EE_CMP_CANON_MAX];
+        char ny[EE_CMP_CANON_MAX];
+        cmp_compose_name(x, rx, nx, sizeof(nx));
+        cmp_compose_name(y, ry, ny, sizeof(ny));
+        bits |= field_change_bits(nx, ny, EE_CMP_NAME_MINOR, EE_CMP_NAME_MAJOR, FALSE);
+    }
+    else
+    {
+        bits |= field_change_bits(EeVoterTable_GetCellUtf8(x, rx, EE_COL_NAME),
+                                  EeVoterTable_GetCellUtf8(y, ry, EE_COL_NAME),
+                                  EE_CMP_NAME_MINOR,
+                                  EE_CMP_NAME_MAJOR,
+                                  FALSE);
+    }
+    if (cs->o.compare_address)
+    {
+        addr_bits = field_change_bits(EeVoterTable_GetCellUtf8(x, rx, EE_COL_ADDRESS),
+                                      EeVoterTable_GetCellUtf8(y, ry, EE_COL_ADDRESS),
+                                      EE_CMP_ADDR_MINOR,
+                                      EE_CMP_ADDR_MAJOR,
+                                      TRUE);
+        bits |= addr_bits;
+    }
     /* A precinct change that comes with an address change is just the move (the
      * address covers it). Only flag precinct when the address is unchanged, which
      * signals re-precincting (e.g. post-census redistricting). */
-    if (addr_bits == 0 && _stricmp(EeVoterTable_GetCellUtf8(a, ra, EE_COL_PRECINCT),
-                                   EeVoterTable_GetCellUtf8(b, rb, EE_COL_PRECINCT)) != 0)
+    if (addr_bits == 0 && !cmp_precinct_equal(EeVoterTable_GetCellUtf8(x, rx, EE_COL_PRECINCT),
+                                              EeVoterTable_GetCellUtf8(y, ry, EE_COL_PRECINCT),
+                                              cs->o.loose_precinct))
     {
         bits |= EE_CMP_PCT_CHANGED;
+    }
+    if (cs->o.compare_vote)
+    {
+        if (_stricmp(cmp_cell(x, rx, cs->method_col[sx]), cmp_cell(y, ry, cs->method_col[sy])) != 0)
+        {
+            bits |= EE_CMP_METHOD_CHANGED;
+        }
+        if (strcmp(cmp_cell(x, rx, cs->date_col[sx]), cmp_cell(y, ry, cs->date_col[sy])) != 0)
+        {
+            bits |= EE_CMP_DATE_CHANGED;
+        }
     }
     return bits;
 }
 
-/* Tally one classified row's change bits into a per-side counter block. */
-static void cmp_tally(uint8_t bits,
-                      uint32_t *identical,
-                      uint32_t *name_minor,
-                      uint32_t *name_major,
-                      uint32_t *addr_minor,
-                      uint32_t *addr_major,
-                      uint32_t *pct_changed)
+/* next[row] = the next row with the same Voter ID (UINT32_MAX at the end); the map
+ * holds the first row of each ID. NULL on out-of-memory. */
+static uint32_t *build_vid_next(const EeVoterTable *t, const uint32_t *slots, uint32_t mask)
 {
+    uint32_t *next = (uint32_t *)malloc(((size_t)t->row_count + 1u) * sizeof(uint32_t));
+    uint32_t *last = (uint32_t *)malloc(((size_t)t->row_count + 1u) * sizeof(uint32_t));
+    uint32_t i;
+    if (next == NULL || last == NULL)
+    {
+        free(next);
+        free(last);
+        return NULL;
+    }
+    for (i = 0; i < t->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(t, i, EE_COL_VOTER_ID);
+        uint32_t first;
+        next[i] = UINT32_MAX;
+        last[i] = i;
+        if (vid == NULL || vid[0] == '\0')
+        {
+            continue;
+        }
+        first = vid_map_find(slots, mask, t, vid);
+        if (first != UINT32_MAX && first != i)
+        {
+            next[last[first]] = i;
+            last[first] = i;
+        }
+    }
+    free(last);
+    return next;
+}
+
+/* Number of change bits set (fewer = closer record). */
+static int cmp_change_count(uint16_t bits)
+{
+    int n = 0;
+    bits &= EE_CMP_CHANGE_BITS;
+    while (bits != 0)
+    {
+        n += bits & 1u;
+        bits >>= 1;
+    }
+    return n;
+}
+
+/* Rows of @p t with a blank Voter ID (*out_n of them); NULL when none or out of memory
+ * (*ok FALSE on out of memory). */
+static uint32_t *build_blank_rows(const EeVoterTable *t, uint32_t *out_n, BOOL *ok)
+{
+    uint32_t *rows = NULL;
+    uint32_t n = 0;
+    uint32_t cap = 0;
+    uint32_t i;
+    *out_n = 0;
+    for (i = 0; i < t->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(t, i, EE_COL_VOTER_ID);
+        if (vid != NULL && vid[0] != '\0')
+        {
+            continue;
+        }
+        if (n == cap)
+        {
+            uint32_t nc = cap ? cap * 2u : 16u;
+            uint32_t *g = (uint32_t *)realloc(rows, (size_t)nc * sizeof(uint32_t));
+            if (g == NULL)
+            {
+                free(rows);
+                *ok = FALSE;
+                return NULL;
+            }
+            rows = g;
+            cap = nc;
+        }
+        rows[n++] = i;
+    }
+    *out_n = n;
+    return rows;
+}
+
+#define CMP_PAIR_NONE     UINT32_MAX        /* Voter ID blank or absent from the other file */
+#define CMP_PAIR_REPEATED (UINT32_MAX - 1u) /* ID in the other file, but all its rows paired */
+
+/* Unused row of @p y in @p first's same-ID chain closest to row @p rx of @p x: an identical
+ * one when @p identical_only, else the one with the fewest changed fields (the first on a
+ * tie). Returns CMP_PAIR_NONE when every row of the chain is used. */
+static uint32_t cmp_pick(const CmpSetup *cs,
+                         const EeVoterTable *x,
+                         uint32_t rx,
+                         const EeVoterTable *y,
+                         uint32_t first,
+                         const uint32_t *next_y,
+                         const uint8_t *used_y,
+                         BOOL identical_only,
+                         uint16_t *out_bits)
+{
+    uint32_t c;
+    uint32_t best = CMP_PAIR_NONE;
+    int best_n = 1000;
+    uint16_t best_bits = 0;
+    for (c = first; c != UINT32_MAX; c = next_y[c])
+    {
+        uint16_t bits;
+        int n;
+        if (used_y[c])
+        {
+            continue;
+        }
+        bits = classify_matched(cs, x, rx, 0, y, c);
+        n = cmp_change_count(bits);
+        if (n == 0)
+        {
+            *out_bits = bits;
+            return c;
+        }
+        if (!identical_only && n < best_n)
+        {
+            best = c;
+            best_n = n;
+            best_bits = bits;
+        }
+    }
+    *out_bits = best_bits;
+    return best;
+}
+
+/*
+ * One-to-one pairing of A rows with B rows by Voter ID, so a Voter ID on several rows of
+ * one file never pairs twice with the same row of the other (the identical counts then
+ * agree on both sides). Pass 1 pairs identical rows; pass 2 pairs each remaining row with
+ * the closest unpaired row of its ID. Rows left over are CMP_PAIR_REPEATED. Comparing two
+ * rosters, a blank Voter ID pairs with an otherwise identical unpaired blank-ID row.
+ *
+ * pair_a[i] / bits_a[i]: B row (or CMP_PAIR_*) and change bits for A row i; pair_b[j]: A
+ * row (or CMP_PAIR_*) for B row j. *cancelled is set when the caller cancelled.
+ */
+static BOOL cmp_pair(const CmpSetup *cs,
+                     const EeVoterTable *a,
+                     const EeVoterTable *b,
+                     uint32_t *pair_a,
+                     uint16_t *bits_a,
+                     uint32_t *pair_b,
+                     volatile LONG *cancel_flag,
+                     EeLoadProgressFn progress_fn,
+                     void *progress_user,
+                     BOOL *cancelled)
+{
+    uint32_t *map_a = NULL;
+    uint32_t *map_b = NULL;
+    uint32_t *next_b = NULL;
+    uint32_t *blank_b = NULL;
+    uint8_t *used_b = NULL;
+    uint32_t nblank_b = 0;
+    uint32_t cap_a, mask_a, cap_b, mask_b;
+    uint32_t i;
+    uint32_t total;
+    uint32_t done_steps = 0;
+    BOOL mem = TRUE;
+    BOOL ok = FALSE;
+    int pass;
+
+    *cancelled = FALSE;
+    map_a = build_vid_map(a, &cap_a, &mask_a);
+    map_b = build_vid_map(b, &cap_b, &mask_b);
+    if (map_a == NULL || map_b == NULL)
+    {
+        goto done;
+    }
+    (void)cap_a;
+    (void)cap_b;
+    next_b = build_vid_next(b, map_b, mask_b);
+    used_b = (uint8_t *)calloc((size_t)b->row_count + 1u, 1);
+    if (cs->o.compare_vote)
+    {
+        blank_b = build_blank_rows(b, &nblank_b, &mem);
+    }
+    if (next_b == NULL || used_b == NULL || !mem)
+    {
+        goto done;
+    }
+    ok = TRUE;
+    /* row counts are <= UINT32_MAX/2 (build_vid_map), so this sum cannot overflow */
+    total = a->row_count + a->row_count / 8u + b->row_count;
+
+    for (i = 0; i < a->row_count; i++)
+    {
+        pair_a[i] = CMP_PAIR_NONE;
+        bits_a[i] = 0;
+    }
+    for (pass = 0; pass < 2; pass++)
+    {
+        for (i = 0; i < a->row_count; i++)
+        {
+            const char *vid;
+            uint32_t first;
+            uint32_t got;
+            uint16_t bits = 0;
+            if (pass == 1 && pair_a[i] != CMP_PAIR_REPEATED)
+            {
+                continue; /* paired in pass 1, or its ID is not in B */
+            }
+            vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
+            if (vid == NULL || vid[0] == '\0')
+            {
+                uint32_t k;
+                for (k = 0; pass == 0 && k < nblank_b; k++)
+                {
+                    uint32_t c = blank_b[k];
+                    if (!used_b[c])
+                    {
+                        bits = classify_matched(cs, a, i, 0, b, c);
+                        if ((bits & EE_CMP_CHANGE_BITS) == 0)
+                        {
+                            pair_a[i] = c;
+                            bits_a[i] = bits;
+                            used_b[c] = 1;
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            first = vid_map_find(map_b, mask_b, b, vid);
+            if (first == UINT32_MAX)
+            {
+                continue; /* only in A */
+            }
+            got = cmp_pick(cs, a, i, b, first, next_b, used_b, pass == 0, &bits);
+            if (got != CMP_PAIR_NONE)
+            {
+                pair_a[i] = got;
+                bits_a[i] = bits;
+                used_b[got] = 1;
+            }
+            else
+            {
+                pair_a[i] = CMP_PAIR_REPEATED; /* pass 2 retries; stays if nothing is left */
+            }
+            if ((++done_steps & 0xffffu) == 0u &&
+                !dup_scan_pump(progress_fn, progress_user, cancel_flag, done_steps, total))
+            {
+                *cancelled = TRUE;
+                goto done;
+            }
+        }
+    }
+
+    for (i = 0; i < b->row_count; i++)
+    {
+        pair_b[i] = CMP_PAIR_NONE;
+    }
+    for (i = 0; i < a->row_count; i++)
+    {
+        if (pair_a[i] < CMP_PAIR_REPEATED)
+        {
+            pair_b[pair_a[i]] = i;
+        }
+    }
+    for (i = 0; i < b->row_count; i++)
+    {
+        if (!used_b[i])
+        {
+            const char *vid = EeVoterTable_GetCellUtf8(b, i, EE_COL_VOTER_ID);
+            if (vid != NULL && vid[0] != '\0' && vid_map_find(map_a, mask_a, a, vid) != UINT32_MAX)
+            {
+                pair_b[i] = CMP_PAIR_REPEATED;
+            }
+        }
+        if ((++done_steps & 0xffffu) == 0u &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, done_steps, total))
+        {
+            *cancelled = TRUE;
+            goto done;
+        }
+    }
+
+done:
+    free(map_a);
+    free(map_b);
+    free(next_b);
+    free(blank_b);
+    free(used_b);
+    return ok;
+}
+
+/* Tally one classified row's change bits into a per-side counter block. */
+static void cmp_tally(uint16_t bits, EeCompareResult *r, BOOL side_b)
+{
+    if (bits & EE_CMP_ONLY_HERE)
+    {
+        (*(side_b ? &r->only_b : &r->only_a))++;
+        return;
+    }
+    if (bits & EE_CMP_REPEATED)
+    {
+        (*(side_b ? &r->repeated_b : &r->repeated_a))++;
+        return;
+    }
     if ((bits & EE_CMP_CHANGE_BITS) == 0)
     {
-        (*identical)++;
+        (*(side_b ? &r->identical_b : &r->identical_a))++;
         return;
     }
     if (bits & EE_CMP_NAME_MINOR)
-    {
-        (*name_minor)++;
-    }
+        (*(side_b ? &r->name_minor_b : &r->name_minor_a))++;
     if (bits & EE_CMP_NAME_MAJOR)
-    {
-        (*name_major)++;
-    }
+        (*(side_b ? &r->name_major_b : &r->name_major_a))++;
     if (bits & EE_CMP_ADDR_MINOR)
-    {
-        (*addr_minor)++;
-    }
+        (*(side_b ? &r->addr_minor_b : &r->addr_minor_a))++;
     if (bits & EE_CMP_ADDR_MAJOR)
-    {
-        (*addr_major)++;
-    }
+        (*(side_b ? &r->addr_major_b : &r->addr_major_a))++;
     if (bits & EE_CMP_PCT_CHANGED)
+        (*(side_b ? &r->pct_changed_b : &r->pct_changed_a))++;
+    if (bits & EE_CMP_METHOD_CHANGED)
+        (*(side_b ? &r->method_changed_b : &r->method_changed_a))++;
+    if (bits & EE_CMP_DATE_CHANGED)
+        (*(side_b ? &r->date_changed_b : &r->date_changed_a))++;
+}
+
+static uint16_t cmp_class_of(uint32_t pair, uint16_t bits)
+{
+    return (pair == CMP_PAIR_NONE)       ? (uint16_t)EE_CMP_ONLY_HERE
+           : (pair == CMP_PAIR_REPEATED) ? (uint16_t)EE_CMP_REPEATED
+                                         : bits;
+}
+
+BOOL EeVoterTable_CompareByVoterIdEx(const EeVoterTable *a,
+                                     const EeVoterTable *b,
+                                     const EeCompareOptions *options,
+                                     uint16_t *class_a,
+                                     uint16_t *class_b,
+                                     EeCompareResult *out,
+                                     volatile LONG *cancel_flag,
+                                     EeLoadProgressFn progress_fn,
+                                     void *progress_user)
+{
+    uint32_t *pair_a;
+    uint32_t *pair_b;
+    uint16_t *bits_a;
+    uint32_t i;
+    EeCompareResult r;
+    CmpSetup cs;
+    BOOL cancelled = FALSE;
+    BOOL ok;
+
+    if (out != NULL)
     {
-        (*pct_changed)++;
+        memset(out, 0, sizeof(*out));
     }
+    if (a == NULL || b == NULL || class_a == NULL || class_b == NULL || out == NULL)
+    {
+        return FALSE;
+    }
+    memset(&r, 0, sizeof(r));
+    cmp_setup(a, b, options, &cs);
+    pair_a = (uint32_t *)malloc(((size_t)a->row_count + 1u) * sizeof(uint32_t));
+    pair_b = (uint32_t *)malloc(((size_t)b->row_count + 1u) * sizeof(uint32_t));
+    bits_a = (uint16_t *)malloc(((size_t)a->row_count + 1u) * sizeof(uint16_t));
+    ok = pair_a != NULL && pair_b != NULL && bits_a != NULL &&
+         cmp_pair(&cs, a, b, pair_a, bits_a, pair_b, cancel_flag, progress_fn, progress_user,
+                  &cancelled);
+    if (ok && !cancelled)
+    {
+        for (i = 0; i < a->row_count; i++)
+        {
+            class_a[i] = cmp_class_of(pair_a[i], bits_a[i]);
+            cmp_tally(class_a[i], &r, FALSE);
+        }
+        for (i = 0; i < b->row_count; i++)
+        {
+            uint32_t pa = pair_b[i];
+            class_b[i] = cmp_class_of(pa, (pa < CMP_PAIR_REPEATED) ? bits_a[pa] : 0);
+            cmp_tally(class_b[i], &r, TRUE);
+        }
+    }
+    free(pair_a);
+    free(pair_b);
+    free(bits_a);
+    *out = r;
+    return ok; /* on cancel: TRUE with no classifications (the caller checks its flag) */
 }
 
 BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
@@ -1967,13 +2607,10 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
                                    EeLoadProgressFn progress_fn,
                                    void *progress_user)
 {
-    uint32_t *map_a = NULL;
-    uint32_t *map_b = NULL;
-    uint32_t cap_a, mask_a, cap_b, mask_b;
+    uint16_t *wa;
+    uint16_t *wb;
     uint32_t i;
-    uint32_t total;
-    EeCompareResult r;
-
+    BOOL ok;
     if (out != NULL)
     {
         memset(out, 0, sizeof(*out));
@@ -1982,107 +2619,44 @@ BOOL EeVoterTable_CompareByVoterId(const EeVoterTable *a,
     {
         return FALSE;
     }
-    memset(&r, 0, sizeof(r));
-
-    map_a = build_vid_map(a, &cap_a, &mask_a);
-    map_b = build_vid_map(b, &cap_b, &mask_b);
-    if (map_a == NULL || map_b == NULL)
+    wa = (uint16_t *)calloc((size_t)a->row_count + 1u, sizeof(uint16_t));
+    wb = (uint16_t *)calloc((size_t)b->row_count + 1u, sizeof(uint16_t));
+    ok = (wa != NULL && wb != NULL) &&
+         EeVoterTable_CompareByVoterIdEx(a, b, NULL, wa, wb, out, cancel_flag, progress_fn,
+                                         progress_user);
+    if (ok)
     {
-        free(map_a);
-        free(map_b);
-        return FALSE;
+        /* 8-bit classes: a repeated Voter ID's extra row reads as "only here"; voter-list
+         * compares never set the roster flags. */
+        for (i = 0; i < a->row_count; i++)
+            class_a[i] = (uint8_t)((wa[i] & EE_CMP_REPEATED) ? EE_CMP_ONLY_HERE : wa[i]);
+        for (i = 0; i < b->row_count; i++)
+            class_b[i] = (uint8_t)((wb[i] & EE_CMP_REPEATED) ? EE_CMP_ONLY_HERE : wb[i]);
     }
-    (void)cap_a;
-    (void)cap_b;
-
-    /* Each row_count is <= UINT32_MAX/2 (checked in build_vid_map), so the sum
-     * used only for progress cannot overflow. */
-    total = a->row_count + b->row_count;
-
-    for (i = 0; i < a->row_count; i++)
-    {
-        const char *vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
-        uint32_t rb =
-            (vid != NULL && vid[0] != '\0') ? vid_map_find(map_b, mask_b, b, vid) : UINT32_MAX;
-        if (rb == UINT32_MAX)
-        {
-            class_a[i] = EE_CMP_ONLY_HERE;
-            r.only_a++;
-        }
-        else
-        {
-            uint8_t bits = classify_matched(a, i, b, rb);
-            class_a[i] = bits;
-            cmp_tally(bits,
-                      &r.identical_a,
-                      &r.name_minor_a,
-                      &r.name_major_a,
-                      &r.addr_minor_a,
-                      &r.addr_major_a,
-                      &r.pct_changed_a);
-        }
-        if ((i & 0xffffu) == 0xffffu &&
-            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, total))
-        {
-            free(map_a);
-            free(map_b);
-            *out = r;
-            return TRUE;
-        }
-    }
-
-    for (i = 0; i < b->row_count; i++)
-    {
-        const char *vid = EeVoterTable_GetCellUtf8(b, i, EE_COL_VOTER_ID);
-        uint32_t ra =
-            (vid != NULL && vid[0] != '\0') ? vid_map_find(map_a, mask_a, a, vid) : UINT32_MAX;
-        if (ra == UINT32_MAX)
-        {
-            class_b[i] = EE_CMP_ONLY_HERE;
-            r.only_b++;
-        }
-        else
-        {
-            uint8_t bits = classify_matched(b, i, a, ra);
-            class_b[i] = bits;
-            cmp_tally(bits,
-                      &r.identical_b,
-                      &r.name_minor_b,
-                      &r.name_major_b,
-                      &r.addr_minor_b,
-                      &r.addr_major_b,
-                      &r.pct_changed_b);
-        }
-        if ((i & 0xffffu) == 0xffffu &&
-            !dup_scan_pump(progress_fn, progress_user, cancel_flag, a->row_count + i + 1, total))
-        {
-            free(map_a);
-            free(map_b);
-            *out = r;
-            return TRUE;
-        }
-    }
-
-    free(map_a);
-    free(map_b);
-    *out = r;
-    return TRUE;
+    free(wa);
+    free(wb);
+    return ok;
 }
 
-BOOL EeVoterTable_CollectDifferences(const EeVoterTable *a,
-                                     const EeVoterTable *b,
-                                     EeCompareDiff **out,
-                                     uint32_t *out_count,
-                                     volatile LONG *cancel_flag,
-                                     EeLoadProgressFn progress_fn,
-                                     void *progress_user)
+BOOL EeVoterTable_CollectDifferencesEx(const EeVoterTable *a,
+                                       const EeVoterTable *b,
+                                       const EeCompareOptions *options,
+                                       EeCompareDiff **out,
+                                       uint32_t *out_count,
+                                       volatile LONG *cancel_flag,
+                                       EeLoadProgressFn progress_fn,
+                                       void *progress_user)
 {
-    uint32_t *map_b = NULL;
-    uint32_t cap_b, mask_b;
+    uint32_t *pair_a;
+    uint32_t *pair_b;
+    uint16_t *bits_a;
     EeCompareDiff *list = NULL;
     uint32_t n = 0;
     uint32_t cap = 0;
     uint32_t i;
+    CmpSetup cs;
+    BOOL cancelled = FALSE;
+    BOOL ok;
 
     if (out != NULL)
     {
@@ -2096,33 +2670,18 @@ BOOL EeVoterTable_CollectDifferences(const EeVoterTable *a,
     {
         return FALSE;
     }
-
-    map_b = build_vid_map(b, &cap_b, &mask_b);
-    if (map_b == NULL)
+    cmp_setup(a, b, options, &cs);
+    pair_a = (uint32_t *)malloc(((size_t)a->row_count + 1u) * sizeof(uint32_t));
+    pair_b = (uint32_t *)malloc(((size_t)b->row_count + 1u) * sizeof(uint32_t));
+    bits_a = (uint16_t *)malloc(((size_t)a->row_count + 1u) * sizeof(uint16_t));
+    ok = pair_a != NULL && pair_b != NULL && bits_a != NULL &&
+         cmp_pair(&cs, a, b, pair_a, bits_a, pair_b, cancel_flag, progress_fn, progress_user,
+                  &cancelled);
+    for (i = 0; ok && !cancelled && i < a->row_count; i++)
     {
-        return FALSE;
-    }
-    (void)cap_b;
-
-    for (i = 0; i < a->row_count; i++)
-    {
-        const char *vid = EeVoterTable_GetCellUtf8(a, i, EE_COL_VOTER_ID);
-        uint32_t rb;
-        uint8_t bits;
-
-        if (vid == NULL || vid[0] == '\0')
+        if (pair_a[i] >= CMP_PAIR_REPEATED || (bits_a[i] & EE_CMP_CHANGE_BITS) == 0)
         {
-            goto pump;
-        }
-        rb = vid_map_find(map_b, mask_b, b, vid);
-        if (rb == UINT32_MAX)
-        {
-            goto pump;
-        }
-        bits = classify_matched(a, i, b, rb);
-        if ((bits & EE_CMP_CHANGE_BITS) == 0)
-        {
-            goto pump;
+            continue;
         }
         if (n == cap)
         {
@@ -2131,30 +2690,166 @@ BOOL EeVoterTable_CollectDifferences(const EeVoterTable *a,
                 (EeCompareDiff *)realloc(list, (size_t)new_cap * sizeof(EeCompareDiff));
             if (grown == NULL)
             {
-                free(list);
-                free(map_b);
-                return FALSE;
+                ok = FALSE;
+                break;
             }
             list = grown;
             cap = new_cap;
         }
         list[n].row_a = i;
-        list[n].row_b = rb;
-        list[n].bits = bits;
+        list[n].row_b = pair_a[i];
+        list[n].bits = bits_a[i];
         n++;
-
-    pump:
-        if ((i & 0xffffu) == 0xffffu &&
-            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, a->row_count))
-        {
-            break;
-        }
     }
-
-    free(map_b);
+    free(pair_a);
+    free(pair_b);
+    free(bits_a);
+    if (!ok)
+    {
+        free(list);
+        return FALSE;
+    }
     *out = list;
     *out_count = n;
     return TRUE;
+}
+
+BOOL EeVoterTable_CollectDifferences(const EeVoterTable *a,
+                                     const EeVoterTable *b,
+                                     EeCompareDiff **out,
+                                     uint32_t *out_count,
+                                     volatile LONG *cancel_flag,
+                                     EeLoadProgressFn progress_fn,
+                                     void *progress_user)
+{
+    return EeVoterTable_CollectDifferencesEx(a, b, NULL, out, out_count, cancel_flag, progress_fn,
+                                             progress_user);
+}
+
+BOOL EeVoterTable_MarkDuplicateVotersVoting(const EeVoterTable *list,
+                                            const EeVoterTable *roster,
+                                            uint8_t *marks,
+                                            uint32_t *out_count,
+                                            uint32_t *out_groups,
+                                            volatile LONG *cancel_flag,
+                                            EeLoadProgressFn progress_fn,
+                                            void *progress_user)
+{
+    uint32_t *map_r = NULL;
+    uint32_t *slots = NULL;
+    uint32_t *group = NULL; /* voted row -> its group's first row (UINT32_MAX: not voted) */
+    uint8_t *multi = NULL;  /* per first row: the group has two or more Voter IDs */
+    uint32_t cap_r, mask_r, cap, mask;
+    uint32_t i;
+    uint32_t marked = 0;
+    uint32_t groups = 0;
+    int dob_col;
+    BOOL ok = FALSE;
+
+    if (out_count != NULL)
+        *out_count = 0;
+    if (out_groups != NULL)
+        *out_groups = 0;
+    if (list == NULL || roster == NULL || marks == NULL || out_count == NULL)
+    {
+        return FALSE;
+    }
+    dob_col = EeVoterTable_FindBirthdateColumn(list);
+    if (dob_col < 0 || list->row_count == 0 || roster->row_count == 0)
+    {
+        return TRUE;
+    }
+    if (list->row_count > (UINT32_MAX / 2u))
+    {
+        return FALSE;
+    }
+    map_r = build_vid_map(roster, &cap_r, &mask_r);
+    cap = next_pow2_ge_u32(list->row_count * 2u);
+    slots = (cap != 0) ? (uint32_t *)malloc((size_t)cap * sizeof(uint32_t)) : NULL;
+    group = (uint32_t *)malloc((size_t)list->row_count * sizeof(uint32_t));
+    multi = (uint8_t *)calloc((size_t)list->row_count, 1);
+    if (map_r == NULL || slots == NULL || group == NULL || multi == NULL)
+    {
+        goto done;
+    }
+    (void)cap_r;
+    mask = cap - 1u;
+    for (i = 0; i < cap; i++)
+    {
+        slots[i] = UINT32_MAX;
+    }
+
+    /* Group the voters who voted (Voter ID in the roster) by name + DOB, with the
+     * same match rule as EeVoterTable_MarkDuplicateVotersByNameDob. */
+    for (i = 0; i < list->row_count; i++)
+    {
+        const char *vid = EeVoterTable_GetCellUtf8(list, i, EE_COL_VOTER_ID);
+        const char *name = EeVoterTable_GetCellUtf8(list, i, EE_COL_NAME);
+        const char *dob = EeVoterTable_GetCellUtf8(list, i, (uint32_t)dob_col);
+        group[i] = UINT32_MAX;
+        if (vid != NULL && vid[0] != '\0' && name != NULL && name[0] != '\0' && dob != NULL &&
+            dob[0] != '\0' && vid_map_find(map_r, mask_r, roster, vid) != UINT32_MAX)
+        {
+            uint32_t ymd = 0;
+            unsigned h;
+            uint32_t b;
+            (void)parse_utf8_ymd(dob, &ymd);
+            h = hash_ci_fold(2166136261u, name);
+            h = (ymd != 0) ? hash_mix_u32(h, ymd) : hash_ci_fold(h, dob);
+            for (b = h & mask;; b = (b + 1u) & mask)
+            {
+                uint32_t rep = slots[b];
+                const char *rdob;
+                uint32_t rymd = 0;
+                if (rep == UINT32_MAX)
+                {
+                    slots[b] = i;
+                    group[i] = i;
+                    break;
+                }
+                rdob = EeVoterTable_GetCellUtf8(list, rep, (uint32_t)dob_col);
+                (void)parse_utf8_ymd(rdob, &rymd);
+                if (name_dob_equal_cells(name, dob, ymd, EeVoterTable_GetCellUtf8(list, rep, EE_COL_NAME),
+                                         rdob, rymd))
+                {
+                    group[i] = rep;
+                    if (!multi[rep] &&
+                        strcmp(vid, EeVoterTable_GetCellUtf8(list, rep, EE_COL_VOTER_ID)) != 0)
+                    {
+                        multi[rep] = 1;
+                        groups++;
+                    }
+                    break;
+                }
+            }
+        }
+        if ((i & 0xffffu) == 0xffffu &&
+            !dup_scan_pump(progress_fn, progress_user, cancel_flag, i + 1, list->row_count))
+        {
+            ok = TRUE; /* cancelled: no marks */
+            groups = 0;
+            goto done;
+        }
+    }
+    for (i = 0; groups > 0 && i < list->row_count; i++)
+    {
+        if (group[i] != UINT32_MAX && multi[group[i]] && marks[i] == 0)
+        {
+            marks[i] = 1;
+            marked++;
+        }
+    }
+    ok = TRUE;
+
+done:
+    free(map_r);
+    free(slots);
+    free(group);
+    free(multi);
+    *out_count = marked;
+    if (out_groups != NULL)
+        *out_groups = groups;
+    return ok;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -5115,6 +5810,129 @@ EeLoadStatus EeVoterTable_LoadXlsxSheet(const wchar_t *path,
     voter_finalize_addresses(out_table);
     report_progress(progress_fn, progress_user, 99, out_table->row_count, 0, 0);
     return EeLoadStatus_Ok;
+}
+
+/* -------------------------------------------------------------------------- */
+/* In-memory builder (loaders that assemble rows themselves, e.g. rosters)     */
+/* -------------------------------------------------------------------------- */
+
+struct EeVoterTableBuilder
+{
+    EeVoterTable *out;
+    LoadColumnMap map;
+    FieldList row; /* borrows the caller's cell pointers; never owns them */
+    size_t cap;
+};
+
+EeVoterTableBuilder *EeVoterTable_BuilderBegin(EeVoterTable *out,
+                                               const char *const *header,
+                                               uint32_t ncols,
+                                               wchar_t *err,
+                                               size_t errcch)
+{
+    EeVoterTableBuilder *b;
+    FieldList hdr;
+    uint32_t i;
+    EeLoadStatus s;
+
+    if (out == NULL || header == NULL || ncols == 0)
+    {
+        set_error(err, errcch, L"Invalid table arguments.");
+        return NULL;
+    }
+    b = (EeVoterTableBuilder *)calloc(1, sizeof(*b));
+    if (b == NULL)
+    {
+        set_error(err, errcch, L"Out of memory.");
+        return NULL;
+    }
+    {
+        BOOL surname_first = out->name_surname_first;
+        EeVoterTable_Clear(out);
+        out->name_surname_first = surname_first;
+    }
+    ZeroMemory(&hdr, sizeof(hdr));
+    for (i = 0; i < ncols; i++)
+    {
+        const char *h = (header[i] != NULL) ? header[i] : "";
+        if (!field_list_push(&hdr, h, strlen(h)))
+        {
+            field_list_free(&hdr);
+            free(b);
+            set_error(err, errcch, L"Out of memory.");
+            return NULL;
+        }
+    }
+    s = ingest_header(out, &hdr, 0, &b->map, err, errcch);
+    field_list_free(&hdr);
+    if (s != EeLoadStatus_Ok)
+    {
+        EeVoterTable_Clear(out);
+        free(b);
+        return NULL;
+    }
+    b->out = out;
+    return b;
+}
+
+BOOL EeVoterTable_BuilderAppend(EeVoterTableBuilder *b,
+                                const char *const *cells,
+                                uint32_t ncells,
+                                wchar_t *err,
+                                size_t errcch)
+{
+    uint32_t i;
+    if (b == NULL || cells == NULL)
+    {
+        return FALSE;
+    }
+    if (ncells > b->cap)
+    {
+        char **items = (char **)realloc(b->row.items, (size_t)ncells * sizeof(char *));
+        size_t *lengths;
+        if (items == NULL)
+        {
+            set_error(err, errcch, L"Out of memory.");
+            return FALSE;
+        }
+        b->row.items = items;
+        lengths = (size_t *)realloc(b->row.lengths, (size_t)ncells * sizeof(size_t));
+        if (lengths == NULL)
+        {
+            set_error(err, errcch, L"Out of memory.");
+            return FALSE;
+        }
+        b->row.lengths = lengths;
+        b->cap = ncells;
+    }
+    for (i = 0; i < ncells; i++)
+    {
+        const char *c = (cells[i] != NULL) ? cells[i] : "";
+        b->row.items[i] = (char *)c;
+        b->row.lengths[i] = strlen(c);
+    }
+    b->row.count = ncells;
+    return ingest_row(b->out, &b->map, &b->row, err, errcch);
+}
+
+void EeVoterTable_BuilderEnd(EeVoterTableBuilder *b, BOOL keep)
+{
+    if (b == NULL)
+    {
+        return;
+    }
+    free(b->row.items); /* borrowed strings are not freed */
+    free(b->row.lengths);
+    if (keep)
+    {
+        finalize_column_kinds(b->out);
+        voter_finalize_addresses(b->out);
+    }
+    else
+    {
+        EeVoterTable_Clear(b->out);
+    }
+    free(b);
 }
 
 /* Case-insensitive test for a ".xlsx" path suffix. */

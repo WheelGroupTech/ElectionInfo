@@ -6,7 +6,61 @@
 
 **Last updated:** 2026-10-10
 
-### In progress — release notes file (UNCOMMITTED)
+### In progress — Voter Roster feature for 1.4 (steps 1–5 DONE, UNCOMMITTED)
+
+- Plan + user decisions: `ElectionExplorer/docs/voter-roster-design.md` (new, uncommitted).
+  Travis County first; surveyed all 12 roster ZIPs in `Voter_Rosters/TX_Travis_County/`
+  (9 header layouts, corrections via `_Updated`, P24 misnamed Election Day copy, missing
+  header row, pasted VUID-only rows, footer totals, malformed VUIDs, vector-text Limited
+  Ballot PDFs). Decisions: D1 keep + flag duplicates, totals count each voter once, skip
+  whole-file copies; D2 Limited PDFs deferred; D3 roster↔list names = first + last;
+  D4 Voting Totals split by party in primaries.
+- **Step 1 done:** engine `src/voter_roster.{c,h}` (`EeRoster_LoadFiles` + load summary),
+  `EeXlsx_ListSheetsMem`/`EeXlsx_ReadSheetMem` (`xlsx.c`/`.h`), `EeVoterTable_Builder*`
+  (`voter_table.c`/`.h`), project files, smoke test `roster` (+ `test/README.md` build
+  line). Validated on all 12 Travis ZIPs: rows match an independent Python parse, counts
+  match the survey, ZIP → TSV → reload identical for all 12. Details in the design doc's
+  "Implementation status". Full smoke suite green; app builds clean x64 Debug.
+- **Step 2 done:** the Voter Roster window (`main.c` roster mode of the voter viewer,
+  `resource.h` IDs 40100/40101): single pane, roster menus, Load Voter Roster… in all
+  windows, load dialog with time remaining + Cancel, load summary, export without the
+  normalized prompt. Details in the design doc's "Implementation status". Driven in the
+  Debug build (G24 / P24 / G26 loads, Options, Filter, duplicates, Precinct report,
+  export → reload, cancel). **Needs the user's click-testing** (header-click sort,
+  right-click menu, copy, zoom, the CVR window's Load Voter Roster…).
+  Click-test passed (user, 2026-10-10).
+- **Step 3 done:** Reports → Display Voting Totals (`EeRoster_ComputeTotals` in
+  `voter_roster.c` + `RosterTotalsWindow` in `main.c`, ID 40102): per date × method,
+  each Voter ID once (earliest record), party rows + All parties in primaries, "not
+  available" / "not loaded" (PDF) columns, copy + export. Smoke test `rtotals`;
+  driven on 7 Travis rosters. Needs the user's click-test (right-click copy/export,
+  Ctrl+C).
+  Click-test passed (user, 2026-10-10).
+- **Step 4 done:** Compare roster↔roster and roster↔voter list. `EeCompareOptions` +
+  `EeVoterTable_CompareByVoterIdEx` / `CollectDifferencesEx` (`voter_table.c/.h`, 16-bit
+  classes, Voting Method / Date Voted bits, D3 names incl. Travis full-name lists, "P 267"
+  == "267"); compare windows show only the applicable categories. Smoke test `rcmp`.
+  Acceptance test passed in the app (G24 and P24 ZIP → TSV → reload → compare: all
+  identical). User click-test passed. Then fixed the user-reported asymmetric identical
+  counts: rows now pair one to one in every compare, with a new "Voter ID repeated"
+  category for left-over rows of a repeated Voter ID. User re-test passed.
+- **Step 5 done:** roster Help topics (Loading, Options, Filters, Reports, Compare,
+  Export); version **1.4.0.0** in the three version files; `RELEASES.md` 1.4.0.0 entry
+  ("not yet submitted"); `STORE-LISTING.txt` "TRACK WHO HAS VOTED" section + intro.
+  Release x64 + ARM64 build clean (EXE 1.4.0.0). Store bundle NOT built yet.
+- **1.4 held** (user, 2026-10-10: Microsoft just published 1.3; submit 1.4 later in the
+  week after more features, incl. rosters for other Texas counties).
+- **Added:** Compare Summary Export Summary… / Export All Records…; Differences
+  right-click Export Selected / Export All; Filter → Show Duplicate Voters Voting… (name +
+  DOB duplicates who voted under different Voter IDs in a chosen roster;
+  `EeVoterTable_MarkDuplicateVotersVoting`, smoke test `dupvote`). Driven in the app (P26
+  roster + `p26_olvr_primary_voter_data_rep.csv`: HERNANDEZ, ALEXA ×2). Help, RELEASES
+  (1,263 chars) and STORE-LISTING updated. Needs the user's click-test (Differences
+  right-click exports especially).
+- **Next:** voter roster support for other Texas counties (survey the top-10 counties'
+  roster formats first), then final validation and the 1.4.0.0 bundle.
+
+### Committed — release notes file
 
 - New `ElectionExplorer/RELEASES.md`: the Store "What's new" text for every release,
   newest first — 1.3.0.0 (submitted 2026-10-10), 1.2.0.0 (submitted 2026-10-02), 1.1.0.0

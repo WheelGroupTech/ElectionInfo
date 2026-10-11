@@ -268,13 +268,18 @@ extern "C"
         EE_CMP_NAME_MAJOR = 0x08, /* Name differs substantially */
         EE_CMP_ADDR_MINOR = 0x10, /* Address differs slightly */
         EE_CMP_ADDR_MAJOR = 0x20, /* Address differs substantially */
-        EE_CMP_PCT_CHANGED = 0x40 /* Precinct differs */
+        EE_CMP_PCT_CHANGED = 0x40,    /* Precinct differs */
+        EE_CMP_METHOD_CHANGED = 0x80, /* Voting Method differs (voter roster compare) */
+        EE_CMP_DATE_CHANGED = 0x100,  /* Date Voted differs (voter roster compare) */
+        EE_CMP_REPEATED = 0x200       /* Voter ID in both files, but on more rows here than
+                                       * there: this row was left unpaired (rows pair one
+                                       * to one). Exclusive like EE_CMP_ONLY_HERE */
     };
 
     /* All "something changed" bits (matched rows without any of these are identical). */
 #define EE_CMP_CHANGE_BITS                                                                         \
     (EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR | EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR |               \
-     EE_CMP_PCT_CHANGED)
+     EE_CMP_PCT_CHANGED | EE_CMP_METHOD_CHANGED | EE_CMP_DATE_CHANGED)
 
     /** Row-count tallies from a compare (A = first table, B = second). */
     typedef struct EeCompareResult
@@ -287,7 +292,35 @@ extern "C"
         uint32_t name_minor_b, name_major_b;
         uint32_t addr_minor_b, addr_major_b;
         uint32_t pct_changed_b;
+        uint32_t method_changed_a, date_changed_a; /* voter roster compares only */
+        uint32_t method_changed_b, date_changed_b;
+        uint32_t repeated_a, repeated_b; /* EE_CMP_REPEATED rows */
     } EeCompareResult;
+
+    /** How names are compared (see EeCompareOptions). */
+    typedef enum EeCompareNames
+    {
+        EE_CMP_NAMES_FULL = 0,  /* the normalized Name column */
+        EE_CMP_NAMES_PARTS,     /* last + first + middle + suffix parts (independent of the
+                                 * surname-first display option); FULL if a table has no
+                                 * first / last name columns */
+        EE_CMP_NAMES_FIRST_LAST /* equal when first and last names match (ignoring middle
+                                 * names, case and punctuation); otherwise graded as PARTS */
+    } EeCompareNames;
+
+    /** What a compare looks at. NULL options = a voter-list compare: Name (FULL),
+     *  Address, and Precinct when the address is unchanged. */
+    typedef struct EeCompareOptions
+    {
+        BOOL compare_address; /* grade Address; FALSE never compares it, and Precinct is
+                               * then always compared */
+        BOOL loose_precinct;  /* "0400" equals "400" (all-digit precincts) */
+        int names;            /* EeCompareNames */
+        BOOL compare_vote;    /* compare the "Voting Method" and "Date Voted" columns (both
+                               * tables are voter rosters); a Voter ID on several rows
+                               * matches the other file's row with the same method and date
+                               * when there is one */
+    } EeCompareOptions;
 
     /**
      * @brief Classify every row of two tables by matching normalized Voter ID.
@@ -322,7 +355,7 @@ extern "C"
     {
         uint32_t row_a; /* physical row in table A */
         uint32_t row_b; /* physical row in table B */
-        uint8_t bits;   /* EE_CMP_* change bits (Name/Address/Precinct) */
+        uint16_t bits;  /* EE_CMP_* change bits */
     } EeCompareDiff;
 
     /**
@@ -342,6 +375,62 @@ extern "C"
                                          volatile LONG *cancel_flag,
                                          EeLoadProgressFn progress_fn,
                                          void *progress_user);
+
+    /**
+     * @brief EeVoterTable_CompareByVoterId / EeVoterTable_CollectDifferences with
+     *        options (NULL = voter-list defaults) and 16-bit classes, which can hold
+     *        EE_CMP_METHOD_CHANGED / EE_CMP_DATE_CHANGED / EE_CMP_REPEATED.
+     *
+     * Rows pair one to one: a Voter ID on several rows pairs each row with a different
+     * row of the other file -- identical rows first, then the closest -- and rows left
+     * over are EE_CMP_REPEATED, so every matched category counts the same on both sides.
+     * (The 8-bit API reports EE_CMP_REPEATED rows as EE_CMP_ONLY_HERE.)
+     */
+    BOOL EeVoterTable_CompareByVoterIdEx(const EeVoterTable *a,
+                                         const EeVoterTable *b,
+                                         const EeCompareOptions *options,
+                                         uint16_t *class_a,
+                                         uint16_t *class_b,
+                                         EeCompareResult *out,
+                                         volatile LONG *cancel_flag,
+                                         EeLoadProgressFn progress_fn,
+                                         void *progress_user);
+
+    BOOL EeVoterTable_CollectDifferencesEx(const EeVoterTable *a,
+                                           const EeVoterTable *b,
+                                           const EeCompareOptions *options,
+                                           EeCompareDiff **out,
+                                           uint32_t *out_count,
+                                           volatile LONG *cancel_flag,
+                                           EeLoadProgressFn progress_fn,
+                                           void *progress_user);
+
+    /**
+     * @brief Flag voters of @p list who voted -- whose Voter ID appears in @p roster -- and
+     *        share a normalized name and DOB with another voter who voted under a
+     *        different Voter ID (e.g. two people with the same name and birth date, told
+     *        apart only by driver license numbers that lists do not publish).
+     *
+     * Name + DOB match as in EeVoterTable_MarkDuplicateVotersByNameDob. A group needs two
+     * or more distinct Voter IDs among its voters who voted; only those voters are
+     * marked. @p marks must hold @p list->row_count bytes (zeroed by the caller).
+     *
+     * @param out_count   Rows marked.
+     * @param out_groups  Optional; name + DOB groups found.
+     * @return FALSE on invalid arguments or out of memory. TRUE (0 marked) when @p list
+     *         has no birth-date column. On cancel, TRUE with no marks.
+     */
+    BOOL EeVoterTable_MarkDuplicateVotersVoting(const EeVoterTable *list,
+                                                const EeVoterTable *roster,
+                                                uint8_t *marks,
+                                                uint32_t *out_count,
+                                                uint32_t *out_groups,
+                                                volatile LONG *cancel_flag,
+                                                EeLoadProgressFn progress_fn,
+                                                void *progress_user);
+
+    /** Source column titled @p title (case-insensitive), or -1. */
+    int EeVoterTable_FindColumnByTitle(const EeVoterTable *table, const wchar_t *title);
 
     /**
  * @brief Sort by display column; toggles direction if same column.
@@ -448,6 +537,30 @@ extern "C"
                                             void *progress_user,
                                             wchar_t *error_message,
                                             size_t error_cch);
+
+    /**
+     * Incremental table builder: fill @p out from an in-memory header + rows (UTF-8)
+     * whose columns are classified by header name exactly as a file load classifies
+     * them (so the result works with filters, duplicate scans, export, reports and
+     * compare). Used by loaders that assemble rows themselves (voter rosters).
+     *
+     * BuilderBegin clears @p out (keeping its surname-first preference) and returns a
+     * builder, or NULL on failure (message in @p err). Append one row per call; cells
+     * are only read during the call. BuilderEnd finalizes the table when @p keep is
+     * TRUE (else clears it) and frees the builder.
+     */
+    typedef struct EeVoterTableBuilder EeVoterTableBuilder;
+    EeVoterTableBuilder *EeVoterTable_BuilderBegin(EeVoterTable *out,
+                                                   const char *const *header,
+                                                   uint32_t ncols,
+                                                   wchar_t *err,
+                                                   size_t errcch);
+    BOOL EeVoterTable_BuilderAppend(EeVoterTableBuilder *b,
+                                    const char *const *cells,
+                                    uint32_t ncells,
+                                    wchar_t *err,
+                                    size_t errcch);
+    void EeVoterTable_BuilderEnd(EeVoterTableBuilder *b, BOOL keep);
 
 #ifdef __cplusplus
 }

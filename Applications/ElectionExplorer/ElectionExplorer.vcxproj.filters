@@ -48,6 +48,9 @@
     <ClCompile Include="src\ee_rcv.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\voter_roster.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\third_party\miniz\miniz.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -90,6 +93,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\hart_ocr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\voter_roster.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ocr_win.h">

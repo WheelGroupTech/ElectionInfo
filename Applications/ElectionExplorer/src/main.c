@@ -9,6 +9,7 @@
 #include "filter.h"
 #include "xlsx.h"
 #include "ee_cvr.h"
+#include "voter_roster.h"
 #include "settings.h"
 
 #include <commctrl.h>
@@ -43,6 +44,7 @@ static const wchar_t k_CvrClassName[] = L"ElectionExplorerCvr";
 static const wchar_t k_CvrReportClassName[] = L"ElectionExplorerCvrReport";
 static const wchar_t k_CvrValueReportClassName[] = L"ElectionExplorerCvrValueReport";
 static const wchar_t k_CvrRcvClassName[] = L"ElectionExplorerCvrRcv";
+static const wchar_t k_RosterTotalsClassName[] = L"ElectionExplorerRosterTotals";
 static const wchar_t k_CvrFilterClassName[] = L"ElectionExplorerCvrFilter";
 
 static const int k_DefaultWidth = 1100;
@@ -61,7 +63,8 @@ enum
     EE_SCAN_DUP_NAME_DOB = 2,
     EE_SCAN_CMP_ONLY = 3,     /* rows only in this file (compare) */
     EE_SCAN_CMP_CHANGED = 4,  /* matched rows whose fields differ */
-    EE_SCAN_CMP_IDENTICAL = 5 /* matched rows identical in both */
+    EE_SCAN_CMP_IDENTICAL = 5, /* matched rows identical in both */
+    EE_SCAN_DUP_VOTING = 6     /* name + DOB duplicates who voted (a roster) */
 };
 
 /* Report kinds (Precinct / Address summary windows). */
@@ -72,6 +75,7 @@ enum
 };
 
 typedef struct ReportWindow ReportWindow;
+typedef struct RosterTotalsWindow RosterTotalsWindow;
 
 static const int k_ZoomMin = 50;
 static const int k_ZoomMax = 250;
@@ -134,6 +138,12 @@ typedef struct AppState
     BOOL is_cvr_ui; /* TRUE for the resource-only AppState a CVR window owns (not a
                      * voter viewer): keeps it out of the voter-window behaviors and
                      * makes "Load Voter List" from a CVR window open a fresh viewer. */
+    BOOL is_roster; /* a Voter Roster window: one pane showing roster_cols (columns of a
+                    * table built by voter_roster.c); otherwise the same viewer machinery
+                    * (filters, duplicates, reports, copy, export, options) */
+    uint32_t roster_cols[64];      /* table columns shown in the single pane, in order */
+    uint32_t nroster_cols;
+    EeRosterLoadInfo roster_info;  /* load summary (owned) */
     BOOL loading;
     BOOL close_pending;
     volatile LONG load_cancel;
@@ -163,8 +173,8 @@ typedef struct AppState
     /* Two-file compare initiated from this viewer (as file A). Reuses the scan
      * thread / progress modal (scan_thread, scanning, scan_cancel). */
     struct AppState *cmp_other; /* the other viewer (file B) */
-    uint8_t *cmp_class_a;       /* a->row_count bytes (EE_CMP_*), transient */
-    uint8_t *cmp_class_b;       /* b->row_count bytes (EE_CMP_*), transient */
+    uint16_t *cmp_class_a;      /* a->row_count entries (EE_CMP_*), transient */
+    uint16_t *cmp_class_b;      /* b->row_count entries (EE_CMP_*), transient */
     EeCompareResult cmp_result;
     BOOL cmp_ok;
 
@@ -180,6 +190,7 @@ typedef struct AppState
     /* Modeless Precinct/Address report windows spawned from this viewer. */
     ReportWindow *report_precinct;
     ReportWindow *report_address;
+    RosterTotalsWindow *report_totals; /* Voter Roster: Voting Totals report */
 
     struct AppState *next;
 } AppState;
@@ -199,13 +210,17 @@ typedef struct CompareWindow
     HWND list;
     HWND status;
     HWND diff_btn;    /* "Show Differences…" */
+    HWND exp_sum_btn; /* "Export Summary…" */
+    HWND exp_all_btn; /* "Export All Records…" */
     AppState *a;      /* initiating viewer (file A) */
     AppState *b;      /* other viewer (file B) */
     EeCompareResult result;
-    uint8_t *class_a; /* a->row_count bytes, owned */
-    uint8_t *class_b; /* b->row_count bytes, owned */
-    uint32_t rows_a;  /* a->row_count captured at compute time */
+    uint16_t *class_a; /* a->row_count entries, owned */
+    uint16_t *class_b; /* b->row_count entries, owned */
+    uint32_t rows_a;   /* a->row_count captured at compute time */
     uint32_t rows_b;
+    int buckets[16];   /* summary row -> CMP_BUCKET_* (only those that apply) */
+    int nbuckets;
 } CompareWindow;
 
 static CompareWindow *g_compare = NULL;
@@ -215,7 +230,10 @@ typedef struct DiffRow
 {
     uint32_t row_a; /* physical row in A */
     uint32_t row_b; /* physical row in B */
-    uint32_t col;   /* EE_COL_NAME / EE_COL_ADDRESS / EE_COL_PRECINCT */
+    uint32_t col;   /* column in A: EE_COL_NAME / _ADDRESS / _PRECINCT, or a roster's
+                     * Voting Method / Date Voted column */
+    uint32_t col_b; /* the same field's column in B */
+    int field;      /* DIFF_FIELD_* */
 } DiffRow;
 
 /* Modeless side-by-side "which field differs" window (one at a time). */
@@ -265,6 +283,18 @@ static AppState *App_CreateViewer(HINSTANCE instance,
                                   int nCmdShow,
                                   HWND offset_from,
                                   const AppState *prefs);
+static AppState *App_CreateViewerEx(HINSTANCE instance,
+                                    int nCmdShow,
+                                    HWND offset_from,
+                                    const AppState *prefs,
+                                    BOOL roster);
+static HMENU App_CreateRosterMenu(void);
+static void App_BeginOpenRoster(AppState *app);
+static void App_ShowRosterTotals(AppState *app);
+static void App_ShowDuplicateVotersVoting(AppState *app);
+static const wchar_t *App_PathBaseName(const wchar_t *path);
+static void Diff_CellW(const EeVoterTable *t, uint32_t row, uint32_t col, wchar_t *out, int cch);
+static void App_CloseRosterTotals(AppState *app);
 static void App_StartLoad(AppState *app, const wchar_t *path, int sheet_index);
 static void App_RequestClose(AppState *app);
 static void App_ExitAll(void);
@@ -386,7 +416,7 @@ static AppState *App_FindViewerByPath(const wchar_t *path)
 
     for (p = g_viewers; p != NULL; p = p->next)
     {
-        if (App_PathsEqual(p->load_path, path))
+        if (!p->is_roster && App_PathsEqual(p->load_path, path))
         {
             return p;
         }
@@ -1246,9 +1276,10 @@ static void App_SetStatus(AppState *app, const wchar_t *text)
 static void App_UpdateRowStatus(AppState *app)
 {
     wchar_t buf[192];
+    const wchar_t *noun = app->is_roster ? L"voter records" : L"voters";
     if (app->table.row_count == 0)
     {
-        App_SetStatus(app, L"No voter list loaded.");
+        App_SetStatus(app, app->is_roster ? L"No voter roster loaded." : L"No voter list loaded.");
         return;
     }
     if (app->mark_active)
@@ -1258,32 +1289,35 @@ static void App_UpdateRowStatus(AppState *app)
         {
             StringCchPrintfW(buf,
                              ARRAYSIZE(buf),
-                             L"%s within filter: %u of %u voters",
+                             L"%s within filter: %u of %u %s",
                              what,
                              app->filter_count,
-                             app->table.row_count);
+                             app->table.row_count,
+                             noun);
         }
         else
         {
             StringCchPrintfW(buf,
                              ARRAYSIZE(buf),
-                             L"Showing %u %s of %u voters",
+                             L"Showing %u %s of %u %s",
                              app->filter_count,
                              what,
-                             app->table.row_count);
+                             app->table.row_count,
+                             noun);
         }
     }
     else if (EeFilter_HasEnabled(&app->filters))
     {
         StringCchPrintfW(buf,
                          ARRAYSIZE(buf),
-                         L"Filtered: %u of %u voters",
+                         L"Filtered: %u of %u %s",
                          app->filter_count,
-                         app->table.row_count);
+                         app->table.row_count,
+                         noun);
     }
     else
     {
-        StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u voters loaded", app->table.row_count);
+        StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u %s loaded", app->table.row_count, noun);
     }
     App_SetStatus(app, buf);
 }
@@ -1472,6 +1506,72 @@ static void App_FitFrozenColumns(AppState *app)
     ListView_SetColumnWidth(app->hwnd_frozen, EE_COL_ADDRESS, addr_w);
 }
 
+/* The scroll pane's columns: every source column for a voter list, or the roster's
+ * display columns (Voter ID, Precinct, Name, Voting Method, Date Voted, extras) for a
+ * Voter Roster window, whose left pane is hidden. */
+static int App_ScrollColumnCount(const AppState *app)
+{
+    if (app->is_roster)
+    {
+        return (int)app->nroster_cols;
+    }
+    return (app->table.column_count > EE_FROZEN_COLUMN_COUNT)
+               ? (int)(app->table.column_count - EE_FROZEN_COLUMN_COUNT)
+               : 0;
+}
+
+/* Table column shown at scroll-pane column @p local, or UINT32_MAX. */
+static uint32_t App_ScrollToTable(const AppState *app, int local)
+{
+    if (local < 0)
+    {
+        return UINT32_MAX;
+    }
+    if (app->is_roster)
+    {
+        return ((uint32_t)local < app->nroster_cols) ? app->roster_cols[local] : UINT32_MAX;
+    }
+    return (uint32_t)local + EE_FROZEN_COLUMN_COUNT;
+}
+
+/* Scroll-pane column showing table column @p tcol, or -1 (not in the scroll pane). */
+static int App_TableToScroll(const AppState *app, uint32_t tcol)
+{
+    uint32_t i;
+    if (app->is_roster)
+    {
+        for (i = 0; i < app->nroster_cols; i++)
+        {
+            if (app->roster_cols[i] == tcol)
+            {
+                return (int)i;
+            }
+        }
+        return -1;
+    }
+    return (tcol >= EE_FROZEN_COLUMN_COUNT) ? (int)(tcol - EE_FROZEN_COLUMN_COUNT) : -1;
+}
+
+/* Put the sort arrow on whichever pane shows @p table_column. */
+static void App_ShowSortArrows(AppState *app, uint32_t table_column)
+{
+    if (!app->is_roster && table_column < EE_FROZEN_COLUMN_COUNT)
+    {
+        App_SetHeaderSortArrow(app,
+                               app->hwnd_frozen,
+                               (int)table_column,
+                               (int)table_column,
+                               app->table.sort_ascending);
+        App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
+    }
+    else
+    {
+        int local = App_TableToScroll(app, table_column);
+        App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
+        App_SetHeaderSortArrow(app, app->hwnd_scroll, local, local, app->table.sort_ascending);
+    }
+}
+
 static void App_RebuildColumns(AppState *app)
 {
     LVCOLUMNW col;
@@ -1498,7 +1598,7 @@ static void App_RebuildColumns(AppState *app)
      * narrower (the user can still widen individual ones). Computed in device
      * pixels so it holds regardless of DPI/zoom. */
     {
-        int scroll_cols = (int)app->table.column_count - EE_FROZEN_COLUMN_COUNT;
+        int scroll_cols = App_ScrollColumnCount(app);
         if (scroll_cols > 0)
         {
             int cap = 32000 / scroll_cols; /* margin under the 32,767 px header limit */
@@ -1556,41 +1656,49 @@ static void App_RebuildColumns(AppState *app)
         }
     }
 
-    /* Scrollable: remaining source columns */
-    for (i = EE_FROZEN_COLUMN_COUNT; i < app->table.column_count; i++)
+    /* Scrollable: the remaining source columns (a roster window: its display columns) */
     {
-        int idx = (int)(i - EE_FROZEN_COLUMN_COUNT);
-        ZeroMemory(&col, sizeof(col));
-        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-        col.fmt = LVCFMT_LEFT;
-        col.cx = col_width;
-        col.pszText = app->table.column_titles[i];
-        col.iSubItem = idx;
-        ListView_InsertColumn(app->hwnd_scroll, idx, &col);
+        int idx;
+        int n = App_ScrollColumnCount(app);
+        for (idx = 0; idx < n; idx++)
+        {
+            uint32_t tc = App_ScrollToTable(app, idx);
+            int cx = col_width;
+            if (tc >= app->table.column_count)
+            {
+                continue;
+            }
+            if (app->is_roster)
+            {
+                const wchar_t *t = app->table.column_titles[tc] ? app->table.column_titles[tc] : L"";
+                if (tc == EE_COL_VOTER_ID)
+                    cx = ScaleDisplay(app, 110);
+                else if (tc == EE_COL_PRECINCT)
+                    cx = ScaleDisplay(app, 80);
+                else if (tc == EE_COL_NAME)
+                    cx = ScaleDisplay(app, 230);
+                else if (wcscmp(t, L"Voting Method") == 0)
+                    cx = ScaleDisplay(app, 170);
+                else if (wcscmp(t, L"Date Voted") == 0)
+                    cx = ScaleDisplay(app, 100);
+                else if (wcscmp(t, L"Source File") == 0)
+                    cx = ScaleDisplay(app, 260);
+            }
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+            col.fmt = LVCFMT_LEFT;
+            col.cx = cx;
+            col.pszText = app->table.column_titles[tc];
+            col.iSubItem = idx;
+            ListView_InsertColumn(app->hwnd_scroll, idx, &col);
+        }
     }
 
     App_ApplyFilter(app);
 
     if (app->table.sort_column >= 0)
     {
-        if (app->table.sort_column < EE_FROZEN_COLUMN_COUNT)
-        {
-            App_SetHeaderSortArrow(app,
-                                   app->hwnd_frozen,
-                                   app->table.sort_column,
-                                   app->table.sort_column,
-                                   app->table.sort_ascending);
-            App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
-        }
-        else
-        {
-            App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
-            App_SetHeaderSortArrow(app,
-                                   app->hwnd_scroll,
-                                   app->table.sort_column - EE_FROZEN_COLUMN_COUNT,
-                                   app->table.sort_column - EE_FROZEN_COLUMN_COUNT,
-                                   app->table.sort_ascending);
-        }
+        App_ShowSortArrows(app, (uint32_t)app->table.sort_column);
     }
 
     App_ApplyHeaderStyle(app, app->hwnd_frozen);
@@ -1648,21 +1756,7 @@ static void App_RefreshSortUi(AppState *app, uint32_t table_column)
 {
     App_ApplyFilter(app);
 
-    if (table_column < EE_FROZEN_COLUMN_COUNT)
-    {
-        App_SetHeaderSortArrow(app,
-                               app->hwnd_frozen,
-                               (int)table_column,
-                               (int)table_column,
-                               app->table.sort_ascending);
-        App_SetHeaderSortArrow(app, app->hwnd_scroll, -1, -1, TRUE);
-    }
-    else
-    {
-        int local = (int)table_column - EE_FROZEN_COLUMN_COUNT;
-        App_SetHeaderSortArrow(app, app->hwnd_frozen, -1, -1, TRUE);
-        App_SetHeaderSortArrow(app, app->hwnd_scroll, local, local, app->table.sort_ascending);
-    }
+    App_ShowSortArrows(app, table_column);
     {
         HWND hf = ListView_GetHeader(app->hwnd_frozen);
         HWND hs = ListView_GetHeader(app->hwnd_scroll);
@@ -1711,7 +1805,7 @@ static void App_SortFromHeader(AppState *app, HWND hwnd_list, int local_column)
     }
     else
     {
-        table_column = (uint32_t)local_column + EE_FROZEN_COLUMN_COUNT;
+        table_column = App_ScrollToTable(app, local_column);
     }
 
     if (table_column >= app->table.column_count)
@@ -2100,7 +2194,8 @@ static void App_BeginOpenVoterList(AppState *app)
 
         /* From a CVR window (a resource-only AppState) always open a fresh viewer,
          * as its "window" is the CVR grid, not an empty voter list. */
-        if (app->is_cvr_ui || app->load_path[0] != L'\0' || app->table.row_count > 0)
+        if (app->is_cvr_ui || app->is_roster || app->load_path[0] != L'\0' ||
+            app->table.row_count > 0)
         {
             AppState *created = App_CreateViewer(app->instance, SW_SHOWNORMAL, app->hwnd_main, app);
             if (created == NULL)
@@ -2223,9 +2318,9 @@ static void App_GetSplitterRect(AppState *app, RECT *out_rc)
     int frozen_w;
 
     ZeroMemory(out_rc, sizeof(*out_rc));
-    if (app->hwnd_main == NULL)
+    if (app->hwnd_main == NULL || app->is_roster)
     {
-        return;
+        return; /* no splitter in a single-pane roster window */
     }
 
     GetClientRect(app->hwnd_main, &client);
@@ -2250,6 +2345,10 @@ static void App_GetSplitterRect(AppState *app, RECT *out_rc)
 static BOOL App_HitTestSplitter(AppState *app, int x, int y)
 {
     RECT rc;
+    if (app->is_roster)
+    {
+        return FALSE;
+    }
     App_GetSplitterRect(app, &rc);
     /* Widen hit target slightly for easier grabbing. */
     rc.left -= Scale(app, 2);
@@ -2310,7 +2409,7 @@ static void App_SyncPaneScrollChrome(AppState *app)
     int grid_top;
     int grid_h;
 
-    if (app->hwnd_frozen == NULL || app->hwnd_scroll == NULL)
+    if (app->hwnd_frozen == NULL || app->hwnd_scroll == NULL || app->is_roster)
     {
         return;
     }
@@ -2474,6 +2573,28 @@ static void App_Layout(AppState *app)
     if (grid_h < 0)
     {
         grid_h = 0;
+    }
+
+    if (app->is_roster)
+    {
+        /* Voter Roster window: a single pane over the whole client area (the left pane
+         * stays hidden; it still mirrors the selection for the shared code paths). */
+        if (app->hwnd_frozen_title)
+            ShowWindow(app->hwnd_frozen_title, SW_HIDE);
+        if (app->hwnd_scroll_title)
+            ShowWindow(app->hwnd_scroll_title, SW_HIDE);
+        if (app->hwnd_frozen)
+            ShowWindow(app->hwnd_frozen, SW_HIDE);
+        if (app->hwnd_frozen_hsb_pad)
+            ShowWindow(app->hwnd_frozen_hsb_pad, SW_HIDE);
+        if (app->hwnd_scroll_hsb_pad)
+            ShowWindow(app->hwnd_scroll_hsb_pad, SW_HIDE);
+        if (app->hwnd_scroll)
+        {
+            int w = client_w - app->pad * 2;
+            MoveWindow(app->hwnd_scroll, app->pad, grid_top, (w > 0) ? w : 0, grid_h, TRUE);
+        }
+        return;
     }
 
     split_w = app->splitter_width > 0 ? app->splitter_width : Scale(app, 6);
@@ -2672,6 +2793,7 @@ static HMENU App_CreateMenu(void)
     HMENU edit_menu = CreatePopupMenu();
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter List");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter List…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -2684,6 +2806,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTER_IDS, L"Show &Duplicate Voter IDs…");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTERS, L"Show Duplicate &Voters…");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTERS_VOTING, L"Show Duplicate Voters V&oting…");
     AppendMenuW(filter_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET_VIEW, L"Reset Vie&w…");
     HMENU reports_menu = CreatePopupMenu();
@@ -2906,7 +3029,7 @@ static void App_CopySelection(AppState *app)
     if (!EeVoterTable_FormatCopyUtf8(&app->table,
                                      rows,
                                      n,
-                                     app->copy_prepend_normalized,
+                                     app->copy_prepend_normalized && !app->is_roster,
                                      &text,
                                      NULL))
     {
@@ -3030,7 +3153,7 @@ static void App_ShowCopyContextMenu(AppState *app, HWND hwnd_list, int screen_x,
             }
             else
             {
-                hit_col = (uint32_t)sub.iSubItem + EE_FROZEN_COLUMN_COUNT;
+                hit_col = App_ScrollToTable(app, sub.iSubItem);
             }
             if (hit_col < app->table.column_count)
             {
@@ -3462,7 +3585,7 @@ static BOOL App_ShowOptions(AppState *app)
     }
 
     client_w = Scale(app, 420);
-    client_h = Scale(app, 250);
+    client_h = Scale(app, app->is_roster ? 150 : 250);
     margin = Scale(app, 16);
     btn_w = Scale(app, 90);
     btn_h = Scale(app, 28);
@@ -3510,7 +3633,7 @@ static BOOL App_ShowOptions(AppState *app)
         CreateWindowExW(0,
                         L"BUTTON",
                         L"Pre-pend normalized data for copies (ID, Precinct, Name, Address)",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                        WS_CHILD | (app->is_roster ? 0 : WS_VISIBLE) | WS_TABSTOP | BS_AUTOCHECKBOX,
                         margin,
                         margin,
                         client_w - margin * 2,
@@ -3524,7 +3647,7 @@ static BOOL App_ShowOptions(AppState *app)
                                   L"Display name in surname-first format",
                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
                                   margin,
-                                  margin + Scale(app, 28),
+                                  app->is_roster ? margin : margin + Scale(app, 28),
                                   client_w - margin * 2,
                                   Scale(app, 24),
                                   app->hwnd_options,
@@ -3532,7 +3655,7 @@ static BOOL App_ShowOptions(AppState *app)
                                   app->instance,
                                   NULL);
     {
-        int zy = margin + Scale(app, 64);
+        int zy = margin + Scale(app, app->is_roster ? 36 : 64);
         int zh = Scale(app, 24);
         int edit_x = margin + Scale(app, 56);
         int edit_w = Scale(app, 56);
@@ -3614,7 +3737,7 @@ static BOOL App_ShowOptions(AppState *app)
         lbl_map = CreateWindowExW(0,
                                   L"STATIC",
                                   L"Map engine:",
-                                  WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+                                  WS_CHILD | (app->is_roster ? 0 : WS_VISIBLE) | SS_LEFT | SS_CENTERIMAGE,
                                   margin,
                                   my,
                                   Scale(app, 90),
@@ -3626,8 +3749,8 @@ static BOOL App_ShowOptions(AppState *app)
         cmb_map = CreateWindowExW(0,
                                   L"COMBOBOX",
                                   L"",
-                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
-                                      CBS_DROPDOWNLIST | CBS_HASSTRINGS,
+                                  WS_CHILD | (app->is_roster ? 0 : WS_VISIBLE) | WS_TABSTOP |
+                                      WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
                                   margin + Scale(app, 94),
                                   my,
                                   Scale(app, 180),
@@ -3744,6 +3867,31 @@ static void FilterDlg_PopulateColumns(HWND combo, const EeVoterTable *table)
         if (idx >= 0)
         {
             SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)i);
+        }
+    }
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+}
+
+/* Filter-dialog column list for a viewer: a voter roster offers the columns it shows
+ * (not the raw VUID / name-part columns behind them). */
+static void App_FilterPopulateColumns(HWND combo, const AppState *app)
+{
+    uint32_t i;
+    if (app == NULL || !app->is_roster)
+    {
+        FilterDlg_PopulateColumns(combo, (app != NULL) ? &app->table : NULL);
+        return;
+    }
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < app->nroster_cols; i++)
+    {
+        uint32_t c = app->roster_cols[i];
+        const wchar_t *title =
+            (c < app->table.column_count && app->table.column_titles[c]) ? app->table.column_titles[c] : L"";
+        int idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)title);
+        if (idx >= 0)
+        {
+            SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)c);
         }
     }
     SendMessageW(combo, CB_SETCURSEL, 0, 0);
@@ -4726,7 +4874,7 @@ static BOOL App_ShowFilter(AppState *app)
     col.cx = Scale(app, 90);
     ListView_InsertColumn(list, 3, &col);
 
-    FilterDlg_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), &app->table);
+    App_FilterPopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), app);
     FilterDlg_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION),
                                 FilterDlg_ColumnAllowsOrder(app, 0));
     FilterDlg_PopulateActions(GetDlgItem(hwnd, IDC_FLT_ACTION));
@@ -5095,6 +5243,112 @@ static void App_ShowDuplicateVoters(AppState *app)
     {
         App_RunDuplicateScanSync(app, EE_SCAN_DUP_NAME_DOB);
     }
+}
+
+static int App_PickItem(AppState *app,
+                        const wchar_t *caption,
+                        const wchar_t *prompt,
+                        const wchar_t *ok_label,
+                        const wchar_t *const *items,
+                        int count);
+
+/* Filter → Show Duplicate Voters Voting…: voters of this list with the same name and DOB
+ * who voted (Voter ID in a loaded roster) under different Voter IDs. With several rosters
+ * open, the user picks one. */
+static void App_ShowDuplicateVotersVoting(AppState *app)
+{
+    AppState *rosters[32];
+    wchar_t labels[32][MAX_PATH + 32];
+    const wchar_t *items[32];
+    int n = 0;
+    int pick = 0;
+    AppState *p;
+    AppState *r;
+    uint8_t *marks;
+    uint32_t count = 0;
+    uint32_t groups = 0;
+    HCURSOR prev;
+    BOOL ok;
+    const wchar_t *base;
+    wchar_t msg[MAX_PATH + 160];
+
+    if (app == NULL || app->is_roster)
+    {
+        return;
+    }
+    if (app->loading || app->scanning || app->table.row_count == 0)
+    {
+        MessageBoxW(app->hwnd_main, L"Load a voter list before checking for duplicate voters.",
+                    k_WindowTitle, MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    if (EeVoterTable_FindBirthdateColumn(&app->table) < 0)
+    {
+        MessageBoxW(app->hwnd_main, L"No birth date data is available", k_WindowTitle,
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    for (p = g_viewers; p != NULL && n < (int)ARRAYSIZE(rosters); p = p->next)
+    {
+        if (p->is_roster && p->table.row_count > 0 && !p->loading)
+        {
+            rosters[n] = p;
+            labels[n][0] = L'\0';
+            GetWindowTextW(p->hwnd_main, labels[n], ARRAYSIZE(labels[n]));
+            items[n] = labels[n];
+            n++;
+        }
+    }
+    if (n == 0)
+    {
+        MessageBoxW(app->hwnd_main,
+                    L"Load a voter roster (File → Load Voter Roster…) to check which duplicate "
+                    L"voters voted.",
+                    k_WindowTitle, MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    if (n > 1)
+    {
+        pick = App_PickItem(app, L"Select Voter Roster",
+                            L"Several voter rosters are open. Choose the one to check:", L"OK",
+                            items, n);
+        if (pick < 0)
+        {
+            return;
+        }
+    }
+    r = rosters[pick];
+
+    marks = (uint8_t *)calloc((size_t)app->table.row_count, sizeof(uint8_t));
+    if (marks == NULL)
+    {
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    ok = EeVoterTable_MarkDuplicateVotersVoting(&app->table, &r->table, marks, &count, &groups, NULL,
+                                                NULL, NULL);
+    SetCursor(prev);
+    base = App_PathBaseName(r->load_path);
+    if (!ok)
+    {
+        free(marks);
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    if (count == 0)
+    {
+        free(marks);
+        StringCchPrintfW(msg, ARRAYSIZE(msg),
+                         L"No voters with the same name and date of birth voted under different "
+                         L"Voter IDs in %s.",
+                         base);
+        MessageBoxW(app->hwnd_main, msg, k_WindowTitle, MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    StringCchPrintfW(msg, ARRAYSIZE(msg), L"duplicate voters (name + DOB) voting in %s", base);
+    App_ApplyMarks(app, marks, count, EE_SCAN_DUP_VOTING, EE_COL_NAME, msg);
+    App_ActivateViewer(app);
 }
 
 static void App_AddQuickFilter(AppState *app,
@@ -6414,7 +6668,8 @@ static void App_ExportVoters(AppState *app, BOOL selection_only)
         n = vis;
     }
 
-    if (!App_AskExportNormalized(app, app->hwnd_main, &include_normalized))
+    /* A roster exports its own columns only (they reload into the same roster). */
+    if (!app->is_roster && !App_AskExportNormalized(app, app->hwnd_main, &include_normalized))
     {
         free(rows);
         return;
@@ -6425,8 +6680,11 @@ static void App_ExportVoters(AppState *app, BOOL selection_only)
                      ARRAYSIZE(suggested),
                      L"%s%s",
                      base,
-                     selection_only ? L"-Selected_Voters"
-                                     : (filtered ? L"-Filtered_Voters" : L"-All_Voters"));
+                     app->is_roster
+                         ? (selection_only ? L"-Selected_Roster"
+                                           : (filtered ? L"-Filtered_Roster" : L"-Roster"))
+                         : (selection_only ? L"-Selected_Voters"
+                                           : (filtered ? L"-Filtered_Voters" : L"-All_Voters")));
 
     if (!App_PromptExportPath(app->hwnd_main, suggested, path, ARRAYSIZE(path), &delim))
     {
@@ -6677,6 +6935,7 @@ static void App_CloseReports(AppState *app)
     {
         DestroyWindow(app->report_address->hwnd);
     }
+    App_CloseRosterTotals(app);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -6731,7 +6990,13 @@ static void App_BuildCompareMenu(AppState *app, HMENU popup)
         {
             base = L"(voter list)";
         }
-        StringCchPrintfW(label, ARRAYSIZE(label), L"Compare with %s", base);
+        /* Name the kind when it differs from this window's, or is a roster. */
+        StringCchPrintfW(label,
+                         ARRAYSIZE(label),
+                         L"Compare with %s%s",
+                         base,
+                         p->is_roster ? L" (voter roster)"
+                                      : (app->is_roster ? L" (voter list)" : L""));
         AppendMenuW(popup,
                     (p->table.row_count > 0) ? MF_STRING : (MF_STRING | MF_GRAYED),
                     (UINT_PTR)(IDM_COMPARE_WITH_FIRST + idx),
@@ -6743,7 +7008,8 @@ static void App_BuildCompareMenu(AppState *app, HMENU popup)
         AppendMenuW(popup,
                     MF_STRING | MF_GRAYED,
                     (UINT_PTR)IDM_COMPARE_WITH_FIRST,
-                    L"(open another voter list to compare)");
+                    app->is_roster ? L"(open another voter roster or a voter list to compare)"
+                                   : L"(open another voter list or a voter roster to compare)");
     }
 }
 
@@ -6751,11 +7017,14 @@ static void App_BuildCompareMenu(AppState *app, HMENU popup)
 enum
 {
     CMP_BUCKET_ONLY = 0,
+    CMP_BUCKET_REPEATED,
     CMP_BUCKET_NAME_MINOR,
     CMP_BUCKET_NAME_MAJOR,
     CMP_BUCKET_ADDR_MINOR,
     CMP_BUCKET_ADDR_MAJOR,
     CMP_BUCKET_PCT,
+    CMP_BUCKET_METHOD,
+    CMP_BUCKET_DATE,
     CMP_BUCKET_IDENTICAL,
     CMP_BUCKET_COUNT
 };
@@ -6764,20 +7033,23 @@ typedef struct CompareBucket
 {
     const wchar_t *label;  /* summary-row text */
     const wchar_t *phrase; /* status-bar phrase for the highlighted view */
-    uint8_t mask;          /* class bit to match; 0 = identical special case */
+    uint16_t mask;         /* class bit to match; 0 = identical special case */
 } CompareBucket;
 
 static const CompareBucket k_CompareBuckets[CMP_BUCKET_COUNT] = {
     {L"Only here", L"voters only here vs", EE_CMP_ONLY_HERE},
+    {L"Voter ID repeated", L"rows with a repeated Voter ID vs", EE_CMP_REPEATED},
     {L"Name (minor)", L"name (minor) changes vs", EE_CMP_NAME_MINOR},
     {L"Name (major)", L"name (major) changes vs", EE_CMP_NAME_MAJOR},
     {L"Address (minor)", L"address (minor) changes vs", EE_CMP_ADDR_MINOR},
     {L"Address (major)", L"address (major) changes vs", EE_CMP_ADDR_MAJOR},
     {L"Precinct changed", L"precinct changes vs", EE_CMP_PCT_CHANGED},
+    {L"Voting Method changed", L"voting method changes vs", EE_CMP_METHOD_CHANGED},
+    {L"Date Voted changed", L"date voted changes vs", EE_CMP_DATE_CHANGED},
     {L"Identical", L"identical voters vs", 0},
 };
 
-static BOOL compare_row_in_bucket(uint8_t cls, int bucket)
+static BOOL compare_row_in_bucket(uint16_t cls, int bucket)
 {
     if (bucket == CMP_BUCKET_IDENTICAL)
     {
@@ -6796,6 +7068,10 @@ static void compare_bucket_counts(const EeCompareResult *r,
         case CMP_BUCKET_ONLY:
             *out_a = r->only_a;
             *out_b = r->only_b;
+            break;
+        case CMP_BUCKET_REPEATED:
+            *out_a = r->repeated_a;
+            *out_b = r->repeated_b;
             break;
         case CMP_BUCKET_NAME_MINOR:
             *out_a = r->name_minor_a;
@@ -6817,6 +7093,14 @@ static void compare_bucket_counts(const EeCompareResult *r,
             *out_a = r->pct_changed_a;
             *out_b = r->pct_changed_b;
             break;
+        case CMP_BUCKET_METHOD:
+            *out_a = r->method_changed_a;
+            *out_b = r->method_changed_b;
+            break;
+        case CMP_BUCKET_DATE:
+            *out_a = r->date_changed_a;
+            *out_b = r->date_changed_b;
+            break;
         case CMP_BUCKET_IDENTICAL:
             *out_a = r->identical_a;
             *out_b = r->identical_b;
@@ -6830,7 +7114,7 @@ static void compare_bucket_counts(const EeCompareResult *r,
 
 /* Build a fresh mark buffer of the rows in @p bucket and show it in @p app. */
 static void App_ShowCompareCategory(AppState *app,
-                                    const uint8_t *cls,
+                                    const uint16_t *cls,
                                     uint32_t rows,
                                     int bucket,
                                     const wchar_t *other_base)
@@ -6890,8 +7174,8 @@ static void App_ShowCompareCategory(AppState *app,
 static void App_ShowCompareWindow(AppState *a,
                                   AppState *b,
                                   const EeCompareResult *result,
-                                  uint8_t *class_a,
-                                  uint8_t *class_b,
+                                  uint16_t *class_a,
+                                  uint16_t *class_b,
                                   uint32_t rows_a,
                                   uint32_t rows_b)
 {
@@ -6924,6 +7208,21 @@ static void App_ShowCompareWindow(AppState *a,
     cw->class_b = class_b;
     cw->rows_a = rows_a;
     cw->rows_b = rows_b;
+    {
+        /* Address rows only for two voter lists; Voting Method / Date Voted only for two
+         * voter rosters. */
+        BOOL lists = !a->is_roster && !b->is_roster;
+        BOOL rosters = a->is_roster && b->is_roster;
+        int k;
+        for (k = 0; k < CMP_BUCKET_COUNT && cw->nbuckets < (int)ARRAYSIZE(cw->buckets); k++)
+        {
+            if ((k == CMP_BUCKET_ADDR_MINOR || k == CMP_BUCKET_ADDR_MAJOR) && !lists)
+                continue;
+            if ((k == CMP_BUCKET_METHOD || k == CMP_BUCKET_DATE) && !rosters)
+                continue;
+            cw->buckets[cw->nbuckets++] = k;
+        }
+    }
 
     base_a = App_PathBaseName(a->load_path);
     base_b = App_PathBaseName(b->load_path);
@@ -6942,8 +7241,8 @@ static void App_ShowCompareWindow(AppState *a,
         x = pr.left + Scale(a, 60);
         y = pr.top + Scale(a, 60);
     }
-    w = Scale(a, 460);
-    h = Scale(a, 340);
+    w = Scale(a, 540); /* room for the three buttons */
+    h = Scale(a, 360);
 
     cw->hwnd = CreateWindowExW(0,
                                k_CompareClassName,
@@ -6969,18 +7268,46 @@ static void App_ShowCompareWindow(AppState *a,
     SetForegroundWindow(cw->hwnd);
 }
 
+/* What to compare for the pair (a, b): two voter lists compare Name, Address and
+ * Precinct; with a voter roster there is no address, names match on the parts (first +
+ * last decide a roster vs a voter list, D3), and two rosters also compare Voting Method
+ * and Date Voted. */
+static void App_CompareOptions(const AppState *a, const AppState *b, EeCompareOptions *o)
+{
+    ZeroMemory(o, sizeof(*o));
+    if (!a->is_roster && !b->is_roster)
+    {
+        o->compare_address = TRUE;
+        o->names = EE_CMP_NAMES_FULL;
+        return;
+    }
+    o->compare_address = FALSE;
+    o->loose_precinct = TRUE;
+    if (a->is_roster && b->is_roster)
+    {
+        o->names = EE_CMP_NAMES_PARTS;
+        o->compare_vote = TRUE;
+    }
+    else
+    {
+        o->names = EE_CMP_NAMES_FIRST_LAST;
+    }
+}
+
 /* Run the compare and present it. Takes both class buffers by ownership on the
  * synchronous path; the async path stores them on @p a first. */
 static void App_RunCompareSync(AppState *a, AppState *b)
 {
-    uint8_t *class_a;
-    uint8_t *class_b;
+    uint16_t *class_a;
+    uint16_t *class_b;
     EeCompareResult r;
+    EeCompareOptions opts;
     HCURSOR prev;
     BOOL ok;
 
-    class_a = (uint8_t *)calloc((size_t)a->table.row_count, sizeof(uint8_t));
-    class_b = (uint8_t *)calloc((size_t)b->table.row_count, sizeof(uint8_t));
+    App_CompareOptions(a, b, &opts);
+    class_a = (uint16_t *)calloc((size_t)a->table.row_count + 1u, sizeof(uint16_t));
+    class_b = (uint16_t *)calloc((size_t)b->table.row_count + 1u, sizeof(uint16_t));
     if (class_a == NULL || class_b == NULL)
     {
         free(class_a);
@@ -6990,7 +7317,7 @@ static void App_RunCompareSync(AppState *a, AppState *b)
     }
     prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
     ok =
-        EeVoterTable_CompareByVoterId(&a->table, &b->table, class_a, class_b, &r, NULL, NULL, NULL);
+        EeVoterTable_CompareByVoterIdEx(&a->table, &b->table, &opts, class_a, class_b, &r, NULL, NULL, NULL);
     SetCursor(prev);
     if (!ok)
     {
@@ -7010,9 +7337,12 @@ static DWORD WINAPI CompareThreadProc(void *param)
     AppState *app = (AppState *)param; /* file A */
     AppState *b = app->cmp_other;
     EeCompareResult r;
+    EeCompareOptions opts;
 
-    app->cmp_ok = EeVoterTable_CompareByVoterId(&app->table,
+    App_CompareOptions(app, b, &opts);
+    app->cmp_ok = EeVoterTable_CompareByVoterIdEx(&app->table,
                                                 &b->table,
+                                                &opts,
                                                 app->cmp_class_a,
                                                 app->cmp_class_b,
                                                 &r,
@@ -7027,8 +7357,8 @@ static DWORD WINAPI CompareThreadProc(void *param)
 static void App_StartCompareThread(AppState *a, AppState *b)
 {
     a->cmp_other = b;
-    a->cmp_class_a = (uint8_t *)calloc((size_t)a->table.row_count, sizeof(uint8_t));
-    a->cmp_class_b = (uint8_t *)calloc((size_t)b->table.row_count, sizeof(uint8_t));
+    a->cmp_class_a = (uint16_t *)calloc((size_t)a->table.row_count + 1u, sizeof(uint16_t));
+    a->cmp_class_b = (uint16_t *)calloc((size_t)b->table.row_count + 1u, sizeof(uint16_t));
     if (a->cmp_class_a == NULL || a->cmp_class_b == NULL)
     {
         free(a->cmp_class_a);
@@ -7138,8 +7468,8 @@ static void App_OnCompareFinished(AppState *app)
     }
 
     {
-        uint8_t *class_a = app->cmp_class_a;
-        uint8_t *class_b = app->cmp_class_b;
+        uint16_t *class_a = app->cmp_class_a;
+        uint16_t *class_b = app->cmp_class_b;
         uint32_t rows_a = app->table.row_count;
         uint32_t rows_b = (b != NULL) ? b->table.row_count : 0;
         app->cmp_class_a = NULL; /* ownership passes to the compare window */
@@ -7196,7 +7526,7 @@ static void Compare_Populate(CompareWindow *cw)
 {
     int i;
 
-    for (i = 0; i < CMP_BUCKET_COUNT; i++)
+    for (i = 0; i < cw->nbuckets; i++)
     {
         LVITEMW it;
         wchar_t num[32];
@@ -7206,9 +7536,9 @@ static void Compare_Populate(CompareWindow *cw)
         it.mask = LVIF_TEXT;
         it.iItem = i;
         it.iSubItem = 0;
-        it.pszText = (wchar_t *)k_CompareBuckets[i].label;
+        it.pszText = (wchar_t *)k_CompareBuckets[cw->buckets[i]].label;
         ListView_InsertItem(cw->list, &it);
-        compare_bucket_counts(&cw->result, i, &ca, &cb);
+        compare_bucket_counts(&cw->result, cw->buckets[i], &ca, &cb);
         StringCchPrintfW(num, ARRAYSIZE(num), L"%u", ca);
         ListView_SetItemText(cw->list, i, 1, num);
         StringCchPrintfW(num, ARRAYSIZE(num), L"%u", cb);
@@ -7246,6 +7576,14 @@ static void Compare_Layout(CompareWindow *cw, int cx, int cy)
     {
         MoveWindow(cw->diff_btn, cx - gap - bw, list_h + gap / 2, bw, bh, TRUE);
     }
+    if (cw->exp_all_btn != NULL)
+    {
+        MoveWindow(cw->exp_all_btn, cx - 2 * (gap + bw), list_h + gap / 2, bw, bh, TRUE);
+    }
+    if (cw->exp_sum_btn != NULL)
+    {
+        MoveWindow(cw->exp_sum_btn, cx - 3 * (gap + bw), list_h + gap / 2, bw, bh, TRUE);
+    }
 }
 
 /* Apply the summary row (bucket) the user acted on to viewer @p to_b ? B : A. */
@@ -7253,10 +7591,11 @@ static void Compare_ShowRow(CompareWindow *cw, int row, BOOL to_b)
 {
     const wchar_t *base_other;
 
-    if (cw == NULL || row < 0 || row >= CMP_BUCKET_COUNT)
+    if (cw == NULL || row < 0 || row >= cw->nbuckets)
     {
         return;
     }
+    row = cw->buckets[row]; /* summary row -> bucket */
     if (to_b)
     {
         base_other = App_PathBaseName(cw->a->load_path);
@@ -7277,6 +7616,177 @@ static void Compare_ShowRow(CompareWindow *cw, int row, BOOL to_b)
     }
 }
 
+/* "<A>-vs-<B>" (file names without extensions) for suggested export names. */
+static void Compare_BaseName(const CompareWindow *cw, wchar_t *out, size_t cch)
+{
+    wchar_t a[96];
+    wchar_t b[96];
+    App_BaseNameNoExt(cw->a->load_path, a, ARRAYSIZE(a));
+    App_BaseNameNoExt(cw->b->load_path, b, ARRAYSIZE(b));
+    StringCchPrintfW(out, cch, L"%s-vs-%s", a, b);
+}
+
+/* FALSE (after telling the user) when a file was reloaded since the compare ran. */
+static BOOL Compare_StillCurrent(CompareWindow *cw)
+{
+    if (cw->a->table.row_count != cw->rows_a || cw->b->table.row_count != cw->rows_b)
+    {
+        MessageBoxW(cw->hwnd, L"A file changed since the comparison was run. Run Compare again.",
+                    k_WindowTitle, MB_ICONINFORMATION | MB_OK);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void Compare_SummaryCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    uint32_t ca = 0;
+    uint32_t cb = 0;
+    int bucket = cw->buckets[row];
+    if (col == 0)
+    {
+        StringCchCopyW(buf, cch, k_CompareBuckets[bucket].label);
+        return;
+    }
+    compare_bucket_counts(&cw->result, bucket, &ca, &cb);
+    StringCchPrintfW(buf, cch, L"%u", (col == 1) ? ca : cb);
+}
+
+/* Compare → Export Summary…: the category table (Category, count in A, count in B). */
+static void Compare_ExportSummary(CompareWindow *cw)
+{
+    wchar_t base[256];
+    wchar_t suggested[300];
+    const wchar_t *headers[3];
+    if (cw == NULL || cw->nbuckets == 0)
+    {
+        return;
+    }
+    headers[0] = L"Category";
+    headers[1] = App_PathBaseName(cw->a->load_path);
+    headers[2] = App_PathBaseName(cw->b->load_path);
+    Compare_BaseName(cw, base, ARRAYSIZE(base));
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-Compare_Summary", base);
+    App_ExportReportModel(cw->hwnd, suggested, 3, headers, (uint32_t)cw->nbuckets, Compare_SummaryCell,
+                          cw);
+}
+
+/* One row per record of both files for Export All Records. */
+typedef struct CompareRecordsCtx
+{
+    CompareWindow *cw;
+    BOOL address;      /* two voter lists: an Address column */
+    BOOL vote;         /* a roster is involved: Voting Method / Date Voted columns */
+    int method_col[2]; /* per side, -1 = absent */
+    int date_col[2];
+    uint32_t ncols;
+    const wchar_t *headers[10];
+} CompareRecordsCtx;
+
+static void Compare_RecordCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    CompareRecordsCtx *x = (CompareRecordsCtx *)user;
+    CompareWindow *cw = x->cw;
+    int side = (row < cw->rows_a) ? 0 : 1;
+    uint32_t r = side ? row - cw->rows_a : row;
+    const AppState *app = side ? cw->b : cw->a;
+    uint16_t cls = side ? cw->class_b[r] : cw->class_a[r];
+    const wchar_t *h = x->headers[col];
+    int src = -1;
+
+    buf[0] = L'\0';
+    if (wcscmp(h, L"File") == 0)
+    {
+        StringCchCopyW(buf, cch, App_PathBaseName(app->load_path));
+        return;
+    }
+    if (wcscmp(h, L"Result") == 0)
+    {
+        StringCchCopyW(buf, cch,
+                       (cls & EE_CMP_ONLY_HERE)                ? L"Only here"
+                       : (cls & EE_CMP_REPEATED)               ? L"Voter ID repeated"
+                       : ((cls & EE_CMP_CHANGE_BITS) == 0)     ? L"Identical"
+                                                               : L"Changed");
+        return;
+    }
+    if (wcscmp(h, L"Changed Fields") == 0)
+    {
+        static const struct
+        {
+            uint16_t bit;
+            const wchar_t *label;
+        } k_fields[] = {{EE_CMP_NAME_MINOR, L"Name (minor)"},     {EE_CMP_NAME_MAJOR, L"Name (major)"},
+                        {EE_CMP_ADDR_MINOR, L"Address (minor)"},  {EE_CMP_ADDR_MAJOR, L"Address (major)"},
+                        {EE_CMP_PCT_CHANGED, L"Precinct"},        {EE_CMP_METHOD_CHANGED, L"Voting Method"},
+                        {EE_CMP_DATE_CHANGED, L"Date Voted"}};
+        size_t k;
+        for (k = 0; k < ARRAYSIZE(k_fields); k++)
+        {
+            if (cls & k_fields[k].bit)
+            {
+                if (buf[0] != L'\0')
+                    StringCchCatW(buf, cch, L"; ");
+                StringCchCatW(buf, cch, k_fields[k].label);
+            }
+        }
+        return;
+    }
+    if (wcscmp(h, L"Voter ID") == 0)
+        src = EE_COL_VOTER_ID;
+    else if (wcscmp(h, L"Precinct") == 0)
+        src = EE_COL_PRECINCT;
+    else if (wcscmp(h, L"Name") == 0)
+        src = EE_COL_NAME;
+    else if (wcscmp(h, L"Address") == 0)
+        src = EE_COL_ADDRESS;
+    else if (wcscmp(h, L"Voting Method") == 0)
+        src = x->method_col[side];
+    else if (wcscmp(h, L"Date Voted") == 0)
+        src = x->date_col[side];
+    if (src >= 0)
+    {
+        Diff_CellW(&app->table, r, (uint32_t)src, buf, (int)cch);
+    }
+}
+
+/* Compare → Export All Records…: every record of both files with its result. */
+static void Compare_ExportRecords(CompareWindow *cw)
+{
+    CompareRecordsCtx x;
+    wchar_t base[256];
+    wchar_t suggested[300];
+    if (cw == NULL || cw->class_a == NULL || cw->class_b == NULL || !Compare_StillCurrent(cw))
+    {
+        return;
+    }
+    ZeroMemory(&x, sizeof(x));
+    x.cw = cw;
+    x.address = !cw->a->is_roster && !cw->b->is_roster;
+    x.vote = cw->a->is_roster || cw->b->is_roster;
+    x.method_col[0] = EeVoterTable_FindColumnByTitle(&cw->a->table, L"Voting Method");
+    x.method_col[1] = EeVoterTable_FindColumnByTitle(&cw->b->table, L"Voting Method");
+    x.date_col[0] = EeVoterTable_FindColumnByTitle(&cw->a->table, L"Date Voted");
+    x.date_col[1] = EeVoterTable_FindColumnByTitle(&cw->b->table, L"Date Voted");
+    x.headers[x.ncols++] = L"File";
+    x.headers[x.ncols++] = L"Voter ID";
+    x.headers[x.ncols++] = L"Precinct";
+    x.headers[x.ncols++] = L"Name";
+    if (x.address)
+        x.headers[x.ncols++] = L"Address";
+    if (x.vote)
+    {
+        x.headers[x.ncols++] = L"Voting Method";
+        x.headers[x.ncols++] = L"Date Voted";
+    }
+    x.headers[x.ncols++] = L"Result";
+    x.headers[x.ncols++] = L"Changed Fields";
+    Compare_BaseName(cw, base, ARRAYSIZE(base));
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-Compare_Records", base);
+    App_ExportReportModel(cw->hwnd, suggested, x.ncols, x.headers, cw->rows_a + cw->rows_b,
+                          Compare_RecordCell, &x);
+}
+
 static void Compare_OnContextMenu(CompareWindow *cw, int row, POINT screen)
 {
     HMENU menu;
@@ -7286,8 +7796,27 @@ static void Compare_OnContextMenu(CompareWindow *cw, int row, POINT screen)
     wchar_t item_b[MAX_PATH + 32];
     int cmd;
 
-    if (cw == NULL || row < 0 || row >= CMP_BUCKET_COUNT)
+    if (cw == NULL)
     {
+        return;
+    }
+    if (row < 0 || row >= cw->nbuckets)
+    {
+        /* Outside the rows: only the exports apply. */
+        menu = CreatePopupMenu();
+        if (menu == NULL)
+        {
+            return;
+        }
+        AppendMenuW(menu, MF_STRING, IDC_CMP_EXPORT_SUMMARY, L"Export &Summary…");
+        AppendMenuW(menu, MF_STRING, IDC_CMP_EXPORT_ALL, L"Export &All Records…");
+        cmd = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, screen.x,
+                                  screen.y, 0, cw->hwnd, NULL);
+        DestroyMenu(menu);
+        if (cmd == IDC_CMP_EXPORT_SUMMARY)
+            Compare_ExportSummary(cw);
+        else if (cmd == IDC_CMP_EXPORT_ALL)
+            Compare_ExportRecords(cw);
         return;
     }
     base_a = App_PathBaseName(cw->a->load_path);
@@ -7310,6 +7839,9 @@ static void Compare_OnContextMenu(CompareWindow *cw, int row, POINT screen)
     }
     AppendMenuW(menu, MF_STRING, IDM_COMPARE_SHOW_A, item_a);
     AppendMenuW(menu, MF_STRING, IDM_COMPARE_SHOW_B, item_b);
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, IDC_CMP_EXPORT_SUMMARY, L"Export &Summary…");
+    AppendMenuW(menu, MF_STRING, IDC_CMP_EXPORT_ALL, L"Export &All Records…");
     cmd = (int)TrackPopupMenu(menu,
                               TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
                               screen.x,
@@ -7325,6 +7857,14 @@ static void Compare_OnContextMenu(CompareWindow *cw, int row, POINT screen)
     else if (cmd == IDM_COMPARE_SHOW_B)
     {
         Compare_ShowRow(cw, row, TRUE);
+    }
+    else if (cmd == IDC_CMP_EXPORT_SUMMARY)
+    {
+        Compare_ExportSummary(cw);
+    }
+    else if (cmd == IDC_CMP_EXPORT_ALL)
+    {
+        Compare_ExportRecords(cw);
     }
 }
 
@@ -7390,7 +7930,7 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
             col.fmt = LVCFMT_LEFT;
             col.pszText = L"Category";
-            col.cx = Scale(cw->a, 130);
+            col.cx = Scale(cw->a, 170); /* fits "Voting Method changed" */
             ListView_InsertColumn(cw->list, 0, &col);
             col.fmt = LVCFMT_RIGHT;
             col.pszText = hdr_a;
@@ -7441,6 +7981,22 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             {
                 SendMessageW(cw->diff_btn, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
             }
+            cw->exp_sum_btn = CreateWindowExW(0, L"BUTTON", L"Export Summary…",
+                                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0,
+                                              Scale(cw->a, 150), Scale(cw->a, 26), hwnd,
+                                              (HMENU)(INT_PTR)IDC_CMP_EXPORT_SUMMARY, cw->a->instance,
+                                              NULL);
+            cw->exp_all_btn = CreateWindowExW(0, L"BUTTON", L"Export All Records…",
+                                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 0, 0,
+                                              Scale(cw->a, 150), Scale(cw->a, 26), hwnd,
+                                              (HMENU)(INT_PTR)IDC_CMP_EXPORT_ALL, cw->a->instance, NULL);
+            if (cw->a->font_ui)
+            {
+                if (cw->exp_sum_btn != NULL)
+                    SendMessageW(cw->exp_sum_btn, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
+                if (cw->exp_all_btn != NULL)
+                    SendMessageW(cw->exp_all_btn, WM_SETFONT, (WPARAM)cw->a->font_ui, TRUE);
+            }
 
             Compare_Populate(cw);
             Compare_Layout(cw, rc.right, rc.bottom);
@@ -7451,6 +8007,16 @@ static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             if (cw != NULL && LOWORD(wParam) == IDC_CMP_DIFF)
             {
                 App_ShowDifferences(cw);
+                return 0;
+            }
+            if (cw != NULL && LOWORD(wParam) == IDC_CMP_EXPORT_SUMMARY)
+            {
+                Compare_ExportSummary(cw);
+                return 0;
+            }
+            if (cw != NULL && LOWORD(wParam) == IDC_CMP_EXPORT_ALL)
+            {
+                Compare_ExportRecords(cw);
                 return 0;
             }
             break;
@@ -7538,12 +8104,21 @@ static void Diff_CellW(const EeVoterTable *t, uint32_t row, uint32_t col, wchar_
     }
 }
 
-static const wchar_t *Diff_FieldName(uint32_t col)
+enum
 {
-    return (col == EE_COL_NAME)       ? L"Name"
-           : (col == EE_COL_ADDRESS)  ? L"Address"
-           : (col == EE_COL_PRECINCT) ? L"Precinct"
-                                      : L"";
+    DIFF_FIELD_NAME = 0,
+    DIFF_FIELD_ADDRESS,
+    DIFF_FIELD_PRECINCT,
+    DIFF_FIELD_METHOD,
+    DIFF_FIELD_DATE,
+    DIFF_FIELD_COUNT
+};
+
+static const wchar_t *Diff_FieldName(int field)
+{
+    static const wchar_t *const k_names[DIFF_FIELD_COUNT] = {L"Name", L"Address", L"Precinct",
+                                                             L"Voting Method", L"Date Voted"};
+    return (field >= 0 && field < DIFF_FIELD_COUNT) ? k_names[field] : L"";
 }
 
 static void Diff_Layout(DiffWindow *dw, int cx, int cy)
@@ -7569,6 +8144,9 @@ static void App_ShowDifferences(CompareWindow *cw)
 {
     EeCompareDiff *diffs = NULL;
     uint32_t diff_count = 0;
+    EeCompareOptions opts;
+    int vote_col_a[2] = {-1, -1}; /* Voting Method, Date Voted columns in A */
+    int vote_col_b[2] = {-1, -1};
     DiffRow *rows = NULL;
     uint32_t row_count = 0;
     uint32_t i;
@@ -7594,9 +8172,15 @@ static void App_ShowDifferences(CompareWindow *cw)
         return;
     }
 
+    App_CompareOptions(cw->a, cw->b, &opts);
+    vote_col_a[0] = EeVoterTable_FindColumnByTitle(&cw->a->table, L"Voting Method");
+    vote_col_a[1] = EeVoterTable_FindColumnByTitle(&cw->a->table, L"Date Voted");
+    vote_col_b[0] = EeVoterTable_FindColumnByTitle(&cw->b->table, L"Voting Method");
+    vote_col_b[1] = EeVoterTable_FindColumnByTitle(&cw->b->table, L"Date Voted");
     prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (!EeVoterTable_CollectDifferences(&cw->a->table,
+    if (!EeVoterTable_CollectDifferencesEx(&cw->a->table,
                                          &cw->b->table,
+                                         &opts,
                                          &diffs,
                                          &diff_count,
                                          NULL,
@@ -7614,24 +8198,29 @@ static void App_ShowDifferences(CompareWindow *cw)
     /* Expand to one display row per differing field. */
     if (diff_count > 0)
     {
-        rows = (DiffRow *)malloc((size_t)diff_count * 3u * sizeof(DiffRow));
+        rows = (DiffRow *)malloc((size_t)diff_count * DIFF_FIELD_COUNT * sizeof(DiffRow));
     }
     if (rows != NULL)
     {
         for (i = 0; i < diff_count; i++)
         {
-            static const uint32_t cols[3] = {EE_COL_NAME, EE_COL_ADDRESS, EE_COL_PRECINCT};
-            static const uint8_t masks[3] = {(uint8_t)(EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR),
-                                             (uint8_t)(EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR),
-                                             (uint8_t)EE_CMP_PCT_CHANGED};
+            static const uint16_t masks[DIFF_FIELD_COUNT] = {
+                EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR, EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR,
+                EE_CMP_PCT_CHANGED, EE_CMP_METHOD_CHANGED, EE_CMP_DATE_CHANGED};
+            const int cols_a[DIFF_FIELD_COUNT] = {EE_COL_NAME, EE_COL_ADDRESS, EE_COL_PRECINCT,
+                                                  vote_col_a[0], vote_col_a[1]};
+            const int cols_b[DIFF_FIELD_COUNT] = {EE_COL_NAME, EE_COL_ADDRESS, EE_COL_PRECINCT,
+                                                  vote_col_b[0], vote_col_b[1]};
             int k;
-            for (k = 0; k < 3; k++)
+            for (k = 0; k < DIFF_FIELD_COUNT; k++)
             {
-                if (diffs[i].bits & masks[k])
+                if ((diffs[i].bits & masks[k]) && cols_a[k] >= 0 && cols_b[k] >= 0)
                 {
                     rows[row_count].row_a = diffs[i].row_a;
                     rows[row_count].row_b = diffs[i].row_b;
-                    rows[row_count].col = cols[k];
+                    rows[row_count].col = (uint32_t)cols_a[k];
+                    rows[row_count].col_b = (uint32_t)cols_b[k];
+                    rows[row_count].field = k;
                     row_count++;
                 }
             }
@@ -7736,12 +8325,11 @@ static LRESULT CALLBACK DiffListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPA
     return CallWindowProcW(g_old_diff_list_proc, hwnd, msg, wParam, lParam);
 }
 
-static const char *Diff_FieldNameUtf8(uint32_t col)
+static const char *Diff_FieldNameUtf8(int field)
 {
-    return (col == EE_COL_NAME)       ? "Name"
-           : (col == EE_COL_ADDRESS)  ? "Address"
-           : (col == EE_COL_PRECINCT) ? "Precinct"
-                                      : "";
+    static const char *const k_names[DIFF_FIELD_COUNT] = {"Name", "Address", "Precinct",
+                                                          "Voting Method", "Date Voted"};
+    return (field >= 0 && field < DIFF_FIELD_COUNT) ? k_names[field] : "";
 }
 
 /* Voter IDs compare numerically when both are all digits, else case-insensitive. */
@@ -7783,15 +8371,15 @@ static int diff_sort_cmp(void *ctxv, const void *pa, const void *pb)
                              EeVoterTable_GetCellUtf8(ctx->a, rb->row_a, EE_COL_VOTER_ID));
             break;
         case 1:
-            c = _stricmp(Diff_FieldNameUtf8(ra->col), Diff_FieldNameUtf8(rb->col));
+            c = _stricmp(Diff_FieldNameUtf8(ra->field), Diff_FieldNameUtf8(rb->field));
             break;
         case 2:
             c = _stricmp(EeVoterTable_GetCellUtf8(ctx->a, ra->row_a, ra->col),
                          EeVoterTable_GetCellUtf8(ctx->a, rb->row_a, rb->col));
             break;
         default: /* 3 */
-            c = _stricmp(EeVoterTable_GetCellUtf8(ctx->b, ra->row_b, ra->col),
-                         EeVoterTable_GetCellUtf8(ctx->b, rb->row_b, rb->col));
+            c = _stricmp(EeVoterTable_GetCellUtf8(ctx->b, ra->row_b, ra->col_b),
+                         EeVoterTable_GetCellUtf8(ctx->b, rb->row_b, rb->col_b));
             break;
     }
     if (c == 0)
@@ -7892,9 +8480,9 @@ static void Diff_CopySelected(DiffWindow *dw)
         {
             const DiffRow *dr = &dw->rows[i];
             total += strlen(EeVoterTable_GetCellUtf8(a, dr->row_a, EE_COL_VOTER_ID));
-            total += strlen(Diff_FieldNameUtf8(dr->col));
+            total += strlen(Diff_FieldNameUtf8(dr->field));
             total += strlen(EeVoterTable_GetCellUtf8(a, dr->row_a, dr->col));
-            total += strlen(EeVoterTable_GetCellUtf8(b, dr->row_b, dr->col));
+            total += strlen(EeVoterTable_GetCellUtf8(b, dr->row_b, dr->col_b));
             total += 5; /* 3 tabs + CR + LF */
         }
         i = ListView_GetNextItem(dw->list, i, LVNI_SELECTED);
@@ -7918,9 +8506,9 @@ static void Diff_CopySelected(DiffWindow *dw)
             const char *fields[4];
             int f;
             fields[0] = EeVoterTable_GetCellUtf8(a, dr->row_a, EE_COL_VOTER_ID);
-            fields[1] = Diff_FieldNameUtf8(dr->col);
+            fields[1] = Diff_FieldNameUtf8(dr->field);
             fields[2] = EeVoterTable_GetCellUtf8(a, dr->row_a, dr->col);
-            fields[3] = EeVoterTable_GetCellUtf8(b, dr->row_b, dr->col);
+            fields[3] = EeVoterTable_GetCellUtf8(b, dr->row_b, dr->col_b);
             for (f = 0; f < 4; f++)
             {
                 size_t n = strlen(fields[f]);
@@ -7938,6 +8526,76 @@ static void Diff_CopySelected(DiffWindow *dw)
 }
 
 /* Right-click: select the row if needed, then a Copy menu. */
+typedef struct DiffExportCtx
+{
+    DiffWindow *dw;
+    const uint32_t *idx; /* export row -> display row, or NULL for all */
+} DiffExportCtx;
+
+static void Diff_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    DiffExportCtx *c = (DiffExportCtx *)user;
+    const DiffRow *dr = &c->dw->rows[(c->idx != NULL) ? c->idx[row] : row];
+    buf[0] = L'\0';
+    switch (col)
+    {
+        case 0:
+            Diff_CellW(&c->dw->a->table, dr->row_a, EE_COL_VOTER_ID, buf, (int)cch);
+            break;
+        case 1:
+            StringCchCopyW(buf, cch, Diff_FieldName(dr->field));
+            break;
+        case 2:
+            Diff_CellW(&c->dw->a->table, dr->row_a, dr->col, buf, (int)cch);
+            break;
+        default:
+            Diff_CellW(&c->dw->b->table, dr->row_b, dr->col_b, buf, (int)cch);
+            break;
+    }
+}
+
+/* Differences → Export Selected / Export All: Voter ID, Field, value in A, value in B, in
+ * the order shown. */
+static void Diff_Export(DiffWindow *dw, BOOL selection_only)
+{
+    const wchar_t *headers[4];
+    wchar_t a[96];
+    wchar_t b[96];
+    wchar_t suggested[300];
+    uint32_t *idx = NULL;
+    uint32_t n;
+    DiffExportCtx ctx;
+    if (dw == NULL || dw->row_count == 0)
+    {
+        return;
+    }
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(dw->list, dw->row_count, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = dw->row_count;
+    }
+    headers[0] = L"Voter ID";
+    headers[1] = L"Field";
+    headers[2] = App_PathBaseName(dw->a->load_path);
+    headers[3] = App_PathBaseName(dw->b->load_path);
+    App_BaseNameNoExt(dw->a->load_path, a, ARRAYSIZE(a));
+    App_BaseNameNoExt(dw->b->load_path, b, ARRAYSIZE(b));
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-vs-%s-%sDifferences", a, b,
+                     selection_only ? L"Selected_" : L"");
+    ctx.dw = dw;
+    ctx.idx = idx;
+    App_ExportReportModel(dw->hwnd, suggested, 4, headers, n, Diff_ExportCell, &ctx);
+    free(idx);
+}
+
 static void Diff_OnContextMenu(DiffWindow *dw, int item, POINT screen)
 {
     HMENU m;
@@ -7961,12 +8619,23 @@ static void Diff_OnContextMenu(DiffWindow *dw, int item, POINT screen)
         return;
     }
     AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
     cmd = (UINT)
         TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, dw->hwnd, NULL);
     DestroyMenu(m);
     if (cmd == IDM_EDIT_COPY)
     {
         Diff_CopySelected(dw);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED)
+    {
+        Diff_Export(dw, TRUE);
+    }
+    else if (cmd == IDM_EXPORT_ALL)
+    {
+        Diff_Export(dw, FALSE);
     }
 }
 
@@ -8133,7 +8802,7 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         case 1:
                             StringCchCopyW(di->item.pszText,
                                            di->item.cchTextMax,
-                                           Diff_FieldName(dr->col));
+                                           Diff_FieldName(dr->field));
                             break;
                         case 2:
                             Diff_CellW(&dw->a->table,
@@ -8145,7 +8814,7 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                         case 3:
                             Diff_CellW(&dw->b->table,
                                        dr->row_b,
-                                       dr->col,
+                                       dr->col_b,
                                        di->item.pszText,
                                        di->item.cchTextMax);
                             break;
@@ -8218,7 +8887,34 @@ static const wchar_t k_HelpLoading[] =
     L"one state). Columns that only look like city or state fields — district codes "
     L"such as a \"CITY\" column holding \"C10\", or \"STATE BOARD OF EDUCATION\" — are "
     L"ignored. A confidential (masked) address is kept exactly as the county masked "
-    L"it.";
+    L"it.\r\n\r\n"
+    L"To see who has voted in an election, use File → Load Voter Roster… instead; a roster "
+    L"opens in its own window (see Help → Loading Voter Rosters there).";
+
+static const wchar_t k_HelpRosterLoading[] =
+    L"Load Voter Roster (File menu) opens the rosters a county publishes during an election "
+    L"— who has voted, by day and voting method. Select one or more ZIP files as published, "
+    L"Excel workbooks (.xlsx), or CSV / TSV files (including a roster exported from this "
+    L"window). Travis County, Texas, rosters are supported. Large rosters load in the "
+    L"background with a progress bar, an estimate of the time remaining, and Cancel.\r\n\r\n"
+    L"•  Each spreadsheet is one day's list for one voting method. The date and method come "
+    L"from the file name (for example \"10.22.2024 Early Vote.xlsx\"). A primary roster has "
+    L"one sheet per party, and the party becomes a column.\r\n\r\n"
+    L"•  When a corrected file (\"…_Updated.xlsx\") is present, the original it replaces is "
+    L"not loaded. A file whose voters all appear in a file of another voting method (a "
+    L"misnamed copy) is skipped. PDF files, such as scanned Limited Ballot poll lists, are not "
+    L"read yet.\r\n\r\n"
+    L"•  Rows that are not voters (totals, notes, \"No ballots received.\", Voter IDs with no "
+    L"name or precinct) are skipped. Unusual and blank Voter IDs are kept and counted. A "
+    L"sheet missing its header row uses the header of a matching sheet.\r\n\r\n"
+    L"The window shows Voter ID, Precinct, Name, Voting Method (Mail Ballot, Early Vote "
+    L"In-Person, Election Day In-Person, Provisional, or Limited), Date Voted, and any extra "
+    L"columns (Party, Notes, Assisting Person, Source File). Duplicate Voter IDs are kept; "
+    L"Filter → Show Duplicate Voter IDs lists them. Reports → Display Load Summary shows what "
+    L"the load skipped or flagged; the summary also opens after loading when there is "
+    L"something to report.\r\n\r\n"
+    L"See also Help → Reports (Voting Totals) and Help → Compare (with another roster or a "
+    L"voter list).";
 
 static const wchar_t k_HelpOptions[] =
     L"Options (Edit → Options) control display and copy behavior. Settings "
@@ -8233,6 +8929,22 @@ static const wchar_t k_HelpOptions[] =
     L"size).\r\n\r\n"
     L"•  Map engine — the mapping service opened by \"Show in Maps\" "
     L"(Google, Bing, Apple, or OpenStreetMap).";
+
+/* How Include / Exclude rules combine (shared by the voter-list and roster topics). */
+#define EE_HELP_FILTER_RULES                                                                       \
+    L"Filters (Filter menu, or Ctrl+L) narrow the visible rows. Each rule targets "                \
+    L"one column and tests it with a relation — is, is not, begins with, ends "                    \
+    L"with, contains, excludes, and (for date and numeric columns) less than / "                   \
+    L"more than. Every rule is either an Include or an Exclude.\r\n\r\n"                          \
+    L"How multiple rules combine:\r\n\r\n"                                                        \
+    L"•  Exclude wins. If a row matches ANY enabled Exclude rule it is hidden, "                   \
+    L"regardless of the Include rules.\r\n\r\n"                                                   \
+    L"•  Includes on the SAME field are OR'd — a row passes that field if "                        \
+    L"it matches at least one of them.\r\n\r\n"                                                   \
+    L"•  Includes on DIFFERENT fields are AND'd — a row must satisfy each "                        \
+    L"field that has Include rules.\r\n\r\n"                                                      \
+    L"•  With no Include rules, every row is shown except those removed by "                       \
+    L"Exclude rules.\r\n\r\n"
 
 static const wchar_t k_HelpFilters[] =
     L"Filters (Filter menu, or Ctrl+L) narrow the visible rows. Each rule targets "
@@ -8253,7 +8965,14 @@ static const wchar_t k_HelpFilters[] =
     L"Exclude rules.\r\n\r\n"
     L"Add rules in the Filter dialog, or right-click a cell and choose "
     L"Include/Exclude to add a rule for that value. Reset Filter clears all rules; "
-    L"a disabled rule is kept but ignored.";
+    L"a disabled rule is kept but ignored.\r\n\r\n"
+    L"Show Duplicate Voters lists voters who share a name and date of birth. Show "
+    L"Duplicate Voters Voting does the same for voters who voted — whose Voter ID is in "
+    L"an open voter roster — under two or more different Voter IDs (for example, two "
+    L"people with the same name and birth date, told apart only by driver license "
+    L"numbers that voter lists do not include). It needs a list with birth dates and a "
+    L"loaded voter roster; with several rosters open you choose one. Reset View returns "
+    L"to all rows.";
 
 static const wchar_t k_HelpReports[] =
     L"Reports (Reports menu) summarize the loaded list by a single column.\r\n\r\n"
@@ -8275,6 +8994,10 @@ static const wchar_t k_HelpCompare[] =
     L"<file>\". The Compare Summary window reports, for each file:\r\n\r\n"
     L"•  Only here — voters whose Voter ID is not in the other file (rows "
     L"with a blank Voter ID are counted here).\r\n\r\n"
+    L"•  Voter ID repeated — rows whose Voter ID appears on more rows in this file "
+    L"than in the other. Rows pair one to one (identical rows first, then the closest), "
+    L"so a county export that repeats a voter leaves the extra row here and the other "
+    L"counts agree in both files.\r\n\r\n"
     L"•  Changed — voters found in both files whose Precinct, Name, or "
     L"Address differs.\r\n\r\n"
     L"•  Precinct changed — voters whose precinct differs but whose address "
@@ -8288,7 +9011,81 @@ static const wchar_t k_HelpCompare[] =
     L"the highlight. Large comparisons show a progress bar and can be canceled.\r\n\r\n"
     L"Show Differences… opens a side-by-side list of every changed voter's "
     L"differing fields — Voter ID, the field (Name / Address / Precinct), and its "
-    L"value in each file.";
+    L"value in each file. Right-click it to Copy, Export Selected or Export All.\r\n\r\n"
+    L"Export Summary… saves the category counts; Export All Records… saves every record "
+    L"of both files with its file, Voter ID, Precinct, Name, Address, result (Only here, "
+    L"Voter ID repeated, Identical or Changed) and changed fields. Both write UTF-8 CSV "
+    L"or TSV.";
+
+static const wchar_t k_RosterHelpOptions[] =
+    L"Options (Edit → Options) control how the roster is shown. Settings apply to this "
+    L"window and become the defaults for windows opened afterward.\r\n\r\n"
+    L"•  Display name in surname-first format — shows the Name column as \"Last, First "
+    L"Middle\" instead of \"First Middle Last\". Compare is not affected: it compares the "
+    L"name parts.\r\n\r\n"
+    L"•  Zoom — scales the grid text from 50% to 250% (100% is actual size).";
+
+static const wchar_t k_RosterHelpFilters[] =
+    EE_HELP_FILTER_RULES
+    L"In a voter roster the Filter dialog lists the columns the window shows — Voter ID, "
+    L"Precinct, Name, Voting Method, Date Voted, and extra columns such as Party and Source "
+    L"File. For example, Include Voting Method is Mail Ballot together with Include Date "
+    L"Voted is 10/22/2024 shows the mail ballots of that day. Right-click a cell to Include "
+    L"or Exclude its value; Reset Filter clears all rules.\r\n\r\n"
+    L"Show Duplicate Voter IDs lists every row whose Voter ID appears more than once (a "
+    L"voter listed for two days or methods, or a county error such as two voters sharing "
+    L"one ID). Reset View returns to all rows.";
+
+static const wchar_t k_RosterHelpReports[] =
+    L"Reports (Reports menu) summarize all loaded records — they ignore the active filter "
+    L"and the duplicates view.\r\n\r\n"
+    L"•  Display Precinct Report — one row per Precinct with its Number of Voters (a "
+    L"voter on several roster rows counts on each).\r\n\r\n"
+    L"•  Display Voting Totals — voters per Date Voted and Voting Method, with a Total "
+    L"column and a Total row. Each Voter ID is counted once, on its earliest record (by "
+    L"date, then Mail Ballot, Early Vote, Election Day, Provisional, Limited); records with "
+    L"a blank Voter ID are each counted, and the status bar says how many later records were "
+    L"not counted. In a primary each day has a row per party plus an \"All parties\" row, "
+    L"followed by a Total per party and an overall Total. A method with no roster files "
+    L"shows \"not available\"; a method whose files are PDFs (not read yet) shows \"not "
+    L"loaded\". Right-click to Copy (or Ctrl+C) or to Export Selected / Export All; copies "
+    L"and exports use plain numbers.\r\n\r\n"
+    L"•  Display Load Summary — what the load read, skipped (corrections, copies, PDFs, "
+    L"rows that are not voters) and flagged (unusual, blank and duplicate Voter IDs).\r\n\r\n"
+    L"Each report opens in its own window and closes with the roster window.";
+
+static const wchar_t k_RosterHelpCompare[] =
+    L"Compare (Compare menu) matches this roster, by Voter ID, against another open voter "
+    L"roster or voter list. Choose Compare → \"Compare with <file>\".\r\n\r\n"
+    L"•  Two rosters compare Precinct, Name (first, middle, last and suffix), Voting Method "
+    L"and Date Voted — for example a roster against its own export, or two days of the "
+    L"same election.\r\n\r\n"
+    L"•  A roster and a voter list compare Precinct and Name (rosters have no address). "
+    L"Names are equal when the first and last names match, ignoring middle names, case and "
+    L"punctuation; other name differences are graded minor or major. Precincts written with "
+    L"a prefix or leading zeros, such as \"P 267\" and \"267\", are equal.\r\n\r\n"
+    L"The Compare Summary reports, for each file: Only here (Voter ID not in the other "
+    L"file, or blank), Voter ID repeated (rows pair one to one, so a Voter ID on more rows "
+    L"here than in the other file leaves extra rows), Name (minor / major), Precinct "
+    L"changed, Voting Method changed and Date Voted changed (two rosters), and Identical. "
+    L"Double-click a row, or right-click it, to show those records in either window; Filter "
+    L"→ Reset View clears the highlight. Show Differences… lists every changed field side "
+    L"by side (right-click it to Copy, Export Selected or Export All). Export Summary… saves "
+    L"the category counts, and Export All Records… saves every record of both files with "
+    L"its result and changed fields, as UTF-8 CSV or TSV.";
+
+static const wchar_t k_RosterHelpExport[] =
+    L"File → Export Voter Roster writes the visible rows (all rows, or the filtered or "
+    L"duplicates view) to a UTF-8 CSV or TSV file in the order shown; right-click → Export "
+    L"Selected writes only the selected rows. The suggested name ends \"-Roster\", "
+    L"\"-Filtered_Roster\" or \"-Selected_Roster\".\r\n\r\n"
+    L"The file holds the roster's own columns — VUID, Precinct, Last Name, First Name, "
+    L"Middle Name and Name Suffix when present, Voting Method, Date Voted, Party, the extra "
+    L"columns and Source File — so Load Voter Roster reads it back into an identical "
+    L"roster (Compare the two to check).\r\n\r\n"
+    L"In the Voting Totals and Precinct reports, right-click → Export Selected or Export "
+    L"All saves the report; the Compare Summary and Differences windows export the "
+    L"comparison. Files are written with a byte-order mark so Excel opens them as UTF-8.";
 
 static const wchar_t k_HelpExport[] =
     L"Export writes rows to a UTF-8 file — CSV by default, or TSV — with a header "
@@ -8306,6 +9103,10 @@ static const wchar_t k_HelpExport[] =
     L"•  In a Precinct or Address report, right-click → Export Selected or Export "
     L"All to save that summary (\"-Selected_Precincts\"/\"-All_Precincts\", or the "
     L"Addresses equivalents).\r\n\r\n"
+    L"•  In the Compare Summary, Export Summary… and Export All Records… save the "
+    L"comparison (\"<A>-vs-<B>-Compare_Summary\", \"-Compare_Records\"); in the "
+    L"Differences window, right-click → Export Selected or Export All "
+    L"(\"-Differences\").\r\n\r\n"
     L"Choose CSV or TSV in the Save dialog's file-type list. Files are written with a "
     L"byte-order mark so Excel opens them as UTF-8; fields containing a comma, tab, "
     L"quote, or line break are quoted automatically.";
@@ -8577,6 +9378,9 @@ typedef struct SheetPickData
 {
     AppState *app;
     const wchar_t (*names)[EE_XLSX_SHEET_NAME_CCH];
+    const wchar_t *const *items; /* used instead of names when set (App_PickItem) */
+    const wchar_t *prompt;       /* NULL = the worksheet prompt */
+    const wchar_t *ok_label;     /* NULL = "Load" */
     int count;
     int selected;
 } SheetPickData;
@@ -8616,7 +9420,9 @@ static INT_PTR CALLBACK SheetPickerDlgProc(HWND dlg, UINT msg, WPARAM wParam, LP
 
             label = CreateWindowExW(0,
                                     L"STATIC",
-                                    L"This workbook has multiple sheets. Choose one to load:",
+                                    (d->prompt != NULL)
+                                        ? d->prompt
+                                        : L"This workbook has multiple sheets. Choose one to load:",
                                     WS_CHILD | WS_VISIBLE | SS_LEFT,
                                     margin,
                                     margin,
@@ -8641,13 +9447,14 @@ static INT_PTR CALLBACK SheetPickerDlgProc(HWND dlg, UINT msg, WPARAM wParam, LP
                                    NULL);
             for (i = 0; i < d->count; i++)
             {
-                SendMessageW(list, LB_ADDSTRING, 0, (LPARAM)d->names[i]);
+                SendMessageW(list, LB_ADDSTRING, 0,
+                             (LPARAM)((d->items != NULL) ? d->items[i] : d->names[i]));
             }
             SendMessageW(list, LB_SETCURSEL, 0, 0);
 
             ok = CreateWindowExW(0,
                                  L"BUTTON",
-                                 L"Load",
+                                 (d->ok_label != NULL) ? d->ok_label : L"Load",
                                  WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                                  rc.right - margin - 2 * btn_w - gap,
                                  rc.bottom - margin - btn_h,
@@ -8717,11 +9524,34 @@ static INT_PTR CALLBACK SheetPickerDlgProc(HWND dlg, UINT msg, WPARAM wParam, LP
 static int App_PickSheet(AppState *app, const wchar_t (*names)[EE_XLSX_SHEET_NAME_CCH], int count)
 {
     SheetPickData d;
+    ZeroMemory(&d, sizeof(d));
     d.app = app;
     d.names = names;
     d.count = count;
     d.selected = 0;
     if (App_RunModalDialog(app, L"Select Worksheet", SheetPickerDlgProc, (LPARAM)&d) == 1)
+    {
+        return d.selected;
+    }
+    return -1;
+}
+
+/* The same picker for any list of names; returns the chosen index, or -1. */
+static int App_PickItem(AppState *app,
+                        const wchar_t *caption,
+                        const wchar_t *prompt,
+                        const wchar_t *ok_label,
+                        const wchar_t *const *items,
+                        int count)
+{
+    SheetPickData d;
+    ZeroMemory(&d, sizeof(d));
+    d.app = app;
+    d.items = items;
+    d.prompt = prompt;
+    d.ok_label = ok_label;
+    d.count = count;
+    if (App_RunModalDialog(app, caption, SheetPickerDlgProc, (LPARAM)&d) == 1)
     {
         return d.selected;
     }
@@ -9271,10 +10101,17 @@ static LRESULT App_OnNotify(AppState *app, NMHDR *hdr)
         }
         else
         {
-            column = (uint32_t)di->item.iSubItem + EE_FROZEN_COLUMN_COUNT;
+            column = App_ScrollToTable(app, di->item.iSubItem);
         }
 
-        if (di->item.mask & LVIF_TEXT)
+        if ((di->item.mask & LVIF_TEXT) && column >= app->table.column_count)
+        {
+            if (di->item.cchTextMax > 0)
+            {
+                di->item.pszText[0] = L'\0';
+            }
+        }
+        else if (di->item.mask & LVIF_TEXT)
         {
             EeVoterTable_GetViewCellW(&app->table,
                                       view_row,
@@ -9347,7 +10184,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)app);
             app->hwnd_main = hwnd;
             App_UpdateDpiMetrics(app, GetDpiForWindow(hwnd));
-            menu = App_CreateMenu();
+            menu = app->is_roster ? App_CreateRosterMenu() : App_CreateMenu();
             SetMenu(hwnd, menu);
             if (!App_CreateControls(app))
             {
@@ -9495,6 +10332,22 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 IDM_FILTER_DUP_VOTERS,
                 MF_BYCOMMAND |
                     ((app->table.row_count > 0 && !app->loading) ? MF_ENABLED : MF_GRAYED));
+            {
+                /* Needs birth dates in this list and a loaded voter roster to check. */
+                BOOL roster_open = FALSE;
+                AppState *p;
+                for (p = g_viewers; p != NULL && !roster_open; p = p->next)
+                {
+                    roster_open = p->is_roster && p->table.row_count > 0 && !p->loading;
+                }
+                EnableMenuItem((HMENU)wParam,
+                               IDM_FILTER_DUP_VOTERS_VOTING,
+                               MF_BYCOMMAND |
+                                   ((roster_open && !app->is_roster && app->table.row_count > 0 &&
+                                     !app->loading && EeVoterTable_FindBirthdateColumn(&app->table) >= 0)
+                                        ? MF_ENABLED
+                                        : MF_GRAYED));
+            }
             EnableMenuItem((HMENU)wParam,
                            IDM_FILTER_RESET_VIEW,
                            MF_BYCOMMAND |
@@ -9531,6 +10384,15 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     return 0;
                 case IDM_FILE_OPEN_CVR:
                     App_BeginOpenCvr(app);
+                    return 0;
+                case IDM_FILE_OPEN_ROSTER:
+                    App_BeginOpenRoster(app);
+                    return 0;
+                case IDM_REPORT_LOAD_SUMMARY:
+                    if (app->roster_info.note != NULL)
+                    {
+                        App_ShowHelpTopic(app, L"Voter Roster Load Summary", app->roster_info.note);
+                    }
                     return 0;
                 case IDM_FILE_CLOSE_VOTER_LIST:
                     App_RequestClose(app);
@@ -9571,6 +10433,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_FILTER_DUP_VOTERS:
                     App_ShowDuplicateVoters(app);
                     return 0;
+                case IDM_FILTER_DUP_VOTERS_VOTING:
+                    App_ShowDuplicateVotersVoting(app);
+                    return 0;
                 case IDM_FILTER_RESET_VIEW:
                     /* Leave the duplicates view and any filter: show all records. */
                     App_ResetFilter(app);
@@ -9578,26 +10443,36 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_REPORT_PRECINCT:
                     App_ShowReport(app, EE_REPORT_PRECINCT);
                     return 0;
+                case IDM_REPORT_VOTING_TOTALS:
+                    App_ShowRosterTotals(app);
+                    return 0;
                 case IDM_REPORT_ADDRESS:
                     App_ShowReport(app, EE_REPORT_ADDRESS);
                     return 0;
                 case IDM_HELP_LOADING:
-                    App_ShowHelpTopic(app, L"Help — Loading Voter Lists", k_HelpLoading);
+                    if (app->is_roster)
+                    {
+                        App_ShowHelpTopic(app, L"Help — Loading Voter Rosters", k_HelpRosterLoading);
+                    }
+                    else
+                    {
+                        App_ShowHelpTopic(app, L"Help — Loading Voter Lists", k_HelpLoading);
+                    }
                     return 0;
                 case IDM_HELP_OPTIONS:
-                    App_ShowHelpTopic(app, L"Help — Options", k_HelpOptions);
+                    App_ShowHelpTopic(app, L"Help — Options", app->is_roster ? k_RosterHelpOptions : k_HelpOptions);
                     return 0;
                 case IDM_HELP_FILTERS:
-                    App_ShowHelpTopic(app, L"Help — Filters", k_HelpFilters);
+                    App_ShowHelpTopic(app, L"Help — Filters", app->is_roster ? k_RosterHelpFilters : k_HelpFilters);
                     return 0;
                 case IDM_HELP_REPORTS:
-                    App_ShowHelpTopic(app, L"Help — Reports", k_HelpReports);
+                    App_ShowHelpTopic(app, L"Help — Reports", app->is_roster ? k_RosterHelpReports : k_HelpReports);
                     return 0;
                 case IDM_HELP_EXPORT:
-                    App_ShowHelpTopic(app, L"Help — Export", k_HelpExport);
+                    App_ShowHelpTopic(app, L"Help — Export", app->is_roster ? k_RosterHelpExport : k_HelpExport);
                     return 0;
                 case IDM_HELP_COMPARE:
-                    App_ShowHelpTopic(app, L"Help — Compare", k_HelpCompare);
+                    App_ShowHelpTopic(app, L"Help — Compare", app->is_roster ? k_RosterHelpCompare : k_HelpCompare);
                     return 0;
                 case IDM_HELP_ABOUT:
                     App_ShowAbout(app);
@@ -9752,6 +10627,7 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             app->filter_map = NULL;
             app->filter_count = 0;
             EeVoterTable_Clear(&app->table);
+            EeRoster_FreeInfo(&app->roster_info);
             if (app->font_ui)
             {
                 DeleteObject(app->font_ui);
@@ -9973,6 +10849,16 @@ static AppState *App_CreateViewer(HINSTANCE instance,
                                   HWND offset_from,
                                   const AppState *prefs)
 {
+    return App_CreateViewerEx(instance, nCmdShow, offset_from, prefs, FALSE);
+}
+
+/* Create a viewer window; @p roster makes it a single-pane Voter Roster window. */
+static AppState *App_CreateViewerEx(HINSTANCE instance,
+                                    int nCmdShow,
+                                    HWND offset_from,
+                                    const AppState *prefs,
+                                    BOOL roster)
+{
     AppState *app;
     HWND hwnd;
     int x = CW_USEDEFAULT;
@@ -9986,6 +10872,7 @@ static AppState *App_CreateViewer(HINSTANCE instance,
         return NULL;
     }
     App_InitViewerState(app, instance, prefs);
+    app->is_roster = roster; /* before WM_CREATE: it picks the menu */
 
     if (offset_from != NULL)
     {
@@ -10240,6 +11127,7 @@ static HMENU App_CreateCvrMenu(void)
     }
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_CVR, L"&Close Cast Vote Records");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_CVR, L"&Export Cast Vote Records…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -10852,6 +11740,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_FILE_OPEN_CVR:
                     App_BeginOpenCvr(cw->app);
+                    return 0;
+                case IDM_FILE_OPEN_ROSTER:
+                    App_BeginOpenRoster(cw->app);
                     return 0;
                 case IDM_FILE_CLOSE_CVR:
                     DestroyWindow(hwnd);
@@ -14809,6 +15700,1320 @@ static void App_BeginOpenCvr(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Voter Roster loading (worker thread behind a modal progress dialog)        */
+/* -------------------------------------------------------------------------- */
+
+#define EEM_ROSTER_LOAD_DONE     (WM_APP + 13)
+#define EEM_ROSTER_LOAD_PROGRESS (WM_APP + 14)
+
+typedef struct RosterLoadJob
+{
+    AppState *app;
+    const wchar_t *const *paths;
+    int count;
+    EeVoterTable *table;
+    EeRosterLoadInfo *info;
+    volatile LONG cancel;
+    EeLoadStatus status;
+    wchar_t err[512];
+    HWND dlg;
+    HWND count_label; /* "N voter records" */
+    HWND bar;         /* determinate (0..100), subclassed to draw eta[] over the fill */
+    WNDPROC bar_proc; /* the progress bar's own window procedure */
+    wchar_t eta[96];  /* text centered on the bar: time remaining */
+    ULONGLONG start_tick;
+    ULONGLONG eta_tick; /* when eta[] last changed (updated at most twice a second) */
+    HANDLE thread;
+} RosterLoadJob;
+
+static BOOL RosterLoadProgressCb(const EeLoadProgress *pr, void *user)
+{
+    RosterLoadJob *j = (RosterLoadJob *)user;
+    if (j != NULL && j->dlg != NULL)
+    {
+        uint32_t pct = (pr->percent > 100u) ? 100u : pr->percent;
+        PostMessageW(j->dlg, EEM_ROSTER_LOAD_PROGRESS, (WPARAM)pr->rows_loaded, (LPARAM)pct);
+    }
+    return TRUE; /* cancellation is driven by j->cancel, checked by the loader */
+}
+
+static DWORD WINAPI RosterLoadThreadProc(void *param)
+{
+    RosterLoadJob *j = (RosterLoadJob *)param;
+    j->status = EeRoster_LoadFiles(j->paths,
+                                   j->count,
+                                   j->table,
+                                   j->info,
+                                   &j->cancel,
+                                   RosterLoadProgressCb,
+                                   j,
+                                   j->err,
+                                   ARRAYSIZE(j->err));
+    PostMessageW(j->dlg, EEM_ROSTER_LOAD_DONE, 0, 0);
+    return 0;
+}
+
+/* The progress bar paints itself into a memory DC (WM_PRINTCLIENT), then the time
+ * remaining is drawn centered over it, so the text never flickers as the bar moves. */
+static LRESULT CALLBACK RosterBarProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    RosterLoadJob *j = (RosterLoadJob *)GetPropW(hwnd, L"EeRosterJob");
+    WNDPROC base = (j != NULL) ? j->bar_proc : NULL;
+    if (base == NULL)
+    {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+    if (msg == WM_PAINT)
+    {
+        PAINTSTRUCT ps;
+        RECT rc;
+        HDC dc = BeginPaint(hwnd, &ps);
+        HDC mem;
+        HBITMAP bmp;
+        HGDIOBJ old_bmp;
+        HGDIOBJ old_font = NULL;
+        GetClientRect(hwnd, &rc);
+        mem = CreateCompatibleDC(dc);
+        bmp = CreateCompatibleBitmap(dc, rc.right, rc.bottom);
+        if (mem != NULL && bmp != NULL)
+        {
+            old_bmp = SelectObject(mem, bmp);
+            FillRect(mem, &rc, GetSysColorBrush(COLOR_BTNFACE));
+            CallWindowProcW(base, hwnd, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT | PRF_ERASEBKGND);
+            if (j->eta[0] != L'\0')
+            {
+                if (j->app != NULL && j->app->font_ui != NULL)
+                {
+                    old_font = SelectObject(mem, j->app->font_ui);
+                }
+                SetBkMode(mem, TRANSPARENT);
+                SetTextColor(mem, GetSysColor(COLOR_WINDOWTEXT));
+                DrawTextW(mem, j->eta, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                if (old_font != NULL)
+                {
+                    SelectObject(mem, old_font);
+                }
+            }
+            BitBlt(dc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+            SelectObject(mem, old_bmp);
+        }
+        if (bmp != NULL)
+        {
+            DeleteObject(bmp);
+        }
+        if (mem != NULL)
+        {
+            DeleteDC(mem);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    if (msg == WM_ERASEBKGND)
+    {
+        return 1; /* painted in WM_PAINT */
+    }
+    if (msg == WM_NCDESTROY)
+    {
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)base);
+        RemovePropW(hwnd, L"EeRosterJob");
+        return CallWindowProcW(base, hwnd, msg, wParam, lParam);
+    }
+    return CallWindowProcW(base, hwnd, msg, wParam, lParam);
+}
+
+/* "About N minutes remaining" from the elapsed time and percent done. */
+static void Roster_FormatEta(RosterLoadJob *j, int pct)
+{
+    ULONGLONG now = GetTickCount64();
+    ULONGLONG elapsed = now - j->start_tick;
+    if (pct >= 100)
+    {
+        StringCchCopyW(j->eta, ARRAYSIZE(j->eta), L"Finishing…");
+        return;
+    }
+    if (pct < 3 || elapsed < 1500)
+    {
+        StringCchCopyW(j->eta, ARRAYSIZE(j->eta), L"Estimating time remaining…");
+        return;
+    }
+    if (j->eta_tick != 0 && now - j->eta_tick < 500)
+    {
+        return; /* keep the text steady */
+    }
+    j->eta_tick = now;
+    {
+        ULONGLONG rem_ms = elapsed * (ULONGLONG)(100 - pct) / (ULONGLONG)pct;
+        unsigned long secs = (unsigned long)((rem_ms + 999) / 1000);
+        if (secs < 5)
+        {
+            StringCchCopyW(j->eta, ARRAYSIZE(j->eta), L"A few seconds remaining");
+        }
+        else if (secs < 60)
+        {
+            secs = (secs + 4) / 5 * 5; /* 5-second steps */
+            StringCchPrintfW(j->eta, ARRAYSIZE(j->eta), L"About %lu seconds remaining", secs);
+        }
+        else
+        {
+            unsigned long mins = (secs + 30) / 60;
+            StringCchPrintfW(j->eta,
+                             ARRAYSIZE(j->eta),
+                             L"About %lu minute%s remaining",
+                             mins,
+                             mins == 1ul ? L"" : L"s");
+        }
+    }
+}
+
+static INT_PTR CALLBACK RosterLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    RosterLoadJob *j = (RosterLoadJob *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+        {
+            AppState *app;
+            RECT rc;
+            int margin;
+            HWND label;
+            HWND count;
+            HWND bar;
+            HWND cancel;
+            j = (RosterLoadJob *)lParam;
+            SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)j);
+            j->dlg = dlg;
+            app = j->app;
+
+            App_CenterModalClient(dlg, app, Scale(app, 380), Scale(app, 146));
+            GetClientRect(dlg, &rc);
+            margin = Scale(app, 14);
+            label = CreateWindowExW(0,
+                                    L"STATIC",
+                                    L"Loading Voter Roster…",
+                                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                    margin,
+                                    margin,
+                                    rc.right - 2 * margin,
+                                    Scale(app, 20),
+                                    dlg,
+                                    NULL,
+                                    app->instance,
+                                    NULL);
+            count = CreateWindowExW(0,
+                                    L"STATIC",
+                                    L"0 voter records",
+                                    WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                    margin,
+                                    margin + Scale(app, 22),
+                                    rc.right - 2 * margin,
+                                    Scale(app, 18),
+                                    dlg,
+                                    NULL,
+                                    app->instance,
+                                    NULL);
+            j->count_label = count;
+            bar = CreateWindowExW(0,
+                                  PROGRESS_CLASSW,
+                                  NULL,
+                                  WS_CHILD | WS_VISIBLE,
+                                  margin,
+                                  margin + Scale(app, 46),
+                                  rc.right - 2 * margin,
+                                  Scale(app, 22),
+                                  dlg,
+                                  NULL,
+                                  app->instance,
+                                  NULL);
+            j->bar = bar;
+            cancel = CreateWindowExW(0,
+                                     L"BUTTON",
+                                     L"Cancel",
+                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                     rc.right - margin - Scale(app, 84),
+                                     rc.bottom - margin - Scale(app, 26),
+                                     Scale(app, 84),
+                                     Scale(app, 26),
+                                     dlg,
+                                     (HMENU)(INT_PTR)IDCANCEL,
+                                     app->instance,
+                                     NULL);
+            if (app->font_ui)
+            {
+                SendMessageW(label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(count, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+                SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+            j->start_tick = GetTickCount64();
+            StringCchCopyW(j->eta, ARRAYSIZE(j->eta), L"Estimating time remaining…");
+            if (bar != NULL)
+            {
+                SendMessageW(bar, PBM_SETRANGE32, 0, 100);
+                SendMessageW(bar, PBM_SETPOS, 0, 0);
+                SetPropW(bar, L"EeRosterJob", (HANDLE)j);
+                j->bar_proc =
+                    (WNDPROC)SetWindowLongPtrW(bar, GWLP_WNDPROC, (LONG_PTR)RosterBarProc);
+            }
+            j->thread = CreateThread(NULL, 0, RosterLoadThreadProc, j, 0, NULL);
+            if (j->thread == NULL)
+            {
+                j->status = EeLoadStatus_Error;
+                StringCchCopyW(j->err, ARRAYSIZE(j->err), L"Could not start the load thread.");
+                EndDialog(dlg, 0);
+            }
+            return (INT_PTR)FALSE;
+        }
+
+        case EEM_ROSTER_LOAD_PROGRESS:
+            if (j != NULL)
+            {
+                unsigned long n = (unsigned long)wParam;
+                int pct = (int)lParam;
+                Roster_FormatEta(j, pct);
+                if (j->bar != NULL)
+                {
+                    SendMessageW(j->bar, PBM_SETPOS, (WPARAM)pct, 0);
+                    InvalidateRect(j->bar, NULL, FALSE);
+                }
+                if (j->count_label != NULL)
+                {
+                    wchar_t txt[96];
+                    StringCchPrintfW(txt, ARRAYSIZE(txt), L"%lu voter record%s", n,
+                                     n == 1ul ? L"" : L"s");
+                    SetWindowTextW(j->count_label, txt);
+                }
+            }
+            return (INT_PTR)TRUE;
+
+        case EEM_ROSTER_LOAD_DONE:
+            if (j != NULL && j->thread != NULL)
+            {
+                WaitForSingleObject(j->thread, INFINITE);
+                CloseHandle(j->thread);
+                j->thread = NULL;
+            }
+            EndDialog(dlg, 1);
+            return (INT_PTR)TRUE;
+
+        case WM_COMMAND:
+            if (j != NULL && LOWORD(wParam) == IDCANCEL)
+            {
+                HWND b = GetDlgItem(dlg, IDCANCEL);
+                InterlockedExchange(&j->cancel, 1);
+                if (b != NULL)
+                {
+                    EnableWindow(b, FALSE);
+                }
+                return (INT_PTR)TRUE;
+            }
+            break;
+
+        case WM_CLOSE:
+            if (j != NULL)
+            {
+                InterlockedExchange(&j->cancel, 1);
+            }
+            return (INT_PTR)TRUE;
+
+        default:
+            break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+/* Menu bar of a Voter Roster window. Compare stays at index k_CompareMenuPos. */
+static HMENU App_CreateRosterMenu(void)
+{
+    HMENU menu = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
+    HMENU filter_menu = CreatePopupMenu();
+    HMENU reports_menu = CreatePopupMenu();
+    HMENU compare_menu = CreatePopupMenu();
+    HMENU help_menu = CreatePopupMenu();
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…	Ctrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter Roster");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter Roster…");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy	Ctrl+C");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_OPTIONS, L"&Options…");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…	Ctrl+L");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_DUP_VOTER_IDS, L"Show &Duplicate Voter IDs…");
+    AppendMenuW(filter_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET_VIEW, L"Reset Vie&w…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_PRECINCT, L"Display &Precinct Report…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_VOTING_TOTALS, L"Display &Voting Totals…");
+    AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(reports_menu, MF_STRING, IDM_REPORT_LOAD_SUMMARY, L"Display &Load Summary…");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Voter Rosters");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
+    AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
+    return menu;
+}
+
+/* The roster window's columns: Voter ID, Precinct, Name (normalized), then the source
+ * columns other than the VUID / name parts behind them (Voting Method, Date Voted,
+ * Party, extras, Source File). */
+static void App_BuildRosterColumns(AppState *app)
+{
+    static const wchar_t *const k_hidden[] = {L"VUID",        L"Precinct",    L"Last Name",
+                                              L"First Name",  L"Middle Name", L"Name Suffix"};
+    uint32_t c;
+    app->nroster_cols = 0;
+    app->roster_cols[app->nroster_cols++] = EE_COL_VOTER_ID;
+    app->roster_cols[app->nroster_cols++] = EE_COL_PRECINCT;
+    app->roster_cols[app->nroster_cols++] = EE_COL_NAME;
+    for (c = EE_FROZEN_COLUMN_COUNT;
+         c < app->table.column_count && app->nroster_cols < ARRAYSIZE(app->roster_cols);
+         c++)
+    {
+        const wchar_t *t = app->table.column_titles[c] ? app->table.column_titles[c] : L"";
+        BOOL hide = FALSE;
+        size_t k;
+        for (k = 0; k < ARRAYSIZE(k_hidden); k++)
+        {
+            if (_wcsicmp(t, k_hidden[k]) == 0)
+            {
+                hide = TRUE;
+                break;
+            }
+        }
+        if (!hide)
+        {
+            app->roster_cols[app->nroster_cols++] = c;
+        }
+    }
+}
+
+/* TRUE when the load summary says something beyond the counts (skipped or unread
+ * files, recovered sheets, unusual or duplicate Voter IDs), so it opens after loading. */
+static BOOL Roster_InfoIsNotable(const EeRosterLoadInfo *in)
+{
+    return in->repeated_files > 0 || in->copy_files > 0 || in->unsupported_files > 0 ||
+           in->recovered_sheets > 0 || in->skipped_sheets > 0 || in->vuids_malformed > 0 ||
+           in->vuids_missing > 0 || in->vuids_duplicated > 0;
+}
+
+/* File → Load Voter Roster… (any window): pick roster files, load them behind the
+ * progress dialog, and open the result in a new Voter Roster window. */
+static void App_BeginOpenRoster(AppState *app)
+{
+    OPENFILENAMEW ofn;
+    wchar_t *files;
+    wchar_t *paths[256];
+    int count = 0;
+    int i;
+    EeVoterTable table;
+    EeRosterLoadInfo info;
+    RosterLoadJob job;
+    wchar_t err[512];
+
+    if (app == NULL)
+    {
+        return;
+    }
+    files = (wchar_t *)malloc(65536 * sizeof(wchar_t));
+    if (files == NULL)
+    {
+        return;
+    }
+    files[0] = L'\0';
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = app->hwnd_main;
+    ofn.lpstrFilter = L"Voter rosters (*.zip;*.xlsx;*.csv;*.tsv;*.txt)\0"
+                      L"*.zip;*.xlsx;*.csv;*.tsv;*.txt\0"
+                      L"All files (*.*)\0*.*\0";
+    ofn.lpstrFile = files;
+    ofn.nMaxFile = 65536;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+    ofn.lpstrTitle = L"Load Voter Roster";
+
+    if (!GetOpenFileNameW(&ofn))
+    {
+        free(files);
+        return;
+    }
+
+    /* Multi-select result: a single full path, or a directory followed by NUL-separated
+     * file names, terminated by a double NUL. */
+    {
+        const wchar_t *dir = files;
+        size_t dlen = wcslen(dir);
+        const wchar_t *p = files + dlen + 1;
+        if (*p == L'\0')
+        {
+            paths[count] = _wcsdup(files);
+            if (paths[count] != NULL)
+            {
+                count++;
+            }
+        }
+        else
+        {
+            BOOL need_sep = (dlen > 0 && dir[dlen - 1] != L'\\');
+            while (*p != L'\0' && count < (int)ARRAYSIZE(paths))
+            {
+                size_t need = dlen + 1 + wcslen(p) + 1;
+                wchar_t *full = (wchar_t *)malloc(need * sizeof(wchar_t));
+                if (full == NULL)
+                {
+                    break;
+                }
+                StringCchCopyW(full, need, dir);
+                if (need_sep)
+                {
+                    StringCchCatW(full, need, L"\\");
+                }
+                StringCchCatW(full, need, p);
+                paths[count++] = full;
+                p += wcslen(p) + 1;
+            }
+        }
+    }
+    free(files);
+    if (count == 0)
+    {
+        return;
+    }
+
+    EeVoterTable_Init(&table);
+    table.name_surname_first = app->name_surname_first;
+    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&job, sizeof(job));
+    job.app = app;
+    job.paths = (const wchar_t *const *)paths;
+    job.count = count;
+    job.table = &table;
+    job.info = &info;
+    job.status = EeLoadStatus_Error;
+    App_RunModalDialog(app, L"Loading Voter Roster", RosterLoadDlgProc, (LPARAM)&job);
+    StringCchCopyW(err, ARRAYSIZE(err), job.err);
+
+    if (job.status == EeLoadStatus_Ok)
+    {
+        AppState *r = App_CreateViewerEx(app->instance, SW_SHOWNORMAL, app->hwnd_main, app, TRUE);
+        if (r == NULL)
+        {
+            EeVoterTable_Clear(&table);
+            EeRoster_FreeInfo(&info);
+            MessageBoxW(app->hwnd_main, L"Could not open the Voter Roster window.", k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+        }
+        else
+        {
+            const wchar_t *leaf = paths[0];
+            const wchar_t *q;
+            wchar_t title[MAX_PATH + 64];
+            for (q = paths[0]; *q != L'\0'; q++)
+            {
+                if (*q == L'\\' || *q == L'/')
+                {
+                    leaf = q + 1;
+                }
+            }
+            EeVoterTable_Clear(&r->table);
+            r->table = table; /* move */
+            r->table.name_surname_first = r->name_surname_first;
+            EeVoterTable_Init(&table);
+            r->roster_info = info; /* move */
+            ZeroMemory(&info, sizeof(info));
+            StringCchCopyW(r->load_path, ARRAYSIZE(r->load_path), paths[0]);
+            if (count > 1)
+            {
+                StringCchPrintfW(title, ARRAYSIZE(title), L"%s (+%d more) — Voter Roster", leaf,
+                                 count - 1);
+            }
+            else
+            {
+                StringCchPrintfW(title, ARRAYSIZE(title), L"%s — Voter Roster", leaf);
+            }
+            SetWindowTextW(r->hwnd_main, title);
+            App_BuildRosterColumns(r);
+            App_RebuildColumns(r);
+            App_UpdateRowStatus(r);
+            SetForegroundWindow(r->hwnd_main);
+            SetFocus(r->hwnd_scroll);
+            if (r->roster_info.note != NULL && Roster_InfoIsNotable(&r->roster_info))
+            {
+                App_ShowHelpTopicOn(r, r->hwnd_main, L"Voter Roster Load Summary",
+                                    r->roster_info.note);
+            }
+        }
+    }
+    else
+    {
+        EeVoterTable_Clear(&table);
+        EeRoster_FreeInfo(&info);
+        if (job.status == EeLoadStatus_Error)
+        {
+            MessageBoxW(app->hwnd_main,
+                        (err[0] != L'\0') ? err : L"Could not load the voter roster.",
+                        k_WindowTitle,
+                        MB_ICONERROR | MB_OK);
+        }
+    }
+
+    for (i = 0; i < count; i++)
+    {
+        free(paths[i]);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Voter Roster: Voting Totals report                                         */
+/* -------------------------------------------------------------------------- */
+
+#define RTOT_TOTAL_ROW UINT32_MAX /* row date index of a Total row */
+#define RTOT_ALL_PARTIES (-1)     /* row party of an all-parties row */
+
+enum
+{
+    RTOT_AVAIL = 0,      /* counts shown */
+    RTOT_NOT_AVAILABLE,  /* no file or record of this method */
+    RTOT_NOT_LOADED      /* its files were found but not read (PDF) */
+};
+
+struct RosterTotalsWindow
+{
+    AppState *app;
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    HFONT font_bold;     /* bold font_ui for Total rows */
+    EeRosterTotals tot;
+    uint32_t *row_date;  /* display row -> date index or RTOT_TOTAL_ROW */
+    int32_t *row_party;  /* display row -> party index or RTOT_ALL_PARTIES */
+    uint32_t nrows;
+    int method_col[EE_VM_COUNT]; /* list column of each method, or -1 */
+    int avail[EE_VM_COUNT];
+    int col_party;       /* -1 when the roster has no parties */
+    int col_total;
+    int ncols;
+};
+
+static WNDPROC g_old_rtot_list_proc = NULL;
+
+/* Voters for a (date, party) cell group and method; date RTOT_TOTAL_ROW and party
+ * RTOT_ALL_PARTIES sum over all dates / parties. */
+static uint32_t RosterTotals_Count(const RosterTotalsWindow *rw, uint32_t date, int32_t party, int m)
+{
+    const EeRosterTotals *t = &rw->tot;
+    uint32_t d0 = (date == RTOT_TOTAL_ROW) ? 0 : date;
+    uint32_t d1 = (date == RTOT_TOTAL_ROW) ? t->ndates : date + 1;
+    uint32_t p0 = (party == RTOT_ALL_PARTIES) ? 0 : (uint32_t)party;
+    uint32_t p1 = (party == RTOT_ALL_PARTIES) ? t->nparties : (uint32_t)party + 1;
+    uint32_t sum = 0;
+    uint32_t d;
+    uint32_t p;
+    for (d = d0; d < d1; d++)
+    {
+        for (p = p0; p < p1; p++)
+        {
+            const uint32_t *c = &t->counts[((size_t)d * t->nparties + p) * EE_VM_COUNT];
+            if (m >= 0)
+            {
+                sum += c[m];
+            }
+            else
+            {
+                int k;
+                for (k = 0; k < EE_VM_COUNT; k++)
+                {
+                    sum += c[k];
+                }
+            }
+        }
+    }
+    return sum;
+}
+
+/* "1234567" -> "1,234,567". */
+static void RosterTotals_Group(uint32_t v, wchar_t *buf, size_t cch)
+{
+    wchar_t raw[16];
+    size_t n;
+    size_t i;
+    size_t o = 0;
+    StringCchPrintfW(raw, ARRAYSIZE(raw), L"%u", v);
+    n = wcslen(raw);
+    for (i = 0; i < n && o + 1 < cch; i++)
+    {
+        if (i > 0 && (n - i) % 3 == 0 && o + 2 < cch)
+        {
+            buf[o++] = L',';
+        }
+        buf[o++] = raw[i];
+    }
+    buf[(o < cch) ? o : cch - 1] = L'\0';
+}
+
+/* Cell text; @p display groups digits (copy / export use plain numbers). */
+static void RosterTotals_CellText(const RosterTotalsWindow *rw, uint32_t row, int col, BOOL display,
+                                  wchar_t *buf, size_t cch)
+{
+    uint32_t date;
+    int32_t party;
+    int m;
+    buf[0] = L'\0';
+    if (row >= rw->nrows || cch == 0)
+    {
+        return;
+    }
+    date = rw->row_date[row];
+    party = rw->row_party[row];
+    if (col == 0)
+    {
+        if (date == RTOT_TOTAL_ROW)
+        {
+            StringCchCopyW(buf, cch, L"Total");
+        }
+        else if (rw->tot.dates[date] == 0)
+        {
+            StringCchCopyW(buf, cch, L"(no date)");
+        }
+        else
+        {
+            uint32_t ymd = rw->tot.dates[date];
+            StringCchPrintfW(buf, cch, L"%02u/%02u/%04u", (ymd / 100u) % 100u, ymd % 100u, ymd / 10000u);
+        }
+        return;
+    }
+    if (col == rw->col_party)
+    {
+        if (party == RTOT_ALL_PARTIES)
+        {
+            StringCchCopyW(buf, cch, L"All parties");
+        }
+        else if (rw->tot.parties[party][0] == '\0')
+        {
+            StringCchCopyW(buf, cch, L"(blank)");
+        }
+        else
+        {
+            MultiByteToWideChar(CP_UTF8, 0, rw->tot.parties[party], -1, buf, (int)cch);
+        }
+        return;
+    }
+    if (col == rw->col_total)
+    {
+        uint32_t v = RosterTotals_Count(rw, date, party, -1);
+        if (display)
+            RosterTotals_Group(v, buf, cch);
+        else
+            StringCchPrintfW(buf, cch, L"%u", v);
+        return;
+    }
+    for (m = 0; m < EE_VM_COUNT; m++)
+    {
+        if (rw->method_col[m] == col)
+        {
+            if (rw->avail[m] == RTOT_NOT_AVAILABLE)
+            {
+                StringCchCopyW(buf, cch, L"not available");
+            }
+            else if (rw->avail[m] == RTOT_NOT_LOADED)
+            {
+                StringCchCopyW(buf, cch, L"not loaded");
+            }
+            else
+            {
+                uint32_t v = RosterTotals_Count(rw, date, party, m);
+                if (display)
+                    RosterTotals_Group(v, buf, cch);
+                else
+                    StringCchPrintfW(buf, cch, L"%u", v);
+            }
+            return;
+        }
+    }
+}
+
+static const wchar_t *RosterTotals_ColumnTitle(const RosterTotalsWindow *rw, int col)
+{
+    static const wchar_t *const k_titles[EE_VM_COUNT] = {L"Other",
+                                                         L"Mail Ballot",
+                                                         L"Early Vote In-Person",
+                                                         L"Election Day In-Person",
+                                                         L"Provisional",
+                                                         L"Limited"};
+    int m;
+    if (col == 0)
+        return L"Date Voted";
+    if (col == rw->col_party)
+        return L"Party";
+    if (col == rw->col_total)
+        return L"Total";
+    for (m = 0; m < EE_VM_COUNT; m++)
+    {
+        if (rw->method_col[m] == col)
+        {
+            return k_titles[m];
+        }
+    }
+    return L"";
+}
+
+/* Lay out columns and rows from rw->tot: one row per date (per party, plus an
+ * all-parties row when several parties voted that day), then the Total rows. */
+static BOOL RosterTotals_Build(RosterTotalsWindow *rw)
+{
+    const EeRosterTotals *t = &rw->tot;
+    const EeRosterLoadInfo *in = &rw->app->roster_info;
+    static const int k_order[] = {EE_VM_MAIL, EE_VM_EARLY, EE_VM_ELECTION_DAY, EE_VM_PROVISIONAL,
+                                  EE_VM_LIMITED, EE_VM_NONE};
+    size_t cap;
+    uint32_t d;
+    uint32_t p;
+    size_t k;
+    int col = 1;
+
+    rw->col_party = t->has_party ? col++ : -1;
+    for (k = 0; k < ARRAYSIZE(k_order); k++)
+    {
+        int m = k_order[k];
+        rw->method_col[m] = -1;
+        if (m == EE_VM_NONE && !t->method_present[EE_VM_NONE])
+        {
+            continue; /* "Other" only for unrecognized Voting Method values */
+        }
+        rw->method_col[m] = col++;
+        if (t->method_present[m] || in->method_read[m])
+            rw->avail[m] = RTOT_AVAIL;
+        else if (in->method_source[m])
+            rw->avail[m] = RTOT_NOT_LOADED;
+        else
+            rw->avail[m] = RTOT_NOT_AVAILABLE;
+    }
+    rw->col_total = col++;
+    rw->ncols = col;
+
+    cap = (size_t)t->ndates * (t->nparties + 1u) + t->nparties + 2u;
+    rw->row_date = (uint32_t *)malloc(cap * sizeof(uint32_t));
+    rw->row_party = (int32_t *)malloc(cap * sizeof(int32_t));
+    if (rw->row_date == NULL || rw->row_party == NULL)
+    {
+        return FALSE;
+    }
+    rw->nrows = 0;
+    for (d = 0; d < t->ndates; d++)
+    {
+        uint32_t shown = 0;
+        if (!t->has_party)
+        {
+            rw->row_date[rw->nrows] = d;
+            rw->row_party[rw->nrows++] = RTOT_ALL_PARTIES;
+            continue;
+        }
+        for (p = 0; p < t->nparties; p++)
+        {
+            if (RosterTotals_Count(rw, d, (int32_t)p, -1) > 0)
+            {
+                rw->row_date[rw->nrows] = d;
+                rw->row_party[rw->nrows++] = (int32_t)p;
+                shown++;
+            }
+        }
+        if (shown > 1)
+        {
+            rw->row_date[rw->nrows] = d;
+            rw->row_party[rw->nrows++] = RTOT_ALL_PARTIES;
+        }
+    }
+    if (t->has_party)
+    {
+        for (p = 0; p < t->nparties; p++)
+        {
+            rw->row_date[rw->nrows] = RTOT_TOTAL_ROW;
+            rw->row_party[rw->nrows++] = (int32_t)p;
+        }
+    }
+    rw->row_date[rw->nrows] = RTOT_TOTAL_ROW;
+    rw->row_party[rw->nrows++] = RTOT_ALL_PARTIES;
+    return TRUE;
+}
+
+static void RosterTotals_UpdateStatus(RosterTotalsWindow *rw)
+{
+    wchar_t a[32];
+    wchar_t b[32];
+    wchar_t c[32];
+    wchar_t st[320];
+    int m;
+    if (rw->status == NULL)
+    {
+        return;
+    }
+    RosterTotals_Group(rw->tot.counted, a, ARRAYSIZE(a));
+    if (rw->tot.repeats > 0)
+    {
+        RosterTotals_Group(rw->tot.repeats, b, ARRAYSIZE(b));
+        RosterTotals_Group(rw->tot.repeated_ids, c, ARRAYSIZE(c));
+        StringCchPrintfW(st, ARRAYSIZE(st),
+                         L"%s voters, each counted once (%s later record%s of %s Voter ID%s not "
+                         L"counted)",
+                         a, b, rw->tot.repeats == 1 ? L"" : L"s", c,
+                         rw->tot.repeated_ids == 1 ? L"" : L"s");
+    }
+    else
+    {
+        StringCchPrintfW(st, ARRAYSIZE(st), L"%s voters", a);
+    }
+    for (m = 0; m < EE_VM_COUNT; m++)
+    {
+        if (rw->method_col[m] >= 0 && rw->avail[m] == RTOT_NOT_LOADED)
+        {
+            StringCchCatW(st, ARRAYSIZE(st), L" — not loaded = PDF rosters (not read yet)");
+            break;
+        }
+    }
+    StringCchCatW(st, ARRAYSIZE(st), L" — right-click to copy or export");
+    SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)st);
+}
+
+static void RosterTotals_Layout(RosterTotalsWindow *rw, int width, int height)
+{
+    int sb_h = 0;
+    if (rw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(rw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(rw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (rw->list != NULL)
+    {
+        MoveWindow(rw->list, 0, 0, width, (height > sb_h) ? height - sb_h : 0, TRUE);
+    }
+}
+
+static LRESULT CALLBACK RosterTotalsListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        RosterTotalsWindow *rw =
+            (RosterTotalsWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (rw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(rw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_rtot_list_proc, hwnd, msg, wParam, lParam);
+}
+
+/* Copy the selected rows (with a header row) as tab-separated UTF-8. */
+static void RosterTotals_CopySelected(RosterTotalsWindow *rw)
+{
+    Utf8Export ex;
+    int i;
+    int c;
+    BOOL ok = TRUE;
+    if (rw == NULL || rw->list == NULL || ListView_GetNextItem(rw->list, -1, LVNI_SELECTED) < 0)
+    {
+        return;
+    }
+    ZeroMemory(&ex, sizeof(ex));
+    for (c = 0; c < rw->ncols && ok; c++)
+    {
+        if (c > 0)
+            ok = Utf8Export_AppendChar(&ex, '\t');
+        ok = ok && Utf8Export_AppendFieldW(&ex, RosterTotals_ColumnTitle(rw, c), '\t');
+    }
+    ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+    i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED);
+    while (i >= 0 && ok)
+    {
+        for (c = 0; c < rw->ncols && ok; c++)
+        {
+            wchar_t cell[128];
+            RosterTotals_CellText(rw, (uint32_t)i, c, FALSE, cell, ARRAYSIZE(cell));
+            if (c > 0)
+                ok = Utf8Export_AppendChar(&ex, '\t');
+            ok = ok && Utf8Export_AppendFieldW(&ex, cell, '\t');
+        }
+        ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+        i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED);
+    }
+    if (ok && ex.data != NULL && Utf8Export_AppendChar(&ex, '\0'))
+    {
+        App_SetClipboardUtf8(rw->hwnd, ex.data);
+    }
+    free(ex.data);
+}
+
+typedef struct RosterTotalsExportCtx
+{
+    RosterTotalsWindow *rw;
+    const uint32_t *idx;
+} RosterTotalsExportCtx;
+
+static void RosterTotals_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    RosterTotalsExportCtx *c = (RosterTotalsExportCtx *)user;
+    RosterTotals_CellText(c->rw, (c->idx != NULL) ? c->idx[row] : row, (int)col, FALSE, buf, cch);
+}
+
+static void RosterTotals_Export(RosterTotalsWindow *rw, BOOL selection_only)
+{
+    const wchar_t *headers[EE_VM_COUNT + 3];
+    wchar_t base[192];
+    wchar_t suggested[256];
+    uint32_t *idx = NULL;
+    uint32_t n;
+    int c;
+    RosterTotalsExportCtx ctx;
+
+    if (rw == NULL || rw->nrows == 0)
+    {
+        return;
+    }
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(rw->list, rw->nrows, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = rw->nrows;
+    }
+    for (c = 0; c < rw->ncols && c < (int)ARRAYSIZE(headers); c++)
+    {
+        headers[c] = RosterTotals_ColumnTitle(rw, c);
+    }
+    App_BaseNameNoExt(rw->app->load_path, base, ARRAYSIZE(base));
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%sVoting_Totals", base,
+                     selection_only ? L"Selected_" : L"");
+    ctx.rw = rw;
+    ctx.idx = idx;
+    App_ExportReportModel(rw->hwnd, suggested, (uint32_t)rw->ncols, headers, n, RosterTotals_ExportCell,
+                          &ctx);
+    free(idx);
+}
+
+static void RosterTotals_OnContextMenu(RosterTotalsWindow *rw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+    if (item >= 0 && !(ListView_GetItemState(rw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(rw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(rw->list, item, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
+    cmd = (UINT)TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd, NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_EDIT_COPY)
+        RosterTotals_CopySelected(rw);
+    else if (cmd == IDM_EXPORT_SELECTED)
+        RosterTotals_Export(rw, TRUE);
+    else if (cmd == IDM_EXPORT_ALL)
+        RosterTotals_Export(rw, FALSE);
+}
+
+static void RosterTotals_BuildColumns(RosterTotalsWindow *rw)
+{
+    int c;
+    for (c = 0; c < rw->ncols; c++)
+    {
+        LVCOLUMNW col;
+        int cx = 140;
+        ZeroMemory(&col, sizeof(col));
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | LVCF_SUBITEM;
+        col.fmt = (c == 0 || c == rw->col_party) ? LVCFMT_LEFT : LVCFMT_RIGHT;
+        if (c == 0)
+            cx = 110;
+        else if (c == rw->col_party)
+            cx = 100;
+        else if (c == rw->col_total)
+            cx = 100;
+        else if (c == rw->method_col[EE_VM_EARLY] || c == rw->method_col[EE_VM_ELECTION_DAY])
+            cx = 165;
+        else
+            cx = 120;
+        col.cx = Scale(rw->app, cx);
+        col.pszText = (LPWSTR)RosterTotals_ColumnTitle(rw, c);
+        col.iSubItem = c;
+        ListView_InsertColumn(rw->list, c, &col);
+    }
+}
+
+static LRESULT CALLBACK RosterTotalsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    RosterTotalsWindow *rw = (RosterTotalsWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            RECT rc;
+            rw = (RosterTotalsWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)rw);
+            rw->hwnd = hwnd;
+            GetClientRect(hwnd, &rc);
+            rw->list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                       WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                           LVS_SHOWSELALWAYS,
+                                       0, 0, rc.right, rc.bottom, hwnd, NULL, rw->app->instance, NULL);
+            if (rw->list == NULL)
+            {
+                return -1;
+            }
+            {
+                WNDPROC old = (WNDPROC)SetWindowLongPtrW(rw->list, GWLP_WNDPROC,
+                                                         (LONG_PTR)RosterTotalsListSubclass);
+                if (g_old_rtot_list_proc == NULL)
+                {
+                    g_old_rtot_list_proc = old;
+                }
+            }
+            ListView_SetExtendedListViewStyle(rw->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES);
+            if (rw->app->font_ui)
+            {
+                LOGFONTW lf;
+                SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+                if (GetObjectW(rw->app->font_ui, sizeof(lf), &lf) == sizeof(lf))
+                {
+                    lf.lfWeight = FW_BOLD;
+                    rw->font_bold = CreateFontIndirectW(&lf);
+                }
+            }
+            RosterTotals_BuildColumns(rw);
+            rw->status = CreateWindowExW(0, STATUSCLASSNAMEW, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+                                         0, 0, 0, 0, hwnd, NULL, rw->app->instance, NULL);
+            if (rw->status != NULL && rw->app->font_ui)
+            {
+                SendMessageW(rw->status, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+            }
+            RosterTotals_UpdateStatus(rw);
+            ListView_SetItemCountEx(rw->list, (int)rw->nrows, LVSICF_NOINVALIDATEALL);
+            RosterTotals_Layout(rw, rc.right, rc.bottom);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (rw != NULL)
+            {
+                RosterTotals_Layout(rw, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_SETFOCUS:
+            if (rw != NULL && rw->list != NULL)
+            {
+                SetFocus(rw->list);
+            }
+            return 0;
+
+        case WM_COMMAND:
+            /* Ctrl+C is routed here by the shared accelerator table. */
+            if (rw != NULL && LOWORD(wParam) == IDM_EDIT_COPY)
+            {
+                RosterTotals_CopySelected(rw);
+                return 0;
+            }
+            break;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (rw == NULL || hdr->hwndFrom != rw->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_GETDISPINFOW)
+            {
+                NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+                if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0 && di->item.iSubItem >= 0)
+                {
+                    RosterTotals_CellText(rw, (uint32_t)di->item.iItem, di->item.iSubItem, TRUE,
+                                          di->item.pszText, (size_t)di->item.cchTextMax);
+                }
+                return 0;
+            }
+            if (hdr->code == NM_CUSTOMDRAW)
+            {
+                /* Total and all-parties rows in bold. */
+                NMLVCUSTOMDRAW *cd = (NMLVCUSTOMDRAW *)lParam;
+                if (cd->nmcd.dwDrawStage == CDDS_PREPAINT)
+                {
+                    return CDRF_NOTIFYITEMDRAW;
+                }
+                if (cd->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
+                {
+                    uint32_t row = (uint32_t)cd->nmcd.dwItemSpec;
+                    if (rw->font_bold != NULL && row < rw->nrows &&
+                        (rw->row_date[row] == RTOT_TOTAL_ROW ||
+                         (rw->tot.has_party && rw->row_party[row] == RTOT_ALL_PARTIES)))
+                    {
+                        SelectObject(cd->nmcd.hdc, rw->font_bold);
+                        return CDRF_NEWFONT;
+                    }
+                    return CDRF_DODEFAULT;
+                }
+                return CDRF_DODEFAULT;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(rw->list, &screen);
+                RosterTotals_OnContextMenu(rw, ia->iItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (rw != NULL)
+            {
+                if (rw->app != NULL && rw->app->report_totals == rw)
+                {
+                    rw->app->report_totals = NULL;
+                }
+                if (rw->font_bold != NULL)
+                {
+                    DeleteObject(rw->font_bold);
+                }
+                EeRoster_FreeTotals(&rw->tot);
+                free(rw->row_date);
+                free(rw->row_party);
+                free(rw);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void App_CloseRosterTotals(AppState *app)
+{
+    /* DestroyWindow -> WM_DESTROY frees the window and clears the slot. */
+    if (app != NULL && app->report_totals != NULL)
+    {
+        DestroyWindow(app->report_totals->hwnd);
+    }
+}
+
+/* Reports → Display Voting Totals… in a Voter Roster window. */
+static void App_ShowRosterTotals(AppState *app)
+{
+    RosterTotalsWindow *rw;
+    wchar_t title[MAX_PATH + 64];
+    HCURSOR old_cursor;
+    RECT pr;
+    int x = CW_USEDEFAULT;
+    int y = CW_USEDEFAULT;
+    int w;
+    BOOL ok;
+    const wchar_t *base;
+
+    if (app == NULL || !app->is_roster || app->table.row_count == 0)
+    {
+        return;
+    }
+    if (app->report_totals != NULL)
+    {
+        SetForegroundWindow(app->report_totals->hwnd);
+        return;
+    }
+    rw = (RosterTotalsWindow *)calloc(1, sizeof(RosterTotalsWindow));
+    if (rw == NULL)
+    {
+        return;
+    }
+    rw->app = app;
+    old_cursor = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    ok = EeRoster_ComputeTotals(&app->table, &rw->tot) && RosterTotals_Build(rw);
+    SetCursor(old_cursor);
+    if (!ok)
+    {
+        EeRoster_FreeTotals(&rw->tot);
+        free(rw->row_date);
+        free(rw->row_party);
+        free(rw);
+        MessageBoxW(app->hwnd_main,
+                    L"Could not compute the voting totals (out of memory, or the roster has "
+                    L"no Voting Method column).",
+                    L"Voting Totals", MB_ICONERROR | MB_OK);
+        return;
+    }
+    base = App_PathBaseName(app->load_path);
+    StringCchPrintfW(title, ARRAYSIZE(title), L"Voting Totals - %s", base[0] ? base : L"(voter roster)");
+    if (GetWindowRect(app->hwnd_main, &pr))
+    {
+        x = pr.left + Scale(app, 48);
+        y = pr.top + Scale(app, 48);
+    }
+    w = 110 + (rw->col_party >= 0 ? 100 : 0) + 100 + 40;
+    {
+        int m;
+        for (m = 0; m < EE_VM_COUNT; m++)
+        {
+            if (rw->method_col[m] >= 0)
+                w += (m == EE_VM_EARLY || m == EE_VM_ELECTION_DAY) ? 165 : 120;
+        }
+    }
+    /* Unowned top-level window like the other reports; closed with the roster window. */
+    rw->hwnd = CreateWindowExW(0, k_RosterTotalsClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x,
+                               y, Scale(app, w), Scale(app, 600), NULL, NULL, app->instance, rw);
+    if (rw->hwnd == NULL)
+    {
+        EeRoster_FreeTotals(&rw->tot);
+        free(rw->row_date);
+        free(rw->row_party);
+        free(rw);
+        return;
+    }
+    app->report_totals = rw;
+    ShowWindow(rw->hwnd, SW_SHOW);
+    SetForegroundWindow(rw->hwnd);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Entry                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -15002,6 +17207,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         rrc.hIcon = wc.hIcon;
         rrc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&rrc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW tc;
+        ZeroMemory(&tc, sizeof(tc));
+        tc.cbSize = sizeof(tc);
+        tc.lpfnWndProc = RosterTotalsWndProc;
+        tc.hInstance = hInstance;
+        tc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        tc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        tc.lpszClassName = k_RosterTotalsClassName;
+        tc.hIcon = wc.hIcon;
+        tc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&tc) == 0)
         {
             return 1;
         }

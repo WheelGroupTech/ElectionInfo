@@ -7639,6 +7639,189 @@ done:
     return rc;
 }
 
+/* Tarrant County rosters (tag: tarrant): tab-delimited text inside ZIPs, cumulative per
+ * method; the newer layout (NPA party with the party in the file name, 6-digit precinct
+ * = precinct + subcode, a repeated "City" title, "--Redacted--" protected voters, an ISO
+ * mail Return Date), the older layout with P24's damaged header (first four titles
+ * blank) and an anonymous protected row, and the post-canvass full roster's Vote_Type
+ * codes -- in two ZIPs (the open-ZIP array must not move) -- then a TSV round trip. */
+static int test_tarrant_roster(void)
+{
+    static const char *ev2 =
+        "ID Number\tName\tAddress Line1\tAddress Line2\tCity\tState\tZip\tPrecinct\tParty of Ballot Issued\t"
+        "Election Code\tSOS Voter ID\tUS Rep\tSt Senate\tSt Rep\tCommissioner\tCity\tCSM\tISD\tSSM\tWater\t"
+        "College\tJP\tSBE\tMMD\tEmergency\tLibrary\r\n"
+        "1571219\t\"CONNER, WINNIE M\"\t1114 E ANNIE ST\t\tFORT WORTH\tTX\t76104\t100501\tNPA\t512\t1047504109\t"
+        "12\t09\t95\t01\tFTW\tFW8\tFTW\tFW4\tTRW\tTC6\t05\t13\t\t\t\r\n"
+        "--Redacted--\t--Redacted--\t--Redacted--\t--Redacted--\t--Redacted--\t--Redacted--\t--Redacted--\t"
+        "100501\tNpa\t512\t--Redacted--\t12\t09\t95\t01\tFTW\tFW8\tFTW\tFW4\tTRW\tTC6\t05\t13\t\t\t\r\n";
+    static const char *mail2 =
+        "Certificate\tVoter_Name\tAddress Line1\tAddress Line2\tAddress Line3\tCity\tState\tZip\tPrecinct\t"
+        "Party of Ballot Issued\tElection_Number\tSOS Voter ID\tDate_Abs_Requested\tReturn Date\tUSREP\tSTSEN\t"
+        "STREP\tCOMM\tJP\tCITY1\tCSM\tISD\r\n"
+        "1000538\tEVANS, ROBERT S\t1317 RIDGEWOOD TER\t\t\tARLINGTON\tTX\t76012\t202601\tNPA\t512\t1045765408\t"
+        "2026-01-23\t2026-02-20\t25\t09\t94\t02\t02\tARL\tAR1\tARL\r\n";
+    static const char *ev1 =
+        "\t\t\t\tCity\tState\tZip\tZip4\tPrecinct\tPrecinct Subcode\tBallotstyle\tParty of Ballot Issued\t"
+        "Party of Voter\tElection Code\tPhone Area Code\tPhone Prefix\tPhone Number\tFirstname\tMiddlename\t"
+        "Lastname\tVoting Unit\tBallot ID\tSOS Voter ID\tElection Subcode\tUS Rep\tState Senate\tState Rep\t"
+        "Commissioner\tCity\tCity Single Member\tISD\tISD Single\tWater\tCOLG\tJP\tSBOE\tMMD\tEMRGCY\r\n"
+        "401\tROBERT LARRY ABSHIRE\t401 MEADOWHILL DR\t \tFORT WORTH\tTX\t76126\t\t1719\t01\t\tREP\t\tPM24\t \t"
+        " \t \tROBERT\tLARRY\tABSHIRE\t\t\t1043894819\t00\t12\t09\t97\t01\tBEN\t\tFTW\tFW7\tBEN\tTC7\t06\t11\r\n"
+        "\t\t\t\t\t\t\t\t2262\t01\t\tDEM\t\tPM24\t\t\t\t\t\t\t\t\t\t00\t12\t09\t97\t01\tBEN\t\tFTW\tFW7\tBEN\t"
+        "TC7\t06\t11\r\n";
+    static const char *full =
+        "ID Number\tName\tAddress Line1\tAddress Line2\tCity\tState\tZip_Code\tPrecinct\t"
+        "Party of Ballot Issued\tElection Code\tVote_Type\tSOS Voter ID\tUS Rep\tSt Senate\tSt Rep\t"
+        "Commissioner\tCity.1\tCSM\tISD\r\n"
+        "30008889\tBOATMAN, JOSEPH A\t1101 E CANNON ST\t\tFORT WORTH\tTX\t76104\t1005\tDEM\t512\tF\t1139836712\t"
+        "12\t09\t95\t01\tFTW\tFW8\tFTW\r\n"
+        "30008890\tSMITH, ANN\t1 MAIN ST\t\tFORT WORTH\tTX\t76104\t1005\tDEM\t512\tL\t1000000001\t12\t09\t95\t01\t"
+        "FTW\tFW8\tFTW\r\n"
+        "30008891\tJONES, BOB\t2 MAIN ST\t\tFORT WORTH\tTX\t76104\t1005\tDEM\t512\tY\t1000000002\t12\t09\t95\t01\t"
+        "FTW\tFW8\tFTW\r\n";
+    const char *names1[3] = {"Early_voting_in_person_report_Dem.txt", "absentee_returned_voter_report_Dem.txt",
+                             "ev_vtrex_tc.txt"};
+    const char *data1[3];
+    const char *names2[1] = {"DEM_Election Roster_Redacted.txt"};
+    const char *data2[1];
+    wchar_t z1[MAX_PATH], z2[MAX_PATH], tp[MAX_PATH];
+    const wchar_t *paths[2];
+    EeVoterTable t, t2;
+    EeRosterLoadInfo info, info2;
+    wchar_t err[256];
+    char *text = NULL;
+    size_t text_len = 0;
+    uint32_t *rows = NULL;
+    uint32_t i;
+    int rc = 1;
+
+    data1[0] = ev2;
+    data1[1] = mail2;
+    data1[2] = ev1;
+    data2[0] = full;
+    GetTempPathW(MAX_PATH, z1);
+    StringCchCopyW(z2, MAX_PATH, z1);
+    StringCchCopyW(tp, MAX_PATH, z1);
+    StringCchCatW(z1, MAX_PATH, L"ee_tarrant_1.zip");
+    StringCchCatW(z2, MAX_PATH, L"ee_tarrant_2.zip");
+    StringCchCatW(tp, MAX_PATH, L"ee_tarrant_rt.tsv");
+    EeVoterTable_Init(&t);
+    EeVoterTable_Init(&t2);
+    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&info2, sizeof(info2));
+    if (!hart_write_zip(z1, names1, data1, 3) || !hart_write_zip(z2, names2, data2, 1))
+    {
+        wprintf(L"tarrant: could not write the ZIPs\n");
+        goto done;
+    }
+    paths[0] = z1;
+    paths[1] = z2;
+    if (EeRoster_LoadFiles(paths, 2, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"tarrant: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 8 || info.rows_redacted != 2 || info.recovered_sheets != 1 ||
+        info.method_rows[EE_VM_EARLY] != 4 || info.method_rows[EE_VM_MAIL] != 1 ||
+        info.method_rows[EE_VM_PROVISIONAL] != 1 || info.method_rows[EE_VM_LIMITED] != 1 ||
+        info.method_rows[EE_VM_ELECTION_DAY] != 1 || info.rows_non_voter != 0)
+    {
+        wprintf(L"tarrant: rows %u redacted %u recovered %u ev %u mail %u prov %u lim %u ed %u nonvoter %u\n",
+                t.row_count, info.rows_redacted, info.recovered_sheets, info.method_rows[EE_VM_EARLY],
+                info.method_rows[EE_VM_MAIL], info.method_rows[EE_VM_PROVISIONAL],
+                info.method_rows[EE_VM_LIMITED], info.method_rows[EE_VM_ELECTION_DAY], info.rows_non_voter);
+        goto done;
+    }
+    if (!rt_expect(&t, L"CONNER", L"WINNIE", L"Precinct", L"1005") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"Precinct Subcode", L"01") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"Party", L"DEM") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"Date Voted", L"") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"City", L"FORT WORTH") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"City 2", L"FTW") ||
+        !rt_expect(&t, L"CONNER", L"WINNIE", L"ID Number", L"1571219") ||
+        !rt_expect(&t, L"EVANS", L"ROBERT", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"EVANS", L"ROBERT", L"Date Voted", L"02/20/2026") ||
+        !rt_expect(&t, L"EVANS", L"ROBERT", L"Party", L"DEM") ||
+        !rt_expect(&t, L"EVANS", L"ROBERT", L"Precinct", L"2026") ||
+        !rt_expect(&t, L"ABSHIRE", L"ROBERT", L"Middle Name", L"LARRY") ||
+        !rt_expect(&t, L"ABSHIRE", L"ROBERT", L"Party", L"REP") ||
+        !rt_expect(&t, L"ABSHIRE", L"ROBERT", L"Precinct", L"1719") ||
+        !rt_expect(&t, L"ABSHIRE", L"ROBERT", L"VUID", L"1043894819") ||
+        !rt_expect(&t, L"BOATMAN", L"JOSEPH", L"Voting Method", L"Provisional") ||
+        !rt_expect(&t, L"BOATMAN", L"JOSEPH", L"Vote Type", L"F") ||
+        !rt_expect(&t, L"SMITH", L"ANN", L"Voting Method", L"Limited") ||
+        !rt_expect(&t, L"JONES", L"BOB", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"(Redacted)", L"", L"VUID", L"") ||
+        !rt_expect(&t, L"(Redacted)", L"", L"Precinct", L"1005") ||
+        !rt_expect(&t, L"(Redacted)", L"", L"City", L""))
+    {
+        goto done;
+    }
+    for (i = 0; i < t.column_count; i++)
+    {
+        if (wcscmp(t.column_titles[i], L"Notes") == 0 || wcsncmp(t.column_titles[i], L"Column ", 7) == 0)
+        {
+            wprintf(L"tarrant: unexpected column %s\n", t.column_titles[i]);
+            goto done;
+        }
+    }
+
+    /* Round trip: TSV export, reload, every cell equal. */
+    rows = (uint32_t *)malloc(t.row_count * sizeof(uint32_t));
+    for (i = 0; rows != NULL && i < t.row_count; i++)
+        rows[i] = i;
+    if (rows == NULL ||
+        !EeVoterTable_FormatDelimitedUtf8(&t, rows, t.row_count, FALSE, '\t', TRUE, &text, &text_len) ||
+        !cvr_write_bytes(tp, text, text_len))
+    {
+        wprintf(L"tarrant: export failed\n");
+        goto done;
+    }
+    paths[0] = tp;
+    if (EeRoster_LoadFiles(paths, 1, &t2, &info2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        t2.row_count != t.row_count || t2.column_count != t.column_count)
+    {
+        wprintf(L"tarrant: reload failed (%s) %u x %u\n", err, t2.row_count, t2.column_count);
+        goto done;
+    }
+    {
+        uint32_t r, c;
+        for (r = 0; r < t.row_count; r++)
+        {
+            for (c = 0; c < t.column_count; c++)
+            {
+                wchar_t a[256], b[256];
+                EeVoterTable_GetViewCellW(&t, r, c, a, ARRAYSIZE(a));
+                EeVoterTable_GetViewCellW(&t2, r, c, b, ARRAYSIZE(b));
+                if (wcscmp(a, b) != 0)
+                {
+                    wprintf(L"tarrant: reload row %u [%s] '%s' vs '%s'\n", r, t.column_titles[c], b, a);
+                    goto done;
+                }
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"tarrant ok\n");
+done:
+    free(text);
+    free(rows);
+    EeRoster_FreeInfo(&info);
+    EeRoster_FreeInfo(&info2);
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Clear(&t2);
+    DeleteFileW(z1);
+    DeleteFileW(z2);
+    DeleteFileW(tp);
+    if (rc != 0)
+    {
+        wprintf(L"tarrant test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -7655,6 +7838,7 @@ int wmain(void)
     failed |= test_infer_residence_state();
     failed |= test_el_paso_layout();
     failed |= test_voter_roster();
+    failed |= test_tarrant_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();
     failed |= test_dup_voters_voting();

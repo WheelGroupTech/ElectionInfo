@@ -456,17 +456,19 @@ static void rec_free(RecAcc *r)
 /* Reader                                                                     */
 /* -------------------------------------------------------------------------- */
 
-EeLoadStatus EeCsv_ReadSheet(const wchar_t *path,
-                             EeCsvRowSink sink,
-                             void *sink_ctx,
-                             volatile LONG *cancel_flag,
-                             EeLoadProgressFn progress_fn,
-                             void *progress_user,
-                             wchar_t *error_message,
-                             size_t error_cch)
+/* Parse delimited text from @p raw (taken over and freed); @p path only names the
+ * source for the delimiter choice. */
+static EeLoadStatus csv_read_buffer(unsigned char *raw,
+                                    size_t rawlen,
+                                    const wchar_t *path,
+                                    EeCsvRowSink sink,
+                                    void *sink_ctx,
+                                    volatile LONG *cancel_flag,
+                                    EeLoadProgressFn progress_fn,
+                                    void *progress_user,
+                                    wchar_t *error_message,
+                                    size_t error_cch)
 {
-    unsigned char *raw = NULL;
-    size_t rawlen = 0;
     char *u8 = NULL;
     size_t u8len = 0;
     char delim;
@@ -481,18 +483,8 @@ EeLoadStatus EeCsv_ReadSheet(const wchar_t *path,
     uint32_t last_pct = 101;
     EeLoadStatus result = EeLoadStatus_Ok;
 
-    if (path == NULL || sink == NULL)
-    {
-        csv_set_err(error_message, error_cch, L"Invalid arguments.");
-        return EeLoadStatus_Error;
-    }
     ZeroMemory(&rec, sizeof(rec));
 
-    st = csv_read_file(path, &raw, &rawlen, error_message, error_cch);
-    if (st != EeLoadStatus_Ok)
-    {
-        return st;
-    }
     st = csv_to_utf8(raw, rawlen, &u8, &u8len, error_message, error_cch);
     if (st != EeLoadStatus_Ok)
     {
@@ -667,4 +659,58 @@ done:
     free(cellptrs);
     rec_free(&rec);
     return result;
+}
+
+EeLoadStatus EeCsv_ReadSheet(const wchar_t *path,
+                             EeCsvRowSink sink,
+                             void *sink_ctx,
+                             volatile LONG *cancel_flag,
+                             EeLoadProgressFn progress_fn,
+                             void *progress_user,
+                             wchar_t *error_message,
+                             size_t error_cch)
+{
+    unsigned char *raw = NULL;
+    size_t rawlen = 0;
+    EeLoadStatus st;
+    if (path == NULL || sink == NULL)
+    {
+        csv_set_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    st = csv_read_file(path, &raw, &rawlen, error_message, error_cch);
+    if (st != EeLoadStatus_Ok)
+    {
+        return st;
+    }
+    return csv_read_buffer(raw, rawlen, path, sink, sink_ctx, cancel_flag, progress_fn, progress_user,
+                           error_message, error_cch);
+}
+
+EeLoadStatus EeCsv_ReadSheetMem(const void *data,
+                                size_t size,
+                                const wchar_t *name,
+                                EeCsvRowSink sink,
+                                void *sink_ctx,
+                                volatile LONG *cancel_flag,
+                                EeLoadProgressFn progress_fn,
+                                void *progress_user,
+                                wchar_t *error_message,
+                                size_t error_cch)
+{
+    unsigned char *raw;
+    if (data == NULL || sink == NULL)
+    {
+        csv_set_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    raw = (unsigned char *)malloc(size ? size : 1);
+    if (raw == NULL)
+    {
+        csv_set_err(error_message, error_cch, L"Out of memory loading the file.");
+        return EeLoadStatus_Error;
+    }
+    memcpy(raw, data, size);
+    return csv_read_buffer(raw, size, (name != NULL) ? name : L"", sink, sink_ctx, cancel_flag,
+                           progress_fn, progress_user, error_message, error_cch);
 }

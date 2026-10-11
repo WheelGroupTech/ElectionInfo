@@ -27,7 +27,7 @@
 #include "xlsx.h"
 #include "third_party/miniz/miniz.h"
 
-#define ROSTER_MAX_EXTRA  24 /* extra (non-canonical) columns kept */
+#define ROSTER_MAX_EXTRA  96 /* extra (non-canonical) columns kept */
 #define ROSTER_HEADER_SCAN 15 /* rows searched for the header row */
 #define ROSTER_COPY_MIN   100 /* smallest file considered for whole-file-copy detection */
 #define ROSTER_LIST_MAX   8  /* file names listed per note line */
@@ -168,7 +168,7 @@ static void header_label(const char *s, char *out, size_t cap)
     size_t o = 0;
     for (; s[i] != '\0' && s[i] != '\n' && s[i] != '\r' && s[i] != '(' && o + 1 < sizeof(tmp); i++)
     {
-        tmp[o++] = lc(s[i]);
+        tmp[o++] = (s[i] == '_') ? ' ' : lc(s[i]); /* "Voter_Name" */
     }
     tmp[o] = '\0';
     clean_text(tmp, out, cap);
@@ -259,12 +259,33 @@ static EeVotingMethod method_from_text(const char *s)
         return EE_VM_PROVISIONAL;
     if (contains_ci(s, "limited"))
         return EE_VM_LIMITED;
-    if (contains_ci(s, "mail"))
+    if (contains_ci(s, "mail") || contains_ci(s, "absentee") || contains_ci(s, "reqexp"))
         return EE_VM_MAIL;
-    if (contains_ci(s, "early"))
+    if (contains_ci(s, "early") || contains_ci(s, "ev_vtrex"))
         return EE_VM_EARLY;
     if (contains_ci(s, "election day") || contains_ci(s, "electionday") ||
-        contains_ci(s, "election_day"))
+        contains_ci(s, "election_day") || contains_ci(s, "ed_vtrex"))
+        return EE_VM_ELECTION_DAY;
+    return EE_VM_NONE;
+}
+
+/* Voting method of a vote-type code: Tarrant's official roster (A absentee, E early,
+ * F early-voting provisional, Y election day, Z election-day provisional, L limited) and
+ * Montgomery's (A, E, L, E1 / E3 late voting); P = election day in Tarrant voter files. */
+static EeVotingMethod method_from_vote_type(const char *code)
+{
+    char c[8];
+    clean_text(code, c, sizeof(c));
+    CharUpperBuffA(c, (DWORD)strlen(c));
+    if (strcmp(c, "A") == 0)
+        return EE_VM_MAIL;
+    if (c[0] == 'E' && (c[1] == '\0' || is_digit(c[1])))
+        return EE_VM_EARLY;
+    if (strcmp(c, "L") == 0)
+        return EE_VM_LIMITED;
+    if (strcmp(c, "F") == 0 || strcmp(c, "Z") == 0)
+        return EE_VM_PROVISIONAL;
+    if (strcmp(c, "Y") == 0 || strcmp(c, "P") == 0)
         return EE_VM_ELECTION_DAY;
     return EE_VM_NONE;
 }
@@ -290,6 +311,12 @@ static void party_from_cell(const char *s, char *out, size_t cap)
     char t[64];
     const char *p;
     clean_text(s, t, sizeof(t));
+    if (_stricmp(t, "NP") == 0 || _stricmp(t, "NPA") == 0 || _stricmp(t, "NON") == 0 ||
+        _stricmp(t, "N") == 0)
+    {
+        out[0] = '\0'; /* no party (general elections; Tarrant primaries say NPA too) */
+        return;
+    }
     p = party_from_text(t);
     if (p == NULL && (strcmp(t, "D") == 0 || strcmp(t, "d") == 0))
         p = "DEM";
@@ -302,6 +329,35 @@ static void party_from_cell(const char *s, char *out, size_t cap)
     }
     StringCchCopyA(out, cap, t);
     CharUpperBuffA(out, (DWORD)strlen(out));
+}
+
+/* Party named by a file name's words ("..._Dem.txt", "DEM_Election Roster",
+ * "2026-03-03-IN PERSON-REP", "Republican"); NULL if none. "report" is not "rep". */
+static const char *party_from_name(const char *name)
+{
+    char w[32];
+    size_t n = 0;
+    const char *p = name;
+    for (;; p++)
+    {
+        char c = *p;
+        BOOL alnum = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (alnum && n + 1 < sizeof(w))
+        {
+            w[n++] = lc(c);
+            continue;
+        }
+        w[n] = '\0';
+        if (strcmp(w, "dem") == 0 || strcmp(w, "democrat") == 0 || strcmp(w, "democratic") == 0)
+            return "DEM";
+        if (strcmp(w, "rep") == 0 || strcmp(w, "republican") == 0)
+            return "REP";
+        if (strcmp(w, "lib") == 0 || strcmp(w, "libertarian") == 0)
+            return "LIB";
+        n = 0;
+        if (c == '\0')
+            return NULL;
+    }
 }
 
 static BOOL is_name_suffix(const char *t)
@@ -536,6 +592,7 @@ typedef struct RosterSource
     uint64_t size;            /* uncompressed size (progress) */
     SrcKind kind;
     EeVotingMethod method;    /* from the file name */
+    const char *party;        /* from the file name ("_Dem", "-REP"), NULL if none */
     uint32_t date;            /* yyyymmdd from the file name, 0 unknown */
     BOOL updated;             /* "<name>_Updated" correction */
     int skip;                 /* SKIP_* */
@@ -590,8 +647,11 @@ typedef struct RosterExtra
 typedef struct HeaderMap
 {
     int vuid, pct, first, last, middle, suffix, full, party, notes, aname, aaddr, method, date,
-        source;
+        source, vtype;
     int ncols;
+    BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
+                     * as "Column N", never taken as notes */
+    BOOL split_pct; /* Tarrant: a 6-digit precinct is precinct (4) + subcode (2) */
     int nx;
     int xcol[ROSTER_MAX_EXTRA];
     uint32_t xid[ROSTER_MAX_EXTRA];
@@ -912,7 +972,7 @@ static void map_init(HeaderMap *m)
 {
     ZeroMemory(m, sizeof(*m));
     m->vuid = m->pct = m->first = m->last = m->middle = m->suffix = m->full = m->party =
-        m->notes = m->aname = m->aaddr = m->method = m->date = m->source = -1;
+        m->notes = m->aname = m->aaddr = m->method = m->date = m->source = m->vtype = -1;
 }
 
 static BOOL row_is_header(const SheetRows *r, uint32_t row)
@@ -922,8 +982,8 @@ static BOOL row_is_header(const SheetRows *r, uint32_t row)
     {
         char lab[96];
         header_label(cell_at(r, row, (int)c), lab, sizeof(lab));
-        if (contains_ci(lab, "vuid") || strcmp(lab, "voter id") == 0 || strcmp(lab, "voterid") == 0 ||
-            contains_ci(lab, "name of voter"))
+        if (contains_ci(lab, "vuid") || contains_ci(lab, "voter id") || contains_ci(lab, "voterid") ||
+            contains_ci(lab, "voter_id") || contains_ci(lab, "name of voter"))
         {
             return TRUE;
         }
@@ -931,21 +991,45 @@ static BOOL row_is_header(const SheetRows *r, uint32_t row)
     return FALSE;
 }
 
-/* Map one header row's columns to roles. Unknown titled columns become extras. */
-static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m)
+/* Header cell @p c, or the repaired title from @p fix when it has one. */
+static const char *hdr_cell(const SheetRows *r, uint32_t row, uint32_t c, const char *const *fix)
+{
+    return (fix != NULL && fix[c] != NULL) ? fix[c] : cell_at(r, row, (int)c);
+}
+
+/* Map one header row's columns to roles. Unknown titled columns become extras. @p fix
+ * (optional) supplies titles for damaged header cells. */
+static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m, const char *const *fix)
 {
     uint32_t c;
     BOOL limited_form = FALSE;
+    BOOL sos_vuid = FALSE;
+    BOOL has_subcode = FALSE;
+    int titled = 0;
     map_init(m);
     for (c = 0; c < r->row_len[row]; c++)
     {
         char lab[96];
-        header_label(cell_at(r, row, (int)c), lab, sizeof(lab));
+        header_label(hdr_cell(r, row, c, fix), lab, sizeof(lab));
         if (contains_ci(lab, "name of voter"))
         {
             limited_form = TRUE; /* "Name" / "Address" then describe the assisting person */
         }
+        if (lab[0] != '\0')
+        {
+            titled++;
+        }
+        if (contains_ci(lab, "sos voter id") || contains_ci(lab, "sos_voterid"))
+        {
+            sos_vuid = TRUE;
+        }
+        if (contains_ci(lab, "precinct sub") || contains_ci(lab, "precsub"))
+        {
+            has_subcode = TRUE;
+        }
     }
+    m->rich = (titled >= 15);
+    m->split_pct = sos_vuid && !has_subcode;
     m->ncols = (int)r->row_len[row];
     for (c = 0; c < r->row_len[row]; c++)
     {
@@ -953,7 +1037,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         char title[160];
         char line[160];
         int ci = (int)c;
-        StringCchCopyA(line, ARRAYSIZE(line), cell_at(r, row, ci));
+        StringCchCopyA(line, ARRAYSIZE(line), hdr_cell(r, row, c, fix));
         {
             char *nl = strpbrk(line, "\r\n");
             if (nl != NULL)
@@ -962,7 +1046,14 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             }
         }
         clean_text(line, title, sizeof(title));
-        header_label(cell_at(r, row, ci), lab, sizeof(lab));
+        header_label(hdr_cell(r, row, c, fix), lab, sizeof(lab));
+        if (lab[0] == '\0' && m->rich)
+        {
+            /* An untitled column of a wide export holds data (Tarrant P24 Election Day:
+             * the ballot style): keep it under a placeholder title. */
+            StringCchPrintfA(title, ARRAYSIZE(title), "Column %d", ci + 1);
+            StringCchCopyA(lab, ARRAYSIZE(lab), "column");
+        }
         if (lab[0] == '\0')
         {
             if (m->nblank < (int)ARRAYSIZE(m->blank))
@@ -970,11 +1061,17 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                 m->blank[m->nblank++] = ci;
             }
         }
-        else if (m->vuid < 0 && (contains_ci(lab, "vuid") || strcmp(lab, "voter id") == 0 ||
-                                 strcmp(lab, "voterid") == 0))
+        else if (m->vuid < 0 && (contains_ci(lab, "vuid") || contains_ci(lab, "voter id") ||
+                                 contains_ci(lab, "voterid") || contains_ci(lab, "voter_id")))
             m->vuid = ci;
         else if (m->method < 0 && contains_ci(lab, "voting method"))
             m->method = ci;
+        else if (m->vtype < 0 && (contains_ci(lab, "vote type") || contains_ci(lab, "vote_type")))
+        {
+            m->vtype = ci;
+            (void)extra_col(L, "Vote Type"); /* its code is also kept: register it here, in
+                                              * header order, so an export reloads alike */
+        }
         else if (m->date < 0 && contains_ci(lab, "date voted"))
             m->date = ci;
         else if (m->source < 0 && contains_ci(lab, "source file"))
@@ -1000,6 +1097,8 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             m->party = ci;
         else if (m->notes < 0 && (contains_ci(lab, "note") || contains_ci(lab, "comment")))
             m->notes = ci;
+        else if (m->date < 0 && strcmp(lab, "return date") == 0)
+            m->date = ci; /* mail roster: the day the voted ballot came back */
         else if (strcmp(lab, "no.") == 0 || strcmp(lab, "no") == 0)
         {
             /* row number column (Limited Ballot form) */
@@ -1007,6 +1106,20 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         else if (m->nx < ROSTER_MAX_EXTRA)
         {
             int x = extra_col(L, title);
+            int k;
+            int again = 1;
+            for (k = 0; k < m->nx && x >= 0; k++)
+            {
+                if (m->xid[k] == (uint32_t)x)
+                {
+                    /* the same title twice in one header (Tarrant: address City and the
+                     * City district code): the later one becomes "City 2" */
+                    char t2[176];
+                    StringCchPrintfA(t2, ARRAYSIZE(t2), "%s %d", title, ++again);
+                    x = extra_col(L, t2);
+                    k = -1;
+                }
+            }
             if (x >= 0)
             {
                 m->xcol[m->nx] = ci;
@@ -1015,6 +1128,55 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             }
         }
     }
+}
+
+/* Known header layouts, for repairing damaged header rows. */
+static const char *const k_TarrantEvLayout1[] = {
+    "ID Number", "Name", "Address Line1", "Address Line2", "City", "State", "Zip", "Zip4", "Precinct",
+    "Precinct Subcode", "Ballotstyle", "Party of Ballot Issued", "Party of Voter", "Election Code",
+    "Phone Area Code", "Phone Prefix", "Phone Number", "Firstname", "Middlename", "Lastname",
+    "Voting Unit", "Ballot ID", "SOS Voter ID", "Election Subcode", "US Rep", "State Senate",
+    "State Rep", "Commissioner", "City", "City Single Member", "ISD", "ISD Single", "Water", "COLG",
+    "JP", "SBOE", "MMD", "EMRGCY"};
+
+/* Titles for the blank cells of header row @p row when its other titles match a known
+ * layout (Tarrant P24 Early Vote: the first four titles are missing). Returns TRUE and
+ * fills @p fix (one entry per column, NULL = keep) on a match. */
+static BOOL repair_header(const SheetRows *r, uint32_t row, const char **fix, int cap)
+{
+    static const struct
+    {
+        const char *const *titles;
+        int n;
+    } k_layouts[] = {{k_TarrantEvLayout1, (int)ARRAYSIZE(k_TarrantEvLayout1)}};
+    size_t li;
+    int n = (int)r->row_len[row];
+    for (li = 0; li < ARRAYSIZE(k_layouts); li++)
+    {
+        int c;
+        int blank = 0;
+        BOOL match = (k_layouts[li].n == n && n <= cap);
+        for (c = 0; match && c < n; c++)
+        {
+            char t[96];
+            clean_text(cell_at(r, row, c), t, sizeof(t));
+            if (t[0] == '\0')
+                blank++;
+            else if (_stricmp(t, k_layouts[li].titles[c]) != 0)
+                match = FALSE;
+        }
+        if (match && blank > 0 && blank < n / 2)
+        {
+            for (c = 0; c < n; c++)
+            {
+                char t[96];
+                clean_text(cell_at(r, row, c), t, sizeof(t));
+                fix[c] = (t[0] == '\0') ? k_layouts[li].titles[c] : NULL;
+            }
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 /* Data width of a sheet (max row length over the first rows after @p from). */
@@ -1062,7 +1224,7 @@ static void add_extra(Loader *L, RosterRec *rec, int col, const char *value)
         return;
     }
     clean_text(value, v, sizeof(v));
-    if (v[0] == '\0' || rec->xcount == 255)
+    if (v[0] == '\0' || rec->xcount == 255 || contains_ci(v, "--redacted--"))
     {
         return;
     }
@@ -1159,6 +1321,9 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     uint32_t date = sheet_date;
     int i;
 
+    BOOL redacted;
+    char subcode[8] = "";
+
     if (row_empty(r, row))
     {
         return;
@@ -1173,14 +1338,38 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     {
         last[0] = first[0] = middle[0] = suffix[0] = '\0';
     }
-    if (m->last >= 0)
+    /* Name-part columns win when they have a value (Tarrant's newer files carry empty
+     * Firstname / Lastname columns beside the full name). */
+    if (cell_at(r, row, m->last)[0] != '\0' || cell_at(r, row, m->first)[0] != '\0')
+    {
         clean_text(cell_at(r, row, m->last), last, sizeof(last));
-    if (m->first >= 0)
         clean_text(cell_at(r, row, m->first), first, sizeof(first));
-    if (m->middle >= 0)
         clean_text(cell_at(r, row, m->middle), middle, sizeof(middle));
-    if (m->suffix >= 0)
         clean_text(cell_at(r, row, m->suffix), suffix, sizeof(suffix));
+    }
+    /* A protected voter ("--Redacted--" in the ID, name and address cells) is a voter
+     * record with no Voter ID or name; its precinct and party are kept. */
+    redacted = contains_ci(vuid, "redact") || contains_ci(last, "redact") || contains_ci(first, "redact");
+    /* Tarrant's older files leave a protected voter's ID, name and address blank but keep
+     * the precinct (and the mail status / dates): the same kind of record. */
+    if (!redacted && m->rich && vuid[0] == '\0' && pct[0] != '\0' && !has_letter(last) &&
+        !has_letter(first))
+    {
+        redacted = TRUE;
+    }
+    if (redacted)
+    {
+        vuid[0] = '\0';
+        StringCchCopyA(last, ARRAYSIZE(last), "(Redacted)");
+        first[0] = middle[0] = suffix[0] = '\0';
+    }
+    /* Tarrant's newer files: "100101" = precinct 1001, subcode 01 (the older files and
+     * the voter list carry them in two columns). */
+    if (m->split_pct && strlen(pct) == 6 && strspn(pct, "0123456789") == 6)
+    {
+        StringCchCopyA(subcode, ARRAYSIZE(subcode), pct + 4);
+        pct[4] = '\0';
+    }
     named = has_letter(last) || has_letter(first);
 
     if (m->vuid >= 0)
@@ -1230,6 +1419,14 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
             method = mm;
         }
     }
+    if (m->vtype >= 0)
+    {
+        EeVotingMethod mm = method_from_vote_type(cell_at(r, row, m->vtype));
+        if (mm != EE_VM_NONE)
+        {
+            method = mm;
+        }
+    }
     if (m->date >= 0)
     {
         uint32_t d = find_date(cell_at(r, row, m->date));
@@ -1247,14 +1444,16 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     rec->first = S(L, first);
     rec->middle = S(L, middle);
     rec->suffix = S(L, suffix);
-    if (m->party >= 0 && cell_at(r, row, m->party)[0] != '\0')
-    {
-        party_from_cell(cell_at(r, row, m->party), party, sizeof(party));
-        rec->party = S(L, party);
-    }
-    else if (sheet_party != NULL)
+    /* A party's own file or sheet names the party; otherwise the party column (where
+     * NP / NPA mean none). Tarrant's 2026 primary files say NPA on most rows. */
+    if (sheet_party != NULL)
     {
         rec->party = S(L, sheet_party);
+    }
+    else if (m->party >= 0 && cell_at(r, row, m->party)[0] != '\0')
+    {
+        party_from_cell(cell_at(r, row, m->party), party, sizeof(party));
+        rec->party = (party[0] != '\0') ? S(L, party) : 0;
     }
     if (m->source >= 0 && cell_at(r, row, m->source)[0] != '\0')
     {
@@ -1269,13 +1468,22 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     rec->date = date;
     rec->method = (uint8_t)method;
     rec->source = (uint16_t)si;
+    if (subcode[0] != '\0')
+    {
+        add_extra(L, rec, extra_col(L, "Precinct Subcode"), subcode);
+    }
+    if (m->vtype >= 0)
+    {
+        add_extra(L, rec, extra_col(L, "Vote Type"), cell_at(r, row, m->vtype));
+    }
 
-    /* Notes: a "Notes" column, else the first unlabeled column with a value. */
+    /* Notes: a "Notes" column, else (short layouts only) the first unlabeled column
+     * with a value. */
     if (m->notes >= 0)
     {
         add_extra(L, rec, extra_col(L, "Notes"), cell_at(r, row, m->notes));
     }
-    else
+    else if (!m->rich)
     {
         BOOL done_notes = FALSE;
         for (i = 0; i < m->nblank && !done_notes; i++)
@@ -1306,7 +1514,11 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         add_extra(L, rec, (int)m->xid[i], cell_at(r, row, m->xcol[i]));
     }
 
-    if (m->vuid >= 0 && vuid[0] == '\0')
+    if (redacted)
+    {
+        L->info->rows_redacted++;
+    }
+    else if (m->vuid >= 0 && vuid[0] == '\0')
     {
         L->info->vuids_missing++; /* a named voter whose Voter ID cell is blank */
     }
@@ -1368,7 +1580,17 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
 
     if (h != UINT32_MAX)
     {
-        map_header(L, r, h, &m);
+        const char *fix[64];
+        if (r->row_len[h] <= ARRAYSIZE(fix) && repair_header(r, h, fix, (int)ARRAYSIZE(fix)))
+        {
+            map_header(L, r, h, &m, fix);
+            L->info->recovered_sheets++;
+            append_name(&L->recovered, s->name, sheet_name);
+        }
+        else
+        {
+            map_header(L, r, h, &m, NULL);
+        }
         data_from = h + 1;
         *wb_map = m;
         *wb_have = TRUE;
@@ -1438,6 +1660,10 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
     if (sheet_name != NULL && party_from_text(sheet_name) != NULL)
     {
         party = party_from_text(sheet_name);
+    }
+    if (s->party != NULL)
+    {
+        party = s->party; /* "..._Dem.txt": the file is that party's roster */
     }
 
     method = (s->method != EE_VM_NONE) ? s->method : title_method;
@@ -1525,6 +1751,7 @@ static void parse_source_name(RosterSource *s)
     WideCharToMultiByte(CP_UTF8, 0, s->name, -1, s->name8, (int)sizeof(s->name8), NULL, NULL);
     s->date = find_date(s->name8);
     s->method = method_from_text(s->name8);
+    s->party = party_from_name(s->name8);
     StringCchCopyA(low, ARRAYSIZE(low), s->name8);
     for (i = 0; low[i] != '\0'; i++)
     {
@@ -1579,22 +1806,34 @@ static RosterSource *add_source(Loader *L, const wchar_t *path, const wchar_t *d
 static BOOL expand_inputs(Loader *L, const wchar_t *const *paths, int count)
 {
     int i;
+    int nzip = 0;
+    /* The open-ZIP array is allocated once: a miniz archive points at itself, so the
+     * array must never move (reallocating it broke selections of several ZIPs). */
+    for (i = 0; i < count; i++)
+    {
+        if (_wcsicmp(path_ext(paths[i]), L".zip") == 0)
+        {
+            nzip++;
+        }
+    }
+    if (nzip > 0)
+    {
+        L->zips = (OpenZip *)calloc((size_t)nzip, sizeof(OpenZip));
+        if (L->zips == NULL)
+        {
+            L->oom = TRUE;
+            return FALSE;
+        }
+    }
     for (i = 0; i < count; i++)
     {
         const wchar_t *p = paths[i];
         if (_wcsicmp(path_ext(p), L".zip") == 0)
         {
             OpenZip *z;
-            OpenZip *nz = (OpenZip *)realloc(L->zips, (size_t)(L->nzips + 1) * sizeof(OpenZip));
             __int64 fsize;
             mz_uint e;
             mz_uint n;
-            if (nz == NULL)
-            {
-                L->oom = TRUE;
-                return FALSE;
-            }
-            L->zips = nz;
             z = &L->zips[L->nzips];
             ZeroMemory(z, sizeof(*z));
             if (_wfopen_s(&z->fp, p, L"rb") != 0 || z->fp == NULL)
@@ -1672,7 +1911,7 @@ static void mark_superseded(Loader *L)
     for (i = 0; i < L->nsrc; i++)
     {
         RosterSource *a = &L->src[i];
-        if (a->kind == SRC_PDF || a->kind == SRC_OTHER || (a->kind == SRC_TEXT && a->zip >= 0))
+        if (a->kind == SRC_PDF || a->kind == SRC_OTHER)
         {
             a->skip = SKIP_UNSUPPORTED;
             if (a->method != EE_VM_NONE)
@@ -1786,7 +2025,27 @@ static EeLoadStatus read_source(Loader *L, int si, SheetRows *rows)
     if (s->kind == SRC_TEXT)
     {
         sheet_reset(rows);
-        st = EeCsv_ReadSheet(s->path, rows_sink, &sc, L->cancel, inner_progress, L, err, ARRAYSIZE(err));
+        if (s->zip >= 0)
+        {
+            /* A delimited text entry of a ZIP (Tarrant): read from memory. */
+            size_t size = 0;
+            void *data = mz_zip_reader_extract_to_heap(&L->zips[s->zip].zip, s->entry, &size, 0);
+            if (data == NULL)
+            {
+                L->info->skipped_sheets++;
+                append_name(&L->skipped, s->name, NULL);
+                s->rec_end = L->nrec;
+                return EeLoadStatus_Ok;
+            }
+            st = EeCsv_ReadSheetMem(data, size, s->name, rows_sink, &sc, L->cancel, inner_progress, L,
+                                    err, ARRAYSIZE(err));
+            mz_free(data);
+        }
+        else
+        {
+            st = EeCsv_ReadSheet(s->path, rows_sink, &sc, L->cancel, inner_progress, L, err,
+                                 ARRAYSIZE(err));
+        }
         if (st == EeLoadStatus_Ok && !sc.failed)
         {
             process_sheet(L, si, "", rows, &wb_map, &wb_have);
@@ -1967,9 +2226,9 @@ static void mark_copies(Loader *L, const VuidIndex *ix)
         uint32_t na = sa->rec_end - sa->rec_begin;
         uint32_t i;
         int cand = -1;
-        if (sa->skip != SKIP_NONE || na < ROSTER_COPY_MIN)
+        if (sa->skip != SKIP_NONE || na < ROSTER_COPY_MIN || sa->method == EE_VM_NONE)
         {
-            continue;
+            continue; /* a vote-type roster (method per row) is never a copy */
         }
         /* Candidate: the other source holding the first record's Voter ID. */
         for (i = sa->rec_begin; i < sa->rec_end && cand < 0; i++)
@@ -1982,7 +2241,8 @@ static void mark_copies(Loader *L, const VuidIndex *ix)
             for (h = vuid_head(L, ix, L->rec[i].vuid); h != 0; h = ix->next[h - 1])
             {
                 int b = (int)L->rec[h - 1].source;
-                if (b != a && L->src[b].skip == SKIP_NONE && L->src[b].method != sa->method)
+                if (b != a && L->src[b].skip == SKIP_NONE && L->src[b].method != sa->method &&
+                    L->src[b].method != EE_VM_NONE)
                 {
                     cand = b;
                     break;
@@ -2152,6 +2412,20 @@ static void build_note(Loader *L)
         wb_printf(&b, L"\r\n\r\n%s voter record%s kept with a blank Voter ID.", n1,
                   in->vuids_missing == 1 ? L"" : L"s");
     }
+    if (in->rows_redacted)
+    {
+        fmt_count(in->rows_redacted, n1, ARRAYSIZE(n1));
+        wb_printf(&b, L"\r\n\r\n%s protected (redacted) voter record%s kept with their precinct but no "
+                     L"Voter ID or name.",
+                  n1, in->rows_redacted == 1 ? L"" : L"s");
+    }
+    if (in->rows_no_date)
+    {
+        fmt_count(in->rows_no_date, n1, ARRAYSIZE(n1));
+        wb_printf(&b, L"\r\n\r\n%s record%s have no Date Voted: the county's file gives no voting date "
+                     L"(e.g. a cumulative early voting or Election Day list).",
+                  n1, in->rows_no_date == 1 ? L"" : L"s");
+    }
     if (in->vuids_duplicated)
     {
         fmt_count(in->vuids_duplicated, n1, ARRAYSIZE(n1));
@@ -2305,6 +2579,10 @@ static EeLoadStatus emit_table(Loader *L, const int *order, EeVoterTable *out)
                 return EeLoadStatus_Error;
             }
             L->info->method_rows[rec->method < EE_VM_COUNT ? rec->method : 0]++;
+            if (rec->date == 0)
+            {
+                L->info->rows_no_date++;
+            }
             emitted++;
             if ((emitted & 0x3FFF) == 0)
             {
@@ -2771,6 +3049,29 @@ BOOL EeRoster_ComputeTotals(const EeVoterTable *table, EeRosterTotals *out)
                 break;
             }
             h = (h + 1u) & (cap - 1u);
+        }
+    }
+
+    /* Split by party only for a primary: when at least half the counted voters have a
+     * party. A general election's stray party values (Tarrant's G24 mail roster has a
+     * few DEM / REP rows) are folded into one group. */
+    {
+        uint32_t counted = 0;
+        uint32_t with_party = 0;
+        for (r = 0; r < n; r++)
+        {
+            if (keep[r])
+            {
+                counted++;
+                with_party += (party_of[r][0] != '\0');
+            }
+        }
+        if (with_party * 2u < counted)
+        {
+            for (r = 0; r < n; r++)
+            {
+                party_of[r] = "";
+            }
         }
     }
 

@@ -51,6 +51,19 @@ extern "C"
                                  wchar_t *error_message,
                                  size_t error_cch);
 
+    /** EeCsv_ReadSheet over an in-memory file (e.g. a ZIP entry); @p name (the entry's
+     *  file name) chooses the delimiter by extension, as the path does. */
+    EeLoadStatus EeCsv_ReadSheetMem(const void *data,
+                                    size_t size,
+                                    const wchar_t *name,
+                                    EeCsvRowSink sink,
+                                    void *sink_ctx,
+                                    volatile LONG *cancel_flag,
+                                    EeLoadProgressFn progress_fn,
+                                    void *progress_user,
+                                    wchar_t *error_message,
+                                    size_t error_cch);
+
 #ifdef __cplusplus
 }
 #endif

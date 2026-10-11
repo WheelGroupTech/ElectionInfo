@@ -57,8 +57,20 @@
   roster + `p26_olvr_primary_voter_data_rep.csv`: HERNANDEZ, ALEXA ×2). Help, RELEASES
   (1,263 chars) and STORE-LISTING updated. Needs the user's click-test (Differences
   right-click exports especially).
-- **Next:** voter roster support for other Texas counties (survey the top-10 counties'
-  roster formats first), then final validation and the 1.4.0.0 bundle.
+- **County survey done (2026-10-10):** top-20 Texas counties, written up in
+  `ElectionExplorer/docs/voter-roster-county-survey.md` (Tarrant fully profiled from the
+  local files + layout PDFs; formats/URLs for the rest; SOS statewide portal). Open
+  questions for the user are at the end of that doc.
+- **Tarrant roster support done (2026-10-10):** see the survey doc's "Tarrant support"
+  section — TSV in ZIPs, two layouts, redacted voters, vote-type full roster, party from
+  file names, P24 header repair; plus a multi-ZIP use-after-free fix (all counties).
+  Validated on all Tarrant elections 2020–2026 (counts = Python, round trips identical);
+  smoke test `tarrant`. Needs the user's click-test (load a Tarrant election's 3 ZIPs).
+- **Fixed (user report):** the roster window could not scroll — `App_SyncVerticalScroll`
+  synced the visible pane to the hidden left pane, which cannot scroll, snapping it back to
+  the top. Roster windows now skip the vertical sync (`main.c`).
+- **Next:** the next county (Harris / Dallas suggested), then final validation and the
+  1.4.0.0 bundle.
 
 ### Committed — release notes file
 

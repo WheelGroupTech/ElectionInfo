@@ -81,6 +81,9 @@ extern "C"
         uint32_t vuids_missing;                 /* kept named rows with a blank Voter ID (in a
                                                  * sheet that has a VUID column) */
         uint32_t vuids_duplicated;              /* distinct Voter IDs on more than one row */
+        uint32_t rows_redacted;                 /* protected voters ("--Redacted--"): kept with
+                                                 * no Voter ID or name */
+        uint32_t rows_no_date;                  /* records whose file gives no voting date */
         BOOL has_party;                         /* a Party column was produced */
         wchar_t *note;                          /* human-readable summary (owned) */
     } EeRosterLoadInfo;

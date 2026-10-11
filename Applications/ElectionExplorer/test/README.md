@@ -133,6 +133,11 @@ ignored, no address), a Travis-style list with one full-name column and "P nnn"
 precincts, one-to-one pairing (a voter repeated in one list leaves a "Voter ID
 repeated" row and equal identical counts; the 8-bit API reports it as only-here), and
 the voter-list defaults for contrast;
+`tarrant` covers Tarrant County rosters: tab-delimited files inside two ZIPs (the newer
+layout with NPA party + `_Dem` file name, a 6-digit precinct split into precinct +
+subcode, a repeated `City` title, a `--Redacted--` protected voter and an ISO mail
+Return Date; the older layout with P24's damaged header and an anonymous protected row;
+the full roster's Vote_Type F / L / Y) and a TSV round trip;
 `dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without

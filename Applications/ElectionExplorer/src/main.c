@@ -1722,7 +1722,9 @@ static void App_SyncVerticalScroll(AppState *app, HWND source)
     int row_height;
     RECT rc;
 
-    if (app->hwnd_frozen == NULL || app->hwnd_scroll == NULL)
+    /* A roster window shows one pane: the hidden left pane cannot scroll, and syncing to
+     * it would snap the visible pane back to the top. */
+    if (app->hwnd_frozen == NULL || app->hwnd_scroll == NULL || app->is_roster)
     {
         return;
     }
@@ -8895,11 +8897,19 @@ static const wchar_t k_HelpRosterLoading[] =
     L"Load Voter Roster (File menu) opens the rosters a county publishes during an election "
     L"— who has voted, by day and voting method. Select one or more ZIP files as published, "
     L"Excel workbooks (.xlsx), or CSV / TSV files (including a roster exported from this "
-    L"window). Travis County, Texas, rosters are supported. Large rosters load in the "
-    L"background with a progress bar, an estimate of the time remaining, and Cancel.\r\n\r\n"
-    L"•  Each spreadsheet is one day's list for one voting method. The date and method come "
-    L"from the file name (for example \"10.22.2024 Early Vote.xlsx\"). A primary roster has "
-    L"one sheet per party, and the party becomes a column.\r\n\r\n"
+    L"window). Travis and Tarrant County, Texas, rosters are supported. Large rosters load "
+    L"in the background with a progress bar, an estimate of the time remaining, and "
+    L"Cancel.\r\n\r\n"
+    L"•  Travis: each spreadsheet is one day's list for one voting method. The date and "
+    L"method come from the file name (for example \"10.22.2024 Early Vote.xlsx\"). A primary "
+    L"roster has one sheet per party, and the party becomes a column.\r\n\r\n"
+    L"•  Tarrant: one tab-delimited file per voting method for the whole election (select "
+    L"the mail, early voting and Election Day ZIPs together), with addresses. These lists give "
+    L"no voting date for early and Election Day voters, so Date Voted is blank and Voting "
+    L"Totals shows them as \"(no date)\"; mail ballots carry their return date. In a primary "
+    L"the party comes from the file name (\"…_Dem\", \"…_Rep\"). The full election roster "
+    L"published after the canvass has a vote type that also identifies provisional and "
+    L"limited ballots. Protected voters (\"--Redacted--\") are kept with their precinct.\r\n\r\n"
     L"•  When a corrected file (\"…_Updated.xlsx\") is present, the original it replaces is "
     L"not loaded. A file whose voters all appear in a file of another voting method (a "
     L"misnamed copy) is skipped. PDF files, such as scanned Limited Ballot poll lists, are not "

@@ -168,12 +168,90 @@ P26 full rosters give E 213,514 / Y 113,125 / A 9,265 / provisional 507 (F 292 +
 Travis ZIPs). Smoke test `tarrant`. In the app: G24's three ZIPs selected together →
 823,256 records; Voting Totals one "(no date)" row + mail by return date.
 
+## Harris support (done 2026-10-12)
+
+Files (`Voter_Rosters/TX_Harris_County/`, 2020-2026):
+
+- **Daily rosters** (CSV in ZIPs, plus a `DISCLAIMER.TXT`): `Cumulative_BBM_<code>.csv` (all
+  mail ballots returned), `Cumulative_EV_<code>_<MM-DD-YY>.csv` (despite the name, *one day*
+  of early voting per file: no voter repeats across days), `VoterRoster - ELECTION DAY
+  ONLY_<code>_<n>.csv` (split at 100,000 rows; G20's is one `.xlsx`). Columns: `ElectionCode,
+  IDNumber` (county certificate), `StateVoterID` (VUID), `Party` (D / R / `N~P`), `Name`
+  ("LAST, FIRST MIDDLE"), `VoterAddress, VoterCity, VoterZIP`, [`BirthDate` (year), `Sex`,
+  `VoteType` "Election Day"], `Precinct` (4 digits), `ActivityDate` (the voting day, or the
+  day a mail ballot came back), `Dist02..Dist36` (district names). G26's mail file
+  (`Cumulative_BBM_ToPost_1126.csv`) has only 8 columns.
+- **Post-canvass voter history** (`<code>_VoterHistory[ (Set n of m)].xlsx`, G21-G25, P22,
+  P24, with `Generic File Layout.pdf` and polling-place workbooks): `ELECTION_CODE, IDNUMBER,
+  VUID, STATUS, VOTE_TYPE, FIRSTNAME, [MIDDLENAME,] LASTNAME, ADDRESS, ..., DATE_VOTED` (an
+  Excel date), `ACTIVITY_DATE` (when the record was updated), `[OLDPRECINCT, NEWPRECINCT,]
+  PRECINCT, PRECSUB, Dist01..`. Harris's VOTE_TYPE codes **differ from Tarrant's**:
+  E = Election Day, P = early in person, M = mail, A = overseas / military, Z = provisional,
+  1 / 2 = limited ballot in person / by mail (confirmed by DATE_VOTED: E rows on Election
+  Day, P rows on early-voting days).
+- **P26 official roster** (`0326_OfficialRoster_..._001_2026-07-09-14-36-38.xlsx`):
+  `VoteType` is only "In Person" or "Mail" and `ActivityDate` is the posting date (late
+  March / April), so it gives no voting method for in-person voters and no voting dates.
+
+Loader changes (`voter_roster.c`, `xlsx.c`):
+
+- File-name abbreviations as whole words: `BBM` / `ABBM` mail, `EV` early, `ED` Election Day
+  (also Hidalgo's "EV Roster" / "ED Roster" / "ABBM LIST").
+- A header with an `IDNumber` title (Tarrant writes "ID Number") reads vote types with
+  Harris's codes; word values ("Election Day", "Mail") are read as words. An export's
+  Voting Method label now wins over its kept Vote Type code (a mixed Tarrant + Harris
+  export holds both schemes).
+- `ActivityDate` becomes Date Voted when the sheet has no Date Voted column and no vote type
+  other than Election Day; otherwise (the official roster) it stays an extra column.
+- `N~P` = no party; `VoteType` title recognized; an exact `Precinct` title wins over
+  `OLDPRECINCT`, and `NEWPRECINCT` fills a blank PRECINCT (1,872 truncated P22 rows).
+- A `YYYY-MM-DD-hh-mm-ss` export timestamp in a file name is not a voting date.
+- Reference files packed with rosters (disclaimer / read-me, file layout, "Poll Code"
+  location lists) are not read; the load summary lists them (they do not open it).
+- `xlsx.c`: SpreadsheetML parts whose elements carry a namespace prefix (`<x:row>`, the
+  OpenXML SDK: G20's Election Day workbook, 440 MB of sheet XML) are normalized in place.
+
+Validation: every daily roster ZIP P20-G26 loads with per-method counts equal to an
+independent Python parse (e.g. G20 mail 176,453 / early 1,265,359 + Election Day xlsx
+202,535; G24 62,332 / 1,177,333 / 319,501; G25 7,111 / 204,993 / 227,506; P26 20,013 /
+333,010 / 213,381; G26 mail 14,008). Voter histories: G21 229,496, P22 358,910, G22
+1,107,401, G23 452,555, P24 381,858, G24 1,566,985 (44 s), G25 441,163 (incl. provisional
+and limited); P26 official 566,839. Round trips identical (G25 rosters, G25 history, P26
+official, G26). Travis (12 ZIPs) and Tarrant (10 elections) load byte-identical to the
+previous build. Smoke tests `harris`, `xlsxns`. In the app: G25's three ZIPs -> 439,610
+records; Voting Totals per day matches the daily files.
+
+## Downloaded rosters (2026-10-12)
+
+Saved under `Voter_Rosters/TX_<County>_County/` as `<Code>_<county file name>`
+(P20, G20, G21, P22, G22, G23, P24, G24, G25, P26, G26: November and March primary
+elections 2020 to date; runoffs and local elections skipped). Untrusted data, never run.
+
+| County | Files | Size | Elections | Format / layout notes |
+|---|---|---|---|---|
+| Harris | 39 | 1.4 GB | P20 G20 G21 P22 G22 G23 P24 G24 G25 P26 G26 (mail) | cumulative BBM / EV / ED ZIPs + post-canvass official rosters / voter history |
+| Dallas | 21 | 205 MB | P20 (PDF) P24 G24 G25 P26 | XLSX per method; G24 / G25 `Precincts_*.zip` (the G26 page links the G25 ZIPs) |
+| Bexar | 217 | 77 MB | G23 P24 G24 G25 P26 G26 (mail, PDF) | daily CSV: `Name` (full), `State ID`, `Time`, `Precinct`; per party in primaries; some XLSX |
+| Brazoria | 317 | 32 MB | P22 G22 G23 P24 G24 G25 P26 | daily XLSX (G25 in-person CSV), `IN PERSON` / `MAIL`, party in file name; site blocks plain curl (needs browser headers) |
+| Hidalgo | 128 | 98 MB | P20 G20 G21 P22 G22 G23 P24 G24 G25 P26 G26 (mail) | cumulative EV / ED CSV or XLSX (`CERT` = VUID, `CHECK-IN` date, `PRECINCT`, `SITE`, address); daily ABBM XLSX through 2022, cumulative after; per party in primaries |
+| Montgomery | 260 | 20 MB | G21 P22 G22 G23 P24 G24 G25 P26 G26 | daily CSV in ZIP (`EVHistoryFiles/<ELEC>_<mm.dd.yyyy>.zip`, older ELIDs still listed): `VUID`, `Voted_Party`, `DateVoted` (`BBM Recvd Oct  9 2026  1:00PM`), `VoteType` A/E/…; P20 / G20 not listed; P22 02-22 is 404 |
+| Lubbock | 25 | 4 MB | P24 G25 | daily CSV, a multi-line title in the first cell, header row 2: `CERT #`, names, `CHECK-IN`, `PRECINCT`, `VOTING METHOD`; other statewide elections only on the SOS portal |
+| Galveston | 14 | 80 KB | G26 (mail) | daily CSV: `Selected - Election`, `Precinct` / `Precinct Name`, `VUID`, `Name`, `Ballot Received Date`, `Status` |
+| El Paso | 3 | 160 KB | G26 (mail) | daily CSV: `VUID`, name parts, `Precinct`, `MailDate`, `ReceivedDate` (10/09 post repeats the 10/08 file) |
+| Denton | 2 | 116 KB | G26 (mail) | cumulative XLSX snapshots 10-08 and 10-12 |
+| Webb | 3 | 1 MB | G26 (mail) | PDF |
+| Cameron | 1 | 8 KB | G26 (mail) | XLSX; archived files are turnout totals, not rosters |
+| Williamson | 1 | 40 KB | G26 | XLSX; one document replaced daily (only the latest snapshot exists) |
+
+Nothing available: Collin, Bell (posting starts with early voting on 10/19), Fort Bend
+(still shows the June runoff; no archive), Nueces, Hays. Dallas 2020–2023: the old Clarity
+site is gone and the Internet Archive was "Temporarily Offline" (retry later).
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —
    then Harris, Dallas, and the daily-CSV counties).
-2. Permission to download one sample election per county (sizes listed when asking),
-   or the user copies them as for Tarrant.
+2. ~~Downloads~~ — done for every county that posts files (see "Downloaded rosters").
 3. ~~Tarrant mail status~~ — keep every row (decided).
 4. Cumulative files with no voting date: leave Date Voted blank, or use the election
    date for Election Day files?

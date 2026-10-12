@@ -12,8 +12,9 @@
  *
  * so the table's normalized Voter ID / Precinct / Name columns, filters, duplicate
  * scans, export, reports and compare all work as for a voter list. Bracketed columns
- * appear only when some row has a value. Travis County, TX is the first format
- * supported. See docs/voter-roster-design.md.
+ * appear only when some row has a value. Travis, Tarrant and Harris County, TX
+ * formats are supported. See docs/voter-roster-design.md and
+ * docs/voter-roster-county-survey.md.
  */
 #pragma once
 
@@ -73,6 +74,8 @@ extern "C"
         uint32_t repeated_files;                /* same file name in several inputs */
         uint32_t copy_files;                    /* whole-file copies of another method */
         uint32_t unsupported_files;             /* PDFs and other files not read */
+        uint32_t reference_files;               /* disclaimers, file layouts, polling-place
+                                                 * lists packed with the rosters (not read) */
         uint32_t recovered_sheets;              /* sheets missing a header row, recovered */
         uint32_t skipped_sheets;                /* sheets that could not be read */
         uint32_t rows_vuid_only;                /* Voter IDs with no name or precinct */

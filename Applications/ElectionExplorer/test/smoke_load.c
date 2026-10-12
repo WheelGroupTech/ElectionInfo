@@ -7822,6 +7822,314 @@ done:
     return rc;
 }
 
+/* Harris County rosters (tag: harris): CSVs inside ZIPs -- the daily mail (BBM) and
+ * early voting (EV, a two-digit-year file date) files with ActivityDate as the voting
+ * day and N~P = no party, a blank-VUID mail row, and the Election Day roster's
+ * "Election Day" VoteType; the post-canvass voter history with Harris's own vote-type
+ * codes (E election day, P early, M / A mail, Z provisional, 1 limited), PRECINCT
+ * preferred over OLDPRECINCT and NEWPRECINCT used when PRECINCT is missing; the
+ * official roster (VoteType "In Person" / "Mail", an export timestamp in its name)
+ * whose ActivityDate is not a voting day; a disclaimer and a polling-place list
+ * (reference files, not read) -- then a TSV round trip. */
+static int test_harris_roster(void)
+{
+    static const char *k_head =
+        "ElectionCode,IDNumber,StateVoterID,Party,Name,VoterAddress,VoterCity,VoterZIP,Precinct,ActivityDate,"
+        "Dist02,Dist03,Dist04,Dist05,Dist06,Dist07\r\n";
+    static const char *bbm_rows =
+        "1125,92087172,2177328880,N~P,\"KRESS, CARSON SAMUEL\",\"17810  BURNT LEAF \",SPRING,77379,0514,"
+        "09/26/2025,CONGRESSIONAL DIST 02,STATE SENATORIAL DIST 07,STATE REP DISTRICT 126,Commissioner Precinct 3,"
+        "STATE BOARD OF EDUC DIST 06,JP/Constable Precinct 04\r\n"
+        "1125,5548813,,N~P,\"ROSE, JESSE B\",5006  NOLDALE,HOUSTON,77016,0252,9/29/2025,CONGRESSIONAL DIST 18,"
+        "STATE SENATORIAL DIST 13,STATE REP DISTRICT 141,Commissioner Precinct 1,STATE BOARD OF EDUC DIST 04,"
+        "JP/Constable Precinct 03\r\n";
+    static const char *ev_rows =
+        "1125,84623156,2167864385,N~P,\"PRUDOT GONZALEZ, EMILY MELISSA\",\"17915  OBELISK BAY \",CYPRESS,77429,"
+        "0817,10/20/2025,CONGRESSIONAL DIST 38,STATE SENATORIAL DIST 07,STATE REP DISTRICT 130,"
+        "Commissioner Precinct 3,STATE BOARD OF EDUC DIST 06,JP/Constable Precinct 04\r\n";
+    static const char *ed =
+        "ElectionCode,IDNumber,StateVoterID,Party,Name,VoterAddress,VoterCity,VoterZIP,BirthDate,Sex,VoteType,"
+        "Precinct,ActivityDate,Dist02,Dist03,Dist04,Dist05,Dist06,Dist07\r\n"
+        "1125,81145211,2150054628,N~P,\"CABRERA, MARCO ROMEO\",\"15303  STABLE RUN \",CYPRESS,77429,1971,M,"
+        "Election Day,0691,11/04/2025,CONGRESSIONAL DIST 38,STATE SENATORIAL DIST 07,STATE REP DISTRICT 130,"
+        "Commissioner Precinct 3,STATE BOARD OF EDUC DIST 06,JP/Constable Precinct 04\r\n";
+    static const char *disclaimer =
+        "Early Voting Election Rosters\r\n-----------------------------\r\n\r\n"
+        "Disclaimer: The early voting election rosters are unofficial lists of voters.\r\n";
+    static const char *history =
+        "ELECTION_CODE,IDNUMBER,VUID,STATUS,VOTE_TYPE,FIRSTNAME,MIDDLENAME,LASTNAME,ADDRESS,CITY,ZIP,DATE_VOTED,"
+        "ACTIVITY_DATE,OLDPRECINCT,NEWPRECINCT,PRECINCT,PRECSUB,Dist01\r\n"
+        "1125,1,1000000001,A,E,ALICE,,ADAMS,1 MAIN ST,HOUSTON,77001,2025-11-04,2025-12-01,0099,0001,0001,02,"
+        "HARRIS COUNTY\r\n"
+        "1125,2,1000000002,A,P,BOB,,BAKER,2 MAIN ST,HOUSTON,77001,2025-10-30,2025-12-01,0001,0001,0001,02,"
+        "HARRIS COUNTY\r\n"
+        "1125,3,1000000003,A,M,CAROL,,CLARK,3 MAIN ST,HOUSTON,77001,2025-10-23,2025-12-01,0001,0001,0001,02,"
+        "HARRIS COUNTY\r\n"
+        "1125,4,1000000004,A,A,DAN,,DAVIS,4 MAIN ST,HOUSTON,77001,2025-10-15,2025-12-01,0001,0001,0001,02,"
+        "HARRIS COUNTY\r\n"
+        "1125,5,1000000005,A,Z,EVE,,EVANS,5 MAIN ST,HOUSTON,77001,,2025-12-01,0001,0001,0001,02,HARRIS COUNTY\r\n"
+        "1125,6,1000000006,A,1,FRANK,,FOX,6 MAIN ST,HOUSTON,77001,2025-10-31,2025-12-01,0001,0001,0001,02,"
+        "HARRIS COUNTY\r\n"
+        "1125,7,1000000007,A,P,GINA,,GREEN,7 MAIN ST,HOUSTON,77001,2025-10-28,2025-12-01,0711,0711\r\n";
+    static const char *locations = "Poll Codes,Type,Location\r\n12153,ED,A B Anderson Academy\r\n";
+    static const char *official =
+        "ElectionCode,IDNumber,StateVoterID,Party,VoteType,Name,VoterAddress,Precinct,ActivityDate,fileName\r\n"
+        "0326,78426376,2135610638,D,In Person,\"ST LAURENT, GERARD JOSEPH JR\",1707 SAGE ST HOUSTON 77009,0001,"
+        "03-23-2026,0326_OffiicalRoster_001\r\n"
+        "0326,33063777,1115760081,R,Mail,\"NGUYEN, TAI PHUC\",412 PECORE ST HOUSTON 77009,0001,04-02-2026,"
+        "0326_OffiicalRoster_001\r\n";
+    char bbm[2048], ev[1024];
+    const char *names1[4] = {"Cumulative_BBM_1125.csv", "Cumulative_EV_1125_10-20-25.csv",
+                             "VoterRoster - ELECTION DAY ONLY_1125_1.csv", "DISCLAIMER.TXT"};
+    const char *data1[4];
+    const char *names2[3] = {"1125_VoterHistory (Set 1 of 2).csv", "1125 Locations with Poll Codes.csv",
+                             "0326_OfficialRoster_001_2026-07-09-14-36-38.csv"};
+    const char *data2[3];
+    wchar_t z1[MAX_PATH], z2[MAX_PATH], tp[MAX_PATH];
+    const wchar_t *paths[2];
+    EeVoterTable t, t2;
+    EeRosterLoadInfo info, info2;
+    wchar_t err[256];
+    char *text = NULL;
+    size_t text_len = 0;
+    uint32_t *rows = NULL;
+    uint32_t i;
+    int rc = 1;
+
+    StringCchCopyA(bbm, ARRAYSIZE(bbm), k_head);
+    StringCchCatA(bbm, ARRAYSIZE(bbm), bbm_rows);
+    StringCchCopyA(ev, ARRAYSIZE(ev), k_head);
+    StringCchCatA(ev, ARRAYSIZE(ev), ev_rows);
+    data1[0] = bbm;
+    data1[1] = ev;
+    data1[2] = ed;
+    data1[3] = disclaimer;
+    data2[0] = history;
+    data2[1] = locations;
+    data2[2] = official;
+    GetTempPathW(MAX_PATH, z1);
+    StringCchCopyW(z2, MAX_PATH, z1);
+    StringCchCopyW(tp, MAX_PATH, z1);
+    StringCchCatW(z1, MAX_PATH, L"ee_harris_1.zip");
+    StringCchCatW(z2, MAX_PATH, L"ee_harris_2.zip");
+    StringCchCatW(tp, MAX_PATH, L"ee_harris_rt.tsv");
+    EeVoterTable_Init(&t);
+    EeVoterTable_Init(&t2);
+    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&info2, sizeof(info2));
+    if (!hart_write_zip(z1, names1, data1, 4) || !hart_write_zip(z2, names2, data2, 3))
+    {
+        wprintf(L"harris: could not write the ZIPs\n");
+        goto done;
+    }
+    paths[0] = z1;
+    paths[1] = z2;
+    if (EeRoster_LoadFiles(paths, 2, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"harris: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 13 || info.reference_files != 2 || info.skipped_sheets != 0 ||
+        info.method_rows[EE_VM_MAIL] != 5 || info.method_rows[EE_VM_EARLY] != 3 ||
+        info.method_rows[EE_VM_ELECTION_DAY] != 2 || info.method_rows[EE_VM_PROVISIONAL] != 1 ||
+        info.method_rows[EE_VM_LIMITED] != 1 || info.method_rows[EE_VM_NONE] != 1 || info.vuids_missing != 1)
+    {
+        wprintf(L"harris: rows %u ref %u skipped %u mail %u ev %u ed %u prov %u lim %u none %u missing %u\n",
+                t.row_count, info.reference_files, info.skipped_sheets, info.method_rows[EE_VM_MAIL],
+                info.method_rows[EE_VM_EARLY], info.method_rows[EE_VM_ELECTION_DAY],
+                info.method_rows[EE_VM_PROVISIONAL], info.method_rows[EE_VM_LIMITED],
+                info.method_rows[EE_VM_NONE], info.vuids_missing);
+        goto done;
+    }
+    if (!rt_expect(&t, L"KRESS", L"CARSON", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"KRESS", L"CARSON", L"Date Voted", L"09/26/2025") ||
+        !rt_expect(&t, L"KRESS", L"CARSON", L"Party", L"") ||
+        !rt_expect(&t, L"KRESS", L"CARSON", L"Precinct", L"0514") ||
+        !rt_expect(&t, L"KRESS", L"CARSON", L"ActivityDate", L"") ||
+        !rt_expect(&t, L"KRESS", L"CARSON", L"Dist02", L"CONGRESSIONAL DIST 02") ||
+        !rt_expect(&t, L"ROSE", L"JESSE", L"VUID", L"") ||
+        !rt_expect(&t, L"ROSE", L"JESSE", L"IDNumber", L"5548813") ||
+        !rt_expect(&t, L"ROSE", L"JESSE", L"Date Voted", L"09/29/2025") ||
+        !rt_expect(&t, L"PRUDOT GONZALEZ", L"EMILY", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"PRUDOT GONZALEZ", L"EMILY", L"Date Voted", L"10/20/2025") ||
+        !rt_expect(&t, L"CABRERA", L"MARCO", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"CABRERA", L"MARCO", L"Date Voted", L"11/04/2025") ||
+        !rt_expect(&t, L"CABRERA", L"MARCO", L"Vote Type", L"Election Day") ||
+        !rt_expect(&t, L"CABRERA", L"MARCO", L"BirthDate", L"1971") ||
+        !rt_expect(&t, L"ADAMS", L"ALICE", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"ADAMS", L"ALICE", L"Date Voted", L"11/04/2025") ||
+        !rt_expect(&t, L"ADAMS", L"ALICE", L"Precinct", L"0001") ||
+        !rt_expect(&t, L"ADAMS", L"ALICE", L"OLDPRECINCT", L"0099") ||
+        !rt_expect(&t, L"ADAMS", L"ALICE", L"ACTIVITY_DATE", L"2025-12-01") ||
+        !rt_expect(&t, L"BAKER", L"BOB", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"CLARK", L"CAROL", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"DAVIS", L"DAN", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"EVANS", L"EVE", L"Voting Method", L"Provisional") ||
+        !rt_expect(&t, L"EVANS", L"EVE", L"Date Voted", L"") ||
+        !rt_expect(&t, L"FOX", L"FRANK", L"Voting Method", L"Limited") ||
+        !rt_expect(&t, L"GREEN", L"GINA", L"Precinct", L"0711") ||
+        !rt_expect(&t, L"GREEN", L"GINA", L"Date Voted", L"10/28/2025") ||
+        !rt_expect(&t, L"ST LAURENT", L"GERARD", L"Voting Method", L"") ||
+        !rt_expect(&t, L"ST LAURENT", L"GERARD", L"Date Voted", L"") ||
+        !rt_expect(&t, L"ST LAURENT", L"GERARD", L"ActivityDate", L"03-23-2026") ||
+        !rt_expect(&t, L"ST LAURENT", L"GERARD", L"Party", L"DEM") ||
+        !rt_expect(&t, L"ST LAURENT", L"GERARD", L"Name Suffix", L"JR") ||
+        !rt_expect(&t, L"NGUYEN", L"TAI", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"NGUYEN", L"TAI", L"Date Voted", L"") ||
+        !rt_expect(&t, L"NGUYEN", L"TAI", L"Party", L"REP"))
+    {
+        goto done;
+    }
+
+    /* Round trip: TSV export, reload, every cell equal. */
+    rows = (uint32_t *)malloc(t.row_count * sizeof(uint32_t));
+    for (i = 0; rows != NULL && i < t.row_count; i++)
+        rows[i] = i;
+    if (rows == NULL ||
+        !EeVoterTable_FormatDelimitedUtf8(&t, rows, t.row_count, FALSE, '\t', TRUE, &text, &text_len) ||
+        !cvr_write_bytes(tp, text, text_len))
+    {
+        wprintf(L"harris: export failed\n");
+        goto done;
+    }
+    paths[0] = tp;
+    if (EeRoster_LoadFiles(paths, 1, &t2, &info2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        t2.row_count != t.row_count || t2.column_count != t.column_count)
+    {
+        wprintf(L"harris: reload failed (%s) %u x %u\n", err, t2.row_count, t2.column_count);
+        goto done;
+    }
+    {
+        uint32_t r, c;
+        for (r = 0; r < t.row_count; r++)
+        {
+            for (c = 0; c < t.column_count; c++)
+            {
+                wchar_t a[256], b[256];
+                EeVoterTable_GetViewCellW(&t, r, c, a, ARRAYSIZE(a));
+                EeVoterTable_GetViewCellW(&t2, r, c, b, ARRAYSIZE(b));
+                if (wcscmp(a, b) != 0)
+                {
+                    wprintf(L"harris: reload row %u [%s] '%s' vs '%s'\n", r, t.column_titles[c], b, a);
+                    goto done;
+                }
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"harris ok\n");
+done:
+    free(text);
+    free(rows);
+    EeRoster_FreeInfo(&info);
+    EeRoster_FreeInfo(&info2);
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Clear(&t2);
+    DeleteFileW(z1);
+    DeleteFileW(z2);
+    DeleteFileW(tp);
+    if (rc != 0)
+    {
+        wprintf(L"harris test failed\n");
+    }
+    return rc;
+}
+
+/* A workbook written with every SpreadsheetML element under a namespace prefix
+ * ("<x:row>", "<x:c>" -- the OpenXML SDK; Harris County's 2020 Election Day roster),
+ * a BOM, and a package-absolute worksheet target ("/xl/worksheets/sheet2.xml"): the
+ * cells, shared strings (one holding a literal "<x:b>" as text) and a date style must
+ * read as in an ordinary workbook (tag: xlsxns). */
+static int test_xlsx_prefixed(void)
+{
+    static const char *k_workbook =
+        "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?><x:workbook "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
+        "xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+        "<x:sheets><x:sheet name=\"Sheet1\" sheetId=\"2\" r:id=\"rId5\" /></x:sheets></x:workbook>";
+    static const char *k_rels =
+        "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?><Relationships "
+        "xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" "
+        "Target=\"/xl/worksheets/sheet2.xml\" Id=\"rId5\" /></Relationships>";
+    static const char *k_shared =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><x:sst "
+        "xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+        "<x:si><x:t>VUID</x:t></x:si><x:si><x:t>Name</x:t></x:si><x:si><x:t>Voted</x:t></x:si>"
+        "<x:si><x:t>MORAN, CARY &lt;x:b&gt;</x:t></x:si></x:sst>";
+    static const char *k_styles =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?><x:styleSheet "
+        "xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+        "<x:cellXfs count=\"2\"><x:xf numFmtId=\"0\" /><x:xf numFmtId=\"14\" /></x:cellXfs></x:styleSheet>";
+    static const char *k_sheet =
+        "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?><x:worksheet "
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" "
+        "xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><x:sheetData>"
+        "<x:row r=\"1\"><x:c r=\"A1\" t=\"s\"><x:v>0</x:v></x:c><x:c r=\"B1\" t=\"s\"><x:v>1</x:v></x:c>"
+        "<x:c r=\"C1\" t=\"s\"><x:v>2</x:v></x:c></x:row>"
+        "<x:row r=\"2\"><x:c r=\"A2\"><x:v>1108595320</x:v></x:c><x:c r=\"B2\" t=\"s\"><x:v>3</x:v></x:c>"
+        "<x:c r=\"C2\" s=\"1\"><x:v>44138</x:v></x:c></x:row></x:sheetData></x:worksheet>";
+    const char *names[5] = {"xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/sharedStrings.xml",
+                            "xl/styles.xml", "xl/worksheets/sheet2.xml"};
+    const char *parts[5];
+    wchar_t path[MAX_PATH];
+    wchar_t err[256] = L"";
+    wchar_t buf[128];
+    EeVoterTable t;
+    EeLoadStatus s;
+    int rc = 1;
+
+    parts[0] = k_workbook;
+    parts[1] = k_rels;
+    parts[2] = k_shared;
+    parts[3] = k_styles;
+    parts[4] = k_sheet;
+    GetTempPathW(MAX_PATH, path);
+    StringCchCatW(path, MAX_PATH, L"ee_xlsxns.xlsx");
+    if (!hart_write_zip(path, names, parts, 5))
+    {
+        wprintf(L"xlsxns: could not write the workbook\n");
+        return 1;
+    }
+    EeVoterTable_Init(&t);
+    s = EeVoterTable_LoadXlsxSheet(path, 0, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    DeleteFileW(path);
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"xlsxns: load failed s=%d rows=%u err=%s\n", (int)s, t.row_count, err);
+        EeVoterTable_Clear(&t);
+        return 1;
+    }
+    /* Source cols: 4=VUID 5=Name 6=Voted. */
+    EeVoterTable_GetViewCellW(&t, 0, 4, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"1108595320") != 0)
+    {
+        wprintf(L"xlsxns: VUID (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 5, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"MORAN, CARY <x:b>") != 0)
+    {
+        wprintf(L"xlsxns: shared string (%s)\n", buf);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, 6, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"2020-11-03") != 0)
+    {
+        wprintf(L"xlsxns: date style (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"xlsxns ok\n");
+done:
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"xlsxns test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -7839,6 +8147,7 @@ int wmain(void)
     failed |= test_el_paso_layout();
     failed |= test_voter_roster();
     failed |= test_tarrant_roster();
+    failed |= test_harris_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();
     failed |= test_dup_voters_voting();
@@ -7865,6 +8174,7 @@ int wmain(void)
     failed |= test_settings_roundtrip();
     failed |= test_xlsx_roundtrip();
     failed |= test_xlsx_styles();
+    failed |= test_xlsx_prefixed();
     failed |= test_cvr();
     failed |= test_cvr_multiselect();
     failed |= test_cvr_tabulate();

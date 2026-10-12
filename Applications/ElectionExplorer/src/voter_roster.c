@@ -269,14 +269,71 @@ static EeVotingMethod method_from_text(const char *s)
     return EE_VM_NONE;
 }
 
-/* Voting method of a vote-type code: Tarrant's official roster (A absentee, E early,
- * F early-voting provisional, Y election day, Z election-day provisional, L limited) and
- * Montgomery's (A, E, L, E1 / E3 late voting); P = election day in Tarrant voter files. */
-static EeVotingMethod method_from_vote_type(const char *code)
+/* Voting method of a file name: its words, else the abbreviations as whole words
+ * ("Cumulative_BBM_1124" mail, "Cumulative_EV_1124_10-21-24" early voting, "ED Roster"
+ * Election Day). */
+static EeVotingMethod method_from_name(const char *name)
 {
-    char c[8];
+    EeVotingMethod m = method_from_text(name);
+    char w[16];
+    size_t n = 0;
+    const char *p;
+    if (m != EE_VM_NONE)
+    {
+        return m;
+    }
+    for (p = name;; p++)
+    {
+        char c = *p;
+        BOOL alnum = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (alnum && n + 1 < sizeof(w))
+        {
+            w[n++] = lc(c);
+            continue;
+        }
+        w[n] = '\0';
+        if (strcmp(w, "bbm") == 0 || strcmp(w, "abbm") == 0)
+            return EE_VM_MAIL;
+        if (strcmp(w, "ev") == 0)
+            return EE_VM_EARLY;
+        if (strcmp(w, "ed") == 0)
+            return EE_VM_ELECTION_DAY;
+        n = 0;
+        if (c == '\0')
+            return EE_VM_NONE;
+    }
+}
+
+/* Voting method of a vote-type cell. Words are read as words ("Election Day", "Mail";
+ * "In Person" names no single method). Codes: Tarrant's official roster (A absentee,
+ * E early, F early-voting provisional, Y election day, Z election-day provisional,
+ * L limited) and Montgomery's (A, E, L, E1 / E3 late voting); P = election day in
+ * Tarrant voter files. Harris County's codes differ (@p harris): E election day, P early
+ * in person, M mail, A overseas / military (by mail), Z provisional, 1 / 2 limited ballot
+ * in person / by mail. */
+static EeVotingMethod method_from_vote_type(const char *code, BOOL harris)
+{
+    char c[64];
     clean_text(code, c, sizeof(c));
+    if (strlen(c) > 3)
+    {
+        return method_from_text(c);
+    }
     CharUpperBuffA(c, (DWORD)strlen(c));
+    if (harris)
+    {
+        if (strcmp(c, "E") == 0)
+            return EE_VM_ELECTION_DAY;
+        if (strcmp(c, "P") == 0)
+            return EE_VM_EARLY;
+        if (strcmp(c, "M") == 0 || strcmp(c, "A") == 0)
+            return EE_VM_MAIL;
+        if (strcmp(c, "Z") == 0)
+            return EE_VM_PROVISIONAL;
+        if (strcmp(c, "1") == 0 || strcmp(c, "2") == 0)
+            return EE_VM_LIMITED;
+        return EE_VM_NONE;
+    }
     if (strcmp(c, "A") == 0)
         return EE_VM_MAIL;
     if (c[0] == 'E' && (c[1] == '\0' || is_digit(c[1])))
@@ -312,9 +369,10 @@ static void party_from_cell(const char *s, char *out, size_t cap)
     const char *p;
     clean_text(s, t, sizeof(t));
     if (_stricmp(t, "NP") == 0 || _stricmp(t, "NPA") == 0 || _stricmp(t, "NON") == 0 ||
-        _stricmp(t, "N") == 0)
+        _stricmp(t, "N") == 0 || _stricmp(t, "N~P") == 0)
     {
-        out[0] = '\0'; /* no party (general elections; Tarrant primaries say NPA too) */
+        out[0] = '\0'; /* no party (general elections; Tarrant primaries say NPA too;
+                        * Harris says N~P) */
         return;
     }
     p = party_from_text(t);
@@ -607,7 +665,8 @@ enum
     SKIP_SUPERSEDED,
     SKIP_REPEATED,
     SKIP_COPY,
-    SKIP_UNSUPPORTED
+    SKIP_UNSUPPORTED,
+    SKIP_REFERENCE /* a county's disclaimer, file layout or polling-place list */
 };
 
 typedef struct OpenZip
@@ -648,10 +707,13 @@ typedef struct HeaderMap
 {
     int vuid, pct, first, last, middle, suffix, full, party, notes, aname, aaddr, method, date,
         source, vtype;
+    int adate;      /* Harris "ActivityDate" column (also kept as an extra), or -1 */
+    int pct_alt;    /* Harris "NEWPRECINCT" (also kept): the precinct when PRECINCT is blank */
     int ncols;
     BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
                      * as "Column N", never taken as notes */
     BOOL split_pct; /* Tarrant: a 6-digit precinct is precinct (4) + subcode (2) */
+    BOOL harris;    /* Harris County layout ("IDNumber"): its vote-type codes */
     int nx;
     int xcol[ROSTER_MAX_EXTRA];
     uint32_t xid[ROSTER_MAX_EXTRA];
@@ -972,7 +1034,8 @@ static void map_init(HeaderMap *m)
 {
     ZeroMemory(m, sizeof(*m));
     m->vuid = m->pct = m->first = m->last = m->middle = m->suffix = m->full = m->party =
-        m->notes = m->aname = m->aaddr = m->method = m->date = m->source = m->vtype = -1;
+        m->notes = m->aname = m->aaddr = m->method = m->date = m->source = m->vtype = m->adate =
+            m->pct_alt = -1;
 }
 
 static BOOL row_is_header(const SheetRows *r, uint32_t row)
@@ -1005,12 +1068,21 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     BOOL limited_form = FALSE;
     BOOL sos_vuid = FALSE;
     BOOL has_subcode = FALSE;
+    BOOL exact_pct = FALSE;
     int titled = 0;
     map_init(m);
     for (c = 0; c < r->row_len[row]; c++)
     {
         char lab[96];
         header_label(hdr_cell(r, row, c, fix), lab, sizeof(lab));
+        if (strcmp(lab, "idnumber") == 0)
+        {
+            m->harris = TRUE; /* Tarrant writes "ID Number" */
+        }
+        if (strcmp(lab, "precinct") == 0)
+        {
+            exact_pct = TRUE; /* Harris voter history: "PRECINCT" beside "OLDPRECINCT" */
+        }
         if (contains_ci(lab, "name of voter"))
         {
             limited_form = TRUE; /* "Name" / "Address" then describe the assisting person */
@@ -1066,7 +1138,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             m->vuid = ci;
         else if (m->method < 0 && contains_ci(lab, "voting method"))
             m->method = ci;
-        else if (m->vtype < 0 && (contains_ci(lab, "vote type") || contains_ci(lab, "vote_type")))
+        else if (m->vtype < 0 && (contains_ci(lab, "vote type") || strcmp(lab, "votetype") == 0))
         {
             m->vtype = ci;
             (void)extra_col(L, "Vote Type"); /* its code is also kept: register it here, in
@@ -1076,7 +1148,8 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             m->date = ci;
         else if (m->source < 0 && contains_ci(lab, "source file"))
             m->source = ci;
-        else if (m->pct < 0 && (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0))
+        else if (m->pct < 0 && (exact_pct ? strcmp(lab, "precinct") == 0
+                                          : (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0)))
             m->pct = ci;
         else if (m->first < 0 && contains_ci(lab, "first"))
             m->first = ci;
@@ -1125,6 +1198,14 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                 m->xcol[m->nx] = ci;
                 m->xid[m->nx] = (uint32_t)x;
                 m->nx++;
+                if (m->adate < 0 && (strcmp(lab, "activitydate") == 0 || strcmp(lab, "activity date") == 0))
+                {
+                    m->adate = ci; /* may become Date Voted: see use_activity_date */
+                }
+                if (m->pct_alt < 0 && strcmp(lab, "newprecinct") == 0)
+                {
+                    m->pct_alt = ci;
+                }
             }
         }
     }
@@ -1330,6 +1411,11 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     }
     clean_id(cell_at(r, row, m->vuid), vuid, sizeof(vuid));
     clean_id(cell_at(r, row, m->pct), pct, sizeof(pct));
+    if (pct[0] == '\0' && m->pct_alt >= 0)
+    {
+        /* Harris P22 voter history: some rows end before PRECINCT but carry NEWPRECINCT */
+        clean_id(cell_at(r, row, m->pct_alt), pct, sizeof(pct));
+    }
     if (m->full >= 0)
     {
         split_full_name(cell_at(r, row, m->full), last, first, middle, suffix, sizeof(last));
@@ -1410,21 +1496,27 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         return; /* Limited Ballot form: unused numbered lines */
     }
 
-    /* Canonical export columns override the sheet-level method / date. */
-    if (m->method >= 0)
+    /* Canonical export columns override the sheet-level method / date; an export's
+     * Voting Method label also wins over its kept Vote Type code (a mixed Tarrant +
+     * Harris export holds both code schemes). */
     {
-        EeVotingMethod mm = EeRoster_MethodFromLabel(cell_at(r, row, m->method));
-        if (mm != EE_VM_NONE)
+        BOOL labeled = FALSE;
+        if (m->method >= 0)
         {
-            method = mm;
+            EeVotingMethod mm = EeRoster_MethodFromLabel(cell_at(r, row, m->method));
+            if (mm != EE_VM_NONE)
+            {
+                method = mm;
+                labeled = TRUE;
+            }
         }
-    }
-    if (m->vtype >= 0)
-    {
-        EeVotingMethod mm = method_from_vote_type(cell_at(r, row, m->vtype));
-        if (mm != EE_VM_NONE)
+        if (m->vtype >= 0 && !labeled)
         {
-            method = mm;
+            EeVotingMethod mm = method_from_vote_type(cell_at(r, row, m->vtype), m->harris);
+            if (mm != EE_VM_NONE)
+            {
+                method = mm;
+            }
         }
     }
     if (m->date >= 0)
@@ -1553,6 +1645,43 @@ static void append_name(WBuf *b, const wchar_t *name, const char *sheet)
     }
 }
 
+/* Harris County's "ActivityDate" is the day voted (early voting, Election Day) or the
+ * day a mail ballot came back -- except in its post-canvass official roster, whose rows
+ * ("In Person" / "Mail") carry the day the record was posted. It becomes Date Voted when
+ * the sheet has no Date Voted column and no vote type other than Election Day in its
+ * first rows; its extra column is then dropped. */
+static void use_activity_date(HeaderMap *m, const SheetRows *r, uint32_t from)
+{
+    uint32_t row;
+    int k;
+    if (m->adate < 0 || m->date >= 0)
+    {
+        return;
+    }
+    if (m->vtype >= 0)
+    {
+        for (row = from; row < r->nrows && row < from + 1000; row++)
+        {
+            const char *v = cell_at(r, row, m->vtype);
+            if (v[0] != '\0' && method_from_vote_type(v, m->harris) != EE_VM_ELECTION_DAY)
+            {
+                return;
+            }
+        }
+    }
+    m->date = m->adate;
+    for (k = 0; k < m->nx; k++)
+    {
+        if (m->xcol[k] == m->adate)
+        {
+            memmove(&m->xcol[k], &m->xcol[k + 1], (size_t)(m->nx - k - 1) * sizeof(m->xcol[0]));
+            memmove(&m->xid[k], &m->xid[k + 1], (size_t)(m->nx - k - 1) * sizeof(m->xid[0]));
+            m->nx--;
+            break;
+        }
+    }
+}
+
 /* Analyze one worksheet's rows and emit its records. @p wb_map / @p wb_have carry the
  * workbook's previous header so a sibling sheet missing its header can borrow it. */
 static void process_sheet(Loader *L, int si, const char *sheet_name, const SheetRows *r,
@@ -1635,6 +1764,7 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         L->info->recovered_sheets++;
         append_name(&L->recovered, s->name, sheet_name);
     }
+    use_activity_date(&m, r, data_from);
 
     /* Title rows: roster date, method words, and the party of a primary sheet. */
     for (row = 0; row < h && row < r->nrows; row++)
@@ -1741,6 +1871,39 @@ static SrcKind kind_from_ext(const wchar_t *ext)
     return SRC_OTHER;
 }
 
+/* A "YYYY-MM-DD-hh-mm-ss" export timestamp in a file name (Harris's official roster
+ * "..._001_2026-07-09-14-36-38.xlsx"): when the file was written, not a voting day. */
+static BOOL has_timestamp(const char *s)
+{
+    static const char k_pat[] = "dddd-dd-dd-dd-dd-dd";
+    size_t n = strlen(s);
+    size_t i;
+    size_t k;
+    for (i = 0; i + sizeof(k_pat) - 1 <= n; i++)
+    {
+        for (k = 0; k < sizeof(k_pat) - 1; k++)
+        {
+            if (k_pat[k] == 'd' ? !is_digit(s[i + k]) : s[i + k] != '-')
+            {
+                break;
+            }
+        }
+        if (k == sizeof(k_pat) - 1)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* A county's reference file packed beside its rosters: a disclaimer or read-me, a file
+ * layout, or a polling-place list ("1122 Locations with Poll Codes.xlsx"). */
+static BOOL is_reference_name(const char *name)
+{
+    return contains_ci(name, "disclaimer") || contains_ci(name, "readme") || contains_ci(name, "read me") ||
+           contains_ci(name, "file layout") || contains_ci(name, "poll code");
+}
+
 /* Fill name / key / date / method / updated from the display name. */
 static void parse_source_name(RosterSource *s)
 {
@@ -1749,8 +1912,8 @@ static void parse_source_name(RosterSource *s)
     char *u;
     size_t i;
     WideCharToMultiByte(CP_UTF8, 0, s->name, -1, s->name8, (int)sizeof(s->name8), NULL, NULL);
-    s->date = find_date(s->name8);
-    s->method = method_from_text(s->name8);
+    s->date = has_timestamp(s->name8) ? 0 : find_date(s->name8);
+    s->method = method_from_name(s->name8);
     s->party = party_from_name(s->name8);
     StringCchCopyA(low, ARRAYSIZE(low), s->name8);
     for (i = 0; low[i] != '\0'; i++)
@@ -1911,7 +2074,11 @@ static void mark_superseded(Loader *L)
     for (i = 0; i < L->nsrc; i++)
     {
         RosterSource *a = &L->src[i];
-        if (a->kind == SRC_PDF || a->kind == SRC_OTHER)
+        if (is_reference_name(a->name8))
+        {
+            a->skip = SKIP_REFERENCE;
+        }
+        else if (a->kind == SRC_PDF || a->kind == SRC_OTHER)
         {
             a->skip = SKIP_UNSUPPORTED;
             if (a->method != EE_VM_NONE)
@@ -2357,13 +2524,15 @@ static void build_note(Loader *L)
     }
 
     if (in->superseded_files || in->repeated_files || in->copy_files || in->unsupported_files ||
-        in->skipped_sheets)
+        in->reference_files || in->skipped_sheets)
     {
         wb_append(&b, L"\r\n\r\nNot loaded:");
         note_file_list(L, &b, SKIP_SUPERSEDED, L"original file(s) replaced by a corrected (_Updated) file");
         note_file_list(L, &b, SKIP_REPEATED, L"file(s) also in a later selection (loaded once)");
         note_file_list(L, &b, SKIP_COPY, L"file(s) whose voters all appear in a file of another voting method");
         note_file_list(L, &b, SKIP_UNSUPPORTED, L"PDF or other file(s) that cannot be read yet");
+        note_file_list(L, &b, SKIP_REFERENCE,
+                       L"reference file(s) packed with the rosters (disclaimer, file layout, polling places)");
         if (in->skipped_sheets)
         {
             wb_printf(&b, L"\r\n\x2022  %lu worksheet(s) with no recognizable layout: %s",
@@ -2422,8 +2591,9 @@ static void build_note(Loader *L)
     if (in->rows_no_date)
     {
         fmt_count(in->rows_no_date, n1, ARRAYSIZE(n1));
-        wb_printf(&b, L"\r\n\r\n%s record%s have no Date Voted: the county's file gives no voting date "
-                     L"(e.g. a cumulative early voting or Election Day list).",
+        wb_printf(&b, L"\r\n\r\n%s record%s have no Date Voted: the county's file gives no voting date for "
+                     L"them (e.g. a cumulative early voting or Election Day list, provisional ballots, or "
+                     L"an official roster that lists only \x201CIn Person\x201D or \x201CMail\x201D).",
                   n1, in->rows_no_date == 1 ? L"" : L"s");
     }
     if (in->vuids_duplicated)
@@ -2792,6 +2962,9 @@ EeLoadStatus EeRoster_LoadFiles(const wchar_t *const *paths,
                 break;
             case SKIP_UNSUPPORTED:
                 info->unsupported_files++;
+                break;
+            case SKIP_REFERENCE:
+                info->reference_files++;
                 break;
             default:
                 break;

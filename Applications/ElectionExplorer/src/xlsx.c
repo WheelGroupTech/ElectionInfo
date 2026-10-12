@@ -423,6 +423,107 @@ static char *extract_part(mz_zip_archive *zip, const char *name, size_t *out_siz
     return (char *)data;
 }
 
+/* Some writers (the OpenXML SDK: Harris County's 2020 roster) put every SpreadsheetML
+ * element under a namespace prefix ("<x:row>", "<x:c>", "</x:si>"). Find the prefix
+ * bound to the SpreadsheetML namespace in the part's root tag and drop it from element
+ * names, in place (the text only shrinks), so the scanners below see "<row>". Markup
+ * is the only place a raw '<' can appear in XML, so text is never changed. */
+static void strip_sml_prefix(char *xml, size_t *len)
+{
+    static const char *const k_ns[] = {"http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+                                       "http://purl.oclc.org/ooxml/spreadsheetml/main"};
+    char pre[32];
+    size_t plen = 0;
+    size_t n;
+    size_t i;
+    size_t o;
+    const char *p;
+    const char *hend;
+    if (xml == NULL || len == NULL)
+    {
+        return;
+    }
+    n = *len;
+    p = xml;
+    hend = xml + (n < 8192 ? n : 8192);
+    while (plen == 0 && (p = mem_find(p, hend, "xmlns:", 6)) != NULL)
+    {
+        const char *q = p + 6;
+        size_t k = 0;
+        while (q + k < hend && q[k] != '=' && q[k] != ' ' && k + 1 < sizeof(pre))
+        {
+            k++;
+        }
+        if (k > 0 && q + k + 1 < hend && q[k] == '=' && (q[k + 1] == '"' || q[k + 1] == '\''))
+        {
+            const char *v = q + k + 2;
+            const char *ve = (const char *)memchr(v, q[k + 1], (size_t)(hend - v));
+            size_t ni;
+            for (ni = 0; ve != NULL && ni < ARRAYSIZE(k_ns); ni++)
+            {
+                size_t nl = strlen(k_ns[ni]);
+                if ((size_t)(ve - v) == nl && memcmp(v, k_ns[ni], nl) == 0)
+                {
+                    memcpy(pre, q, k);
+                    plen = k;
+                    break;
+                }
+            }
+        }
+        p += 6;
+    }
+    if (plen == 0)
+    {
+        return;
+    }
+    i = 0;
+    o = 0;
+    while (i < n)
+    {
+        const char *lt = (const char *)memchr(xml + i, '<', n - i);
+        size_t j = (lt != NULL) ? (size_t)(lt - xml) : n;
+        size_t s;
+        if (j > i)
+        {
+            if (o != i)
+            {
+                memmove(xml + o, xml + i, j - i);
+            }
+            o += j - i;
+            i = j;
+        }
+        if (i >= n)
+        {
+            break;
+        }
+        s = i + 1; /* just past '<' (and '/') */
+        if (s < n && xml[s] == '/')
+        {
+            s++;
+        }
+        if (s + plen < n && xml[s + plen] == ':' && memcmp(xml + s, pre, plen) == 0)
+        {
+            memmove(xml + o, xml + i, s - i); /* "<" or "</" */
+            o += s - i;
+            i = s + plen + 1;
+        }
+        else
+        {
+            xml[o++] = xml[i++];
+        }
+    }
+    *len = o;
+}
+
+/* extract_part for a SpreadsheetML part (workbook, shared strings, styles, worksheet):
+ * also drops a namespace prefix from its element names. */
+static char *extract_sml_part(mz_zip_archive *zip, const char *name, size_t *out_size)
+{
+    char *xml = extract_part(zip, name, out_size);
+    strip_sml_prefix(xml, out_size);
+    return xml;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Shared strings                                                             */
 /* -------------------------------------------------------------------------- */
@@ -1849,7 +1950,7 @@ EeLoadStatus EeXlsx_ListSheetsMem(const void *data,
         xlsx_err(error_message, error_cch, L"Not a valid .xlsx (ZIP) file.");
         return EeLoadStatus_Error;
     }
-    wb = extract_part(&zip, "xl/workbook.xml", &wb_size);
+    wb = extract_sml_part(&zip, "xl/workbook.xml", &wb_size);
     if (wb == NULL)
     {
         xlsx_err(error_message, error_cch, L"Missing xl/workbook.xml.");
@@ -1964,7 +2065,7 @@ EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
         return EeLoadStatus_Error;
     }
 
-    wb = extract_part(&zip, "xl/workbook.xml", &wb_size);
+    wb = extract_sml_part(&zip, "xl/workbook.xml", &wb_size);
     rels = extract_part(&zip, "xl/_rels/workbook.xml.rels", &rels_size);
     if (wb == NULL || rels == NULL)
     {
@@ -1994,7 +2095,7 @@ EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
     }
 
     /* Shared strings are optional (files using inline strings have none). */
-    shared_xml = extract_part(&zip, "xl/sharedStrings.xml", &shared_size);
+    shared_xml = extract_sml_part(&zip, "xl/sharedStrings.xml", &shared_size);
     if (shared_xml != NULL)
     {
         if (!parse_shared_strings(shared_xml, shared_size, &shared, error_message, error_cch))
@@ -2004,7 +2105,7 @@ EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
     }
 
     /* Styles are optional; they tell dates from plain numbers (Phase 3). */
-    styles_xml = extract_part(&zip, "xl/styles.xml", &styles_size);
+    styles_xml = extract_sml_part(&zip, "xl/styles.xml", &styles_size);
     if (styles_xml != NULL)
     {
         if (!parse_styles(styles_xml, styles_size, &styles, error_message, error_cch))
@@ -2013,7 +2114,7 @@ EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
         }
     }
 
-    sheet_xml = extract_part(&zip, sheet_part, &sheet_size);
+    sheet_xml = extract_sml_part(&zip, sheet_part, &sheet_size);
     if (sheet_xml == NULL)
     {
         xlsx_err(error_message, error_cch, L"Could not read the worksheet.");

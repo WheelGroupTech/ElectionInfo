@@ -33,6 +33,9 @@ test\smoke_load.exe
 
 (The `xlsx` round-trip test authors a tiny `.xlsx` in memory via miniz, so
 `src\xlsx.c` and `src\third_party\miniz\miniz.c` are required to build the tests.
+`xlsxns` authors a workbook whose SpreadsheetML elements all carry a namespace prefix
+(`<x:row>`, as the OpenXML SDK writes them), with a BOM and a package-absolute sheet
+target, and checks cells, a shared string holding a literal `<x:b>`, and a date style.
 The `cvr`, `cvrmulti`, `cvrtab`, and `writein` tests also need `src\ee_cvr.c`;
 `writein` authors a workbook with a worksheet-rels → drawing → anchor and checks a
 blank contest cell carrying a write-in image reads back as `[write-in]`; `cvrmulti`
@@ -138,6 +141,13 @@ layout with NPA party + `_Dem` file name, a 6-digit precinct split into precinct
 subcode, a repeated `City` title, a `--Redacted--` protected voter and an ISO mail
 Return Date; the older layout with P24's damaged header and an anonymous protected row;
 the full roster's Vote_Type F / L / Y) and a TSV round trip;
+`harris` covers Harris County rosters: CSVs inside two ZIPs (daily mail / early voting
+files with ActivityDate as the voting day and N~P = no party, a two-digit-year file date,
+a blank-VUID mail row, the Election Day roster's VoteType; the voter history's Harris
+vote-type codes E / P / M / A / Z / 1, PRECINCT preferred over OLDPRECINCT and
+NEWPRECINCT used when PRECINCT is missing; the official roster's "In Person" / "Mail"
+with no voting date and an export timestamp in its name; a disclaimer and a
+polling-place list skipped as reference files) and a TSV round trip;
 `dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without

@@ -69,8 +69,19 @@
 - **Fixed (user report):** the roster window could not scroll — `App_SyncVerticalScroll`
   synced the visible pane to the hidden left pane, which cannot scroll, snapping it back to
   the top. Roster windows now skip the vertical sync (`main.c`).
-- **Next:** the next county (Harris / Dallas suggested), then final validation and the
-  1.4.0.0 bundle.
+- **Roster downloads done (2026-10-12):** `Voter_Rosters/TX_<County>_County/`
+  (`<Code>_<file name>`) for Harris, Dallas, Bexar, Brazoria, Hidalgo, Montgomery,
+  Lubbock + G26 mail for Galveston, El Paso, Denton, Webb, Cameron, Williamson. Inventory,
+  per-county layouts and gaps in the survey doc's "Downloaded rosters" section.
+  `Voter_Rosters/` is gitignored — copy it to the other machine by hand if needed.
+- **Harris roster support done (2026-10-12):** see the survey doc's "Harris support"
+  section -- daily BBM / EV / Election Day CSVs (ActivityDate = voting day), post-canvass
+  voter history with Harris's own vote-type codes (E = Election Day, P = early), the P26
+  official roster (In Person / Mail only), reference files skipped, and `xlsx.c` reading
+  namespace-prefixed workbooks (G20 Election Day). Counts = Python for every ZIP; Travis /
+  Tarrant unchanged; smoke tests `harris`, `xlsxns`. Help, RELEASES.md (1,340 chars) and
+  STORE-LISTING name Harris. Needs the user's click-test (load an election's 3 ZIPs).
+- **Next:** Dallas roster support, then final validation and the 1.4.0.0 bundle.
 
 ### Committed — release notes file
 

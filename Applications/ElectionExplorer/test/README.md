@@ -154,6 +154,10 @@ VUID), the Election-Day Website Roster (NP party), the 2026 layout (State ID, Da
 FIRST MIDDLE LAST name, ED in the file name) and a precinct early-voting roster
 (StateIDNumber, "LAST - FIRST" names, the P=InPerson M=Mail column, DD-MON-YY dates, a
 shifted row, a two-space file name) and a TSV round trip;
+`pdfroster` covers PDF rosters (`read_pdf_table`; needs `src\pdf_reader.c`): a
+two-page Bexar-style mail list (cells centered under their headers via the font's
+/Widths, a title line, no header on page 2, a "Page 2 of 2" footer, a suffix column, a
+blank middle name) and a PDF with no roster table (listed as not readable);
 `dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without

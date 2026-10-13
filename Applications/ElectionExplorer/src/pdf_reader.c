@@ -21,6 +21,7 @@
 
 #include "pdf_reader.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -790,10 +791,24 @@ typedef struct CMapRange
     uint16_t incr;    /* 1: last unit increments with (code - lo) */
 } CMapRange;
 
+/* Glyph widths of a Type0 font's /W entry: codes lo..hi are w (1/1000 em) wide. */
+typedef struct WidthRange
+{
+    uint32_t lo;
+    uint32_t hi;
+    float w;
+} WidthRange;
+
 typedef struct PdfFont
 {
     uint32_t num;
     int two_byte;
+    int has_widths;       /* simple: /Widths read; Type0: /W or /DW read */
+    float widths[256];    /* simple fonts: per code (1/1000 em), missing = dw */
+    float dw;             /* default width */
+    WidthRange *wr;       /* Type0: sorted ranges from /W */
+    uint32_t nwr;
+    uint32_t cap_wr;
     uint16_t enc[256];
     CMapRange *map;
     uint32_t nmap;
@@ -2337,8 +2352,182 @@ static void font_free(PdfFont *f)
     {
         free(f->map);
         free(f->units);
+        free(f->wr);
         free(f);
     }
+}
+
+static BOOL font_add_wr(PdfFont *f, uint32_t lo, uint32_t hi, float w)
+{
+    if (f->nwr == f->cap_wr)
+    {
+        uint32_t nc = f->cap_wr ? f->cap_wr * 2 : 64;
+        WidthRange *n = (WidthRange *)realloc(f->wr, (size_t)nc * sizeof(WidthRange));
+        if (n == NULL)
+        {
+            return FALSE;
+        }
+        f->wr = n;
+        f->cap_wr = nc;
+    }
+    f->wr[f->nwr].lo = lo;
+    f->wr[f->nwr].hi = hi;
+    f->wr[f->nwr].w = w;
+    f->nwr++;
+    return TRUE;
+}
+
+static int __cdecl wr_cmp(const void *a, const void *b)
+{
+    uint32_t x = ((const WidthRange *)a)->lo, y = ((const WidthRange *)b)->lo;
+    return (x < y) ? -1 : (x > y) ? 1 : 0;
+}
+
+/* Glyph widths (1/1000 em): a simple font's /FirstChar + /Widths (+ the descriptor's
+ * /MissingWidth), a Type0 font's descendant /W + /DW. Fonts without them (the standard
+ * 14) keep has_widths = 0. */
+static void font_read_widths(EePdf *pdf, Arena *a, PdfFont *f, const PdfObj *fd)
+{
+    PdfObj tmp;
+    uint32_t k;
+    if (!f->two_byte)
+    {
+        const PdfObj *w = resolve(pdf, a, dict_get(fd, "Widths"), &tmp);
+        const PdfObj *first = dict_get(fd, "FirstChar");
+        const PdfObj *desc = resolve(pdf, a, dict_get(fd, "FontDescriptor"), NULL);
+        int fc = (first != NULL) ? (int)obj_num(first) : 0;
+        f->dw = 0.0f;
+        if (desc != NULL && desc->t == PO_DICT && dict_get(desc, "MissingWidth") != NULL)
+        {
+            f->dw = (float)obj_num(dict_get(desc, "MissingWidth"));
+        }
+        for (k = 0; k < 256; k++)
+        {
+            f->widths[k] = f->dw;
+        }
+        if (w != NULL && w->t == PO_ARRAY)
+        {
+            for (k = 0; k < w->n; k++)
+            {
+                int code = fc + (int)k;
+                if (code >= 0 && code < 256)
+                {
+                    f->widths[code] = (float)obj_num(&w->u.items[k]);
+                }
+            }
+            f->has_widths = 1;
+        }
+        return;
+    }
+    {
+        const PdfObj *dfs = resolve(pdf, a, dict_get(fd, "DescendantFonts"), &tmp);
+        const PdfObj *cid;
+        const PdfObj *w;
+        PdfObj tmp2;
+        f->dw = 1000.0f;
+        if (dfs == NULL || dfs->t != PO_ARRAY || dfs->n < 1)
+        {
+            return;
+        }
+        cid = resolve(pdf, a, &dfs->u.items[0], &tmp2);
+        if (cid == NULL || cid->t != PO_DICT)
+        {
+            return;
+        }
+        if (dict_get(cid, "DW") != NULL)
+        {
+            f->dw = (float)obj_num(dict_get(cid, "DW"));
+        }
+        f->has_widths = 1;
+        w = resolve(pdf, a, dict_get(cid, "W"), NULL);
+        if (w == NULL || w->t != PO_ARRAY)
+        {
+            return;
+        }
+        /* c [w1 w2 ...]  or  c_first c_last w */
+        for (k = 0; k < w->n;)
+        {
+            const PdfObj *c0 = &w->u.items[k];
+            if (k + 1 < w->n && w->u.items[k + 1].t == PO_ARRAY)
+            {
+                const PdfObj *arr = &w->u.items[k + 1];
+                uint32_t j;
+                uint32_t c = (uint32_t)obj_num(c0);
+                for (j = 0; j < arr->n; j++)
+                {
+                    if (!font_add_wr(f, c + j, c + j, (float)obj_num(&arr->u.items[j])))
+                    {
+                        return;
+                    }
+                }
+                k += 2;
+            }
+            else if (k + 2 < w->n)
+            {
+                if (!font_add_wr(f, (uint32_t)obj_num(c0), (uint32_t)obj_num(&w->u.items[k + 1]),
+                                 (float)obj_num(&w->u.items[k + 2])))
+                {
+                    return;
+                }
+                k += 3;
+            }
+            else
+            {
+                break;
+            }
+        }
+        if (f->nwr > 1)
+        {
+            qsort(f->wr, f->nwr, sizeof(WidthRange), wr_cmp);
+        }
+    }
+}
+
+/* Width (1/1000 em) of one code of @p f. */
+static float font_code_width(const PdfFont *f, uint32_t code)
+{
+    if (!f->two_byte)
+    {
+        return f->widths[code & 0xFF];
+    }
+    {
+        uint32_t lo = 0, hi = f->nwr;
+        while (lo < hi)
+        {
+            uint32_t mid = (lo + hi) / 2;
+            if (f->wr[mid].hi < code)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo < f->nwr && f->wr[lo].lo <= code && code <= f->wr[lo].hi)
+        {
+            return f->wr[lo].w;
+        }
+        return f->dw;
+    }
+}
+
+/* Width (1/1000 em) of string bytes @p s through @p f. */
+static float font_string_width(const PdfFont *f, const unsigned char *s, uint32_t n)
+{
+    float w = 0.0f;
+    uint32_t i;
+    if (f->two_byte)
+    {
+        for (i = 0; i + 1 < n; i += 2)
+        {
+            w += font_code_width(f, ((uint32_t)s[i] << 8) | s[i + 1]);
+        }
+    }
+    else
+    {
+        for (i = 0; i < n; i++)
+        {
+            w += font_code_width(f, s[i]);
+        }
+    }
+    return w;
 }
 
 /* Build a font from its dictionary @p fd (in arena @p a). */
@@ -2398,6 +2587,7 @@ static PdfFont *font_build(EePdf *pdf, Arena *a, const PdfObj *fd, uint32_t num)
         }
         bb_free(&data);
     }
+    font_read_widths(pdf, a, f, fd);
     return f;
 }
 
@@ -2721,6 +2911,7 @@ typedef struct Interp
     double tlm[6];
     double tl;
     PdfFont *font;
+    double font_size; /* Tf size (text space) */
     /* path bbox */
     int has_path;
     double px0, py0, px1, py1;
@@ -2779,6 +2970,7 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
     const GState *g = &in->gs[in->gsp];
     EePdfTextRun *r;
     size_t start = pt->text_len;
+    double adv = 0.0; /* advance in text space units of 1/1000 em */
     if (pt->nruns == pt->cap_runs)
     {
         uint32_t nc = pt->cap_runs ? pt->cap_runs * 2 : 256;
@@ -2796,6 +2988,10 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
         {
             return FALSE;
         }
+        if (in->font != NULL && in->font->has_widths)
+        {
+            adv += font_string_width(in->font, str_or_array->u.s, str_or_array->n);
+        }
     }
     else if (str_or_array->t == PO_ARRAY)
     {
@@ -2809,18 +3005,35 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
                 {
                     return FALSE;
                 }
-            }
-            else if ((it->t == PO_INT || it->t == PO_REAL) && obj_num(it) < -200.0)
-            {
-                /* a large negative kern in TJ is a word gap */
-                if (!text_put_cp(pt, ' '))
+                if (in->font != NULL && in->font->has_widths)
                 {
+                    adv += font_string_width(in->font, it->u.s, it->n);
+                }
+            }
+            else if (it->t == PO_INT || it->t == PO_REAL)
+            {
+                adv -= obj_num(it); /* TJ adjustment, thousandths of an em */
+                if (obj_num(it) < -200.0 && !text_put_cp(pt, ' '))
+                {
+                    /* a large negative kern in TJ is a word gap */
                     return FALSE;
                 }
             }
         }
     }
     r = &pt->runs[pt->nruns++];
+    {
+        /* Text space -> user space: the horizontal and vertical unit vectors through the
+         * text matrix and the CTM. */
+        const double *t = in->tm;
+        const double *c = g->ctm;
+        double hx = t[0] * c[0] + t[1] * c[2], hy = t[0] * c[1] + t[1] * c[3];
+        double vx = t[2] * c[0] + t[3] * c[2], vy = t[2] * c[1] + t[3] * c[3];
+        double hs = sqrt(hx * hx + hy * hy), vs = sqrt(vx * vx + vy * vy);
+        r->font_size = (float)(in->font_size * vs);
+        r->has_width = (in->font != NULL && in->font->has_widths);
+        r->width = r->has_width ? (float)(adv / 1000.0 * in->font_size * hs) : 0.0f;
+    }
     r->x = (float)(in->tm[4] * g->ctm[0] + in->tm[5] * g->ctm[2] + g->ctm[4]);
     r->y = (float)(in->tm[4] * g->ctm[1] + in->tm[5] * g->ctm[3] + g->ctm[5]);
     r->has_clip = g->has_clip;
@@ -3028,6 +3241,7 @@ static BOOL interpret(Interp *in, const unsigned char *data, size_t len)
                     {
                         in->font =
                             font_get(in->pdf, dict_get(in->fonts, (const char *)ops[nops - 2].u.s));
+                        in->font_size = obj_num(&ops[nops - 1]);
                     }
                     else if (op[1] == 'L' && op[2] == 0 && nops >= 1)
                     {

@@ -270,6 +270,39 @@ identical for all four elections' reports and both precinct sets. Travis, Tarran
 load byte-identical to the previous build. Smoke test `dallas`. In the app: G24's three
 reports -> 855,368 records, 1,241 voters on two reports counted once in Voting Totals.
 
+## PDF rosters (done 2026-10-12)
+
+Bexar switched to PDF for its 2026 lists (G26 mail `ABBM_Recvd_<MMDDYYYY>.pdf`, printed
+from Excel by Acrobat PDFMaker): `VUID, Last Name, Suffix, First Name, Middle Name, Ballot
+Received Date, Precinct` (one file has a single `Name` column, "LAST,FIRST MIDDLE"). Cells
+are centered (one file left-aligned); the header is on page 1 only and the column
+positions are the same on every page. `pdftotext -layout` scrambles these rows (names on
+the wrong lines); the PDF's own text runs do not.
+
+- `pdf_reader.c`: each run now reports its font size and advance width (simple fonts'
+  `/FirstChar` + `/Widths` / `/MissingWidth`, Type0 descendants' `/W` + `/DW`, TJ
+  adjustments); positions are unchanged (Hart PDF reading unaffected).
+- `voter_roster.c` `read_pdf_table`: loose PDFs are read as tables -- runs grouped into lines
+  by baseline, the line with a Voter ID title is the header, each run goes to the header
+  cell its span overlaps most (else the nearest center), pages without a header reuse the
+  columns, a later page's repeated titles above its header and "Page N of M" lines are
+  skipped. PDFs with no such header in their first pages (scanned Limited Ballot lists,
+  Dallas P20's turnout tables) and PDFs inside ZIPs are listed as not readable.
+- Also: `Ballot Received Date` / `ReceivedDate` / `Date Received`, `CHECK-IN` / `Check-in
+  Date` are Date Voted; `CERT` / `CERT #` is a (generic-rank) Voter ID; a "Voting Method"
+  value that is not one of ours is read as words (Lubbock "MAIL-IN").
+- Load Voter Roster's file filter includes `*.pdf` (user request). A PDF that cannot be read is
+  listed in the load summary; when no selected file can be read, the error names the files
+  and explains that only roster tables printed from a spreadsheet can be read.
+
+Validation: Bexar's 7 G26 PDFs -> 2,129 mail records; per-file counts equal the date-bearing
+lines of `pdftotext`, and every row equals `pdftotext -raw`'s row (names in order, date,
+precinct); every VUID 10 digits, every suffix (117) in the suffix column. Webb's 3 PDFs
+(Print To PDF, left-aligned) -> 24 (8 with the county's 8-digit IDs); Lubbock's P24
+first-day PDF -> 1,610 (= raw rows; MAIL-IN 401, in person 1,209, dates from CHECK-IN).
+Travis / Tarrant / Harris / Dallas load byte-identical to the previous build (only the
+"cannot be read" note reworded). Smoke tests `pdfroster`, `hart`, `hartpdf`, `hartocr`.
+
 ## Downloaded rosters (2026-10-12)
 
 Saved under `Voter_Rosters/TX_<County>_County/` as `<Code>_<county file name>`

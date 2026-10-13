@@ -3,7 +3,7 @@
  * @brief Minimal read-only PDF text extractor (positioned text runs per page).
  *
  * Purpose-built for machine-generated report PDFs (e.g. Hart "CVR Report" exports
- * rendered by Microsoft Reporting Services): it locates objects through the
+ * rendered by Microsoft Reporting Services, and voter rosters printed to PDF from Excel): it locates objects through the
  * cross-reference data, walks the page tree, decodes FlateDecode content streams,
  * and interprets the text/clipping operators of each page's content stream to
  * produce text runs with their page position and innermost clip rectangle.
@@ -12,9 +12,11 @@
  * predictors, object streams), 64-bit file offsets, offsets that a 32-bit writer
  * wrapped (files > 2/4 GB), a full object-scan rebuild when the xref is unusable,
  * simple fonts (WinAnsi/Standard + /Differences) and Type0 Identity-H fonts, with
- * ToUnicode CMaps taking precedence. Not supported: encryption, filters other than
- * FlateDecode, glyph-width-based layout (each show operator's run starts at the
- * current text position; runs are not split or advanced by glyph widths).
+ * ToUnicode CMaps taking precedence. Each run reports its font size and, when the font
+ * carries glyph widths (/Widths, or /W of a Type0 descendant), its advance width. Not
+ * supported: encryption, filters other than FlateDecode, glyph-width-based layout (each
+ * show operator's run starts at the current text position; runs are not split or
+ * advanced by glyph widths).
  *
  * The file is read on demand (never wholly loaded), so multi-GB documents are fine.
  * An EePdf handle is not thread-safe; use one handle per thread.
@@ -48,6 +50,11 @@ extern "C"
                            * runs drawn inside the same clip share an id */
         uint32_t text_off; /* UTF-8 text (not NUL-terminated) at EePdfPageText.text + off */
         uint32_t text_len;
+        float font_size;   /* text size in user space (Tf size x text / CTM scale) */
+        float width;       /* advance width of the shown string in user space, from the
+                            * font's glyph widths (valid when has_width); the run's
+                            * position does not include it (runs are not advanced) */
+        int has_width;
     } EePdfTextRun;
 
     /** Text runs of one page, in content-stream order. Reused across pages. */

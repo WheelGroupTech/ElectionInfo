@@ -8298,6 +8298,190 @@ done:
     return rc;
 }
 
+/* One text line of a PDF roster page: a run centered at @p cx (a 600-unit monospaced
+ * font at 10 pt: 6 pt per character). */
+static BOOL proster_text(TBuf *b, double cx, double y, const char *s)
+{
+    double x = cx - 3.0 * (double)strlen(s);
+    return s[0] == '\0' || tb_printf(b, "BT /F1 10 Tf 1 0 0 1 %.2f %.2f Tm (%s) Tj ET\n", x, y, s);
+}
+
+/* Write a PDF (classic xref table, uncompressed content) whose pages have the given
+ * content streams; font F1 is a TrueType font with /Widths (all 600). */
+static BOOL proster_write(const wchar_t *path, TBuf *pages, int npages)
+{
+    TBuf b = {0};
+    long offs[16];
+    int i, nobj;
+    BOOL ok;
+    FILE *fp = NULL;
+    long xref;
+    nobj = 3 + npages * 2; /* 1 catalog, 2 pages, 3 font, then page + content per page */
+    if (nobj + 1 > (int)ARRAYSIZE(offs))
+    {
+        return FALSE;
+    }
+    ok = tb_printf(&b, "%%PDF-1.4\n");
+#define POBJ(n) (offs[n] = (long)b.len, ok = ok && tb_printf(&b, "%d 0 obj\n", n))
+    POBJ(1);
+    ok = ok && tb_printf(&b, "<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    POBJ(2);
+    ok = ok && tb_printf(&b, "<< /Type /Pages /Count %d /Kids [", npages);
+    for (i = 0; i < npages; i++)
+    {
+        ok = ok && tb_printf(&b, " %d 0 R", 4 + i * 2);
+    }
+    ok = ok && tb_printf(&b, " ] >>\nendobj\n");
+    POBJ(3);
+    ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /TrueType /BaseFont /Courier /FirstChar 32 /LastChar 126 "
+                             "/Encoding /WinAnsiEncoding /Widths [");
+    for (i = 32; i <= 126; i++)
+    {
+        ok = ok && tb_printf(&b, " 600");
+    }
+    ok = ok && tb_printf(&b, " ] >>\nendobj\n");
+    for (i = 0; i < npages && ok; i++)
+    {
+        POBJ(4 + i * 2);
+        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents %d 0 R "
+                                 "/Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n", 5 + i * 2);
+        POBJ(5 + i * 2);
+        ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n", (unsigned)pages[i].len) &&
+             tb_add(&b, pages[i].p, pages[i].len) && tb_printf(&b, "\nendstream\nendobj\n");
+    }
+    xref = (long)b.len;
+    ok = ok && tb_printf(&b, "xref\n0 %d\n0000000000 65535 f \n", nobj + 1);
+    for (i = 1; i <= nobj && ok; i++)
+    {
+        ok = tb_printf(&b, "%010ld 00000 n \n", offs[i]);
+    }
+    ok = ok && tb_printf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%ld\n%%%%EOF\n", nobj + 1, xref);
+#undef POBJ
+    ok = ok && _wfopen_s(&fp, path, L"wb") == 0 && fp != NULL && fwrite(b.p, 1, b.len, fp) == b.len;
+    if (fp != NULL)
+    {
+        fclose(fp);
+    }
+    free(b.p);
+    return ok;
+}
+
+/* PDF rosters (tag: pdfroster): a Bexar-style mail list printed to PDF from Excel --
+ * cells centered under their headers, a title line above the header, a second page with
+ * no header row and a "Page 2 of 2" footer, a name suffix column, a blank middle name --
+ * and a PDF with no roster table (listed as not readable). */
+static int test_pdf_roster(void)
+{
+    static const double k_cx[7] = {70, 150, 215, 270, 360, 450, 525};
+    static const char *k_head[7] = {"VUID", "Last Name", "Suffix", "First Name", "Middle Name",
+                                    "Ballot Received Date", "Precinct"};
+    static const char *k_rows[4][7] = {
+        {"1064047867", "ABNEY", "", "BRENDA", "JEAN", "10/5/2026", "P 3079"},
+        {"1068064818", "ALFARO", "SR", "JOSE", "ANTONIO", "10/5/2026", "P 4017"},
+        {"1182074030", "ADAMIUK", "", "JOAO", "", "10/5/2026", "S 3089.01"},
+        {"2166120393", "ALEMAN REYES", "", "DAVID", "MANUEL", "10/6/2026", "S 3072.01"}};
+    TBuf pages[2] = {{0}, {0}};
+    TBuf other = {0};
+    wchar_t p1[MAX_PATH], p2[MAX_PATH];
+    const wchar_t *paths[2];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    BOOL ok = TRUE;
+    int r, c;
+    int rc = 1;
+
+    ok = proster_text(&pages[0], 300, 770, "Bexar County Mail Ballots Received");
+    for (c = 0; c < 7 && ok; c++)
+    {
+        ok = proster_text(&pages[0], k_cx[c], 740, k_head[c]);
+    }
+    for (r = 0; r < 3 && ok; r++)
+    {
+        for (c = 0; c < 7 && ok; c++)
+        {
+            ok = proster_text(&pages[0], k_cx[c], 720 - 14 * r, k_rows[r][c]);
+        }
+    }
+    for (c = 0; c < 7 && ok; c++)
+    {
+        ok = proster_text(&pages[1], k_cx[c], 740, k_rows[3][c]);
+    }
+    ok = ok && proster_text(&pages[1], 300, 40, "Page 2 of 2");
+    ok = ok && proster_text(&other, 300, 700, "Poll List for Limited Ballot Voters");
+    GetTempPathW(MAX_PATH, p1);
+    StringCchCopyW(p2, MAX_PATH, p1);
+    StringCchCatW(p1, MAX_PATH, L"G26_ABBM_Recvd_10052026.pdf");
+    StringCchCatW(p2, MAX_PATH, L"10.22.2025 Limited Ballot.pdf");
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(p1, pages, 2) || !proster_write(p2, &other, 1))
+    {
+        wprintf(L"pdfroster: could not write the PDFs\n");
+        goto done;
+    }
+    paths[0] = p1;
+    paths[1] = p2;
+    if (EeRoster_LoadFiles(paths, 2, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"pdfroster: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 4 || info.method_rows[EE_VM_MAIL] != 4 || info.unsupported_files != 1 ||
+        info.rows_non_voter != 0 || info.rows_no_date != 0 || info.files_read != 1)
+    {
+        wprintf(L"pdfroster: rows %u mail %u unsupported %u nonvoter %u nodate %u files %u\n", t.row_count,
+                info.method_rows[EE_VM_MAIL], info.unsupported_files, info.rows_non_voter, info.rows_no_date,
+                info.files_read);
+        goto done;
+    }
+    if (!rt_expect(&t, L"ABNEY", L"BRENDA", L"VUID", L"1064047867") ||
+        !rt_expect(&t, L"ABNEY", L"BRENDA", L"Middle Name", L"JEAN") ||
+        !rt_expect(&t, L"ABNEY", L"BRENDA", L"Name Suffix", L"") ||
+        !rt_expect(&t, L"ABNEY", L"BRENDA", L"Date Voted", L"10/05/2026") ||
+        !rt_expect(&t, L"ABNEY", L"BRENDA", L"Precinct", L"P 3079") ||
+        !rt_expect(&t, L"ALFARO", L"JOSE", L"Name Suffix", L"SR") ||
+        !rt_expect(&t, L"ALFARO", L"JOSE", L"Middle Name", L"ANTONIO") ||
+        !rt_expect(&t, L"ADAMIUK", L"JOAO", L"Middle Name", L"") ||
+        !rt_expect(&t, L"ADAMIUK", L"JOAO", L"Precinct", L"S 3089.01") ||
+        !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Date Voted", L"10/06/2026") ||
+        !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Source File", L"G26_ABBM_Recvd_10052026.pdf"))
+    {
+        goto done;
+    }
+    /* Only an unreadable PDF: the error names it and says why. */
+    {
+        wchar_t err2[512] = L"";
+        EeVoterTable t3;
+        EeVoterTable_Init(&t3);
+        paths[0] = p2;
+        if (EeRoster_LoadFiles(paths, 1, &t3, NULL, NULL, NULL, NULL, err2, ARRAYSIZE(err2)) != EeLoadStatus_Error ||
+            wcsstr(err2, L"10.22.2025 Limited Ballot.pdf") == NULL || wcsstr(err2, L"printed from a spreadsheet") == NULL)
+        {
+            wprintf(L"pdfroster: unreadable-PDF message: %s\n", err2);
+            EeVoterTable_Clear(&t3);
+            goto done;
+        }
+        EeVoterTable_Clear(&t3);
+    }
+    rc = 0;
+    wprintf(L"pdfroster ok\n");
+done:
+    free(pages[0].p);
+    free(pages[1].p);
+    free(other.p);
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    DeleteFileW(p1);
+    DeleteFileW(p2);
+    if (rc != 0)
+    {
+        wprintf(L"pdfroster test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -8317,6 +8501,7 @@ int wmain(void)
     failed |= test_tarrant_roster();
     failed |= test_harris_roster();
     failed |= test_dallas_roster();
+    failed |= test_pdf_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();
     failed |= test_dup_voters_voting();

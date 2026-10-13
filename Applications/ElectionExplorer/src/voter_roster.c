@@ -24,6 +24,7 @@
 #include <strsafe.h>
 
 #include "csv_sheet.h"
+#include "pdf_reader.h"
 #include "xlsx.h"
 #include "third_party/miniz/miniz.h"
 
@@ -1177,8 +1178,9 @@ static int vuid_rank(const char *lab)
         return 1;
     if (contains_ci(lab, "county voter"))
         return 3;
-    if (contains_ci(lab, "voter id") || contains_ci(lab, "voterid"))
-        return 2;
+    if (contains_ci(lab, "voter id") || contains_ci(lab, "voterid") || strcmp(lab, "cert") == 0 ||
+        strcmp(lab, "cert #") == 0 || strcmp(lab, "cert#") == 0)
+        return 2; /* Hidalgo / Lubbock "CERT" (the VUID); Tarrant's "Certificate" is not */
     return 0;
 }
 
@@ -1302,8 +1304,12 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                                               * header order, so an export reloads alike */
         }
         else if (m->date < 0 && (contains_ci(lab, "date voted") || strcmp(lab, "date") == 0 ||
-                                 strcmp(lab, "date ballot returned") == 0))
-            m->date = ci; /* Dallas: "Date" (P26 rosters), "Date Ballot Returned" (precincts) */
+                                 strcmp(lab, "date ballot returned") == 0 || contains_ci(lab, "received date") ||
+                                 strcmp(lab, "receiveddate") == 0 || strcmp(lab, "date received") == 0 ||
+                                 strcmp(lab, "check-in") == 0 || strcmp(lab, "check in") == 0 ||
+                                 strcmp(lab, "check-in date") == 0 || strcmp(lab, "checkin date") == 0))
+            m->date = ci; /* Dallas: "Date" (P26 rosters), "Date Ballot Returned" (precincts);
+                           * Bexar / Brazoria "Ballot Received Date", Webb "ReceivedDate" */
         else if (m->source < 0 && contains_ci(lab, "source file"))
             m->source = ci;
         else if (m->pct < 0 && (exact_pct ? strcmp(lab, "precinct") == 0
@@ -1677,6 +1683,10 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
             {
                 method = mm;
                 labeled = TRUE;
+            }
+            else if ((mm = method_from_text(cell_at(r, row, m->method))) != EE_VM_NONE)
+            {
+                method = mm; /* a county's own words: Lubbock "MAIL-IN" */
             }
         }
         if (m->vtype >= 0 && !labeled)
@@ -2276,8 +2286,9 @@ static void mark_superseded(Loader *L)
         {
             a->skip = SKIP_REFERENCE;
         }
-        else if (a->kind == SRC_PDF || a->kind == SRC_OTHER)
+        else if ((a->kind == SRC_PDF && a->zip >= 0) || a->kind == SRC_OTHER)
         {
+            /* (a loose PDF is tried as a table when read: see read_pdf_table) */
             a->skip = SKIP_UNSUPPORTED;
             if (a->method != EE_VM_NONE)
             {
@@ -2370,6 +2381,294 @@ static BOOL read_file(const wchar_t *path, unsigned char **out, size_t *out_size
     return TRUE;
 }
 
+/* -------------------------------------------------------------------------- */
+/* PDF tables                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/* A roster printed to PDF from a spreadsheet (Bexar's 2026 mail lists, Webb, Lubbock):
+ * the text runs of each page are grouped into lines by baseline, the line holding a
+ * Voter ID title is the header, and every other run goes to the header cell its span
+ * overlaps most (cells may be left-aligned, centered or right-aligned), else the
+ * nearest one. Pages without a header row reuse the last header's columns; a later
+ * page's lines above its own header (repeated titles) are skipped. The lines become
+ * rows of one sheet, read like a CSV. Scanned (image-only) PDFs and PDFs with no such
+ * header are not tables. */
+
+#define PDF_TABLE_MAX_COLS 64
+#define PDF_TABLE_CELL     256
+
+typedef struct PdfLine
+{
+    uint32_t first; /* into the page's sorted run order */
+    uint32_t count;
+} PdfLine;
+
+static int __cdecl pdf_run_cmp(void *ctx, const void *a, const void *b)
+{
+    const EePdfPageText *pt = (const EePdfPageText *)ctx;
+    const EePdfTextRun *x = &pt->runs[*(const uint32_t *)a];
+    const EePdfTextRun *y = &pt->runs[*(const uint32_t *)b];
+    if (x->y != y->y)
+        return (x->y > y->y) ? -1 : 1; /* top of the page first */
+    return (x->x < y->x) ? -1 : (x->x > y->x) ? 1 : 0;
+}
+
+static float pdf_run_width(const EePdfTextRun *r)
+{
+    return r->has_width ? r->width : 0.55f * r->font_size * (float)r->text_len;
+}
+
+/* Copy run @p r's text, trimmed, into @p out. */
+static void pdf_run_text(const EePdfPageText *pt, const EePdfTextRun *r, char *out, size_t cap)
+{
+    char tmp[PDF_TABLE_CELL];
+    size_t n = r->text_len < sizeof(tmp) - 1 ? r->text_len : sizeof(tmp) - 1;
+    memcpy(tmp, pt->text + r->text_off, n);
+    tmp[n] = '\0';
+    clean_text(tmp, out, cap);
+}
+
+/* A line is the header when one of its runs names the Voter ID. */
+static BOOL pdf_line_is_header(const EePdfPageText *pt, const uint32_t *ord, const PdfLine *ln)
+{
+    uint32_t k;
+    for (k = 0; k < ln->count; k++)
+    {
+        char t[PDF_TABLE_CELL];
+        char lab[96];
+        pdf_run_text(pt, &pt->runs[ord[ln->first + k]], t, sizeof(t));
+        header_label(t, lab, sizeof(lab));
+        if (vuid_rank(lab) > 0 || contains_ci(lab, "name of voter"))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Read source @p si as a PDF table into @p sc's rows. Returns 1 when a table was read,
+ * 0 when the PDF is not a table (or cannot be opened), -1 on out of memory / cancel. */
+static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
+{
+    RosterSource *s = &L->src[si];
+    EePdf *pdf = NULL;
+    EePdfPageText pt;
+    uint32_t *ord = NULL;
+    uint32_t ord_cap = 0;
+    PdfLine *lines = NULL;
+    uint32_t lines_cap = 0;
+    float cx0[PDF_TABLE_MAX_COLS], cx1[PDF_TABLE_MAX_COLS];
+    int ncols = 0;
+    BOOL header_emitted = FALSE;
+    uint32_t npages;
+    uint32_t page;
+    int result = 0;
+    char cells[PDF_TABLE_MAX_COLS][PDF_TABLE_CELL];
+    const char *cellp[PDF_TABLE_MAX_COLS];
+
+    if (s->zip >= 0 || !EePdf_Open(s->path, &pdf, NULL, 0))
+    {
+        return 0;
+    }
+    EePdf_PageTextInit(&pt);
+    npages = EePdf_PageCount(pdf);
+    for (page = 0; page < npages; page++)
+    {
+        uint32_t i;
+        uint32_t nlines = 0;
+        uint32_t hdr_line = UINT32_MAX;
+        uint32_t li;
+        if (!EePdf_ExtractPageText(pdf, page, &pt))
+        {
+            break;
+        }
+        if (cancelled(L))
+        {
+            result = -1;
+            break;
+        }
+        report(L, L->done_bytes + (L->cur_size * (page + 1)) / (npages ? npages : 1));
+        if (pt.nruns > ord_cap)
+        {
+            uint32_t *no = (uint32_t *)realloc(ord, (size_t)pt.nruns * sizeof(uint32_t));
+            PdfLine *nl = (PdfLine *)realloc(lines, (size_t)pt.nruns * sizeof(PdfLine));
+            if (no == NULL || nl == NULL)
+            {
+                free(no != NULL ? no : ord);
+                free(nl != NULL ? nl : lines);
+                ord = NULL;
+                lines = NULL;
+                result = -1;
+                break;
+            }
+            ord = no;
+            lines = nl;
+            ord_cap = lines_cap = pt.nruns;
+        }
+        for (i = 0; i < pt.nruns; i++)
+        {
+            ord[i] = i;
+        }
+        qsort_s(ord, pt.nruns, sizeof(uint32_t), pdf_run_cmp, &pt);
+        /* Lines: runs whose baselines lie within a fraction of the text size. */
+        for (i = 0; i < pt.nruns; i++)
+        {
+            const EePdfTextRun *r = &pt.runs[ord[i]];
+            float tol = r->font_size > 4.0f ? 0.3f * r->font_size : 1.5f;
+            if (nlines > 0 && pt.runs[ord[lines[nlines - 1].first]].y - r->y <= tol)
+            {
+                lines[nlines - 1].count++;
+            }
+            else
+            {
+                lines[nlines].first = i;
+                lines[nlines].count = 1;
+                nlines++;
+            }
+        }
+        for (li = 0; li < nlines && hdr_line == UINT32_MAX; li++)
+        {
+            if (pdf_line_is_header(&pt, ord, &lines[li]))
+            {
+                hdr_line = li;
+            }
+        }
+        if (hdr_line == UINT32_MAX && ncols == 0)
+        {
+            if (page >= 2 || (pt.nruns == 0 && page + 1 >= npages))
+            {
+                break; /* no header in the first pages: not a table */
+            }
+            continue;
+        }
+        for (li = 0; li < nlines; li++)
+        {
+            const PdfLine *ln = &lines[li];
+            uint32_t k;
+            int c;
+            if (li == hdr_line)
+            {
+                /* (Re)define the columns from this header; emit it once. */
+                ncols = 0;
+                for (k = 0; k < ln->count && ncols < PDF_TABLE_MAX_COLS; k++)
+                {
+                    const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
+                    cx0[ncols] = r->x;
+                    cx1[ncols] = r->x + pdf_run_width(r);
+                    pdf_run_text(&pt, r, cells[ncols], PDF_TABLE_CELL);
+                    cellp[ncols] = cells[ncols];
+                    ncols++;
+                }
+                if (!header_emitted)
+                {
+                    if (!rows_sink(sc, cellp, (uint32_t)ncols))
+                    {
+                        result = -1;
+                        break;
+                    }
+                    header_emitted = TRUE;
+                }
+                continue;
+            }
+            if (hdr_line != UINT32_MAX && li < hdr_line)
+            {
+                if (header_emitted && page > 0)
+                {
+                    continue; /* a later page's repeated titles */
+                }
+                /* Title lines above the first header: one cell per run. */
+                for (k = 0; k < ln->count && k < PDF_TABLE_MAX_COLS; k++)
+                {
+                    pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], cells[k], PDF_TABLE_CELL);
+                    cellp[k] = cells[k];
+                }
+                if (!rows_sink(sc, cellp, k))
+                {
+                    result = -1;
+                    break;
+                }
+                continue;
+            }
+            if (ln->count == 1)
+            {
+                /* a page number ("Page 2 of 36") is not a row */
+                char t[PDF_TABLE_CELL];
+                unsigned a = 0, b = 0;
+                pdf_run_text(&pt, &pt.runs[ord[ln->first]], t, sizeof(t));
+                if (_strnicmp(t, "page ", 5) == 0 &&
+                    (sscanf_s(t + 5, "%u of %u", &a, &b) == 2 || sscanf_s(t + 5, "%u", &a) == 1))
+                {
+                    continue;
+                }
+            }
+            /* A data line: each run to the column it overlaps most. */
+            for (c = 0; c < ncols; c++)
+            {
+                cells[c][0] = '\0';
+                cellp[c] = cells[c];
+            }
+            for (k = 0; k < ln->count; k++)
+            {
+                const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
+                float x0 = r->x;
+                float x1 = r->x + pdf_run_width(r);
+                float mid = (x0 + x1) / 2.0f;
+                float best_ov = 0.0f;
+                float best_d = 1e30f;
+                int best = -1;
+                int nearest = 0;
+                char t[PDF_TABLE_CELL];
+                for (c = 0; c < ncols; c++)
+                {
+                    float lo = x0 > cx0[c] ? x0 : cx0[c];
+                    float hi = x1 < cx1[c] ? x1 : cx1[c];
+                    float d = mid - (cx0[c] + cx1[c]) / 2.0f;
+                    if (hi - lo > best_ov)
+                    {
+                        best_ov = hi - lo;
+                        best = c;
+                    }
+                    if (d < 0)
+                        d = -d;
+                    if (d < best_d)
+                    {
+                        best_d = d;
+                        nearest = c;
+                    }
+                }
+                if (best < 0)
+                {
+                    best = nearest;
+                }
+                pdf_run_text(&pt, r, t, sizeof(t));
+                if (cells[best][0] != '\0')
+                {
+                    StringCchCatA(cells[best], PDF_TABLE_CELL, " ");
+                }
+                StringCchCatA(cells[best], PDF_TABLE_CELL, t);
+            }
+            if (!rows_sink(sc, cellp, (uint32_t)ncols))
+            {
+                result = -1;
+                break;
+            }
+        }
+        if (result < 0)
+        {
+            break;
+        }
+    }
+    if (result == 0 && header_emitted)
+    {
+        result = 1;
+    }
+    free(ord);
+    free(lines);
+    EePdf_PageTextFree(&pt);
+    EePdf_Close(pdf);
+    return result;
+}
+
 /* Read every worksheet of one source and emit its records. */
 static EeLoadStatus read_source(Loader *L, int si, SheetRows *rows)
 {
@@ -2387,7 +2686,32 @@ static EeLoadStatus read_source(Loader *L, int si, SheetRows *rows)
     s->rec_begin = L->nrec;
     L->cur_size = s->size;
 
-    if (s->kind == SRC_TEXT)
+    if (s->kind == SRC_PDF)
+    {
+        int pr;
+        sheet_reset(rows);
+        pr = read_pdf_table(L, si, &sc);
+        if (pr == 0)
+        {
+            /* not a table (scanned, or no Voter ID header): listed as not readable */
+            s->skip = SKIP_UNSUPPORTED;
+            if (s->method != EE_VM_NONE)
+            {
+                L->info->method_source[s->method] = TRUE;
+            }
+            s->rec_end = L->nrec;
+            return EeLoadStatus_Ok;
+        }
+        if (pr > 0 && !sc.failed)
+        {
+            process_sheet(L, si, "", rows, &wb_map, &wb_have);
+        }
+        else if (pr < 0 && !cancelled(L))
+        {
+            sc.failed = TRUE; /* out of memory */
+        }
+    }
+    else if (s->kind == SRC_TEXT)
     {
         sheet_reset(rows);
         if (s->zip >= 0)
@@ -2728,7 +3052,8 @@ static void build_note(Loader *L)
         note_file_list(L, &b, SKIP_SUPERSEDED, L"original file(s) replaced by a corrected (_Updated) file");
         note_file_list(L, &b, SKIP_REPEATED, L"file(s) also in a later selection (loaded once)");
         note_file_list(L, &b, SKIP_COPY, L"file(s) whose voters all appear in a file of another voting method");
-        note_file_list(L, &b, SKIP_UNSUPPORTED, L"PDF or other file(s) that cannot be read yet");
+        note_file_list(L, &b, SKIP_UNSUPPORTED,
+                       L"PDF or other file(s) that cannot be read (a scanned PDF, or not a roster table)");
         note_file_list(L, &b, SKIP_REFERENCE,
                        L"reference file(s) packed with the rosters (disclaimer, file layout, polling places)");
         if (in->skipped_sheets)
@@ -3170,8 +3495,49 @@ EeLoadStatus EeRoster_LoadFiles(const wchar_t *const *paths,
     }
     if (L.nrec == 0 && info->files_read == 0)
     {
-        set_err(error_message, error_cch,
-                L"No voter roster spreadsheets (.xlsx, .csv, .tsv) were found in the selection.");
+        /* Name the files that could not be read (a scanned PDF, say), so the user knows
+         * which ones and why, instead of a bare "nothing could be read". */
+        WBuf m = {0};
+        int nbad = 0;
+        BOOL any_pdf = FALSE;
+        for (i = 0; i < L.nsrc; i++)
+        {
+            const RosterSource *s = &L.src[i];
+            if (s->skip != SKIP_UNSUPPORTED)
+            {
+                continue;
+            }
+            any_pdf |= (s->kind == SRC_PDF);
+            if (nbad < 4)
+            {
+                wb_printf(&m, L"%s%s", nbad ? L", " : L"", s->name);
+            }
+            else if (nbad == 4)
+            {
+                wb_append(&m, L", \x2026");
+            }
+            nbad++;
+        }
+        if (nbad > 0 && m.p != NULL)
+        {
+            wchar_t msg[512];
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"%d selected file%s could not be read: %s.\n\n%s", nbad, nbad == 1 ? L"" : L"s",
+                             m.p,
+                             any_pdf ? L"A PDF can be loaded only when it is a voter roster table printed from a "
+                                       L"spreadsheet (with a Voter ID column). Scanned PDFs and other reports cannot "
+                                       L"be read; use the county's Excel or CSV files instead."
+                                     : L"Voter rosters can be loaded from .zip, .xlsx, .csv, .tsv, .txt, or PDF "
+                                       L"roster files.");
+            set_err(error_message, error_cch, msg);
+        }
+        else
+        {
+            set_err(error_message, error_cch,
+                    L"No voter roster files (.xlsx, .csv, .tsv, or a PDF roster table) could be read in the "
+                    L"selection.");
+        }
+        free(m.p);
         st = EeLoadStatus_Error;
         goto done;
     }

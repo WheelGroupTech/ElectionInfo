@@ -88,8 +88,16 @@
   every file; Travis / Tarrant / Harris unchanged; smoke test `dallas`. Help, RELEASES.md
   and STORE-LISTING name Dallas. Needs the user's click-test (load an election's 3
   workbooks; separately the 4 precinct ZIPs).
-- **Next:** more counties (Hidalgo, Bexar, Brazoria, Montgomery, Lubbock have downloads),
-  then final validation and the 1.4.0.0 bundle.
+- **PDF rosters done (2026-10-12, user request: Bexar switched to PDF):** see the survey
+  doc's "PDF rosters" section -- `pdf_reader.c` reports font size + glyph-width advance per
+  run; `read_pdf_table` reads loose PDFs printed from spreadsheets (Bexar G26 2,129 = pdftotext
+  -raw row for row; Webb; Lubbock P24 PDF). Scanned PDFs stay "not readable". All earlier
+  counties byte-identical; smoke test `pdfroster`. Needs the user's click-test (Bexar G26 PDFs).
+- **Next:** resume the other counties -- survey started: Hidalgo needs CERT/CHECK-IN (now
+  mapped), SITE "EV-/ED-" method, RETURNDATE, VoterName; Bexar CSV early-voting files have no
+  method word (election date in the name); Brazoria "IN PERSON" files (EV vs ED) and its
+  2026 bilingual header; then Montgomery, Lubbock, the G26-only counties, final validation,
+  and the 1.4.0.0 bundle.
 
 ### Committed — release notes file
 

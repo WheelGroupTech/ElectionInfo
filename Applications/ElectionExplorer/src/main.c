@@ -8896,8 +8896,10 @@ static const wchar_t k_HelpLoading[] =
 static const wchar_t k_HelpRosterLoading[] =
     L"Load Voter Roster (File menu) opens the rosters a county publishes during an election "
     L"— who has voted, by day and voting method. Select one or more ZIP files as published, "
-    L"Excel workbooks (.xlsx), or CSV / TSV files (including a roster exported from this "
-    L"window). Travis, Tarrant, Harris, and Dallas County, Texas, rosters are supported. Large "
+    L"Excel workbooks (.xlsx), CSV / TSV files (including a roster exported from this "
+    L"window), or PDF rosters. Travis, Tarrant, Harris, and Dallas County, Texas, rosters are "
+    L"supported, and Bexar's PDF mail ballot lists. If a selected file cannot be read, the load "
+    L"summary lists it; when none can, a message names them. Large "
     L"rosters load in the background with a progress bar, an estimate of the time remaining, "
     L"and Cancel.\r\n\r\n"
     L"•  Travis: each spreadsheet is one day's list for one voting method. The date and "
@@ -8925,8 +8927,11 @@ static const wchar_t k_HelpRosterLoading[] =
     L"precinct, so load them instead of the early voting and mail reports, not with them.\r\n\r\n"
     L"•  When a corrected file (\"…_Updated.xlsx\") is present, the original it replaces is "
     L"not loaded. A file whose voters all appear in a file of another voting method (a "
-    L"misnamed copy) is skipped. PDF files, such as scanned Limited Ballot poll lists, are not "
-    L"read yet.\r\n\r\n"
+    L"misnamed copy) is skipped.\r\n\r\n"
+    L"•  PDF rosters printed from a spreadsheet (Bexar's 2026 mail ballot lists, Webb, "
+    L"Lubbock) are read as tables: the row with a Voter ID title is the header, and each "
+    L"entry goes to the column it sits under, on every page. Scanned PDFs, such as Limited "
+    L"Ballot poll lists, and PDFs without such a table are listed as not readable.\r\n\r\n"
     L"•  Rows that are not voters (totals, notes, \"No ballots received.\", Voter IDs with no "
     L"name or precinct) are skipped. Unusual and blank Voter IDs are kept and counted. A "
     L"sheet missing its header row uses the header of a matching sheet.\r\n\r\n"
@@ -16161,8 +16166,8 @@ static void App_BeginOpenRoster(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Voter rosters (*.zip;*.xlsx;*.csv;*.tsv;*.txt)\0"
-                      L"*.zip;*.xlsx;*.csv;*.tsv;*.txt\0"
+    ofn.lpstrFilter = L"Voter rosters (*.zip;*.xlsx;*.csv;*.tsv;*.txt;*.pdf)\0"
+                      L"*.zip;*.xlsx;*.csv;*.tsv;*.txt;*.pdf\0"
                       L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 65536;

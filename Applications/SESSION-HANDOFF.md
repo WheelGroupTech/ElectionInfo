@@ -81,7 +81,15 @@
   namespace-prefixed workbooks (G20 Election Day). Counts = Python for every ZIP; Travis /
   Tarrant unchanged; smoke tests `harris`, `xlsxns`. Help, RELEASES.md (1,340 chars) and
   STORE-LISTING name Harris. Needs the user's click-test (load an election's 3 ZIPs).
-- **Next:** Dallas roster support, then final validation and the 1.4.0.0 bundle.
+- **Dallas roster support done (2026-10-12):** see the survey doc's "Dallas support" section
+  -- mail / early voting / Election Day workbooks (State Voter ID over County Voter ID,
+  unformatted Excel date serials), the 2026 layout (State ID / Date / one-column names), and
+  the precinct ZIPs (P=InPerson M=Mail, "LAST - FIRST", DD-MON-YY). Counts = Python for
+  every file; Travis / Tarrant / Harris unchanged; smoke test `dallas`. Help, RELEASES.md
+  and STORE-LISTING name Dallas. Needs the user's click-test (load an election's 3
+  workbooks; separately the 4 precinct ZIPs).
+- **Next:** more counties (Hidalgo, Bexar, Brazoria, Montgomery, Lubbock have downloads),
+  then final validation and the 1.4.0.0 bundle.
 
 ### Committed — release notes file
 

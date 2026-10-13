@@ -148,6 +148,12 @@ vote-type codes E / P / M / A / Z / 1, PRECINCT preferred over OLDPRECINCT and
 NEWPRECINCT used when PRECINCT is missing; the official roster's "In Person" / "Mail"
 with no voting date and an export timestamp in its name; a disclaimer and a
 polling-place list skipped as reference files) and a TSV round trip;
+`dallas` covers Dallas County rosters: the mail returns report (a TOTAL RECORDS line,
+State Voter ID chosen over County Voter ID, unformatted Excel date serials, a blank
+VUID), the Election-Day Website Roster (NP party), the 2026 layout (State ID, Date, one
+FIRST MIDDLE LAST name, ED in the file name) and a precinct early-voting roster
+(StateIDNumber, "LAST - FIRST" names, the P=InPerson M=Mail column, DD-MON-YY dates, a
+shifted row, a two-space file name) and a TSV round trip;
 `dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without

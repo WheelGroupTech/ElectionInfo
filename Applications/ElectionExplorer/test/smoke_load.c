@@ -8130,6 +8130,174 @@ done:
     return rc;
 }
 
+/* Dallas County rosters (tag: dallas): the mail returns report (a "TOTAL RECORDS" line
+ * above the header, "State Voter ID" chosen over the earlier "County Voter ID", Excel
+ * date serials with no date format in Return Date / Date Printed, a blank VUID), the
+ * Election Day "Website Roster" ("Election-Day" in the file name, "Total Voters" line,
+ * NP = no party), the 2026 layout ("State ID", "Date", one "FIRST MIDDLE LAST" name,
+ * "ED" in the file name), and a precinct early-voting roster ("StateIDNumber",
+ * "LAST - FIRST" names with a hyphenated surname, the "P=InPerson M=Mail" column,
+ * DD-MON-YY dates, a row whose unquoted comma shifted a ZIP code into the party column,
+ * and a file name with two spaces) -- then a TSV round trip. */
+static int test_dallas_roster(void)
+{
+    static const char *mail =
+        "TOTAL RECORDS,,2,,,,,,,,\r\n"
+        "County Voter ID,State Voter ID,Name,Address,City,ZIP,Precinct,PrecinctSub,Ballot Party,Date Printed,"
+        "Return Date\r\n"
+        "4144412,1205497227,\"LOSSON, DAVID  \",1264 BARNES ST NW   ,ATLANTA,30318,2613,01,R,46038.7053356481,"
+        "46070.0013888889\r\n"
+        "5565978,,\"SHEVELL, MONICA KAREN  \",KORTE OUDERKERKERDIJK 1,NETHERLANDS,,2108,02,D,46038.7053356481,"
+        "46074\r\n";
+    static const char *website =
+        "Total Voters,,1,,,,,,,,,,,,,,,,\r\n"
+        "SITE ID,County Voter ID,State Voter ID,FIRSTNAME,MIDDLENAME,LASTNAME,STREETNUMBER,STREETPREDIR,"
+        "STREETNAME,STREETTYPE,STREETPOSTDIR,UNIT,CITY,ZIP,PRECINCT,PRECINCT SUB,BALLOTSTYLE,PARTY,DATE VOTED\r\n"
+        "V2302,5059245,2184048127,TINA,CARMICHAEL,BRIDGEMAN,12343,,VERONICA,RD,,,FARMERS BRANCH,75234,2310,02,"
+        "2310-02,NP,45965.4649189815\r\n";
+    static const char *ed26 =
+        "Name,State ID,Address,Polling Place,Date,Precinct,Split,Party\r\n"
+        "LINDA DALE TOMLINSON,1000118423,\"1613 BLACKHAWK LN GARLAND, TX 75043\",V2713R,46084.6006944444,1716,01,"
+        "REP\r\n";
+    static const char *pct =
+        "Precinct,Precinct Sub,StateIDNumber,Voter Name,P=InPerson M=Mail,Date Ballot Request,Date Ballot Mailed,"
+        "Date Ballot Returned,Residence Address,Residence City,Residence Zip,Party Code,Election Code\r\n"
+        "4000,01,1078471293,PUGH-MAXWELL - SHARLET DENISE,P,27-OCT-25,27-OCT-25,27-OCT-25,"
+        "10106 TECHNOLOGY BLVD W #1426 DA 75220,DA,75220,,1125-00\r\n"
+        "2000,01,1083611298,BARBARA - DAVID MICHAEL ,M,18-SEP-25,24-SEP-25,21-OCT-25,2219 JOE FIELD RD DA 75229,"
+        "DA,75229,,1125-00\r\n"
+        "4073,01,1124579519,GARZA - ESMERALDA ,P,21-OCT-25,21-OCT-25,21-OCT-25,2738 W DAVIS ST #106, B DA 75211,"
+        "DA,75211,,1125-00\r\n";
+    const char *names[4] = {"Mail-Ballot-Returns-Report_03.03.26.csv", "Election-Day-Website-Roster-1.csv",
+                            "030326-ED-In-Person-Roster.csv", "Precincts 1000 -  1731.csv"};
+    const char *data[4];
+    wchar_t z1[MAX_PATH], tp[MAX_PATH];
+    const wchar_t *paths[1];
+    EeVoterTable t, t2;
+    EeRosterLoadInfo info, info2;
+    wchar_t err[256];
+    char *text = NULL;
+    size_t text_len = 0;
+    uint32_t *rows = NULL;
+    uint32_t i;
+    int rc = 1;
+
+    data[0] = mail;
+    data[1] = website;
+    data[2] = ed26;
+    data[3] = pct;
+    GetTempPathW(MAX_PATH, z1);
+    StringCchCopyW(tp, MAX_PATH, z1);
+    StringCchCatW(z1, MAX_PATH, L"ee_dallas.zip");
+    StringCchCatW(tp, MAX_PATH, L"ee_dallas_rt.tsv");
+    EeVoterTable_Init(&t);
+    EeVoterTable_Init(&t2);
+    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&info2, sizeof(info2));
+    if (!hart_write_zip(z1, names, data, 4))
+    {
+        wprintf(L"dallas: could not write the ZIP\n");
+        goto done;
+    }
+    paths[0] = z1;
+    if (EeRoster_LoadFiles(paths, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"dallas: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 7 || info.method_rows[EE_VM_MAIL] != 3 || info.method_rows[EE_VM_EARLY] != 2 ||
+        info.method_rows[EE_VM_ELECTION_DAY] != 2 || info.method_rows[EE_VM_NONE] != 0 ||
+        info.vuids_missing != 1 || info.rows_no_date != 0 || info.skipped_sheets != 0)
+    {
+        wprintf(L"dallas: rows %u mail %u ev %u ed %u none %u missing %u nodate %u skipped %u\n", t.row_count,
+                info.method_rows[EE_VM_MAIL], info.method_rows[EE_VM_EARLY], info.method_rows[EE_VM_ELECTION_DAY],
+                info.method_rows[EE_VM_NONE], info.vuids_missing, info.rows_no_date, info.skipped_sheets);
+        goto done;
+    }
+    if (!rt_expect(&t, L"LOSSON", L"DAVID", L"VUID", L"1205497227") ||
+        !rt_expect(&t, L"LOSSON", L"DAVID", L"County Voter ID", L"4144412") ||
+        !rt_expect(&t, L"LOSSON", L"DAVID", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"LOSSON", L"DAVID", L"Date Voted", L"02/17/2026") ||
+        !rt_expect(&t, L"LOSSON", L"DAVID", L"Date Printed", L"2026-01-16") ||
+        !rt_expect(&t, L"LOSSON", L"DAVID", L"Party", L"REP") ||
+        !rt_expect(&t, L"SHEVELL", L"MONICA", L"VUID", L"") ||
+        !rt_expect(&t, L"SHEVELL", L"MONICA", L"Date Voted", L"02/21/2026") ||
+        !rt_expect(&t, L"BRIDGEMAN", L"TINA", L"VUID", L"2184048127") ||
+        !rt_expect(&t, L"BRIDGEMAN", L"TINA", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"BRIDGEMAN", L"TINA", L"Date Voted", L"11/04/2025") ||
+        !rt_expect(&t, L"BRIDGEMAN", L"TINA", L"Party", L"") ||
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Middle Name", L"DALE") ||
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"VUID", L"1000118423") ||
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Date Voted", L"03/03/2026") ||
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Party", L"REP") ||
+        !rt_expect(&t, L"PUGH-MAXWELL", L"SHARLET", L"Middle Name", L"DENISE") ||
+        !rt_expect(&t, L"PUGH-MAXWELL", L"SHARLET", L"VUID", L"1078471293") ||
+        !rt_expect(&t, L"PUGH-MAXWELL", L"SHARLET", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"PUGH-MAXWELL", L"SHARLET", L"Date Voted", L"10/27/2025") ||
+        !rt_expect(&t, L"PUGH-MAXWELL", L"SHARLET", L"Vote Type", L"P") ||
+        !rt_expect(&t, L"PUGH-MAXWELL", L"SHARLET", L"Source File", L"Precincts 1000 -  1731.csv") ||
+        !rt_expect(&t, L"BARBARA", L"DAVID", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"BARBARA", L"DAVID", L"Date Voted", L"10/21/2025") ||
+        !rt_expect(&t, L"GARZA", L"ESMERALDA", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"GARZA", L"ESMERALDA", L"Party", L""))
+    {
+        goto done;
+    }
+
+    /* Round trip: TSV export, reload, every cell equal. */
+    rows = (uint32_t *)malloc(t.row_count * sizeof(uint32_t));
+    for (i = 0; rows != NULL && i < t.row_count; i++)
+        rows[i] = i;
+    if (rows == NULL ||
+        !EeVoterTable_FormatDelimitedUtf8(&t, rows, t.row_count, FALSE, '\t', TRUE, &text, &text_len) ||
+        !cvr_write_bytes(tp, text, text_len))
+    {
+        wprintf(L"dallas: export failed\n");
+        goto done;
+    }
+    paths[0] = tp;
+    if (EeRoster_LoadFiles(paths, 1, &t2, &info2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        t2.row_count != t.row_count || t2.column_count != t.column_count)
+    {
+        wprintf(L"dallas: reload failed (%s) %u x %u\n", err, t2.row_count, t2.column_count);
+        goto done;
+    }
+    {
+        uint32_t r, c;
+        for (r = 0; r < t.row_count; r++)
+        {
+            for (c = 0; c < t.column_count; c++)
+            {
+                wchar_t a[256], b[256];
+                EeVoterTable_GetViewCellW(&t, r, c, a, ARRAYSIZE(a));
+                EeVoterTable_GetViewCellW(&t2, r, c, b, ARRAYSIZE(b));
+                if (wcscmp(a, b) != 0)
+                {
+                    wprintf(L"dallas: reload row %u [%s] '%s' vs '%s'\n", r, t.column_titles[c], b, a);
+                    goto done;
+                }
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"dallas ok\n");
+done:
+    free(text);
+    free(rows);
+    EeRoster_FreeInfo(&info);
+    EeRoster_FreeInfo(&info2);
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Clear(&t2);
+    DeleteFileW(z1);
+    DeleteFileW(tp);
+    if (rc != 0)
+    {
+        wprintf(L"dallas test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -8148,6 +8316,7 @@ int wmain(void)
     failed |= test_voter_roster();
     failed |= test_tarrant_roster();
     failed |= test_harris_roster();
+    failed |= test_dallas_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();
     failed |= test_dup_voters_voting();

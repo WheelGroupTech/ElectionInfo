@@ -174,8 +174,52 @@ static void header_label(const char *s, char *out, size_t cap)
     clean_text(tmp, out, cap);
 }
 
-/* Parse a date "M[M]<sep>D[D]<sep>YYYY" or "YYYY-MM-DD" found anywhere in @p s;
- * returns yyyymmdd or 0. */
+/* "D[D]-MON-YY[YY]" at @p p (Dallas precinct rosters: "28-OCT-24"): yyyymmdd, or 0. */
+static uint32_t dmy_month_name(const char *p)
+{
+    static const char k_mon[] = "janfebmaraprmayjunjulaugsepoctnovdec";
+    unsigned d = 0;
+    unsigned y = 0;
+    int k;
+    int m;
+    for (k = 0; k < 2 && is_digit(*p); k++, p++)
+    {
+        d = d * 10u + (unsigned)(*p - '0');
+    }
+    if (k == 0 || (*p != '-' && *p != ' '))
+    {
+        return 0;
+    }
+    p++;
+    for (m = 0; m < 12; m++)
+    {
+        if (lc(p[0]) == k_mon[m * 3] && lc(p[1]) == k_mon[m * 3 + 1] && lc(p[2]) == k_mon[m * 3 + 2])
+        {
+            break;
+        }
+    }
+    if (m == 12 || (p[3] != '-' && p[3] != ' '))
+    {
+        return 0;
+    }
+    p += 4;
+    for (k = 0; k < 4 && is_digit(*p); k++, p++)
+    {
+        y = y * 10u + (unsigned)(*p - '0');
+    }
+    if ((k != 2 && k != 4) || is_digit(*p) || d < 1 || d > 31)
+    {
+        return 0;
+    }
+    if (k == 2)
+    {
+        y += 2000u;
+    }
+    return (y >= 1900 && y <= 2199) ? y * 10000u + (unsigned)(m + 1) * 100u + d : 0;
+}
+
+/* Parse a date "M[M]<sep>D[D]<sep>YYYY", "YYYY-MM-DD" or "D[D]-MON-YY[YY]" found anywhere
+ * in @p s; returns yyyymmdd or 0. */
 static uint32_t find_date(const char *s)
 {
     size_t n = strlen(s);
@@ -190,6 +234,13 @@ static uint32_t find_date(const char *s)
         if (!is_digit(*p) || (i > 0 && is_digit(s[i - 1])))
         {
             continue;
+        }
+        {
+            uint32_t dm = dmy_month_name(p);
+            if (dm != 0)
+            {
+                return dm;
+            }
         }
         /* YYYY-MM-DD */
         if (n - i >= 10 && is_digit(p[1]) && is_digit(p[2]) && is_digit(p[3]) && p[4] == '-' &&
@@ -239,6 +290,63 @@ static uint32_t find_date(const char *s)
     return 0;
 }
 
+/* An Excel date serial written as a plain number ("45965.4649189815": a workbook whose
+ * date column has no date format -- Dallas's G25 rosters) -> yyyymmdd, else 0. Only
+ * 5-digit day counts are taken (1954-2119), so years, ZIP codes and IDs never match. */
+static uint32_t serial_date_cell(const char *s)
+{
+    long days = 0;
+    int k = 0;
+    long z;
+    long era;
+    unsigned doe, yoe, doy, mp, d, m;
+    long y;
+    while (*s == ' ')
+    {
+        s++;
+    }
+    for (; is_digit(*s) && k < 6; s++, k++)
+    {
+        days = days * 10 + (*s - '0');
+    }
+    if (k != 5)
+    {
+        return 0;
+    }
+    if (*s == '.')
+    {
+        s++;
+        while (is_digit(*s))
+        {
+            s++;
+        }
+    }
+    while (*s == ' ')
+    {
+        s++;
+    }
+    if (*s != '\0' || days < 20000 || days > 80000)
+    {
+        return 0;
+    }
+    /* Excel 1900 system: serial 25569 = 1970-01-01 (dates after 1900-02-28). Civil date
+     * from days since the epoch (H. Hinnant's algorithm). */
+    z = (days - 25569) + 719468;
+    era = z / 146097;
+    doe = (unsigned)(z - era * 146097);
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = (long)yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    d = doy - (153 * mp + 2) / 5 + 1;
+    m = mp < 10 ? mp + 3 : mp - 9;
+    if (m <= 2)
+    {
+        y++;
+    }
+    return (uint32_t)y * 10000u + m * 100u + d;
+}
+
 /* An ISO date cell ("2024-10-21", optionally followed by a time) -> yyyymmdd, else 0. */
 static uint32_t iso_date_cell(const char *s)
 {
@@ -264,7 +372,7 @@ static EeVotingMethod method_from_text(const char *s)
     if (contains_ci(s, "early") || contains_ci(s, "ev_vtrex"))
         return EE_VM_EARLY;
     if (contains_ci(s, "election day") || contains_ci(s, "electionday") ||
-        contains_ci(s, "election_day") || contains_ci(s, "ed_vtrex"))
+        contains_ci(s, "election_day") || contains_ci(s, "election-day") || contains_ci(s, "ed_vtrex"))
         return EE_VM_ELECTION_DAY;
     return EE_VM_NONE;
 }
@@ -304,14 +412,23 @@ static EeVotingMethod method_from_name(const char *name)
     }
 }
 
+/* Vote-type code schemes (which one a header uses: see map_header). */
+enum
+{
+    VT_DEFAULT = 0, /* Tarrant / Montgomery */
+    VT_HARRIS,      /* a Harris County layout ("IDNumber" title) */
+    VT_PM           /* Dallas precinct rosters: "P=InPerson M=Mail" (early voting) */
+};
+
 /* Voting method of a vote-type cell. Words are read as words ("Election Day", "Mail";
  * "In Person" names no single method). Codes: Tarrant's official roster (A absentee,
  * E early, F early-voting provisional, Y election day, Z election-day provisional,
  * L limited) and Montgomery's (A, E, L, E1 / E3 late voting); P = election day in
- * Tarrant voter files. Harris County's codes differ (@p harris): E election day, P early
+ * Tarrant voter files. Harris County's codes differ (VT_HARRIS): E election day, P early
  * in person, M mail, A overseas / military (by mail), Z provisional, 1 / 2 limited ballot
- * in person / by mail. */
-static EeVotingMethod method_from_vote_type(const char *code, BOOL harris)
+ * in person / by mail. Dallas's precinct early-voting rosters say what theirs mean in the
+ * column title (VT_PM): P in person (during early voting), M mail. */
+static EeVotingMethod method_from_vote_type(const char *code, int scheme)
 {
     char c[64];
     clean_text(code, c, sizeof(c));
@@ -320,7 +437,15 @@ static EeVotingMethod method_from_vote_type(const char *code, BOOL harris)
         return method_from_text(c);
     }
     CharUpperBuffA(c, (DWORD)strlen(c));
-    if (harris)
+    if (scheme == VT_PM)
+    {
+        if (strcmp(c, "P") == 0)
+            return EE_VM_EARLY;
+        if (strcmp(c, "M") == 0)
+            return EE_VM_MAIL;
+        return EE_VM_NONE;
+    }
+    if (scheme == VT_HARRIS)
     {
         if (strcmp(c, "E") == 0)
             return EE_VM_ELECTION_DAY;
@@ -369,10 +494,12 @@ static void party_from_cell(const char *s, char *out, size_t cap)
     const char *p;
     clean_text(s, t, sizeof(t));
     if (_stricmp(t, "NP") == 0 || _stricmp(t, "NPA") == 0 || _stricmp(t, "NON") == 0 ||
-        _stricmp(t, "N") == 0 || _stricmp(t, "N~P") == 0)
+        _stricmp(t, "N") == 0 || _stricmp(t, "N~P") == 0 ||
+        (t[0] != '\0' && strspn(t, "0123456789") == strlen(t)))
     {
         out[0] = '\0'; /* no party (general elections; Tarrant primaries say NPA too;
-                        * Harris says N~P) */
+                        * Harris says N~P); digits are not a party (a Dallas row whose
+                        * unquoted comma shifted a ZIP code into the party column) */
         return;
     }
     p = party_from_text(t);
@@ -713,10 +840,11 @@ typedef struct HeaderMap
     BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
                      * as "Column N", never taken as notes */
     BOOL split_pct; /* Tarrant: a 6-digit precinct is precinct (4) + subcode (2) */
-    BOOL harris;    /* Harris County layout ("IDNumber"): its vote-type codes */
+    int vt_scheme;  /* VT_*: how its vote-type codes read */
     int nx;
     int xcol[ROSTER_MAX_EXTRA];
     uint32_t xid[ROSTER_MAX_EXTRA];
+    BOOL xdate[ROSTER_MAX_EXTRA]; /* its title says "date": an Excel serial becomes a date */
     int nblank;
     int blank[8];
 } HeaderMap;
@@ -1038,6 +1166,22 @@ static void map_init(HeaderMap *m)
             m->pct_alt = -1;
 }
 
+/* How well a header label names the state Voter ID (VUID): 1 = a state ID ("VUID",
+ * "SOS Voter ID", "State Voter ID", "StateVoterID", Dallas's "State ID" / "StateIDNumber"),
+ * 2 = a generic "Voter ID", 3 = a county's own number ("County Voter ID", Dallas: used
+ * only when there is nothing better), 0 = not a voter ID. */
+static int vuid_rank(const char *lab)
+{
+    if (contains_ci(lab, "vuid") || contains_ci(lab, "sos voter") || contains_ci(lab, "state voter") ||
+        contains_ci(lab, "statevoter") || strncmp(lab, "state id", 8) == 0 || strncmp(lab, "stateid", 7) == 0)
+        return 1;
+    if (contains_ci(lab, "county voter"))
+        return 3;
+    if (contains_ci(lab, "voter id") || contains_ci(lab, "voterid"))
+        return 2;
+    return 0;
+}
+
 static BOOL row_is_header(const SheetRows *r, uint32_t row)
 {
     uint32_t c;
@@ -1045,8 +1189,7 @@ static BOOL row_is_header(const SheetRows *r, uint32_t row)
     {
         char lab[96];
         header_label(cell_at(r, row, (int)c), lab, sizeof(lab));
-        if (contains_ci(lab, "vuid") || contains_ci(lab, "voter id") || contains_ci(lab, "voterid") ||
-            contains_ci(lab, "voter_id") || contains_ci(lab, "name of voter"))
+        if (vuid_rank(lab) > 0 || contains_ci(lab, "name of voter"))
         {
             return TRUE;
         }
@@ -1070,14 +1213,22 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     BOOL has_subcode = FALSE;
     BOOL exact_pct = FALSE;
     int titled = 0;
+    int best_vuid = 0;
     map_init(m);
     for (c = 0; c < r->row_len[row]; c++)
     {
         char lab[96];
+        int vr;
         header_label(hdr_cell(r, row, c, fix), lab, sizeof(lab));
+        vr = vuid_rank(lab);
+        if (vr > 0 && (best_vuid == 0 || vr < best_vuid))
+        {
+            best_vuid = vr; /* Dallas: "State Voter ID" beside an earlier "County Voter ID" */
+            m->vuid = (int)c;
+        }
         if (strcmp(lab, "idnumber") == 0)
         {
-            m->harris = TRUE; /* Tarrant writes "ID Number" */
+            m->vt_scheme = VT_HARRIS; /* Tarrant writes "ID Number" */
         }
         if (strcmp(lab, "precinct") == 0)
         {
@@ -1133,19 +1284,26 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                 m->blank[m->nblank++] = ci;
             }
         }
-        else if (m->vuid < 0 && (contains_ci(lab, "vuid") || contains_ci(lab, "voter id") ||
-                                 contains_ci(lab, "voterid") || contains_ci(lab, "voter_id")))
-            m->vuid = ci;
+        else if (ci == m->vuid)
+        {
+            /* chosen above */
+        }
         else if (m->method < 0 && contains_ci(lab, "voting method"))
             m->method = ci;
-        else if (m->vtype < 0 && (contains_ci(lab, "vote type") || strcmp(lab, "votetype") == 0))
+        else if (m->vtype < 0 && (contains_ci(lab, "vote type") || strcmp(lab, "votetype") == 0 ||
+                                  (contains_ci(lab, "p=inperson") && contains_ci(lab, "m=mail"))))
         {
+            if (contains_ci(lab, "p=inperson"))
+            {
+                m->vt_scheme = VT_PM; /* the title gives the legend */
+            }
             m->vtype = ci;
             (void)extra_col(L, "Vote Type"); /* its code is also kept: register it here, in
                                               * header order, so an export reloads alike */
         }
-        else if (m->date < 0 && contains_ci(lab, "date voted"))
-            m->date = ci;
+        else if (m->date < 0 && (contains_ci(lab, "date voted") || strcmp(lab, "date") == 0 ||
+                                 strcmp(lab, "date ballot returned") == 0))
+            m->date = ci; /* Dallas: "Date" (P26 rosters), "Date Ballot Returned" (precincts) */
         else if (m->source < 0 && contains_ci(lab, "source file"))
             m->source = ci;
         else if (m->pct < 0 && (exact_pct ? strcmp(lab, "precinct") == 0
@@ -1197,6 +1355,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             {
                 m->xcol[m->nx] = ci;
                 m->xid[m->nx] = (uint32_t)x;
+                m->xdate[m->nx] = contains_ci(lab, "date");
                 m->nx++;
                 if (m->adate < 0 && (strcmp(lab, "activitydate") == 0 || strcmp(lab, "activity date") == 0))
                 {
@@ -1331,7 +1490,9 @@ static void add_extra(Loader *L, RosterRec *rec, int col, const char *value)
     rec->xcount++;
 }
 
-/* Split a combined name: "LAST,FIRST MIDDLE" or "FIRST MIDDLE LAST [SUFFIX]". */
+/* Split a combined name: "LAST,FIRST MIDDLE", Dallas's "LAST - FIRST MIDDLE" (a spaced
+ * dash; "PUGH-MAXWELL - SHARLET" keeps its hyphenated surname) or "FIRST MIDDLE LAST
+ * [SUFFIX]". */
 static void split_full_name(const char *full, char *last, char *first, char *middle, char *suffix,
                             size_t cap)
 {
@@ -1343,6 +1504,14 @@ static void split_full_name(const char *full, char *last, char *first, char *mid
     last[0] = first[0] = middle[0] = suffix[0] = '\0';
     clean_text(full, buf, sizeof(buf));
     comma = strchr(buf, ',');
+    if (comma == NULL)
+    {
+        comma = strstr(buf, " - ");
+        if (comma != NULL)
+        {
+            comma[1] = ' '; /* "LAST - FIRST" -> "LAST" | "FIRST" */
+        }
+    }
     if (comma != NULL)
     {
         *comma = '\0';
@@ -1512,7 +1681,7 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         }
         if (m->vtype >= 0 && !labeled)
         {
-            EeVotingMethod mm = method_from_vote_type(cell_at(r, row, m->vtype), m->harris);
+            EeVotingMethod mm = method_from_vote_type(cell_at(r, row, m->vtype), m->vt_scheme);
             if (mm != EE_VM_NONE)
             {
                 method = mm;
@@ -1522,6 +1691,10 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     if (m->date >= 0)
     {
         uint32_t d = find_date(cell_at(r, row, m->date));
+        if (d == 0)
+        {
+            d = serial_date_cell(cell_at(r, row, m->date));
+        }
         date = d; /* blank in the export stays blank */
     }
 
@@ -1549,8 +1722,20 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     }
     if (m->source >= 0 && cell_at(r, row, m->source)[0] != '\0')
     {
+        /* Trimmed only: a file name keeps its own spacing ("Precincts 1000 -  1731.csv"). */
         char sf[MAX_PATH];
-        clean_text(cell_at(r, row, m->source), sf, sizeof(sf));
+        const char *v = cell_at(r, row, m->source);
+        size_t n;
+        while (*v == ' ' || *v == '\t')
+        {
+            v++;
+        }
+        StringCchCopyA(sf, ARRAYSIZE(sf), v);
+        n = strlen(sf);
+        while (n > 0 && (sf[n - 1] == ' ' || sf[n - 1] == '\t' || sf[n - 1] == '\r' || sf[n - 1] == '\n'))
+        {
+            sf[--n] = '\0';
+        }
         rec->source_name = S(L, sf);
     }
     else
@@ -1603,7 +1788,19 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         add_extra(L, rec, extra_col(L, "Assisting Address"), cell_at(r, row, m->aaddr));
     for (i = 0; i < m->nx; i++)
     {
-        add_extra(L, rec, (int)m->xid[i], cell_at(r, row, m->xcol[i]));
+        const char *v = cell_at(r, row, m->xcol[i]);
+        uint32_t sd;
+        if (m->xdate[i] && (sd = serial_date_cell(v)) != 0)
+        {
+            /* an unformatted Excel date ("Date Printed"): written as a formatted one is */
+            char iso[16];
+            StringCchPrintfA(iso, ARRAYSIZE(iso), "%04u-%02u-%02u", sd / 10000u, (sd / 100u) % 100u, sd % 100u);
+            add_extra(L, rec, (int)m->xid[i], iso);
+        }
+        else
+        {
+            add_extra(L, rec, (int)m->xid[i], v);
+        }
     }
 
     if (redacted)
@@ -1663,7 +1860,7 @@ static void use_activity_date(HeaderMap *m, const SheetRows *r, uint32_t from)
         for (row = from; row < r->nrows && row < from + 1000; row++)
         {
             const char *v = cell_at(r, row, m->vtype);
-            if (v[0] != '\0' && method_from_vote_type(v, m->harris) != EE_VM_ELECTION_DAY)
+            if (v[0] != '\0' && method_from_vote_type(v, m->vt_scheme) != EE_VM_ELECTION_DAY)
             {
                 return;
             }
@@ -1676,6 +1873,7 @@ static void use_activity_date(HeaderMap *m, const SheetRows *r, uint32_t from)
         {
             memmove(&m->xcol[k], &m->xcol[k + 1], (size_t)(m->nx - k - 1) * sizeof(m->xcol[0]));
             memmove(&m->xid[k], &m->xid[k + 1], (size_t)(m->nx - k - 1) * sizeof(m->xid[0]));
+            memmove(&m->xdate[k], &m->xdate[k + 1], (size_t)(m->nx - k - 1) * sizeof(m->xdate[0]));
             m->nx--;
             break;
         }

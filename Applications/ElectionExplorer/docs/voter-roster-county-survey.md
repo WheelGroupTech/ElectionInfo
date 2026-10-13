@@ -221,6 +221,55 @@ official, G26). Travis (12 ZIPs) and Tarrant (10 elections) load byte-identical 
 previous build. Smoke tests `harris`, `xlsxns`. In the app: G25's three ZIPs -> 439,610
 records; Voting Totals per day matches the daily files.
 
+## Dallas support (done 2026-10-12)
+
+Files (`Voter_Rosters/TX_Dallas_County/`, P24, G24, G25, P26; P20 is a PDF, not read):
+
+- **Mail returns report** (`Mail-Ballot-Returns-Report_<date>.xlsx`): a `TOTAL RECORDS` line,
+  then `County Voter ID, State Voter ID, Name` ("LAST, FIRST MIDDLE"), `Address, City, ZIP,
+  Precinct, PrecinctSub, Ballot Party` (NP / D / R), `Date Printed, Return Date` [P26 adds
+  `Disposition Code / Description`; every row kept].
+- **Early voting report** (`In-Person-Early-Voting-{Turnout,Details}-Report_<date>.xlsx`):
+  `EV_SITE, IDNUMBER, FIRSTNAME, MIDDLENAME, LASTNAME`, street parts, `PRECINCT,
+  PRECINCT_SUB, BALLOTSTYLE, BALLOT_PARTY / PARTY, DATE_VOTED, VOTING_UNIT, VOTING_SUBUNIT,
+  SOS_VOTERID`.
+- **Election Day "Website Roster"** (`Election-Day-Website-Roster*.xlsx`; G24's file name says
+  "11.05.23"): a `Total Voters` line, then `SITE ID, County Voter ID, State Voter ID`, name and
+  street parts, `PRECINCT, PRECINCT SUB, BALLOTSTYLE, PARTY, DATE VOTED`.
+- **2026 layout** (P26 `InPersonEarlyVotingDetails`, `030326-ED-In-Person-Roster`): `Name`
+  ("FIRST MIDDLE LAST"), `State ID, Address, Polling Place, Date, Precinct, Split / Check-in
+  Party, Party / Ballot Style`.
+- **Precinct ZIPs** (G24 / G25 `Precincts_1000-1731.zip`, 4 per election): one CSV each,
+  early voting in person and by mail **again**, by precinct, as of a day of early voting
+  (G24's stops at 10/31): `Precinct, Precinct Sub, StateIDNumber, Voter Name` ("LAST -
+  FIRST MIDDLE"), `P=InPerson M=Mail`, `Date Ballot Request / Mailed / Returned` (DD-MON-YY),
+  addresses and district codes / names. Two G24 rows have an unquoted comma in the address
+  (later columns shift by one; the voter fields before it are intact).
+- Dates in several workbooks (G25 Election Day / early voting, P24 Election Day, P26 mail)
+  are Excel serials with no date format.
+
+Loader changes (`voter_roster.c`):
+
+- The Voter ID column is ranked: a state ID (`VUID`, `SOS Voter ID`, `State Voter ID`,
+  `StateVoterID`, `State ID`, `StateIDNumber`) over a generic `Voter ID` over `County Voter
+  ID` (kept as an extra column); `State ID` titles also mark the header row.
+- Date Voted also from `Date` and `Date Ballot Returned`; `DD-MON-YY[YY]` dates; an Excel
+  serial with no date format is converted in the Date Voted column and in extra columns
+  titled "date" (written YYYY-MM-DD like a formatted one).
+- "LAST - FIRST MIDDLE" names (a spaced dash; hyphenated surnames kept).
+- The `P=InPerson M=Mail` column is a vote type whose title gives its legend (P = early in
+  person, M = mail); vote-type schemes are now an enum (default / Harris / P-M).
+- `Election-Day` in a file name; a party value that is only digits is no party (the shifted
+  rows); a reloaded Source File keeps its own spacing (trimmed, not collapsed).
+
+Validation: every Dallas workbook's rows, blank and repeated Voter IDs equal an independent
+Python count (P24 9,783 / 104,978 / 116,848; G24 34,546 / 633,142 / 187,680; G25 2,757 /
+97,837 / 137,395; P26 9,450 / 251,881 / 122,562); precinct ZIPs G24 511,724 (mail 21,839,
+in person 489,883 + the 2 shifted rows) and G25 43,951 (1,163 / 42,788). Round trips
+identical for all four elections' reports and both precinct sets. Travis, Tarrant and Harris
+load byte-identical to the previous build. Smoke test `dallas`. In the app: G24's three
+reports -> 855,368 records, 1,241 voters on two reports counted once in Voting Totals.
+
 ## Downloaded rosters (2026-10-12)
 
 Saved under `Voter_Rosters/TX_<County>_County/` as `<Code>_<county file name>`

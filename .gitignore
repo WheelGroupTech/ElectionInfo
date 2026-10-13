@@ -183,6 +183,9 @@ Applications/ElectionExplorer.Package/bin/
 Applications/ElectionExplorer.Package/obj/
 Applications/ElectionExplorer.Package/AppPackages/
 Applications/ElectionExplorer.Package/BundleArtifacts/
+# NuGet restore cache the wapproj writes beside the project (not into obj/);
+# holds machine-specific package-folder paths, so it churns between machines.
+Applications/ElectionExplorer.Package/*.assets.cache
 
 # Visual Studio user-specific / cache files
 *.user

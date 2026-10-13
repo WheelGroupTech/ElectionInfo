@@ -219,9 +219,161 @@ static uint32_t dmy_month_name(const char *p)
     return (y >= 1900 && y <= 2199) ? y * 10000u + (unsigned)(m + 1) * 100u + d : 0;
 }
 
-/* Parse a date "M[M]<sep>D[D]<sep>YYYY", "YYYY-MM-DD" or "D[D]-MON-YY[YY]" found anywhere
- * in @p s; returns yyyymmdd or 0. */
-static uint32_t find_date(const char *s)
+/* Month 1..12 of a month name or its abbreviation at @p p ("Oct", "October", "Nov.");
+ * @p len receives the characters used. 0 if none. */
+static int month_word(const char *p, size_t *len)
+{
+    static const char *const k_full[12] = {"january", "february", "march",     "april",   "may",      "june",
+                                           "july",    "august",   "september", "october", "november", "december"};
+    int m;
+    for (m = 0; m < 12; m++)
+    {
+        const char *f = k_full[m];
+        size_t k = 0;
+        while (f[k] != '\0' && lc(p[k]) == f[k])
+        {
+            k++;
+        }
+        if (k >= 3 && (f[k] == '\0' || !((p[k] >= 'a' && p[k] <= 'z') || (p[k] >= 'A' && p[k] <= 'Z'))))
+        {
+            if (k == 3 && p[k] == '.')
+            {
+                k++;
+            }
+            *len = k;
+            return m + 1;
+        }
+    }
+    return 0;
+}
+
+/* "MON[.] D[D][,] YYYY" anywhere in @p s (Montgomery "BBM Recvd Oct  9 2026  1:00PM", an
+ * election named "November 5 2024"): yyyymmdd, or 0. */
+static uint32_t mdy_month_name(const char *s)
+{
+    const char *p;
+    for (p = s; *p != '\0'; p++)
+    {
+        size_t len = 0;
+        int m;
+        unsigned d = 0;
+        unsigned y = 0;
+        int k;
+        const char *q;
+        BOOL prev_alpha = (p > s) && ((p[-1] >= 'a' && p[-1] <= 'z') || (p[-1] >= 'A' && p[-1] <= 'Z'));
+        if (prev_alpha || (m = month_word(p, &len)) == 0)
+        {
+            continue;
+        }
+        q = p + len;
+        if (*q != ' ' && *q != '-' && *q != '_')
+        {
+            continue;
+        }
+        while (*q == ' ' || *q == '-' || *q == '_')
+        {
+            q++;
+        }
+        for (k = 0; k < 2 && is_digit(*q); k++, q++)
+        {
+            d = d * 10u + (unsigned)(*q - '0');
+        }
+        if (k == 0 || is_digit(*q))
+        {
+            continue;
+        }
+        if (*q == ',')
+        {
+            q++;
+        }
+        if (*q != ' ' && *q != '-' && *q != '_')
+        {
+            continue;
+        }
+        while (*q == ' ' || *q == '-' || *q == '_')
+        {
+            q++;
+        }
+        for (k = 0; k < 4 && is_digit(*q); k++, q++)
+        {
+            y = y * 10u + (unsigned)(*q - '0');
+        }
+        if (k == 4 && !is_digit(*q) && y >= 1900 && y <= 2199 && d >= 1 && d <= 31)
+        {
+            return y * 10000u + (unsigned)m * 100u + d;
+        }
+    }
+    return 0;
+}
+
+/* Days since 1970-01-01 of a civil date (H. Hinnant's algorithm). */
+static long days_from_civil(long y, unsigned m, unsigned d)
+{
+    long era;
+    unsigned yoe, doy, doe;
+    y -= (m <= 2);
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = (unsigned)(y - era * 400);
+    doy = (153 * (m + (m > 2 ? (unsigned)-3 : 9)) + 2) / 5 + d - 1;
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long)doe - 719468;
+}
+
+/* The n-th (1-based) weekday @p wd (0 = Sunday) of month @p m in year @p y, as days. */
+static long nth_weekday(long y, unsigned m, int wd, int n)
+{
+    long first = days_from_civil(y, m, 1);
+    int w = (int)((first + 4) % 7); /* 1970-01-01 was a Thursday */
+    if (w < 0)
+    {
+        w += 7;
+    }
+    return first + ((wd - w + 7) % 7) + 7L * (n - 1);
+}
+
+/* Voting method implied by a roster's own date when nothing else names it: Texas holds
+ * its regular elections on fixed days -- the November general (the Tuesday after the
+ * first Monday), the March primary (first Tuesday), the May uniform election (first
+ * Saturday) and the primary runoff (fourth Tuesday in May) -- and early voting in person
+ * ends days before. A date on one of those days is Election Day; within the three weeks
+ * before, early voting; otherwise unknown. */
+static EeVotingMethod method_from_calendar(uint32_t date)
+{
+    long y;
+    long day;
+    long e[4];
+    int k;
+    if (date == 0)
+    {
+        return EE_VM_NONE;
+    }
+    y = (long)(date / 10000u);
+    day = days_from_civil(y, (date / 100u) % 100u, date % 100u);
+    e[0] = nth_weekday(y, 11, 1, 1) + 1; /* first Monday + 1 */
+    e[1] = nth_weekday(y, 3, 2, 1);
+    e[2] = nth_weekday(y, 5, 6, 1);
+    e[3] = nth_weekday(y, 5, 2, 4);
+    for (k = 0; k < 4; k++)
+    {
+        if (day == e[k])
+        {
+            return EE_VM_ELECTION_DAY;
+        }
+    }
+    for (k = 0; k < 4; k++)
+    {
+        if (e[k] - day > 0 && e[k] - day <= 21)
+        {
+            return EE_VM_EARLY;
+        }
+    }
+    return EE_VM_NONE;
+}
+
+/* Parse a numeric date "M[M]<sep>D[D]<sep>YYYY", "YYYY-MM-DD", "D[D]-MON-YY[YY]" or
+ * "MMDDYYYY" found anywhere in @p s; returns yyyymmdd or 0. File names use only these: a
+ * date spelled out in a file name ("ABBM LIST November 5 2024") names the election. */
+static uint32_t find_date_numeric(const char *s)
 {
     size_t n = strlen(s);
     size_t i;
@@ -288,7 +440,31 @@ static uint32_t find_date(const char *s)
             return y * 10000u + a * 100u + b;
         }
     }
+    /* "MMDDYYYY" as one 8-digit token (Bexar "ABBM_Recvd_09282026", Hidalgo "11042022") */
+    for (i = 0; i + 8 <= n; i++)
+    {
+        const char *p = s + i;
+        unsigned a, b, y;
+        if ((i > 0 && is_digit(s[i - 1])) || is_digit(p[8]) || strspn(p, "0123456789") < 8)
+        {
+            continue;
+        }
+        a = (unsigned)((p[0] - '0') * 10 + (p[1] - '0'));
+        b = (unsigned)((p[2] - '0') * 10 + (p[3] - '0'));
+        y = (unsigned)((p[4] - '0') * 1000 + (p[5] - '0') * 100 + (p[6] - '0') * 10 + (p[7] - '0'));
+        if (y >= 2000 && y <= 2099 && a >= 1 && a <= 12 && b >= 1 && b <= 31)
+        {
+            return y * 10000u + a * 100u + b;
+        }
+    }
     return 0;
+}
+
+/* A date in a cell: the numeric forms, else "MON D[,] YYYY" (Montgomery "Oct  9 2026"). */
+static uint32_t find_date(const char *s)
+{
+    uint32_t d = find_date_numeric(s);
+    return (d != 0) ? d : mdy_month_name(s);
 }
 
 /* An Excel date serial written as a plain number ("45965.4649189815": a workbook whose
@@ -368,7 +544,10 @@ static EeVotingMethod method_from_text(const char *s)
         return EE_VM_PROVISIONAL;
     if (contains_ci(s, "limited"))
         return EE_VM_LIMITED;
-    if (contains_ci(s, "mail") || contains_ci(s, "absentee") || contains_ci(s, "reqexp"))
+    if (contains_ci(s, "mail") || contains_ci(s, "absentee") || contains_ci(s, "reqexp") ||
+        contains_ci(s, "ballots received") || contains_ci(s, "ballots-received") ||
+        contains_ci(s, "ballots_received") || contains_ci(s, "received ballots") ||
+        contains_ci(s, "received_ballots") || contains_ci(s, "ballots recevied")) /* Galveston's typo */
         return EE_VM_MAIL;
     if (contains_ci(s, "early") || contains_ci(s, "ev_vtrex"))
         return EE_VM_EARLY;
@@ -781,6 +960,7 @@ typedef struct RosterSource
     const char *party;        /* from the file name ("_Dem", "-REP"), NULL if none */
     uint32_t date;            /* yyyymmdd from the file name, 0 unknown */
     BOOL updated;             /* "<name>_Updated" correction */
+    BOOL in_person;           /* "IN PERSON" in the file name (Brazoria): never a mail list */
     int skip;                 /* SKIP_* */
     int copy_of;              /* source index this file duplicates (SKIP_COPY) */
     uint32_t rec_begin;
@@ -837,6 +1017,10 @@ typedef struct HeaderMap
         source, vtype;
     int adate;      /* Harris "ActivityDate" column (also kept as an extra), or -1 */
     int pct_alt;    /* Harris "NEWPRECINCT" (also kept): the precinct when PRECINCT is blank */
+    int site;       /* Hidalgo "SITE" (also kept): "EV-..." / "ED-..." names the method */
+    BOOL mail_hint; /* a mail list's columns (received / return date, ballot status) */
+    BOOL by_entity; /* Montgomery "Election_Name": one row per jurisdiction on the ballot */
+    BOOL gap_comma; /* names written "LAST  FIRST MIDDLE" (see sheet_gap_comma) */
     int ncols;
     BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
                      * as "Column N", never taken as notes */
@@ -889,6 +1073,8 @@ typedef struct Loader
     uint32_t odd_examples;
     BOOL date_fix_noted;
     WBuf date_fixes;
+    WBuf swapped; /* sheets whose Voter ID / name columns were read by their contents */
+    uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
     /* progress */
     volatile LONG *cancel;
     EeLoadProgressFn progress_fn;
@@ -1164,7 +1350,7 @@ static void map_init(HeaderMap *m)
     ZeroMemory(m, sizeof(*m));
     m->vuid = m->pct = m->first = m->last = m->middle = m->suffix = m->full = m->party =
         m->notes = m->aname = m->aaddr = m->method = m->date = m->source = m->vtype = m->adate =
-            m->pct_alt = -1;
+            m->pct_alt = m->site = -1;
 }
 
 /* How well a header label names the state Voter ID (VUID): 1 = a state ID ("VUID",
@@ -1214,6 +1400,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     BOOL sos_vuid = FALSE;
     BOOL has_subcode = FALSE;
     BOOL exact_pct = FALSE;
+    BOOL county_pct = FALSE;
     int titled = 0;
     int best_vuid = 0;
     map_init(m);
@@ -1235,6 +1422,21 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         if (strcmp(lab, "precinct") == 0)
         {
             exact_pct = TRUE; /* Harris voter history: "PRECINCT" beside "OLDPRECINCT" */
+        }
+        if (strcmp(lab, "countyelectionprecinct") == 0 || strcmp(lab, "county election precinct") == 0)
+        {
+            county_pct = TRUE; /* Montgomery: beside a per-jurisdiction "Voting_Precinct" */
+        }
+        if (strcmp(lab, "election name") == 0)
+        {
+            m->by_entity = TRUE;
+        }
+        if (contains_ci(lab, "received date") || contains_ci(lab, "ballot received") ||
+            strcmp(lab, "receiveddate") == 0 || strcmp(lab, "date received") == 0 ||
+            strcmp(lab, "return date") == 0 || strcmp(lab, "returndate") == 0 ||
+            contains_ci(lab, "ballot status") || strcmp(lab, "absentee") == 0)
+        {
+            m->mail_hint = TRUE; /* the columns of a mail ballot list */
         }
         if (contains_ci(lab, "name of voter"))
         {
@@ -1293,6 +1495,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         else if (m->method < 0 && contains_ci(lab, "voting method"))
             m->method = ci;
         else if (m->vtype < 0 && (contains_ci(lab, "vote type") || strcmp(lab, "votetype") == 0 ||
+                                  strcmp(lab, "checkin type") == 0 || strcmp(lab, "check-in type") == 0 ||
                                   (contains_ci(lab, "p=inperson") && contains_ci(lab, "m=mail"))))
         {
             if (contains_ci(lab, "p=inperson"))
@@ -1307,13 +1510,16 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                                  strcmp(lab, "date ballot returned") == 0 || contains_ci(lab, "received date") ||
                                  strcmp(lab, "receiveddate") == 0 || strcmp(lab, "date received") == 0 ||
                                  strcmp(lab, "check-in") == 0 || strcmp(lab, "check in") == 0 ||
-                                 strcmp(lab, "check-in date") == 0 || strcmp(lab, "checkin date") == 0))
+                                 strcmp(lab, "check-in date") == 0 || strcmp(lab, "checkin date") == 0 ||
+                                 strcmp(lab, "status date") == 0 || strcmp(lab, "ballot date") == 0))
             m->date = ci; /* Dallas: "Date" (P26 rosters), "Date Ballot Returned" (precincts);
                            * Bexar / Brazoria "Ballot Received Date", Webb "ReceivedDate" */
         else if (m->source < 0 && contains_ci(lab, "source file"))
             m->source = ci;
-        else if (m->pct < 0 && (exact_pct ? strcmp(lab, "precinct") == 0
-                                          : (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0)))
+        else if (m->pct < 0 &&
+                 (county_pct ? (strcmp(lab, "countyelectionprecinct") == 0 || strcmp(lab, "county election precinct") == 0)
+                  : exact_pct ? strcmp(lab, "precinct") == 0
+                              : (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0)))
             m->pct = ci;
         else if (m->first < 0 && contains_ci(lab, "first"))
             m->first = ci;
@@ -1324,6 +1530,9 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         else if (m->suffix < 0 && contains_ci(lab, "suffix"))
             m->suffix = ci;
         else if (m->full < 0 && (contains_ci(lab, "name of voter") || strcmp(lab, "voter name") == 0 ||
+                                 strcmp(lab, "votername") == 0 || strcmp(lab, "full name") == 0 ||
+                                 strcmp(lab, "voter full name") == 0 ||
+                                 (strncmp(lab, "name of ", 8) == 0 && contains_ci(lab, "voter")) ||
                                  (!limited_form && strcmp(lab, "name") == 0)))
             m->full = ci;
         else if (limited_form && m->aname < 0 && strcmp(lab, "name") == 0)
@@ -1334,8 +1543,8 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
             m->party = ci;
         else if (m->notes < 0 && (contains_ci(lab, "note") || contains_ci(lab, "comment")))
             m->notes = ci;
-        else if (m->date < 0 && strcmp(lab, "return date") == 0)
-            m->date = ci; /* mail roster: the day the voted ballot came back */
+        else if (m->date < 0 && (strcmp(lab, "return date") == 0 || strcmp(lab, "returndate") == 0))
+            m->date = ci; /* mail roster: the day the voted ballot came back (Hidalgo RETURNDATE) */
         else if (strcmp(lab, "no.") == 0 || strcmp(lab, "no") == 0)
         {
             /* row number column (Limited Ballot form) */
@@ -1370,6 +1579,11 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                 if (m->pct_alt < 0 && strcmp(lab, "newprecinct") == 0)
                 {
                     m->pct_alt = ci;
+                }
+                if (m->site < 0 && (strcmp(lab, "site") == 0 || strcmp(lab, "ev site") == 0 ||
+                                    strcmp(lab, "polling place") == 0 || strcmp(lab, "location") == 0))
+                {
+                    m->site = ci; /* Hidalgo "EV-Elections Annex" / "ED-UTRGV" */
                 }
             }
         }
@@ -1500,7 +1714,7 @@ static void add_extra(Loader *L, RosterRec *rec, int col, const char *value)
  * dash; "PUGH-MAXWELL - SHARLET" keeps its hyphenated surname) or "FIRST MIDDLE LAST
  * [SUFFIX]". */
 static void split_full_name(const char *full, char *last, char *first, char *middle, char *suffix,
-                            size_t cap)
+                            size_t cap, BOOL gap_comma)
 {
     char buf[256];
     char *tok[16];
@@ -1516,6 +1730,51 @@ static void split_full_name(const char *full, char *last, char *first, char *mid
         if (comma != NULL)
         {
             comma[1] = ' '; /* "LAST - FIRST" -> "LAST" | "FIRST" */
+        }
+    }
+    if (comma == NULL && gap_comma)
+    {
+        /* Galveston writes "ROSAS VILLALBA  MARIA PILAR": one gap of exactly two spaces
+         * between the words marks LAST | FIRST MIDDLE ("CAROL  PARDUE  LUCK", with two
+         * gaps, or a wider gap for an empty field, is FIRST MIDDLE LAST). Only in sheets
+         * written that way (see sheet_gap_comma): elsewhere "SANDRA  GLEDHILL" is a first
+         * and last name around an empty middle name. */
+        const char *t = full;
+        const char *q;
+        const char *gap = NULL;
+        int gaps = 0;
+        BOOL wide = FALSE;
+        while (*t == ' ')
+        {
+            t++;
+        }
+        for (q = t; *q != '\0'; q++)
+        {
+            if (q[0] == ' ' && q[1] == ' ')
+            {
+                const char *e = q;
+                while (*e == ' ')
+                {
+                    e++;
+                }
+                if (*e == '\0')
+                {
+                    break; /* trailing spaces */
+                }
+                gaps++;
+                wide |= (e - q) > 2;
+                gap = q;
+                q = e - 1;
+            }
+        }
+        if (gaps == 1 && !wide && gap != NULL && gap > t)
+        {
+            char tmp[256];
+            StringCchCopyNA(tmp, ARRAYSIZE(tmp), t, (size_t)(gap - t));
+            StringCchCatA(tmp, ARRAYSIZE(tmp), ",");
+            StringCchCatA(tmp, ARRAYSIZE(tmp), gap + 2);
+            clean_text(tmp, buf, sizeof(buf));
+            comma = strchr(buf, ',');
         }
     }
     if (comma != NULL)
@@ -1566,9 +1825,91 @@ static void split_full_name(const char *full, char *last, char *first, char *mid
     }
 }
 
+/* Words after the gap when @p full has exactly one gap of exactly two spaces between
+ * words (and no comma or spaced dash); 0 otherwise. */
+static int name_gap_words_after(const char *full)
+{
+    const char *q = full;
+    const char *gap = NULL;
+    int gaps = 0;
+    int words = 0;
+    BOOL in_word = FALSE;
+    if (strchr(full, ',') != NULL || strstr(full, " - ") != NULL)
+    {
+        return 0;
+    }
+    while (*q == ' ')
+    {
+        q++;
+    }
+    for (; *q != '\0'; q++)
+    {
+        if (q[0] == ' ' && q[1] == ' ')
+        {
+            const char *e = q;
+            while (*e == ' ')
+            {
+                e++;
+            }
+            if (*e == '\0')
+            {
+                break;
+            }
+            if (e - q > 2)
+            {
+                return 0; /* a wider gap: an empty field */
+            }
+            gaps++;
+            gap = q;
+            q = e - 1;
+        }
+    }
+    if (gaps != 1)
+    {
+        return 0;
+    }
+    for (q = gap; *q != '\0'; q++)
+    {
+        if (*q != ' ' && !in_word)
+        {
+            words++;
+        }
+        in_word = (*q != ' ');
+    }
+    return words;
+}
+
+/* Does this sheet write combined names as "LAST  FIRST MIDDLE" (Galveston)? Yes when, in
+ * its first rows, most names with one double-space gap have two or more words after it
+ * (first and middle names); a sheet whose gaps only stand for an empty middle name
+ * ("SANDRA  GLEDHILL") has one word after them. */
+static BOOL sheet_gap_comma(const SheetRows *r, uint32_t from, int full_col)
+{
+    uint32_t row;
+    uint32_t seen = 0;
+    uint32_t multi = 0;
+    uint32_t looked = 0;
+    if (full_col < 0)
+    {
+        return FALSE;
+    }
+    for (row = from; row < r->nrows && looked < 400; row++)
+    {
+        int w = name_gap_words_after(cell_at(r, row, full_col));
+        looked++;
+        if (w > 0)
+        {
+            seen++;
+            multi += (w >= 2);
+        }
+    }
+    return seen >= 1 && multi * 2 > seen;
+}
+
 /* Turn one data row into a record (or count why it is skipped). */
 static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const HeaderMap *m,
-                     EeVotingMethod sheet_method, uint32_t sheet_date, const char *sheet_party)
+                     EeVotingMethod sheet_method, uint32_t sheet_date, const char *sheet_party,
+                     BOOL calendar_ok)
 {
     char vuid[64], pct[32], last[128], first[128], middle[128], suffix[32], party[32];
     BOOL named;
@@ -1593,7 +1934,7 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     }
     if (m->full >= 0)
     {
-        split_full_name(cell_at(r, row, m->full), last, first, middle, suffix, sizeof(last));
+        split_full_name(cell_at(r, row, m->full), last, first, middle, suffix, sizeof(last), m->gap_comma);
     }
     else
     {
@@ -1632,6 +1973,10 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         pct[4] = '\0';
     }
     named = has_letter(last) || has_letter(first);
+    if (named && vuid[0] != '\0' && strspn(vuid, "0") == strlen(vuid))
+    {
+        vuid[0] = '\0'; /* a named voter with a "0" placeholder ID (Montgomery): no Voter ID */
+    }
 
     if (m->vuid >= 0)
     {
@@ -1651,9 +1996,11 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
                 return;
             }
         }
-        else if (!vuid_like(vuid))
+        else if (!vuid_like(vuid) && !(named && strspn(vuid, "0123456789") == strlen(vuid)))
         {
-            L->info->rows_non_voter++; /* "Total Voters", "No ballots received.", ... */
+            /* "Total Voters", "No ballots received.", ... (a named voter with a short
+             * numeric ID is kept, its ID reported as unusual) */
+            L->info->rows_non_voter++;
             return;
         }
         else if (!named && pct[0] == '\0')
@@ -1706,6 +2053,21 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
             d = serial_date_cell(cell_at(r, row, m->date));
         }
         date = d; /* blank in the export stays blank */
+    }
+    /* Nothing named the method: a polling-site name ("EV-The Mansion", "ED-UTRGV"), else
+     * the election calendar for an in-person roster's date (see method_from_calendar). */
+    if (method == EE_VM_NONE && m->site >= 0)
+    {
+        method = method_from_name(cell_at(r, row, m->site));
+    }
+    if (method == EE_VM_NONE && calendar_ok)
+    {
+        method = method_from_calendar(date);
+    }
+    if (method != sheet_method && method != EE_VM_NONE)
+    {
+        L->info->method_source[method] = TRUE;
+        L->info->method_read[method] = TRUE;
     }
 
     rec = new_rec(L);
@@ -1890,6 +2252,167 @@ static void use_activity_date(HeaderMap *m, const SheetRows *r, uint32_t from)
     }
 }
 
+/* Brazoria's 2026 rosters put the Voter ID under the name title and the name under the
+ * Voter ID title. When, in the first data rows, the Voter ID column holds no Voter IDs
+ * but another column holds them in most rows, read that column as the Voter ID -- and the
+ * old Voter ID column as the name when the name title was over the IDs. TRUE if changed. */
+static BOOL repair_swapped_vuid(HeaderMap *m, const SheetRows *r, uint32_t from)
+{
+    uint32_t row;
+    uint32_t n = 0;
+    uint32_t in_vuid = 0;
+    int c;
+    int best = -1;
+    uint32_t best_hits = 0;
+    int ncols = 0;
+    if (m->vuid < 0)
+    {
+        return FALSE;
+    }
+    for (row = from; row < r->nrows && n < 50; row++)
+    {
+        char v[64];
+        if (row_empty(r, row))
+        {
+            continue;
+        }
+        n++;
+        clean_id(cell_at(r, row, m->vuid), v, sizeof(v));
+        in_vuid += vuid_like(v);
+        if ((int)r->row_len[row] > ncols)
+        {
+            ncols = (int)r->row_len[row];
+        }
+    }
+    if (n < 5 || in_vuid * 5 > n) /* the Voter ID column mostly holds Voter IDs: fine */
+    {
+        return FALSE;
+    }
+    for (c = 0; c < ncols; c++)
+    {
+        uint32_t hits = 0;
+        uint32_t k = 0;
+        if (c == m->vuid)
+        {
+            continue;
+        }
+        for (row = from; row < r->nrows && k < 50; row++)
+        {
+            char v[64];
+            if (row_empty(r, row))
+            {
+                continue;
+            }
+            k++;
+            clean_id(cell_at(r, row, c), v, sizeof(v));
+            hits += vuid_valid(v);
+        }
+        if (hits > best_hits)
+        {
+            best_hits = hits;
+            best = c;
+        }
+    }
+    if (best < 0 || best_hits * 5 < n * 4)
+    {
+        return FALSE;
+    }
+    if (m->full == best)
+    {
+        m->full = m->vuid;
+    }
+    m->vuid = best;
+    return TRUE;
+}
+
+/* Fold the record just added (the last one) into an earlier record of the same sheet
+ * with the same Voter ID, date and method -- Montgomery lists a voter once per
+ * jurisdiction on the ballot -- joining the extra values that differ ("Montgomery County;
+ * Willis Independent School District"). @p ix (power-of-two slots, record index + 1)
+ * holds the sheet's records by Voter ID. TRUE when the record was folded and removed. */
+static BOOL fold_entity_row(Loader *L, uint32_t *ix, uint32_t nslots)
+{
+    RosterRec *nr = &L->rec[L->nrec - 1];
+    uint32_t j;
+    if (nr->vuid == 0)
+    {
+        return FALSE;
+    }
+    for (j = (nr->vuid * 2654435761u) & (nslots - 1);; j = (j + 1) & (nslots - 1))
+    {
+        RosterRec *e;
+        uint32_t k;
+        if (ix[j] == 0)
+        {
+            ix[j] = L->nrec; /* first record of this Voter ID in the sheet */
+            return FALSE;
+        }
+        e = &L->rec[ix[j] - 1];
+        if (e->vuid != nr->vuid)
+        {
+            continue;
+        }
+        if (e->date != nr->date || e->method != nr->method || e->source_name != nr->source_name)
+        {
+            return FALSE; /* a different vote (another day), or another file's row (a reloaded
+                           * export of several files): kept */
+        }
+        for (k = 0; k < nr->xcount; k++)
+        {
+            const RosterExtra *nx = &L->x[nr->xfirst + k];
+            uint32_t q;
+            for (q = 0; q < e->xcount; q++)
+            {
+                RosterExtra *ex = &L->x[e->xfirst + q];
+                if (ex->col == nx->col && ex->val != nx->val)
+                {
+                    const char *a = istr(&L->str, ex->val);
+                    const char *b = istr(&L->str, nx->val);
+                    char joined[512];
+                    if (strstr(a, b) == NULL)
+                    {
+                        StringCchPrintfA(joined, ARRAYSIZE(joined), "%s; %s", a, b);
+                        ex->val = S(L, joined);
+                    }
+                    break;
+                }
+            }
+        }
+        /* drop the folded record and its extras (the last ones added) */
+        L->nx -= nr->xcount;
+        L->nrec--;
+        L->merged_rows++;
+        return TRUE;
+    }
+}
+
+/* A row right after the header whose filled cells are all "(...)" is the header's
+ * translation (Brazoria: "(Numero de VUID)"), not data. */
+static BOOL row_is_translation(const SheetRows *r, uint32_t row)
+{
+    uint32_t c;
+    int filled = 0;
+    if (row >= r->nrows)
+    {
+        return FALSE;
+    }
+    for (c = 0; c < r->row_len[row]; c++)
+    {
+        char t[160];
+        clean_text(cell_at(r, row, (int)c), t, sizeof(t));
+        if (t[0] == '\0')
+        {
+            continue;
+        }
+        if (t[0] != '(' || t[strlen(t) - 1] != ')')
+        {
+            return FALSE;
+        }
+        filled++;
+    }
+    return filled > 0;
+}
+
 /* Analyze one worksheet's rows and emit its records. @p wb_map / @p wb_have carry the
  * workbook's previous header so a sibling sheet missing its header can borrow it. */
 static void process_sheet(Loader *L, int si, const char *sheet_name, const SheetRows *r,
@@ -1905,7 +2428,15 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
     const char *party = NULL;
     EeVotingMethod method;
     uint32_t date;
+    BOOL calendar_ok;
 
+    for (row = 0; row < r->nrows && row_empty(r, row); row++)
+    {
+    }
+    if (row >= r->nrows)
+    {
+        return; /* an empty sheet beside the roster: nothing to read, nothing to report */
+    }
     for (row = 0; row < r->nrows && row < ROSTER_HEADER_SCAN; row++)
     {
         if (row_is_header(r, row))
@@ -1972,7 +2503,16 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         L->info->recovered_sheets++;
         append_name(&L->recovered, s->name, sheet_name);
     }
+    while (data_from < r->nrows && row_is_translation(r, data_from))
+    {
+        data_from++;
+    }
+    if (repair_swapped_vuid(&m, r, data_from))
+    {
+        append_name(&L->swapped, s->name, sheet_name);
+    }
     use_activity_date(&m, r, data_from);
+    m.gap_comma = sheet_gap_comma(r, data_from, m.full);
 
     /* Title rows: roster date, method words, and the party of a primary sheet. */
     for (row = 0; row < h && row < r->nrows; row++)
@@ -2020,19 +2560,59 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         wb_append(&L->date_fixes, s->name);
         date = title_date;
     }
+    /* No method from the file name or title rows and none per row: a sheet with a mail
+     * list's columns is the mail list; an in-person roster's method follows from its date. */
+    calendar_ok = FALSE;
+    if (method == EE_VM_NONE && m.vtype < 0)
+    {
+        if (m.mail_hint && m.method < 0 && !s->in_person)
+        {
+            method = EE_VM_MAIL;
+        }
+        else
+        {
+            calendar_ok = TRUE; /* per row, when nothing else names the method (a "Voting
+                                 * Method 1" column of Brazoria's holds the party) */
+        }
+    }
     if (method != EE_VM_NONE)
     {
         L->info->method_source[method] = TRUE;
         L->info->method_read[method] = TRUE;
     }
 
-    for (row = data_from; row < r->nrows; row++)
     {
-        emit_row(L, si, r, row, &m, method, date, party);
-        if (L->oom)
+        uint32_t *ix = NULL;
+        uint32_t nslots = 0;
+        if (m.by_entity && m.vuid >= 0)
         {
-            return;
+            nslots = 1024;
+            while (nslots < 2u * (r->nrows - data_from + 1u))
+            {
+                nslots *= 2;
+            }
+            ix = (uint32_t *)calloc(nslots, sizeof(uint32_t));
+            if (ix == NULL)
+            {
+                L->oom = TRUE;
+                return;
+            }
         }
+        for (row = data_from; row < r->nrows; row++)
+        {
+            uint32_t before = L->nrec;
+            emit_row(L, si, r, row, &m, method, date, party, calendar_ok);
+            if (L->oom)
+            {
+                free(ix);
+                return;
+            }
+            if (ix != NULL && L->nrec > before)
+            {
+                (void)fold_entity_row(L, ix, nslots);
+            }
+        }
+        free(ix);
     }
     L->info->sheets_read++;
 }
@@ -2120,9 +2700,11 @@ static void parse_source_name(RosterSource *s)
     char *u;
     size_t i;
     WideCharToMultiByte(CP_UTF8, 0, s->name, -1, s->name8, (int)sizeof(s->name8), NULL, NULL);
-    s->date = has_timestamp(s->name8) ? 0 : find_date(s->name8);
+    s->date = has_timestamp(s->name8) ? 0 : find_date_numeric(s->name8);
     s->method = method_from_name(s->name8);
     s->party = party_from_name(s->name8);
+    s->in_person = contains_ci(s->name8, "in person") || contains_ci(s->name8, "in-person") ||
+                   contains_ci(s->name8, "inperson");
     StringCchCopyA(low, ARRAYSIZE(low), s->name8);
     for (i = 0; low[i] != '\0'; i++)
     {
@@ -3062,6 +3644,20 @@ static void build_note(Loader *L)
                       (unsigned long)in->skipped_sheets, L->skipped.p ? L->skipped.p : L"");
         }
     }
+    if (L->merged_rows > 0)
+    {
+        wchar_t nm[32];
+        fmt_count(L->merged_rows, nm, ARRAYSIZE(nm));
+        wb_printf(&b, L"\r\n\r\n%s row%s merged: the county lists a voter once for each jurisdiction on the "
+                     L"ballot (Election Name); each voter is one record per day, with the jurisdictions listed.",
+                  nm, L->merged_rows == 1 ? L"" : L"s");
+    }
+    if (L->swapped.len > 0)
+    {
+        wb_printf(&b, L"\r\n\r\nIn these files the Voter ID and name columns hold each other's values (the "
+                     L"titles were swapped); they were read by what they contain: %s",
+                  L->swapped.p);
+    }
     if (in->recovered_sheets)
     {
         wb_printf(&b, L"\r\n\r\n%lu worksheet(s) had no header row; the header of a sheet with the same "
@@ -3329,6 +3925,7 @@ static void loader_free(Loader *L)
     free(L->skipped.p);
     free(L->odd_ids.p);
     free(L->date_fixes.p);
+    free(L->swapped.p);
     intern_free(&L->str);
 }
 

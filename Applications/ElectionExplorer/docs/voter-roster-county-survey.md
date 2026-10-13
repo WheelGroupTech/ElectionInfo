@@ -303,6 +303,63 @@ first-day PDF -> 1,610 (= raw rows; MAIL-IN 401, in person 1,209, dates from CHE
 Travis / Tarrant / Harris / Dallas load byte-identical to the previous build (only the
 "cannot be read" note reworded). Smoke tests `pdfroster`, `hart`, `hartpdf`, `hartocr`.
 
+## Remaining counties support (done 2026-10-12)
+
+Hidalgo, Bexar (CSV), Brazoria, Montgomery, Lubbock and the G26-only counties (Galveston,
+El Paso, Denton, Cameron, Williamson, Webb). Layouts are in "Downloaded rosters" below.
+
+Loader changes (`voter_roster.c`), all generic (no county switch):
+
+- **Method sources**, in order: a vote-type column; a method word in the file name (also
+  `MAIL`, `IN PERSON` -- an "IN PERSON" file stays in person even under a mail list's
+  `Ballot Received Date` title, Brazoria); a `SITE` value starting `EV-` / `ED-` (Hidalgo);
+  a mail list's own columns (`RETURNDATE`, `Ballot Received Date`, `ReceivedDate`, `Status
+  Date`, ...) -> Mail; otherwise the **Texas election calendar** (`method_from_calendar`):
+  the date in the file name (numeric forms only -- a month-name date in a file name is the
+  election's, not a voting day) on the election day is Election Day, within 21 days before
+  it early voting (Bexar's `... - 10-21-2024 (CSV)` files). November = Tuesday after the
+  first Monday, March primary = first Tuesday, May = first Saturday, runoff = 4th Tuesday
+  of May. Brazoria P22's "Voting Method 1" holds the party, so only a vote-type column
+  blocks the calendar.
+- **Header roles:** `VoterName` / `Voter Full Name` / `Name of ... Voter`, `CERT` (Hidalgo
+  VUID), `RETURNDATE`, `CHECK-IN` / `Checkin Type`, `Status Date`, `Ballot Date`, `Received
+  Date`, `CountyElectionPrecinct` (preferred over Montgomery's `Voting_Precinct`, which is a
+  jurisdiction code on non-county rows); dates "11-FEB-20", "BBM Recvd Oct  9 2024
+  1:00PM", month-name cells.
+- **Montgomery** lists a voter once per jurisdiction on the ballot (`Election_Name`): rows
+  with the same VUID, date, method and source file are merged into one record with the
+  jurisdictions joined by "; " (note: "N rows merged"). Its "0" placeholder VUID on named
+  voters becomes a blank Voter ID; named short numeric IDs (Webb's 8 digits) are kept as
+  unusual.
+- **Brazoria 2026** bilingual roster: title rows, a parenthesized Spanish translation row
+  under the header (skipped), and the VUID and name columns swapped under their titles in
+  some files (repaired per file; the note names them).
+- **Galveston** names "LAST  FIRST MIDDLE" (one two-space gap): decided per sheet
+  (`sheet_gap_comma`: most gapped names have 2+ words after the gap), so Dallas P26's
+  "SANDRA  GLEDHILL" (an empty middle name) is still FIRST LAST.
+- Empty sheets are ignored (not "no recognizable layout").
+
+Validation (record counts = independent Python counts per file; round trips identical for
+Montgomery G21 / G24, Brazoria P26, Hidalgo G22, Bexar G24, Bexar G26 PDFs, Galveston,
+Lubbock P24 and El Paso + Denton + Cameron + Williamson together):
+
+| County | Records per election |
+|---|---|
+| Hidalgo | P20 82,258; G20 221,042; G21 22,099; P22 58,858; G22 143,742; G23 39,042; P24 58,042; G24 217,831; G25 37,707; P26 86,763; G26 1,791 (mail) |
+| Bexar | G23 108,567; P24 185,096; G24 785,582; G25 248,162; P26 329,488; G26 2,129 (PDF mail) |
+| Brazoria | P22 42,593; G22 110,148; G23 30,724; P24 45,419; G24 162,796; G25 37,308; P26 62,227 |
+| Montgomery | G21 20,943; P22 44,274; G22 141,108; G23 36,911; P24 50,640; G24 250,973 (679,232 rows merged); G25 34,578; P26 71,399; G26 3,033 |
+| Lubbock | P24 35,854; G25 24,339 |
+| G26 mail | Galveston 540; El Paso 2,658; Denton 1,279; Cameron 18; Webb 24 (PDF); Williamson 474 (method unknown) |
+
+Hidalgo G24 / G25 / P26 cumulative lists give no voting date (Date Voted blank). Travis,
+Tarrant, Harris and Dallas load byte-identical to the previous build. Smoke test
+`counties`.
+
+Known leftovers: Bexar P26's 02-19 mail CSV has no header row (1,880 voters, listed as not
+readable); Brazoria mail workbooks' headerless "rejected ballots" sheets are listed as not
+readable; Williamson's file names no method.
+
 ## Downloaded rosters (2026-10-12)
 
 Saved under `Voter_Rosters/TX_<County>_County/` as `<Code>_<county file name>`
@@ -335,8 +392,8 @@ site is gone and the Internet Archive was "Temporarily Offline" (retry later).
    then Harris, Dallas, and the daily-CSV counties).
 2. ~~Downloads~~ — done for every county that posts files (see "Downloaded rosters").
 3. ~~Tarrant mail status~~ — keep every row (decided).
-4. Cumulative files with no voting date: leave Date Voted blank, or use the election
-   date for Election Day files?
-5. PDF-only counties (Webb, Bexar): defer like Travis's Limited Ballot PDFs?
+4. ~~Cumulative files with no voting date~~ — Date Voted left blank (Voting Totals shows
+   "(no date)").
+5. ~~PDF-only counties (Webb, Bexar)~~ — supported (see "PDF rosters").
 6. The SOS portal: survey it now (it may cover every county for statewide elections) or
    later?

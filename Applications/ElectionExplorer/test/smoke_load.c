@@ -8482,6 +8482,162 @@ done:
     return rc;
 }
 
+/* More county rosters (tag: counties), all as loose CSV files:
+ * - Hidalgo: a check-in roster whose file name names no method -- "EV-..." / "ED-..." SITE
+ *   values do -- with CERT (the VUID) and CHECK-IN dates; a mail (ABBM) list with
+ *   RETURNDATE "11-FEB-20" and STATE_VOTER_ID; a VoterName list whose file name spells out
+ *   the election date (not a voting date);
+ * - Bexar: early voting files named only by election and date: the Texas election
+ *   calendar makes 10-21-2024 early voting and 11-05-2024 Election Day;
+ * - Brazoria: an "IN PERSON" file with a mail list's "Ballot Received Date" title (still in
+ *   person), and a 2026 bilingual roster (title rows, a "(...)" translation row, the VUID
+ *   and name columns swapped under their titles);
+ * - Montgomery: one row per jurisdiction on the ballot (merged, Election_Name joined),
+ *   "BBM Recvd Oct  9 2024  1:00PM" dates, CountyElectionPrecinct over Voting_Precinct;
+ * - Galveston's "WARD  SHARON MARIE" (LAST, two spaces, FIRST MIDDLE) vs a Dallas sheet's
+ *   "SANDRA  GLEDHILL" (an empty middle name). */
+static int test_county_rosters(void)
+{
+    static const struct
+    {
+        const wchar_t *name;
+        const char *text;
+    } k_files[] = {
+        {L"G22_11042022_202211050805420981.csv",
+         "ID,CERT,LASTNAME,FIRSTNAME,MIDDLENAME,SUFFIX,ADDRESS,CHECK-IN,PRECINCT,SITE,BALLOT STYLE\r\n"
+         "281584,1053976901,AABERG,ALICE,FAY,,\"1423 CHARLENE ST, EDINBURG 78539\",10/27/2022 18:01,151.01,"
+         "EV-Elections Annex Bldg.,BS 15\r\n"
+         "371248,1054383330,ABAD,FIDEL,,JR,\"1112 HOUSTON WAY, SAN JUAN 78589\",11/8/2022 17:43,214.01,"
+         "ED-San Juan Memorial Library,BS 5\r\n"},
+        {L"P20_ABBM REPORT MARCH 3, 2020 (FEBRUARY 18, 2020) DEMOCRAT.csv",
+         "LASTNAME,FIRSTNAME,MIDDLENAME,NAMESUFFIX,DELIVERY_ADDR1,DELIVERY_CITY,DELIVERY_STATE,DELIVERY_ZIP,"
+         "IDNUMBER,PRECINCT,PRECSUB,BALLOTSTYLE,RETURNDATE,STATE_VOTER_ID\r\n"
+         "ALANIZ,THEODORA,V,,11843 FM 1425,MERCEDES,TX,78570,10088363,1,1,DEM BS 1,11-FEB-20,1185895904\r\n"},
+        {L"G25_ED Roster November 4, 2025 (Cumulative).csv",
+         "VoterName,VoterAddress,VUID\r\n"
+         "\"ABAD, MARILU L\",\"1402 FRANCES ST, PALMV, TX   78572\",1054878640\r\n"},
+        {L"G24_November 5 2024 General Special and Charter Election - 10-21-2024 (CSV).csv",
+         "VUID,Precinct,Name\r\n1071497081,3146,\"TORRES, LINDA MARIE\"\r\n"},
+        {L"G24_November 5 2024 General Special and Charter Election - 11-05-2024 (CSV).csv",
+         "VUID,Precinct,Name\r\n1071497075,3071,\"STOCKTON, THADDEUS CLARK\"\r\n"},
+        {L"G23_2023-11-02-IN PERSON.csv",
+         "Precinct,Ballot Style,VUID,Voter Name,Residence Address,Ballot Received Date\r\n"
+         "1,,1015924817,\"ALLEN, DONNA SUE\",905 ROBINHOOD LANE ANGLETON TX 77515,2023-11-02\r\n"},
+        {L"P26_2026-02-19-IN PERSON-DEM.csv",
+         "Roster for Early Voting In Person,,,,\r\n"
+         "For the Democrat - Joint Primary Election to be held on Tuesday March 3 2026,,,,\r\n"
+         "Precinct Number*,VUID Number,Name of Early Voter,Residence Address,Date\r\n"
+         "(Numero de Precinto),(Numero de VUID),(Nombre del Votante),(Direccion de Residencia),(Fecha)\r\n"
+         "S 1.1,ADDIE BROWN AYRES,1016170716,501 CATALPA ST ANGLETON TX 77515,2/19/2026\r\n"
+         "S 1.1,CAROL FORD WOODARD,1017132920,508 W MIMOSA ST ANGLETON TX 77515,2/19/2026\r\n"
+         "S 1.1,CATHERINE WOODARD KEYS,1016062797,505 HOLLY ST ANGLETON TX 77515,2/19/2026\r\n"
+         "S 1.1,DEBORAH OAKLEY VESPER,1016964660,235 E PHILLIPS RD ANGLETON TX 77515,2/19/2026\r\n"
+         "S 1.1,DOLORES SALAZAR PEREZ,1017047261,404 S HANCOCK ST ANGLETON TX 77515,2/19/2026\r\n"},
+        {L"GEN110524_10.09.2024.csv",
+         "\"LastName\",\"FirstName\",\"MiddleName\",\"VUID\",\"Voting_Precinct\",\"Voted_Party\",\"DateVoted\","
+         "\"VoteType\",\"Election_Name\",\"CountyElectionPrecinct\"\r\n"
+         "\"DOBSON\",\"JOSEPH\",\"MATTHEW\",\"2223465307\",\"DH\",\" \",\"BBM Recvd Oct  9 2024  1:00PM\",\"A\","
+         "\"The Woodlands Township\",\"17\"\r\n"
+         "\"DOBSON\",\"JOSEPH\",\"MATTHEW\",\"2223465307\",\"17\",\" \",\"BBM Recvd Oct  9 2024  1:00PM\",\"A\","
+         "\"Montgomery County\",\"17\"\r\n"},
+        {L"NOV-3RD-2026-BALLOTS-RECEIVED-10.9.26.csv",
+         "Selected - Election,Precinct Name,VUID,Name,Ballot Received Date,Status\r\n"
+         "2026 NOVEMBER GENERAL ELECTION,Precinct 357,1033321102,WARD  SHARON MARIE,10/9/2026 5:00,Ballot Received\r\n"},
+        {L"P26_030326-ED-In-Person-Roster.csv",
+         "Name,State ID,Address,Polling Place,Date,Precinct,Split,Party\r\n"
+         "SANDRA  GLEDHILL,1000118421,1 MAIN ST GARLAND TX 75043,V2713R,46084.6006944444,1716,01,REP\r\n"
+         "LINDA DALE TOMLINSON,1000118423,1613 BLACKHAWK LN GARLAND TX 75043,V2713R,46084.6006944444,1716,01,REP\r\n"},
+    };
+    wchar_t dir[MAX_PATH];
+    wchar_t paths_buf[ARRAYSIZE(k_files)][MAX_PATH];
+    const wchar_t *paths[ARRAYSIZE(k_files)];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    int i;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < (int)ARRAYSIZE(k_files); i++)
+    {
+        StringCchCopyW(paths_buf[i], MAX_PATH, dir);
+        StringCchCatW(paths_buf[i], MAX_PATH, k_files[i].name);
+        paths[i] = paths_buf[i];
+        if (!cvr_write_bytes(paths_buf[i], k_files[i].text, strlen(k_files[i].text)))
+        {
+            wprintf(L"counties: could not write %s\n", k_files[i].name);
+            goto cleanup;
+        }
+    }
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (EeRoster_LoadFiles(paths, (int)ARRAYSIZE(k_files), &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) !=
+        EeLoadStatus_Ok)
+    {
+        wprintf(L"counties: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 16 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+        info.vuids_duplicated != 0)
+    {
+        wprintf(L"counties: rows %u unknown %u nonvoter %u dup %u\n", t.row_count, info.method_rows[EE_VM_NONE],
+                info.rows_non_voter, info.vuids_duplicated);
+        goto done;
+    }
+    if (!rt_expect(&t, L"AABERG", L"ALICE", L"VUID", L"1053976901") ||
+        !rt_expect(&t, L"AABERG", L"ALICE", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"AABERG", L"ALICE", L"Date Voted", L"10/27/2022") ||
+        !rt_expect(&t, L"ABAD", L"FIDEL", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"ABAD", L"FIDEL", L"Name Suffix", L"JR") ||
+        !rt_expect(&t, L"ALANIZ", L"THEODORA", L"VUID", L"1185895904") ||
+        !rt_expect(&t, L"ALANIZ", L"THEODORA", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"ALANIZ", L"THEODORA", L"Date Voted", L"02/11/2020") ||
+        !rt_expect(&t, L"ALANIZ", L"THEODORA", L"Party", L"DEM") ||
+        !rt_expect(&t, L"ABAD", L"MARILU", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"ABAD", L"MARILU", L"Date Voted", L"") ||
+        !rt_expect(&t, L"TORRES", L"LINDA", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"TORRES", L"LINDA", L"Date Voted", L"10/21/2024") ||
+        !rt_expect(&t, L"STOCKTON", L"THADDEUS", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"ALLEN", L"DONNA", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"ALLEN", L"DONNA", L"Date Voted", L"11/02/2023") ||
+        !rt_expect(&t, L"AYRES", L"ADDIE", L"VUID", L"1016170716") ||
+        !rt_expect(&t, L"AYRES", L"ADDIE", L"Middle Name", L"BROWN") ||
+        !rt_expect(&t, L"AYRES", L"ADDIE", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"AYRES", L"ADDIE", L"Party", L"DEM") ||
+        !rt_expect(&t, L"DOBSON", L"JOSEPH", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"DOBSON", L"JOSEPH", L"Date Voted", L"10/09/2024") ||
+        !rt_expect(&t, L"DOBSON", L"JOSEPH", L"Precinct", L"17") ||
+        !rt_expect(&t, L"DOBSON", L"JOSEPH", L"Election_Name", L"The Woodlands Township; Montgomery County") ||
+        !rt_expect(&t, L"WARD", L"SHARON", L"Middle Name", L"MARIE") ||
+        !rt_expect(&t, L"WARD", L"SHARON", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"GLEDHILL", L"SANDRA", L"VUID", L"1000118421") ||
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Middle Name", L"DALE"))
+    {
+        goto done;
+    }
+    if (info.note == NULL || wcsstr(info.note, L"1 row merged") == NULL ||
+        wcsstr(info.note, L"P26_2026-02-19-IN PERSON-DEM.csv") == NULL)
+    {
+        wprintf(L"counties: note: %s\n", info.note ? info.note : L"(none)");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"counties ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+cleanup:
+    for (i = 0; i < (int)ARRAYSIZE(k_files); i++)
+    {
+        DeleteFileW(paths_buf[i]);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"counties test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -8502,6 +8658,7 @@ int wmain(void)
     failed |= test_harris_roster();
     failed |= test_dallas_roster();
     failed |= test_pdf_roster();
+    failed |= test_county_rosters();
     failed |= test_roster_totals();
     failed |= test_roster_compare();
     failed |= test_dup_voters_voting();

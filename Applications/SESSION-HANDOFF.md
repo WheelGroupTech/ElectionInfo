@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-10
+**Last updated:** 2026-10-12
 
 ### In progress — Voter Roster feature for 1.4 (steps 1–5 DONE, UNCOMMITTED)
 
@@ -93,11 +93,17 @@
   run; `read_pdf_table` reads loose PDFs printed from spreadsheets (Bexar G26 2,129 = pdftotext
   -raw row for row; Webb; Lubbock P24 PDF). Scanned PDFs stay "not readable". All earlier
   counties byte-identical; smoke test `pdfroster`. Needs the user's click-test (Bexar G26 PDFs).
-- **Next:** resume the other counties -- survey started: Hidalgo needs CERT/CHECK-IN (now
-  mapped), SITE "EV-/ED-" method, RETURNDATE, VoterName; Bexar CSV early-voting files have no
-  method word (election date in the name); Brazoria "IN PERSON" files (EV vs ED) and its
-  2026 bilingual header; then Montgomery, Lubbock, the G26-only counties, final validation,
-  and the 1.4.0.0 bundle.
+- **Remaining counties done (2026-10-12):** Hidalgo, Bexar CSV, Brazoria, Montgomery, Lubbock,
+  Galveston, El Paso, Denton, Cameron, Williamson, Webb -- see the survey doc's "Remaining
+  counties support" section (method from SITE / mail columns / the Texas election calendar,
+  Montgomery per-jurisdiction rows merged, Brazoria 2026 swapped columns + translation row,
+  Galveston "LAST  FIRST" names per sheet). Counts = Python for every county; Travis /
+  Tarrant / Harris / Dallas byte-identical; smoke test `counties`. Help, RELEASES.md (1,394
+  chars) and STORE-LISTING ("15 Texas counties") updated. Needs the user's click-test
+  (Montgomery G24 ZIPs, Brazoria P26, Hidalgo G22, Bexar G24 CSVs).
+- **Next:** final validation and the 1.4.0.0 Store bundle when the user is ready. Known
+  leftovers: Bexar P26 02-19 headerless mail CSV, Brazoria rejected-ballot sheets
+  (not readable, listed), Williamson's method unknown.
 
 ### Committed — release notes file
 

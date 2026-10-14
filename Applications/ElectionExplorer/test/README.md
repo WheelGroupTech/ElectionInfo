@@ -158,6 +158,12 @@ shifted row, a two-space file name) and a TSV round trip;
 two-page Bexar-style mail list (cells centered under their headers via the font's
 /Widths, a title line, no header on page 2, a "Page 2 of 2" footer, a suffix column, a
 blank middle name) and a PDF with no roster table (listed as not readable);
+`limitedpdf` covers Limited Ballot poll lists (SOS form 5-38) printed to PDF (needs
+`src\pdf_reader.c`): names as separate merge-field runs (a two-word first name, a two-word
+surname, an empty middle name with "BABIN Jr", a surname drawn in two pieces) or one run
+("THOMPSON, JR"), a symbol-glyph row number, an assisting person, an unused numbered line,
+a second page, the election date drawn in pieces, and a form inside a ZIP whose file-name
+year is wrong (Date Voted blank, noted), plus a TSV round trip;
 `counties` covers the other county rosters as loose CSVs: Hidalgo (CERT / CHECK-IN with
 "EV-" / "ED-" SITE values as the method, an ABBM list with RETURNDATE "11-FEB-20" and
 STATE_VOTER_ID, a VoterName list whose file name spells out the election date), Bexar

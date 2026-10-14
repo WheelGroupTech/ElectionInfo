@@ -821,6 +821,7 @@ typedef struct PdfFont
 struct EePdf
 {
     HANDLE file;
+    const unsigned char *mem; /* EePdf_OpenMem: the caller's bytes (no file) */
     uint64_t size;
 
     /* read window */
@@ -879,6 +880,16 @@ static void set_err(wchar_t *err, size_t cch, const wchar_t *msg)
 static size_t file_read(EePdf *pdf, uint64_t off, void *dst, size_t len)
 {
     size_t total = 0;
+    if (pdf->mem != NULL)
+    {
+        if (off >= pdf->size)
+        {
+            return 0;
+        }
+        total = (pdf->size - off < len) ? (size_t)(pdf->size - off) : len;
+        memcpy(dst, pdf->mem + off, total);
+        return total;
+    }
     while (total < len)
     {
         OVERLAPPED ov;
@@ -3351,14 +3362,12 @@ void EePdf_Close(EePdf *pdf)
     free(pdf);
 }
 
+static BOOL pdf_open_index(EePdf *pdf, EePdf **out, wchar_t *err, size_t errcch);
+
 BOOL EePdf_Open(const wchar_t *path, EePdf **out, wchar_t *err, size_t errcch)
 {
     EePdf *pdf;
     LARGE_INTEGER sz;
-    size_t avail = 0;
-    const unsigned char *hdr;
-    size_t i;
-    BOOL has_magic = FALSE;
 
     if (out == NULL || path == NULL)
     {
@@ -3392,6 +3401,39 @@ BOOL EePdf_Open(const wchar_t *path, EePdf **out, wchar_t *err, size_t errcch)
         return FALSE;
     }
     pdf->size = (uint64_t)sz.QuadPart;
+    return pdf_open_index(pdf, out, err, errcch);
+}
+
+BOOL EePdf_OpenMem(const void *data, size_t size, EePdf **out, wchar_t *err, size_t errcch)
+{
+    EePdf *pdf;
+    if (out == NULL || data == NULL || size == 0)
+    {
+        set_err(err, errcch, L"Invalid arguments.");
+        return FALSE;
+    }
+    *out = NULL;
+    pdf = (EePdf *)calloc(1, sizeof(EePdf));
+    if (pdf == NULL)
+    {
+        set_err(err, errcch, L"Out of memory.");
+        return FALSE;
+    }
+    pdf->file = INVALID_HANDLE_VALUE;
+    pdf->mem = (const unsigned char *)data;
+    pdf->size = (uint64_t)size;
+    return pdf_open_index(pdf, out, err, errcch);
+}
+
+/* Check the header, index the cross-reference data and page tree; on success store
+ * @p pdf in @p out, else close it. */
+static BOOL pdf_open_index(EePdf *pdf, EePdf **out, wchar_t *err, size_t errcch)
+{
+    size_t avail = 0;
+    const unsigned char *hdr;
+    size_t i;
+    BOOL has_magic = FALSE;
+
     pdf->win = (unsigned char *)malloc(PDF_WIN_SIZE);
     pdf->win_off = UINT64_MAX;
     if (pdf->win == NULL)

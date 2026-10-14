@@ -286,8 +286,9 @@ the wrong lines); the PDF's own text runs do not.
   by baseline, the line with a Voter ID title is the header, each run goes to the header
   cell its span overlaps most (else the nearest center), pages without a header reuse the
   columns, a later page's repeated titles above its header and "Page N of M" lines are
-  skipped. PDFs with no such header in their first pages (scanned Limited Ballot lists,
-  Dallas P20's turnout tables) and PDFs inside ZIPs are listed as not readable.
+  skipped. PDFs with no such header in their first pages (Dallas P20's turnout tables,
+  scanned PDFs) are listed as not readable. (PDFs inside ZIPs and Limited Ballot poll
+  lists are read since 2026-10-14: see "Limited Ballot PDFs".)
 - Also: `Ballot Received Date` / `ReceivedDate` / `Date Received`, `CHECK-IN` / `Check-in
   Date` are Date Voted; `CERT` / `CERT #` is a (generic-rank) Voter ID; a "Voting Method"
   value that is not one of ours is read as words (Lubbock "MAIL-IN").
@@ -359,6 +360,49 @@ Tarrant, Harris and Dallas load byte-identical to the previous build. Smoke test
 Known leftovers: Bexar P26's 02-19 mail CSV has no header row (1,880 voters, listed as not
 readable); Brazoria mail workbooks' headerless "rejected ballots" sheets are listed as not
 readable; Williamson's file names no method.
+
+## Limited Ballot PDFs (done 2026-10-14)
+
+Travis posts a Limited Ballot poll list for each day of early voting inside its ZIPs: G25
+(12, `<date> Limited Ballot.pdf` / `<date> Poll List for Limited Ballot Voters.pdf`) and
+P26 (11); PR26 has the same form as workbooks. It is the Secretary of State's form 5-38
+("Poll List for Voters Voting Limited Ballot by Personal Appearance"): a title block with
+the date of the election, numbered lines 1-50 with the Name of Voter (FIRST MIDDLE LAST
+[SUFFIX]) and the Name / Address of a person assisting the voter. No VUID or precinct (a
+limited ballot voter is not registered in the county); limited ballots are cast only during
+early voting. The PDFs are text, not scanned (Microsoft Print To PDF, Word, Acrobat
+PDFMaker); `pdftotext -layout` draws each name a line above its number, but the baselines
+match.
+
+- `voter_roster.c`: a PDF whose first page says "poll list" and "limited ballot" is read by
+  `limited_form_row`: each line whose first mark lies left of the "Name of Voter" title is
+  a row (digits, or a glyph with no text mapping -- Word's automatic numbering in P26's
+  02.26.2026 file); runs left of the midpoint between that title and the assisting
+  person's titles are the voter's name, the rest the assisting name / address (split at
+  "Name  Address"'s center when one run holds both titles). The rows go out under the
+  workbook form's titles (`No.`, `Name of Voter`, `Name`, `Address`), so `map_header`'s
+  form handling applies to both. Titles are found across runs (`pdf_phrase`: Acrobat draws
+  each word separately; one file draws "3/3/2026" in four pieces).
+- Names: when Print To PDF draws the merge fields as separate runs ("AUDREY KATE" | "KATE"
+  | "MCCAFFITY", an empty field as a double gap), they become "LAST, FIRST MIDDLE SUFFIX",
+  so two-word surnames stay whole (PEREYRA REYES, THOMPSON ARISPE); a suffix typed into the
+  last-name field ("BABIN Jr", "Jones, Jr.") or as its own field is the suffix. Names drawn
+  as one run use the usual FIRST MIDDLE LAST split.
+- Method Limited for the form whatever the file is called (also workbooks: a "Name of
+  Voter" header with no Voter ID column); date from the file name unless it is not within
+  21 days before the form's election date -- `02.26.2027 Limited Ballot.pdf` (P26; its
+  names are not in the 02.26.2026 file, probably 02/27, the last day of early voting) gets
+  a blank Date Voted and a note.
+- ZIP-packed PDFs are now read (from memory: `EePdf_OpenMem`), as tables or forms; others
+  are still listed as not readable. Load note: "N Limited Ballot poll lists ... read".
+
+Validation: an independent Python reader (poppler `pdftotext -bbox`, words matched to row
+numbers by baseline) gives G25 123 and P26 443 names; the loader gives the same rows in the
+same order with identical names (only the comma of "Jones, Jr." / "THOMPSON, JR" dropped).
+No form has an assisting person. Travis G25 227,758 -> 227,881 records (Limited 123), P26
+273,740 -> 274,183 (Limited 443, 167 with no date); every other Travis, Tarrant, Harris,
+Dallas and other-county load is byte-identical to the previous build (PR26 adds only the
+note line). Smoke test `limitedpdf`.
 
 ## Downloaded rosters (2026-10-12)
 

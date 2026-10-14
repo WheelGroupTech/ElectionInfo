@@ -1021,6 +1021,8 @@ typedef struct HeaderMap
     BOOL mail_hint; /* a mail list's columns (received / return date, ballot status) */
     BOOL by_entity; /* Montgomery "Election_Name": one row per jurisdiction on the ballot */
     BOOL gap_comma; /* names written "LAST  FIRST MIDDLE" (see sheet_gap_comma) */
+    BOOL limited_form; /* the Limited Ballot poll list: "Name of Voter", then the assisting
+                        * person's "Name" / "Address" */
     int ncols;
     BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
                      * as "Column N", never taken as notes */
@@ -1075,6 +1077,8 @@ typedef struct Loader
     WBuf date_fixes;
     WBuf swapped; /* sheets whose Voter ID / name columns were read by their contents */
     uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
+    uint32_t limited_forms; /* Limited Ballot poll lists (SOS form 5-38) read from PDFs */
+    WBuf limited_dates;     /* those whose file-name date is not during early voting */
     /* progress */
     volatile LONG *cancel;
     EeLoadProgressFn progress_fn;
@@ -1457,6 +1461,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     }
     m->rich = (titled >= 15);
     m->split_pct = sos_vuid && !has_subcode;
+    m->limited_form = limited_form;
     m->ncols = (int)r->row_len[row];
     for (c = 0; c < r->row_len[row]; c++)
     {
@@ -2545,6 +2550,11 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
     }
 
     method = (s->method != EE_VM_NONE) ? s->method : title_method;
+    if (m.limited_form && m.vuid < 0)
+    {
+        method = EE_VM_LIMITED; /* the SOS Limited Ballot poll list (form 5-38) */
+        L->limited_forms++;
+    }
     date = s->date;
     if (date == 0)
     {
@@ -2868,9 +2878,9 @@ static void mark_superseded(Loader *L)
         {
             a->skip = SKIP_REFERENCE;
         }
-        else if ((a->kind == SRC_PDF && a->zip >= 0) || a->kind == SRC_OTHER)
+        else if (a->kind == SRC_OTHER)
         {
-            /* (a loose PDF is tried as a table when read: see read_pdf_table) */
+            /* (a PDF is tried as a table when read: see read_pdf_table) */
             a->skip = SKIP_UNSUPPORTED;
             if (a->method != EE_VM_NONE)
             {
@@ -3028,6 +3038,315 @@ static BOOL pdf_line_is_header(const EePdfPageText *pt, const uint32_t *ord, con
     return FALSE;
 }
 
+/* The Texas Secretary of State's "Poll List for Voters Voting Limited Ballot by Personal
+ * Appearance" (form 5-38; Travis County posts one a day of early voting, "<date> Limited
+ * Ballot.pdf"): a title block with the date of the election, then numbered lines with the
+ * Name of Voter and the Name and Address of a person assisting the voter. It has no Voter
+ * ID or precinct: a limited ballot voter is not registered in the county. Its numbered
+ * lines become rows under the titles of the same form saved as a workbook ("No.", "Name of
+ * Voter", "Name", "Address"; see map_header). A name written as separate fields (first,
+ * middle, last, with an empty field left as a gap) is passed on as "LAST, FIRST MIDDLE
+ * SUFFIX", so a two-word surname stays whole. */
+
+typedef struct LimitedForm
+{
+    BOOL have;     /* columns found */
+    float title_y; /* baseline of the "Name of Voter" title: rows lie below it */
+    float name_x0; /* left of the "Name of Voter" title: the line numbers lie left of it */
+    float split_x; /* voter's name | assisting person's name */
+    float addr_x;  /* assisting person's name | address */
+} LimitedForm;
+
+#define LIMITED_NAME_FIELDS 8
+
+/* Run @p i's text joined with the runs that follow it on its baseline, in drawing order
+ * (Acrobat draws each word, and each space, as a run of its own); @p x1 receives the
+ * right edge of the last run joined. */
+static void pdf_phrase(const EePdfPageText *pt, uint32_t i, char *out, size_t cap, float *x1)
+{
+    const EePdfTextRun *r0 = &pt->runs[i];
+    char tmp[PDF_TABLE_CELL] = "";
+    uint32_t j;
+    *x1 = r0->x + pdf_run_width(r0);
+    for (j = i; j < pt->nruns && j < i + 12; j++)
+    {
+        const EePdfTextRun *r = &pt->runs[j];
+        size_t len = strlen(tmp);
+        size_t n = r->text_len;
+        if (j > i && (r->y - r0->y > 1.0f || r0->y - r->y > 1.0f || r->x < *x1 - 1.0f ||
+                      r->x - *x1 > r0->font_size))
+        {
+            break;
+        }
+        if (len + n + 1 >= sizeof(tmp))
+        {
+            break;
+        }
+        memcpy(tmp + len, pt->text + r->text_off, n);
+        tmp[len + n] = '\0';
+        *x1 = r->x + pdf_run_width(r);
+    }
+    clean_text(tmp, out, cap);
+}
+
+static BOOL pdf_page_is_limited_form(const EePdfPageText *pt)
+{
+    BOOL poll = FALSE;
+    BOOL limited = FALSE;
+    uint32_t i;
+    for (i = 0; i < pt->nruns && !(poll && limited); i++)
+    {
+        char t[PDF_TABLE_CELL];
+        float x1;
+        pdf_phrase(pt, i, t, sizeof(t), &x1);
+        poll |= contains_ci(t, "poll list");
+        limited |= contains_ci(t, "limited ballot");
+    }
+    return poll && limited;
+}
+
+/* The form's columns on this page, from its titles. */
+static BOOL limited_form_columns(const EePdfPageText *pt, LimitedForm *lf)
+{
+    const EePdfTextRun *nv = NULL;
+    float nv_x1 = 0.0f;
+    float aname_x0 = -1.0f;
+    float aname_x1 = -1.0f;
+    float addr_x0 = -1.0f;
+    float both_mid = -1.0f;
+    uint32_t i;
+    for (i = 0; i < pt->nruns && nv == NULL; i++)
+    {
+        char t[PDF_TABLE_CELL];
+        pdf_phrase(pt, i, t, sizeof(t), &nv_x1);
+        if (_strnicmp(t, "name of voter", 13) == 0)
+        {
+            nv = &pt->runs[i];
+        }
+    }
+    if (nv == NULL)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < pt->nruns; i++)
+    {
+        const EePdfTextRun *r = &pt->runs[i];
+        char t[PDF_TABLE_CELL];
+        if (r->x <= nv_x1 || r->y - nv->y > 8.0f || nv->y - r->y > 8.0f)
+        {
+            continue;
+        }
+        pdf_run_text(pt, r, t, sizeof(t));
+        if (_strnicmp(t, "name", 4) == 0 && contains_ci(t, "address"))
+        {
+            aname_x0 = r->x; /* "Name  Address" in one run (Print To PDF) */
+            both_mid = r->x + pdf_run_width(r) / 2.0f;
+        }
+        else if (_strnicmp(t, "name", 4) == 0 && aname_x0 < 0.0f)
+        {
+            aname_x0 = r->x;
+            aname_x1 = r->x + pdf_run_width(r);
+        }
+        else if (_strnicmp(t, "address", 7) == 0)
+        {
+            addr_x0 = r->x;
+        }
+    }
+    lf->have = TRUE;
+    lf->title_y = nv->y;
+    lf->name_x0 = nv->x;
+    lf->split_x = lf->addr_x = 1e30f;
+    if (aname_x0 >= 0.0f)
+    {
+        lf->split_x = (nv_x1 + aname_x0) / 2.0f;
+        if (both_mid >= 0.0f)
+        {
+            lf->addr_x = both_mid;
+        }
+        else if (addr_x0 >= 0.0f)
+        {
+            lf->addr_x = (aname_x1 >= 0.0f) ? (aname_x1 + addr_x0) / 2.0f : addr_x0;
+        }
+    }
+    return TRUE;
+}
+
+/* The date of the election: the title block's only full date (yyyymmdd), 0 if none. */
+static uint32_t limited_form_election_date(const EePdfPageText *pt, const LimitedForm *lf)
+{
+    uint32_t i;
+    for (i = 0; i < pt->nruns; i++)
+    {
+        char t[PDF_TABLE_CELL];
+        float x1;
+        uint32_t d;
+        if (pt->runs[i].y <= lf->title_y)
+        {
+            continue;
+        }
+        pdf_phrase(pt, i, t, sizeof(t), &x1); /* "3/3/2026" may be drawn in pieces */
+        if ((d = find_date_numeric(t)) != 0)
+        {
+            return d;
+        }
+    }
+    return 0;
+}
+
+/* "Jones, Jr." -> "Jones Jr.": a comma before a suffix is not "LAST, FIRST". */
+static void drop_suffix_comma(char *s)
+{
+    char *c = strrchr(s, ',');
+    const char *t;
+    char word[16];
+    if (c == NULL)
+    {
+        return;
+    }
+    for (t = c + 1; *t == ' '; t++)
+    {
+    }
+    clean_text(t, word, sizeof(word));
+    if (word[0] != '\0' && strchr(word, ' ') == NULL && is_name_suffix(word))
+    {
+        memmove(c, c + 1, strlen(c + 1) + 1);
+        if (c[0] != ' ')
+        {
+            memmove(c + 1, c, strlen(c) + 1);
+            c[0] = ' ';
+        }
+    }
+}
+
+static void cat_word(char *dst, const char *w)
+{
+    if (dst[0] != '\0')
+    {
+        StringCchCatA(dst, PDF_TABLE_CELL, " ");
+    }
+    StringCchCatA(dst, PDF_TABLE_CELL, w);
+}
+
+/* One line of the form: a row when it starts with a line number left of the Name of
+ * Voter column. @p cells receives "No.", the voter's name, the assisting person's name
+ * and address. */
+static BOOL limited_form_row(const EePdfPageText *pt, const uint32_t *ord, const PdfLine *ln, const LimitedForm *lf,
+                             char cells[][PDF_TABLE_CELL])
+{
+    uint32_t idx[256];
+    uint32_t n = ln->count < ARRAYSIZE(idx) ? ln->count : (uint32_t)ARRAYSIZE(idx);
+    uint32_t k;
+    char seg[LIMITED_NAME_FIELDS][PDF_TABLE_CELL];
+    char sfx[32] = "";
+    int nseg = 0;
+    BOOL open = FALSE;
+    float prev_x1 = 0.0f;
+    const EePdfTextRun *r0;
+
+    /* The line's runs left to right (a line number may sit a little above the name). */
+    for (k = 0; k < n; k++)
+    {
+        uint32_t v = ord[ln->first + k];
+        uint32_t j = k;
+        while (j > 0 && pt->runs[idx[j - 1]].x > pt->runs[v].x)
+        {
+            idx[j] = idx[j - 1];
+            j--;
+        }
+        idx[j] = v;
+    }
+    for (k = 0; k < n; k++)
+    {
+        pdf_run_text(pt, &pt->runs[idx[k]], cells[0], PDF_TABLE_CELL);
+        if (cells[0][0] != '\0')
+        {
+            break;
+        }
+    }
+    if (k >= n)
+    {
+        return FALSE;
+    }
+    r0 = &pt->runs[idx[k]];
+    /* The line number: digits, or a glyph with no text mapping (Word's automatic
+     * numbering, drawn in a symbol font); not the titles, the translations ("(Núm)") or
+     * "Completed Set No. ___ of ___ Pages". */
+    if (r0->y >= lf->title_y || r0->x >= lf->name_x0 || strlen(cells[0]) > 6 ||
+        strpbrk(cells[0], "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz(_") != NULL)
+    {
+        return FALSE;
+    }
+    cells[1][0] = cells[2][0] = cells[3][0] = '\0';
+    for (k = k + 1; k < n; k++)
+    {
+        const EePdfTextRun *r = &pt->runs[idx[k]];
+        char t[PDF_TABLE_CELL];
+        pdf_run_text(pt, r, t, sizeof(t));
+        if (r->x >= lf->split_x)
+        {
+            if (t[0] != '\0')
+            {
+                cat_word(cells[r->x >= lf->addr_x ? 3 : 2], t);
+            }
+            continue;
+        }
+        if (t[0] == '\0')
+        {
+            open = FALSE; /* a space between fields */
+            continue;
+        }
+        if (!open && nseg < LIMITED_NAME_FIELDS)
+        {
+            seg[nseg++][0] = '\0';
+        }
+        else if (r->x - prev_x1 < 0.15f * r->font_size)
+        {
+            /* one word drawn in pieces */
+            StringCchCatA(seg[nseg - 1], PDF_TABLE_CELL, t);
+            prev_x1 = r->x + pdf_run_width(r);
+            continue;
+        }
+        cat_word(seg[nseg - 1], t);
+        open = TRUE;
+        prev_x1 = r->x + pdf_run_width(r);
+    }
+    for (k = 0; k < (uint32_t)nseg; k++)
+    {
+        drop_suffix_comma(seg[k]);
+    }
+    if (nseg == 1)
+    {
+        StringCchCopyA(cells[1], PDF_TABLE_CELL, seg[0]);
+    }
+    else if (nseg >= 2)
+    {
+        int last = nseg - 1;
+        int i;
+        char *sp;
+        if (nseg >= 3 && is_name_suffix(seg[last]))
+        {
+            StringCchCopyA(sfx, ARRAYSIZE(sfx), seg[last]);
+            last--;
+        }
+        else if ((sp = strrchr(seg[last], ' ')) != NULL && is_name_suffix(sp + 1))
+        {
+            StringCchCopyA(sfx, ARRAYSIZE(sfx), sp + 1); /* "BABIN Jr" in the last-name field */
+            *sp = '\0';
+        }
+        StringCchCopyA(cells[1], PDF_TABLE_CELL, seg[last]);
+        StringCchCatA(cells[1], PDF_TABLE_CELL, ",");
+        for (i = 0; i < last; i++)
+        {
+            cat_word(cells[1], seg[i]);
+        }
+        if (sfx[0] != '\0')
+        {
+            cat_word(cells[1], sfx);
+        }
+    }
+    return TRUE;
+}
+
 /* Read source @p si as a PDF table into @p sc's rows. Returns 1 when a table was read,
  * 0 when the PDF is not a table (or cannot be opened), -1 on out of memory / cancel. */
 static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
@@ -3047,8 +3366,23 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
     int result = 0;
     char cells[PDF_TABLE_MAX_COLS][PDF_TABLE_CELL];
     const char *cellp[PDF_TABLE_MAX_COLS];
+    void *mem = NULL;
+    BOOL form = FALSE;
+    LimitedForm lf;
+    uint32_t election = 0;
 
-    if (s->zip >= 0 || !EePdf_Open(s->path, &pdf, NULL, 0))
+    ZeroMemory(&lf, sizeof(lf));
+    if (s->zip >= 0)
+    {
+        size_t size = 0;
+        mem = mz_zip_reader_extract_to_heap(&L->zips[s->zip].zip, s->entry, &size, 0);
+        if (mem == NULL || !EePdf_OpenMem(mem, size, &pdf, NULL, 0))
+        {
+            mz_free(mem);
+            return 0;
+        }
+    }
+    else if (!EePdf_Open(s->path, &pdf, NULL, 0))
     {
         return 0;
     }
@@ -3107,6 +3441,53 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                 lines[nlines].count = 1;
                 nlines++;
             }
+        }
+        if (page == 0)
+        {
+            form = pdf_page_is_limited_form(&pt);
+        }
+        if (form)
+        {
+            static const char *const k_titles[4] = {"No.", "Name of Voter", "Name", "Address"};
+            if (!limited_form_columns(&pt, &lf) && !lf.have)
+            {
+                if (page >= 2)
+                {
+                    break;
+                }
+                continue;
+            }
+            if (!header_emitted)
+            {
+                election = limited_form_election_date(&pt, &lf);
+                if (!rows_sink(sc, k_titles, 4))
+                {
+                    result = -1;
+                    break;
+                }
+                header_emitted = TRUE;
+            }
+            for (li = 0; li < nlines; li++)
+            {
+                if (limited_form_row(&pt, ord, &lines[li], &lf, cells))
+                {
+                    int c;
+                    for (c = 0; c < 4; c++)
+                    {
+                        cellp[c] = cells[c];
+                    }
+                    if (!rows_sink(sc, cellp, 4))
+                    {
+                        result = -1;
+                        break;
+                    }
+                }
+            }
+            if (result < 0)
+            {
+                break;
+            }
+            continue;
         }
         for (li = 0; li < nlines && hdr_line == UINT32_MAX; li++)
         {
@@ -3244,10 +3625,24 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
     {
         result = 1;
     }
+    if (result > 0 && form && s->date != 0 && election != 0)
+    {
+        /* Limited ballots are cast only during early voting: a file-name date that is not in
+         * the weeks before the election the form names ("02.26.2027 Limited Ballot.pdf" for
+         * the March 3, 2026 primary) is a typo, and Date Voted is left blank. */
+        long d = days_from_civil((long)(s->date / 10000u), (s->date / 100u) % 100u, s->date % 100u);
+        long e = days_from_civil((long)(election / 10000u), (election / 100u) % 100u, election % 100u);
+        if (e - d <= 0 || e - d > 21)
+        {
+            append_name(&L->limited_dates, s->name, NULL);
+            s->date = 0;
+        }
+    }
     free(ord);
     free(lines);
     EePdf_PageTextFree(&pt);
     EePdf_Close(pdf);
+    mz_free(mem);
     return result;
 }
 
@@ -3664,6 +4059,20 @@ static void build_note(Loader *L)
                      L"columns was used: %s",
                   (unsigned long)in->recovered_sheets, L->recovered.p ? L->recovered.p : L"");
     }
+    if (L->limited_forms > 0)
+    {
+        wb_printf(&b, L"\r\n\r\n%lu Limited Ballot poll list%s (Texas Secretary of State form 5-38) read: the "
+                     L"form gives only each voter's name, so Voter ID and Precinct are blank (a limited ballot "
+                     L"voter is not registered in the county).",
+                  (unsigned long)L->limited_forms, L->limited_forms == 1 ? L"" : L"s");
+    }
+    if (L->limited_dates.len > 0)
+    {
+        wb_printf(&b, L"\r\n\r\nThe date in these Limited Ballot file names is not during early voting for "
+                     L"the election the form names (limited ballots are cast only during early voting), so "
+                     L"Date Voted is blank: %s",
+                  L->limited_dates.p);
+    }
     if (L->date_fixes.len > 0)
     {
         wb_printf(&b, L"\r\n\r\nThe date in these file names disagreed with the sheet's own date, which "
@@ -3926,6 +4335,7 @@ static void loader_free(Loader *L)
     free(L->odd_ids.p);
     free(L->date_fixes.p);
     free(L->swapped.p);
+    free(L->limited_dates.p);
     intern_free(&L->str);
 }
 

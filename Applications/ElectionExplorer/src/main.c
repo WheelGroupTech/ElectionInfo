@@ -8942,8 +8942,16 @@ static const wchar_t k_HelpRosterLoading[] =
     L"misnamed copy) is skipped.\r\n\r\n"
     L"•  PDF rosters printed from a spreadsheet (Bexar's 2026 mail ballot lists, Webb, "
     L"Lubbock) are read as tables: the row with a Voter ID title is the header, and each "
-    L"entry goes to the column it sits under, on every page. Scanned PDFs, such as Limited "
-    L"Ballot poll lists, and PDFs without such a table are listed as not readable.\r\n\r\n"
+    L"entry goes to the column it sits under, on every page. Scanned PDFs and PDFs without "
+    L"such a table are listed as not readable.\r\n\r\n"
+    L"•  Limited Ballot poll lists (the Secretary of State's form 5-38, which Travis posts "
+    L"for each day of early voting, also inside its ZIPs) are recognized by their title, as a "
+    L"PDF or a workbook. The form gives only each voter's name: a limited ballot voter is not "
+    L"registered in the county, so Voter ID and Precinct are blank. The method is Limited, "
+    L"and the date comes from the file name. Limited ballots are cast only during early "
+    L"voting, so a file-name date outside it (a typo such as \"02.26.2027\" for the March 3, "
+    L"2026 primary) is left blank and noted. An assisting person's name and address are kept "
+    L"as columns.\r\n\r\n"
     L"•  Rows that are not voters (totals, notes, \"No ballots received.\", Voter IDs with no "
     L"name or precinct) are skipped. Unusual and blank Voter IDs are kept and counted. A "
     L"sheet missing its header row uses the header of a matching sheet.\r\n\r\n"
@@ -9087,8 +9095,8 @@ static const wchar_t k_RosterHelpReports[] =
     L"a blank Voter ID are each counted, and the status bar says how many later records were "
     L"not counted. In a primary each day has a row per party plus an \"All parties\" row, "
     L"followed by a Total per party and an overall Total. A method with no roster files "
-    L"shows \"not available\"; a method whose files are PDFs (not read yet) shows \"not "
-    L"loaded\". Right-click to Copy (or Ctrl+C) or to Export Selected / Export All; copies "
+    L"shows \"not available\"; a method whose only files are PDFs that cannot be read (scanned) "
+    L"shows \"not loaded\". Right-click to Copy (or Ctrl+C) or to Export Selected / Export All; copies "
     L"and exports use plain numbers.\r\n\r\n"
     L"•  Display Load Summary — what the load read, skipped (corrections, copies, PDFs, "
     L"rows that are not voters) and flagged (unusual, blank and duplicate Voter IDs).\r\n\r\n"
@@ -16620,7 +16628,7 @@ static void RosterTotals_UpdateStatus(RosterTotalsWindow *rw)
     {
         if (rw->method_col[m] >= 0 && rw->avail[m] == RTOT_NOT_LOADED)
         {
-            StringCchCatW(st, ARRAYSIZE(st), L" — not loaded = PDF rosters (not read yet)");
+            StringCchCatW(st, ARRAYSIZE(st), L" — not loaded = PDF rosters that cannot be read");
             break;
         }
     }

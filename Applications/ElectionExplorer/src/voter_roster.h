@@ -93,10 +93,10 @@ extern "C"
 
     /**
      * Load one or more roster files into @p out (cleared first; its surname-first
-     * preference is kept). Accepts .zip (of .xlsx / delimited text; other entries such
-     * as PDFs are counted and listed but not read), .xlsx, .csv, .tsv, .txt, and a
-     * roster printed to .pdf from a spreadsheet (read as a table; scanned PDFs are
-     * listed as not readable). A correction
+     * preference is kept). Accepts .zip (of .xlsx / delimited text / .pdf; other
+     * entries are counted and listed but not read), .xlsx, .csv, .tsv, .txt, and a
+     * roster printed to .pdf from a spreadsheet (read as a table) or the SOS Limited
+     * Ballot poll list (form 5-38; scanned PDFs are listed as not readable). A correction
      * "<name>_Updated" replaces "<name>"; a file whose voters all appear in another
      * file of a different voting method is skipped; duplicate Voter IDs are kept.
      *

@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-14
 
 ### In progress — Voter Roster feature for 1.4 (steps 1–5 DONE, UNCOMMITTED)
 
@@ -101,6 +101,13 @@
   Tarrant / Harris / Dallas byte-identical; smoke test `counties`. Help, RELEASES.md (1,394
   chars) and STORE-LISTING ("15 Texas counties") updated. Needs the user's click-test
   (Montgomery G24 ZIPs, Brazoria P26, Hidalgo G22, Bexar G24 CSVs).
+- **Travis Limited Ballot PDFs done (2026-10-14, user request; D2 resolved):** SOS form 5-38
+  recognized by its title, loose or inside the ZIPs (`EePdf_OpenMem`); rows by line number,
+  names split by merge-field runs, Voter ID / Precinct blank, method Limited, a file-name date
+  not during early voting left blank + noted (`02.26.2027`). G25 123 + P26 443 = Python name
+  for name; every other load byte-identical. Smoke test `limitedpdf`. Help, RELEASES (1,442
+  chars), STORE-LISTING, survey doc "Limited Ballot PDFs", design doc D2 updated. Needs the
+  user's click-test (load the G25 or P26 Travis ZIP; Voting Totals' Limited column).
 - **Next:** final validation and the 1.4.0.0 Store bundle when the user is ready. Known
   leftovers: Bexar P26 02-19 headerless mail CSV, Brazoria rejected-ballot sheets
   (not readable, listed), Williamson's method unknown.

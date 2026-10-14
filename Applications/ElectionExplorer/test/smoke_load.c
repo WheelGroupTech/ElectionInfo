@@ -8482,6 +8482,213 @@ done:
     return rc;
 }
 
+/* One left-aligned text run of a form page (font F1, 10 pt, 6 pt per character). */
+static BOOL lform_text(TBuf *b, double x, double y, const char *s)
+{
+    return tb_printf(b, "BT /F1 10 Tf 1 0 0 1 %.2f %.2f Tm (%s) Tj ET\n", x, y, s);
+}
+
+/* The title block and column titles of SOS form 5-38; the election date "3/3/2026" is
+ * drawn in pieces, as Print To PDF sometimes does. */
+static BOOL lform_titles(TBuf *b)
+{
+    return lform_text(b, 36, 770, "5-38") && lform_text(b, 110, 730, "POLL LIST FOR VOTERS") &&
+           lform_text(b, 103, 716, "VOTING LIMITED BALLOT") && lform_text(b, 97, 702, "BY PERSONAL APPEARANCE") &&
+           lform_text(b, 306, 730, "Date of Election") && lform_text(b, 302, 716, "3") &&
+           lform_text(b, 308, 716, "/3") && lform_text(b, 320, 716, "/202") && lform_text(b, 344, 716, "6") &&
+           lform_text(b, 415, 716, "TRAVIS COUNTY") &&
+           lform_text(b, 349, 690, "Information on Person Assisting Voter") && lform_text(b, 36, 600, "No.") &&
+           lform_text(b, 148, 601, "Name of Voter") && lform_text(b, 360, 602, "Name  Address") &&
+           lform_text(b, 36, 588, "(Num)") && lform_text(b, 136, 588, "(Nombre del Votante)") &&
+           lform_text(b, 357, 588, "(Nombre)  (Direccion)") && lform_text(b, 470, 60, "Completed Set") &&
+           lform_text(b, 430, 48, "No. _____ of _____ Pages");
+}
+
+/* Limited Ballot poll lists printed to PDF (tag: limitedpdf; needs src\pdf_reader.c):
+ * Travis County's SOS form 5-38 -- names as separate fields (a two-word first name, a
+ * two-word surname, an empty middle name with "BABIN Jr" in the last-name field, a
+ * surname drawn in two pieces) or as one run ("..., JR"), a row number that is a symbol
+ * glyph, an assisting person, an unused numbered line, a second page; and, inside a ZIP,
+ * a form whose file name has the wrong year (Date Voted blank, noted). */
+static int test_limited_pdf(void)
+{
+    TBuf pages[2] = {{0}, {0}};
+    TBuf third = {0};
+    wchar_t dir[MAX_PATH], p1[MAX_PATH], p2[MAX_PATH], zp[MAX_PATH], tp[MAX_PATH];
+    const wchar_t *paths[2];
+    EeVoterTable t, t2;
+    EeRosterLoadInfo info, info2;
+    wchar_t err[256];
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    unsigned char *pdf2 = NULL;
+    long pdf2_len = 0;
+    FILE *fp = NULL;
+    char *text = NULL;
+    size_t text_len = 0;
+    uint32_t *rows = NULL;
+    uint32_t i;
+    BOOL ok;
+    int rc = 1;
+
+    ok = lform_titles(&pages[0]) && lform_text(&pages[0], 36, 570, "1") &&
+         lform_text(&pages[0], 73, 569, "AUDREY KATE") && lform_text(&pages[0], 139, 569, " ") &&
+         lform_text(&pages[0], 145, 569, "KATE") && lform_text(&pages[0], 169, 569, " ") &&
+         lform_text(&pages[0], 175, 569, "MCCA") && lform_text(&pages[0], 199, 569, "FFITY") &&
+         lform_text(&pages[0], 36, 554, "\\225") && lform_text(&pages[0], 73, 553, "ZYANYA") &&
+         lform_text(&pages[0], 109, 553, " ") && lform_text(&pages[0], 115, 553, "NEFERTITI") &&
+         lform_text(&pages[0], 169, 553, " ") && lform_text(&pages[0], 175, 553, "PEREYRA REYES") &&
+         lform_text(&pages[0], 36, 538, "3") && lform_text(&pages[0], 73, 537, "PATRICK") &&
+         lform_text(&pages[0], 115, 537, " ") && lform_text(&pages[0], 121, 537, " ") &&
+         lform_text(&pages[0], 127, 537, "BABIN Jr") && lform_text(&pages[0], 36, 522, "4") &&
+         lform_text(&pages[0], 73, 521, "RONNEY JAMES GONZALES JR") && lform_text(&pages[0], 36, 506, "5") &&
+         lform_text(&pages[0], 73, 505, "JACK LEE THOMPSON, JR") && lform_text(&pages[0], 36, 490, "6") &&
+         lform_text(&pages[0], 73, 489, "LUCIA CONCHAS") && lform_text(&pages[0], 310, 489, "MARIA CONCHAS") &&
+         lform_text(&pages[0], 420, 489, "100 MAIN ST AUSTIN TX") && lform_text(&pages[0], 36, 474, "7");
+    ok = ok && lform_titles(&pages[1]) && lform_text(&pages[1], 36, 570, "1") &&
+         lform_text(&pages[1], 73, 569, "DAVID LOUIS HARPER");
+    ok = ok && lform_titles(&third) && lform_text(&third, 36, 570, "1") &&
+         lform_text(&third, 73, 569, "ANNA MARIE SMITH");
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p1, MAX_PATH, L"%s02.26.2026 Limited Ballot.pdf", dir);
+    StringCchPrintfW(p2, MAX_PATH, L"%s02.26.2027 Limited Ballot.pdf", dir);
+    StringCchPrintfW(zp, MAX_PATH, L"%sP26_Limited_Rosters.zip", dir);
+    StringCchPrintfW(tp, MAX_PATH, L"%slimited_roundtrip.tsv", dir);
+    EeVoterTable_Init(&t);
+    EeVoterTable_Init(&t2);
+    ZeroMemory(&info, sizeof(info));
+    ZeroMemory(&info2, sizeof(info2));
+    mz_zip_zero_struct(&zip);
+    /* The misdated form goes into a ZIP (read from memory). */
+    ok = ok && proster_write(p1, pages, 2) && proster_write(p2, &third, 1) && _wfopen_s(&fp, p2, L"rb") == 0 &&
+         fp != NULL;
+    if (ok)
+    {
+        fseek(fp, 0, SEEK_END);
+        pdf2_len = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        pdf2 = (unsigned char *)malloc((size_t)pdf2_len);
+        ok = pdf2 != NULL && fread(pdf2, 1, (size_t)pdf2_len, fp) == (size_t)pdf2_len;
+    }
+    if (fp != NULL)
+    {
+        fclose(fp);
+    }
+    DeleteFileW(p2);
+    ok = ok && mz_zip_writer_init_heap(&zip, 0, 0) &&
+         mz_zip_writer_add_mem(&zip, "02.26.2027 Limited Ballot.pdf", pdf2, (size_t)pdf2_len, MZ_DEFAULT_COMPRESSION) &&
+         mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize) && cvr_write_bytes(zp, zbuf, zsize);
+    mz_zip_writer_end(&zip);
+    if (!ok)
+    {
+        wprintf(L"limitedpdf: could not write the PDFs\n");
+        goto done;
+    }
+    paths[0] = p1;
+    paths[1] = zp;
+    if (EeRoster_LoadFiles(paths, 2, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"limitedpdf: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 8 || info.method_rows[EE_VM_LIMITED] != 8 || info.rows_non_voter != 0 ||
+        info.vuids_missing != 0 || info.unsupported_files != 0 || info.rows_no_date != 1 || info.files_read != 2)
+    {
+        wprintf(L"limitedpdf: rows %u limited %u nonvoter %u blank %u unsupported %u nodate %u files %u\n",
+                t.row_count, info.method_rows[EE_VM_LIMITED], info.rows_non_voter, info.vuids_missing,
+                info.unsupported_files, info.rows_no_date, info.files_read);
+        goto done;
+    }
+    if (!rt_expect(&t, L"MCCAFFITY", L"AUDREY", L"Middle Name", L"KATE KATE") ||
+        !rt_expect(&t, L"MCCAFFITY", L"AUDREY", L"VUID", L"") ||
+        !rt_expect(&t, L"MCCAFFITY", L"AUDREY", L"Precinct", L"") ||
+        !rt_expect(&t, L"MCCAFFITY", L"AUDREY", L"Voting Method", L"Limited") ||
+        !rt_expect(&t, L"MCCAFFITY", L"AUDREY", L"Date Voted", L"02/26/2026") ||
+        !rt_expect(&t, L"PEREYRA REYES", L"ZYANYA", L"Middle Name", L"NEFERTITI") ||
+        !rt_expect(&t, L"BABIN", L"PATRICK", L"Name Suffix", L"Jr") ||
+        !rt_expect(&t, L"BABIN", L"PATRICK", L"Middle Name", L"") ||
+        !rt_expect(&t, L"GONZALES", L"RONNEY", L"Name Suffix", L"JR") ||
+        !rt_expect(&t, L"GONZALES", L"RONNEY", L"Middle Name", L"JAMES") ||
+        !rt_expect(&t, L"THOMPSON", L"JACK", L"Name Suffix", L"JR") ||
+        !rt_expect(&t, L"THOMPSON", L"JACK", L"Middle Name", L"LEE") ||
+        !rt_expect(&t, L"CONCHAS", L"LUCIA", L"Assisting Person", L"MARIA CONCHAS") ||
+        !rt_expect(&t, L"CONCHAS", L"LUCIA", L"Assisting Address", L"100 MAIN ST AUSTIN TX") ||
+        !rt_expect(&t, L"HARPER", L"DAVID", L"Middle Name", L"LOUIS") ||
+        !rt_expect(&t, L"HARPER", L"DAVID", L"Date Voted", L"02/26/2026") ||
+        !rt_expect(&t, L"SMITH", L"ANNA", L"Date Voted", L"") ||
+        !rt_expect(&t, L"SMITH", L"ANNA", L"Voting Method", L"Limited") ||
+        !rt_expect(&t, L"SMITH", L"ANNA", L"Source File", L"02.26.2027 Limited Ballot.pdf"))
+    {
+        goto done;
+    }
+    if (info.note == NULL || wcsstr(info.note, L"form 5-38") == NULL ||
+        wcsstr(info.note, L"not during early voting") == NULL ||
+        wcsstr(info.note, L"02.26.2027 Limited Ballot.pdf") == NULL)
+    {
+        wprintf(L"limitedpdf: note: %s\n", info.note ? info.note : L"(none)");
+        goto done;
+    }
+
+    /* Round trip: TSV export, reload, every cell equal. */
+    rows = (uint32_t *)malloc(t.row_count * sizeof(uint32_t));
+    for (i = 0; rows != NULL && i < t.row_count; i++)
+        rows[i] = i;
+    if (rows == NULL ||
+        !EeVoterTable_FormatDelimitedUtf8(&t, rows, t.row_count, FALSE, '\t', TRUE, &text, &text_len) ||
+        !cvr_write_bytes(tp, text, text_len))
+    {
+        wprintf(L"limitedpdf: export failed\n");
+        goto done;
+    }
+    paths[0] = tp;
+    if (EeRoster_LoadFiles(paths, 1, &t2, &info2, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        t2.row_count != t.row_count || t2.column_count != t.column_count)
+    {
+        wprintf(L"limitedpdf: reload failed (%s) %u x %u\n", err, t2.row_count, t2.column_count);
+        goto done;
+    }
+    {
+        uint32_t r, c;
+        for (r = 0; r < t.row_count; r++)
+        {
+            for (c = 0; c < t.column_count; c++)
+            {
+                wchar_t a[256], b[256];
+                EeVoterTable_GetViewCellW(&t, r, c, a, ARRAYSIZE(a));
+                EeVoterTable_GetViewCellW(&t2, r, c, b, ARRAYSIZE(b));
+                if (wcscmp(a, b) != 0)
+                {
+                    wprintf(L"limitedpdf: reload row %u [%s] '%s' vs '%s'\n", r, t.column_titles[c], b, a);
+                    goto done;
+                }
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"limitedpdf ok\n");
+done:
+    free(text);
+    free(rows);
+    free(pdf2);
+    mz_free(zbuf);
+    free(pages[0].p);
+    free(pages[1].p);
+    free(third.p);
+    EeRoster_FreeInfo(&info);
+    EeRoster_FreeInfo(&info2);
+    EeVoterTable_Clear(&t);
+    EeVoterTable_Clear(&t2);
+    DeleteFileW(p1);
+    DeleteFileW(zp);
+    DeleteFileW(tp);
+    if (rc != 0)
+    {
+        wprintf(L"limitedpdf test failed\n");
+    }
+    return rc;
+}
+
 /* More county rosters (tag: counties), all as loose CSV files:
  * - Hidalgo: a check-in roster whose file name names no method -- "EV-..." / "ED-..." SITE
  *   values do -- with CERT (the VUID) and CHECK-IN dates; a mail (ABBM) list with
@@ -8658,6 +8865,7 @@ int wmain(void)
     failed |= test_harris_roster();
     failed |= test_dallas_roster();
     failed |= test_pdf_roster();
+    failed |= test_limited_pdf();
     failed |= test_county_rosters();
     failed |= test_roster_totals();
     failed |= test_roster_compare();

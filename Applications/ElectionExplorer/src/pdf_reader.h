@@ -80,6 +80,12 @@ extern "C"
      */
     BOOL EePdf_Open(const wchar_t *path, EePdf **out, wchar_t *err, size_t errcch);
 
+    /**
+     * Open a PDF held in memory (a ZIP entry), like EePdf_Open. @p data must stay
+     * valid until EePdf_Close.
+     */
+    BOOL EePdf_OpenMem(const void *data, size_t size, EePdf **out, wchar_t *err, size_t errcch);
+
     /** Close a handle from EePdf_Open (NULL is ignored). */
     void EePdf_Close(EePdf *pdf);
 

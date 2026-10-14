@@ -26,7 +26,7 @@ are in `Scripts/Travis_County_Elections/` (one variant per election).
 | `Election Day` | Election Day In-Person | |
 | `Provisionals` | Provisional | L26 only so far |
 | `Limited Ballot` (`.xlsx` in PR26) | Limited | names only, no VUID/precinct |
-| `Limited Ballot` / `Poll List for Limited Ballot Voters` (`.pdf`, G25, P26) | Limited | SOS form 5-38; names are vector outlines, not text |
+| `Limited Ballot` / `Poll List for Limited Ballot Voters` (`.pdf`, G25, P26) | Limited | SOS form 5-38 (text, not scanned); read since 2026-10-14 (D2) |
 
 - Date formats: `MM.DD.YYYY` and `M.DD.YYYY`. Filename typos exist (`02.26.2027 Limited
   Ballot.pdf` in a 2026 election). Each sheet's title row 2 also carries a date, but it
@@ -305,9 +305,12 @@ x64 and ARM64 build clean. The Store bundle is built after step 6.
   reviews them); Voting Totals count each voter once, using the earliest record. A file
   whose voters are *all* already in another file of a different voting method (the P24
   misnamed copy) is skipped and named in the load summary.
-- **D2 — Limited Ballot PDFs:** deferred past 1.4. PDFs are skipped and listed in the
-  load summary; Limited ballots from `.xlsx` files (PR26) load. Revisit (Windows PDF
-  rendering + OCR) when surveying other counties.
+- **D2 — Limited Ballot PDFs:** first deferred; **done 2026-10-14** (user request). The
+  PDFs are text (Word / Print To PDF / Acrobat), not scanned: SOS form 5-38 is
+  recognized by its title and read by its numbered lines (loose or inside the ZIPs);
+  Voter ID and Precinct blank, method Limited, date from the file name unless it is not
+  during early voting before the form's election date (`02.26.2027`: blank, noted). See
+  the county survey doc's "Limited Ballot PDFs" section.
 - **D3 — Roster ↔ voter-list names:** equal when first and last names match, ignoring
   middle names, case and punctuation; otherwise minor/major as today.
 - **D4 — Party totals:** the Voting Totals report splits each date by party when party

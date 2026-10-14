@@ -8702,7 +8702,9 @@ done:
  * - Montgomery: one row per jurisdiction on the ballot (merged, Election_Name joined),
  *   "BBM Recvd Oct  9 2024  1:00PM" dates, CountyElectionPrecinct over Voting_Precinct;
  * - Galveston's "WARD  SHARON MARIE" (LAST, two spaces, FIRST MIDDLE) vs a Dallas sheet's
- *   "SANDRA  GLEDHILL" (an empty middle name). */
+ *   "SANDRA  GLEDHILL" (an empty middle name);
+ * - Williamson: Voting Method "AV" (mail) on a 10/13 ballot -- before early voting, which
+ *   starts at most 17 days before Nov 3 -- and a row whose method cell is blank. */
 static int test_county_rosters(void)
 {
     static const struct
@@ -8754,6 +8756,10 @@ static int test_county_rosters(void)
          "Name,State ID,Address,Polling Place,Date,Precinct,Split,Party\r\n"
          "SANDRA  GLEDHILL,1000118421,1 MAIN ST GARLAND TX 75043,V2713R,46084.6006944444,1716,01,REP\r\n"
          "LINDA DALE TOMLINSON,1000118423,1613 BLACKHAWK LN GARLAND TX 75043,V2713R,46084.6006944444,1716,01,REP\r\n"},
+        {L"G26_VoterTurnout_261013_202610131840074642.csv",
+         "VUID,Name,Precinct,Election Name,Voting Method,Ballot Date\r\n"
+         "1168600721,\"AARON,CHARLES SIDNEY\",393,2026 NOVEMBER 3 JOINT GENERAL AND SPECIAL ELECTION,AV,10/13/2026\r\n"
+         "1178123347,\"HURT,SHANNA LIPPIATT\",146,,,9/28/2026\r\n"},
     };
     wchar_t dir[MAX_PATH];
     wchar_t paths_buf[ARRAYSIZE(k_files)][MAX_PATH];
@@ -8784,7 +8790,7 @@ static int test_county_rosters(void)
         wprintf(L"counties: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 16 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+    if (t.row_count != 18 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
         info.vuids_duplicated != 0)
     {
         wprintf(L"counties: rows %u unknown %u nonvoter %u dup %u\n", t.row_count, info.method_rows[EE_VM_NONE],
@@ -8818,7 +8824,10 @@ static int test_county_rosters(void)
         !rt_expect(&t, L"WARD", L"SHARON", L"Middle Name", L"MARIE") ||
         !rt_expect(&t, L"WARD", L"SHARON", L"Voting Method", L"Mail Ballot") ||
         !rt_expect(&t, L"GLEDHILL", L"SANDRA", L"VUID", L"1000118421") ||
-        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Middle Name", L"DALE"))
+        !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Middle Name", L"DALE") ||
+        !rt_expect(&t, L"AARON", L"CHARLES", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"AARON", L"CHARLES", L"Date Voted", L"10/13/2026") ||
+        !rt_expect(&t, L"HURT", L"SHANNA", L"Voting Method", L"Mail Ballot"))
     {
         goto done;
     }

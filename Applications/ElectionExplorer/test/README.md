@@ -172,7 +172,9 @@ early voting and 11-05-2024 Election Day), Brazoria (an "IN PERSON" file with a 
 list's Ballot Received Date title; a 2026 bilingual roster with title rows, a translation
 row and the VUID / name columns swapped), Montgomery (one row per jurisdiction, merged
 with Election_Name joined; "BBM Recvd" dates; CountyElectionPrecinct), Galveston's
-"LAST  FIRST MIDDLE" names vs a Dallas sheet's "SANDRA  GLEDHILL";
+"LAST  FIRST MIDDLE" names vs a Dallas sheet's "SANDRA  GLEDHILL", Williamson's
+Voting Method "AV" (mail) on a 10/13 ballot (outside the 17-day early-voting window) and a
+blank method cell in an all-"AV" column;
 `dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without

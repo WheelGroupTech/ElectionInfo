@@ -110,7 +110,12 @@
   user's click-test (load the G25 or P26 Travis ZIP; Voting Totals' Limited column).
 - **Next:** final validation and the 1.4.0.0 Store bundle when the user is ready. Known
   leftovers: Bexar P26 02-19 headerless mail CSV, Brazoria rejected-ballot sheets
-  (not readable, listed), Williamson's method unknown.
+  (not readable, listed).
+- **Williamson snapshots (2026-10-14):** the user's 10/13 workbook is a cumulative snapshot
+  of the 10/10 one (461 shared, 13 dropped). `AV` = Mail Ballot; blank method cells in a
+  single-code column take that code; the calendar's early-voting window is now 17 days
+  (was 21: it called 10/13 mail early voting). Survey doc "Williamson snapshots"; smoke
+  `counties` extended. Snapshot policy unchanged (D1: both kept, duplicates flagged).
 
 ### Committed — release notes file
 

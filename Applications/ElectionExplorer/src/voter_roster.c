@@ -335,8 +335,9 @@ static long nth_weekday(long y, unsigned m, int wd, int n)
  * its regular elections on fixed days -- the November general (the Tuesday after the
  * first Monday), the March primary (first Tuesday), the May uniform election (first
  * Saturday) and the primary runoff (fourth Tuesday in May) -- and early voting in person
- * ends days before. A date on one of those days is Election Day; within the three weeks
- * before, early voting; otherwise unknown. */
+ * starts at most 17 days before (later when that is a weekend or holiday) and ends days
+ * before. A date on one of those days is Election Day; within the 17 days before, early
+ * voting; otherwise unknown (a mail list's earlier dates: Williamson 10/13 for Nov 3). */
 static EeVotingMethod method_from_calendar(uint32_t date)
 {
     long y;
@@ -362,7 +363,7 @@ static EeVotingMethod method_from_calendar(uint32_t date)
     }
     for (k = 0; k < 4; k++)
     {
-        if (e[k] - day > 0 && e[k] - day <= 21)
+        if (e[k] - day > 0 && e[k] - day <= 17)
         {
             return EE_VM_EARLY;
         }
@@ -555,6 +556,20 @@ static EeVotingMethod method_from_text(const char *s)
         contains_ci(s, "election_day") || contains_ci(s, "election-day") || contains_ci(s, "ed_vtrex"))
         return EE_VM_ELECTION_DAY;
     return EE_VM_NONE;
+}
+
+/* A county's own value in a "Voting Method" column (not one of our labels): its words
+ * (Lubbock "MAIL-IN"), else "AV" (absentee voting: Williamson's mail ballots). */
+static EeVotingMethod method_from_column(const char *s)
+{
+    char v[16];
+    EeVotingMethod m = method_from_text(s);
+    if (m != EE_VM_NONE)
+    {
+        return m;
+    }
+    clean_text(s, v, sizeof(v));
+    return (_stricmp(v, "AV") == 0) ? EE_VM_MAIL : EE_VM_NONE;
 }
 
 /* Voting method of a file name: its words, else the abbreviations as whole words
@@ -2036,9 +2051,9 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
                 method = mm;
                 labeled = TRUE;
             }
-            else if ((mm = method_from_text(cell_at(r, row, m->method))) != EE_VM_NONE)
+            else if ((mm = method_from_column(cell_at(r, row, m->method))) != EE_VM_NONE)
             {
-                method = mm; /* a county's own words: Lubbock "MAIL-IN" */
+                method = mm; /* a county's own words: Lubbock "MAIL-IN", Williamson "AV" */
             }
         }
         if (m->vtype >= 0 && !labeled)
@@ -2420,6 +2435,36 @@ static BOOL row_is_translation(const SheetRows *r, uint32_t row)
 
 /* Analyze one worksheet's rows and emit its records. @p wb_map / @p wb_have carry the
  * workbook's previous header so a sibling sheet missing its header can borrow it. */
+/* The one voting method of a Voting Method column whose filled cells all name the same
+ * method (Williamson's "AV", left blank on some rows of one snapshot): the sheet's
+ * method, so its blank cells take it too. EE_VM_NONE when the values differ, one is not
+ * a method, or one is our own label (an exported roster: its blanks are unknown). */
+static EeVotingMethod sheet_column_method(const SheetRows *r, uint32_t from, int col)
+{
+    EeVotingMethod one = EE_VM_NONE;
+    uint32_t row;
+    for (row = from; row < r->nrows; row++)
+    {
+        const char *v = cell_at(r, row, col);
+        EeVotingMethod mm;
+        if (v[0] == '\0')
+        {
+            continue;
+        }
+        if (EeRoster_MethodFromLabel(v) != EE_VM_NONE)
+        {
+            return EE_VM_NONE;
+        }
+        mm = method_from_column(v);
+        if (mm == EE_VM_NONE || (one != EE_VM_NONE && mm != one))
+        {
+            return EE_VM_NONE;
+        }
+        one = mm;
+    }
+    return one;
+}
+
 static void process_sheet(Loader *L, int si, const char *sheet_name, const SheetRows *r,
                           HeaderMap *wb_map, BOOL *wb_have)
 {
@@ -2554,6 +2599,10 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
     {
         method = EE_VM_LIMITED; /* the SOS Limited Ballot poll list (form 5-38) */
         L->limited_forms++;
+    }
+    if (method == EE_VM_NONE && m.method >= 0)
+    {
+        method = sheet_column_method(r, data_from, m.method);
     }
     date = s->date;
     if (date == 0)
@@ -3632,7 +3681,7 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
          * the March 3, 2026 primary) is a typo, and Date Voted is left blank. */
         long d = days_from_civil((long)(s->date / 10000u), (s->date / 100u) % 100u, s->date % 100u);
         long e = days_from_civil((long)(election / 10000u), (election / 100u) % 100u, election % 100u);
-        if (e - d <= 0 || e - d > 21)
+        if (e - d <= 0 || e - d > 17)
         {
             append_name(&L->limited_dates, s->name, NULL);
             s->date = 0;

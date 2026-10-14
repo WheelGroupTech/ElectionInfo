@@ -317,8 +317,8 @@ Loader changes (`voter_roster.c`), all generic (no county switch):
   a mail list's own columns (`RETURNDATE`, `Ballot Received Date`, `ReceivedDate`, `Status
   Date`, ...) -> Mail; otherwise the **Texas election calendar** (`method_from_calendar`):
   the date in the file name (numeric forms only -- a month-name date in a file name is the
-  election's, not a voting day) on the election day is Election Day, within 21 days before
-  it early voting (Bexar's `... - 10-21-2024 (CSV)` files). November = Tuesday after the
+  election's, not a voting day) on the election day is Election Day, within 17 days before
+  it early voting (21 until 2026-10-14; early voting starts at most 17 days before) (Bexar's `... - 10-21-2024 (CSV)` files). November = Tuesday after the
   first Monday, March primary = first Tuesday, May = first Saturday, runoff = 4th Tuesday
   of May. Brazoria P22's "Voting Method 1" holds the party, so only a vote-type column
   blocks the calendar.
@@ -351,7 +351,7 @@ Lubbock P24 and El Paso + Denton + Cameron + Williamson together):
 | Brazoria | P22 42,593; G22 110,148; G23 30,724; P24 45,419; G24 162,796; G25 37,308; P26 62,227 |
 | Montgomery | G21 20,943; P22 44,274; G22 141,108; G23 36,911; P24 50,640; G24 250,973 (679,232 rows merged); G25 34,578; P26 71,399; G26 3,033 |
 | Lubbock | P24 35,854; G25 24,339 |
-| G26 mail | Galveston 540; El Paso 2,658; Denton 1,279; Cameron 18; Webb 24 (PDF); Williamson 474 (method unknown) |
+| G26 mail | Galveston 540; El Paso 2,658; Denton 1,279; Cameron 18; Webb 24 (PDF); Williamson 474 (mail, see below) |
 
 Hidalgo G24 / G25 / P26 cumulative lists give no voting date (Date Voted blank). Travis,
 Tarrant, Harris and Dallas load byte-identical to the previous build. Smoke test
@@ -359,7 +359,29 @@ Tarrant, Harris and Dallas load byte-identical to the previous build. Smoke test
 
 Known leftovers: Bexar P26's 02-19 mail CSV has no header row (1,880 voters, listed as not
 readable); Brazoria mail workbooks' headerless "rejected ballots" sheets are listed as not
-readable; Williamson's file names no method.
+readable. (Williamson's method, first left unknown, is read since 2026-10-14: see
+"Williamson snapshots".)
+
+## Williamson snapshots (2026-10-14)
+
+The user downloaded a second Williamson "Voter Turnout" workbook
+(`G26_VoterTurnout_261013_202610131840074642.xlsx`, 818 rows) beside the 10/10 one (474):
+`VUID, Name ("LAST,FIRST MIDDLE"), Precinct, Election Name, Voting Method, Ballot Date`.
+Each is a **cumulative snapshot**: the 10/13 file holds 461 of the 10/10 file's voters,
+unchanged, plus 357 new (10/12 - 10/13); 13 voters dated 10/10 are no longer listed. Every
+filled Voting Method is `AV` (absentee = mail: all dates 9/21 - 10/13, before in-person early
+voting starts on 10/19); the 10/10 file leaves 285 method cells blank (the 10/13 file has `AV`
+for the same voters).
+
+- A Voting Method value `AV` is Mail Ballot (`method_from_column`).
+- A Voting Method column whose filled cells all give one county code is the sheet's method,
+  so its blank cells take it (`sheet_column_method`; not for our own labels, whose blanks in
+  an export mean unknown).
+- The calendar fallback had called the 10/13 rows early voting (21-day window); early voting
+  starts at most 17 days before the election, so the window is now 17 days.
+- Loading both snapshots keeps both copies of the 461 voters (D1: duplicates kept and
+  flagged; Voting Totals counts each once). Load only the latest snapshot for the current
+  list; load each one separately and Compare them to see the voters a later snapshot drops.
 
 ## Limited Ballot PDFs (done 2026-10-14)
 
@@ -390,7 +412,7 @@ match.
   as one run use the usual FIRST MIDDLE LAST split.
 - Method Limited for the form whatever the file is called (also workbooks: a "Name of
   Voter" header with no Voter ID column); date from the file name unless it is not within
-  21 days before the form's election date -- `02.26.2027 Limited Ballot.pdf` (P26; its
+  17 days before the form's election date -- `02.26.2027 Limited Ballot.pdf` (P26; its
   names are not in the 02.26.2026 file, probably 02/27, the last day of early voting) gets
   a blank Date Voted and a note.
 - ZIP-packed PDFs are now read (from memory: `EePdf_OpenMem`), as tables or forms; others

@@ -8854,6 +8854,146 @@ cleanup:
     return rc;
 }
 
+/* Texas Secretary of State turnout rosters (tag: sosroster): a loose statewide early voting
+ * CSV (COUNTY, MAIL-IN / IN-PERSON, no voting date) and Election Day ZIPs that name their
+ * roster "STATEWIDE_VOTER_INFO.csv" for every party (named after the ZIP instead), a
+ * polling-place file beside it (reference, not read), and the same ZIP downloaded on two
+ * days (loaded once). One voter is on both parties' rosters. Election Day in-person rows get
+ * the election's day from its name (primary, primary runoff, general); mail rows and a
+ * special election's rows have no date. */
+static int test_sos_roster(void)
+{
+    static const char k_ev[] =
+        "\"COUNTY\",\"VOTER_NAME\",\"ID_VOTER\",\"VOTING_METHOD\",\"PRECINCT\"\n"
+        "\"ANDERSON\",\"AARON, ALMA JEAN\",\"1000000001\",\"MAIL-IN\",\"13\"\n"
+        "\"TRAVIS\",\"BAKER, BEN\",\"1000000002\",\"IN-PERSON\",\"131\"\n"
+        "\"WOOD\",\"GARCIA, BERNARD Jr\",\"1000000003\",\"MAIL-IN\",\"3S\"\n";
+    static const char k_dem[] = "\"COUNTY_NAME\",\"VOTER_NAME\",\"ID_VOTER\",\"VOTING_METHOD\",\"PRECINCT\"\n"
+                                "\"HARRIS\",\"DAVIS, DORA\",\"1000000011\",\"IN-PERSON\",\"27\"\n"
+                                "\"COMAL\",\"MADDEN, DAVID SCOTT\",\"1000000012\",\"MAIL-IN\",\"\"\n";
+    static const char k_rep[] = "\"COUNTY_NAME\",\"VOTER_NAME\",\"ID_VOTER\",\"VOTING_METHOD\",\"PRECINCT\"\n"
+                                "\"LLANO\",\"ESTES, EVA\",\"1000000021\",\"IN-PERSON\",\"109\"\n"
+                                "\"COMAL\",\"MADDEN, DAVID SCOTT\",\"1000000012\",\"MAIL-IN\",\"207\"\n";
+    static const char k_runoff[] = "\"COUNTY_NAME\",\"VOTER_NAME\",\"ID_VOTER\",\"VOTING_METHOD\",\"PRECINCT\"\n"
+                                   "\"BELL\",\"FOSTER, FAY\",\"1000000031\",\"IN-PERSON\",\"4\"\n";
+    static const char k_general[] = "\"COUNTY_NAME\",\"VOTER_NAME\",\"ID_VOTER\",\"VOTING_METHOD\",\"PRECINCT\"\n"
+                                    "\"BELL\",\"GRANT, GUS\",\"1000000041\",\"IN-PERSON\",\"5\"\n";
+    static const char k_special[] = "\"COUNTY_NAME\",\"VOTER_NAME\",\"ID_VOTER\",\"VOTING_METHOD\",\"PRECINCT\"\n"
+                                    "\"BELL\",\"HALL, HANK\",\"1000000051\",\"IN-PERSON\",\"6\"\n";
+    static const char k_poll[] = "\"COUNTY\",\"POLL PLACE ID\",\"POLL PLACE NAME\",\"VOTER COUNT\"\n"
+                                 "\"ANDERSON\",\"25633\",\"1ST BAPTIST CHURCH-ELKHART\",\"18\"\n";
+    static const wchar_t *const k_names[] = {
+        L"STATEWIDE.2026 NOVEMBER GENERAL ELECTION.EarlyVoting.10_17_2026.csv",
+        L"STATEWIDE.2026 DEMOCRATIC PRIMARY ELECTION.ElectionDay.09_05_2026.zip",
+        L"STATEWIDE.2026 DEMOCRATIC PRIMARY ELECTION.ElectionDay.09_06_2026.zip",
+        L"STATEWIDE.2026 REPUBLICAN PRIMARY ELECTION.ElectionDay.09_07_2026.zip",
+        L"STATEWIDE.2026 REPUBLICAN PRIMARY RUNOFF ELECTION.ElectionDay.09_07_2026.zip",
+        L"STATEWIDE.2024 NOVEMBER GENERAL ELECTION.ElectionDay.09_07_2026.zip",
+        L"STATEWIDE.2026 SPECIAL ELECTION SENATE DISTRICT 22.ElectionDay.11_10_2026.zip",
+    };
+    const char *entries[2] = {"STATEWIDE_VOTER_INFO.csv", "STATEWIDE_POLLING_PLACE_INFO.csv"};
+    const char *dem[2] = {k_dem, k_poll};
+    const char *rep[2] = {k_rep, k_poll};
+    const char *runoff[2] = {k_runoff, k_poll};
+    const char *general[2] = {k_general, k_poll};
+    const char *special[2] = {k_special, k_poll};
+    wchar_t dir[MAX_PATH];
+    wchar_t paths_buf[ARRAYSIZE(k_names)][MAX_PATH];
+    const wchar_t *paths[ARRAYSIZE(k_names)];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    int i;
+    int rc = 1;
+    BOOL ok;
+
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < (int)ARRAYSIZE(k_names); i++)
+    {
+        StringCchCopyW(paths_buf[i], MAX_PATH, dir);
+        StringCchCatW(paths_buf[i], MAX_PATH, k_names[i]);
+        paths[i] = paths_buf[i];
+    }
+    ok = cvr_write_bytes(paths_buf[0], k_ev, strlen(k_ev)) && hart_write_zip(paths_buf[1], entries, dem, 2) &&
+         hart_write_zip(paths_buf[2], entries, dem, 2) && hart_write_zip(paths_buf[3], entries, rep, 2) &&
+         hart_write_zip(paths_buf[4], entries, runoff, 2) && hart_write_zip(paths_buf[5], entries, general, 2) &&
+         hart_write_zip(paths_buf[6], entries, special, 2);
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok)
+    {
+        wprintf(L"sosroster: could not write the fixtures\n");
+        goto done;
+    }
+    if (EeRoster_LoadFiles(paths, (int)ARRAYSIZE(k_names), &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) !=
+        EeLoadStatus_Ok)
+    {
+        wprintf(L"sosroster: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 10 || info.repeated_files != 1 || info.reference_files != 6 || info.vuids_duplicated != 1 ||
+        info.rows_no_date != 6 || info.method_rows[EE_VM_MAIL] != 4 || info.method_rows[EE_VM_EARLY] != 1 ||
+        info.method_rows[EE_VM_ELECTION_DAY] != 5)
+    {
+        wprintf(L"sosroster: rows %u repeated %u reference %u dup %u nodate %u mail %u ev %u ed %u\n", t.row_count,
+                info.repeated_files, info.reference_files, info.vuids_duplicated, info.rows_no_date,
+                info.method_rows[EE_VM_MAIL], info.method_rows[EE_VM_EARLY], info.method_rows[EE_VM_ELECTION_DAY]);
+        goto done;
+    }
+    if (!rt_expect(&t, L"AARON", L"ALMA", L"VUID", L"1000000001") ||
+        !rt_expect(&t, L"AARON", L"ALMA", L"Middle Name", L"JEAN") ||
+        !rt_expect(&t, L"AARON", L"ALMA", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"AARON", L"ALMA", L"Date Voted", L"") ||
+        !rt_expect(&t, L"AARON", L"ALMA", L"County", L"ANDERSON") ||
+        !rt_expect(&t, L"BAKER", L"BEN", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"BAKER", L"BEN", L"Precinct", L"131") ||
+        !rt_expect(&t, L"GARCIA", L"BERNARD", L"Name Suffix", L"Jr") ||
+        !rt_expect(&t, L"GARCIA", L"BERNARD", L"Precinct", L"3S") ||
+        !rt_expect(&t, L"DAVIS", L"DORA", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"DAVIS", L"DORA", L"Party", L"DEM") ||
+        !rt_expect(&t, L"DAVIS", L"DORA", L"County", L"HARRIS") ||
+        !rt_expect(&t, L"DAVIS", L"DORA", L"Source File",
+                   L"STATEWIDE.2026 DEMOCRATIC PRIMARY ELECTION.ElectionDay.09_06_2026.csv") ||
+        !rt_expect(&t, L"DAVIS", L"DORA", L"Date Voted", L"03/03/2026") ||
+        !rt_expect(&t, L"MADDEN", L"DAVID", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"MADDEN", L"DAVID", L"Date Voted", L"") ||
+        !rt_expect(&t, L"ESTES", L"EVA", L"Party", L"REP") ||
+        !rt_expect(&t, L"ESTES", L"EVA", L"Date Voted", L"03/03/2026") ||
+        !rt_expect(&t, L"FOSTER", L"FAY", L"Date Voted", L"05/26/2026") ||
+        !rt_expect(&t, L"GRANT", L"GUS", L"Date Voted", L"11/05/2024") ||
+        !rt_expect(&t, L"HALL", L"HANK", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"HALL", L"HANK", L"Date Voted", L""))
+    {
+        goto done;
+    }
+    if (info.note == NULL || wcsstr(info.note, L"1 Texas Secretary of State early voting roster read (cumulative "
+                                                L"through 10/17/2026)") == NULL ||
+        wcsstr(info.note, L"4 Texas Secretary of State Election Day rosters read: in-person voters get") == NULL ||
+        wcsstr(info.note, L"file name as Date Voted") == NULL ||
+        wcsstr(info.note, L"1 Texas Secretary of State Election Day roster read whose election is not") == NULL ||
+        wcsstr(info.note, L"the same download saved twice): STATEWIDE.2026 DEMOCRATIC PRIMARY "
+                          L"ELECTION.ElectionDay.09_05_2026.csv") == NULL ||
+        wcsstr(info.note, L"repeats an earlier one") != NULL || wcsstr(info.note, L"the county's file") != NULL)
+    {
+        wprintf(L"sosroster: note: %s\n", info.note ? info.note : L"(none)");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"sosroster ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    for (i = 0; i < (int)ARRAYSIZE(k_names); i++)
+    {
+        DeleteFileW(paths_buf[i]);
+    }
+    if (rc != 0)
+    {
+        wprintf(L"sosroster test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -8876,6 +9016,7 @@ int wmain(void)
     failed |= test_pdf_roster();
     failed |= test_limited_pdf();
     failed |= test_county_rosters();
+    failed |= test_sos_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();
     failed |= test_dup_voters_voting();

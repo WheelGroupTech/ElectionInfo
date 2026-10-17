@@ -426,6 +426,90 @@ No form has an assisting person. Travis G25 227,758 -> 227,881 records (Limited 
 Dallas and other-county load is byte-identical to the previous build (PR26 adds only the
 note line). Smoke test `limitedpdf`.
 
+## Texas Secretary of State rosters (done 2026-10-17)
+
+The SOS "Election Information & Turnout Data" site
+(`goelect.txelections.civixapps.com/ivis-evr-ui/evr`, an Angular app by Civix) lists the
+statewide elections (primaries, runoffs, generals, constitutional amendment and special
+elections, 2025 on) with their early-voting days. Per day it shows a turnout table by county
+(registered voters, in person, by mail, cumulative %), with a **CSV download per county** and
+a **Generate Statewide Report** button; Election Day has the same after the election. The
+page builds the downloads from JSON (`{"upload": <base64>}`) returned by
+`/api-ivis-system/api/v1/getFile` and `getFileByFormat`:
+
+| Download | Request | Saved as |
+|---|---|---|
+| Statewide early voting | `getFile?type=EVR_STATEWIDE&electionId=<id>&electionDate=MM/DD/YYYY` | `STATEWIDE.<election>.EarlyVoting.<MM_DD_YYYY>.csv` (the roster's day) |
+| One county, early voting | `getFileByFormat?type=EVR_EARLYVOTING&electionId=&electionDate=&county=&countyId=&format=csv\|zip` | `<COUNTY>.<election>.EarlyVoting.<MM_DD_YYYY>.<csv\|zip>` |
+| Statewide Election Day | `getFile?type=EVR_STATEWIDE_ELECTIONDAY&...` | `STATEWIDE.<election>.ElectionDay.<download day>.zip` |
+| One county, Election Day | `getFileByFormat?type=EVR_ELECTIONDAYTURNOUT&...` | `<COUNTY>.<election>.ElectionDay.<download day>.<fmt>` |
+
+(G26 = election 53815; P26 REP 53813, DEM 53814; PR26 REP 58315, DEM 58314.) Statewide
+requests for the last days of the P26 primary returned 502 and later requests 503: the
+server builds the larger files slowly. The county downloads were not tried (503 at the
+time); their layout is expected to match the statewide one.
+
+**Early voting roster** (CSV, LF line ends, every field quoted, no BOM):
+`COUNTY, VOTER_NAME ("LAST, FIRST MIDDLE [SUFFIX]"), ID_VOTER (VUID), VOTING_METHOD (MAIL-IN /
+IN-PERSON), PRECINCT`, sorted by county. **Cumulative** ("Cumulative Totals Thru Close of
+Business"): the user's 10/17 file (44,205, all MAIL-IN in 85 counties: no in-person early
+voting yet) holds 31,534 of the 10/14 file's 31,750 voters (216 dropped, 7 changed). The SOS
+also **revises earlier days**: its 10/14 roster had 38,994 voters on 10/17 (the user's copy,
+downloaded 10/15, has 31,750), so a day's file depends on when it was downloaded. P26 REP on
+02/17 (first day): 103,085 IN-PERSON + 4,547 MAIL-IN. Precincts: 1-5 digits, letter suffixes
+(`2E`, `3S`), Bexar `99999`, a few blank.
+
+**Election Day ZIP**: `STATEWIDE_VOTER_INFO.csv` (`COUNTY_NAME, VOTER_NAME, ID_VOTER,
+VOTING_METHOD, PRECINCT`) and `STATEWIDE_POLLING_PLACE_INFO.csv` (`COUNTY, POLL PLACE ID, POLL
+PLACE NAME, VOTER COUNT`: turnout per polling place, not a roster), the same entry names for
+both parties. P26 DEM 802,979 (IN-PERSON 792,105, MAIL-IN 10,874), REP 812,852 (797,556 /
+15,296), 254 counties each. The user's downloads of 09/05, 09/06 and 09/07 are byte-identical
+per party (entries dated 2026-06-10: the file is built once after the canvass). Checked against
+Travis's own P26 rosters: 101,069 of Travis's 101,090 Election Day voters are on it (21 not),
+plus 206 voters in no Travis roster; its 488 Travis MAIL-IN rows are all mail ballots in
+Travis's rosters. So it is the Election Day in-person roster plus some mail ballots.
+**118 Voter IDs are on both parties' rosters** (69 in person in both, 47 mail in both, 2
+mixed), worth checking against the counties' rosters.
+
+Loader changes (`voter_roster.c`):
+
+- `ID_VOTER` is a state Voter ID (`vuid_rank` 1, as in voter lists).
+- A header with `ID_VOTER`, `VOTING_METHOD` and `COUNTY` / `COUNTY_NAME` is an SOS roster
+  (`HeaderMap.sos_list`): Date Voted blank for early voting (its file-name date is a cumulative
+  "through" date); on an Election Day roster IN-PERSON rows get the election's day from the
+  election name (`sos_election_day`: primary = first Tuesday in March, primary runoff = fourth
+  Tuesday in May, general = Tuesday after the first Monday in November; a special election or
+  any other name stays blank; user decision 2026-10-17) and MAIL-IN rows no date (the
+  file-name date is the download day); MAIL-IN → Mail (`method_from_column`);
+  IN-PERSON takes the file's method (`EarlyVoting` / `ElectionDay`), else the calendar's for
+  the file's date; the county column is kept as **County**. Party from the file name (`2026
+  REPUBLICAN PRIMARY ELECTION`).
+- A ZIP named `….EarlyVoting.…` / `….ElectionDay.…` names its `*VOTER_INFO*` entry after itself
+  (`sos_entry_name`: `STATEWIDE.2026 DEMOCRATIC PRIMARY ELECTION.ElectionDay.09_06_2026.csv`),
+  so the party comes from it and the DEM and REP entries are not taken for one repeated file;
+  `*polling_place_info*` is a reference file.
+- New for every county: ZIP entries in different ZIPs with the same size and CRC-32 are the
+  same download saved twice (`SKIP_IDENTICAL`): the later input's copy is loaded, the other
+  listed in the summary.
+- Load summary: "N Texas Secretary of State early voting roster(s) read (cumulative through
+  MM/DD/YYYY) …" (with "a later roster repeats an earlier one's voters" when two of one party
+  are loaded), "N … Election Day roster(s) read: in-person voters get the day of the election
+  named in the file name (03/03/2026) …" and, for a special election, "… no voting date"; their
+  blank dates are not repeated in the generic "no Date Voted" line.
+
+Validation: every row of both early voting CSVs and of the DEM + REP Election Day rosters
+equals an independent Python parse (Voter ID, precinct, name parts, method, party, county),
+except the loader's usual cleanup (47 of 1,615,831 Election Day rows: doubled spaces, `13.0`
+precincts, a lone suffix word such as `GARRETT, IV`); P26 Election Day: all 1,589,661 in-person
+rows dated 03/03/2026, all 26,170 mail rows blank; load → TSV export → reload identical; the four
+ZIPs together load 1,615,831 records in 8 s (the 09/05 copies skipped as identical, the
+polling-place files as reference). Every county roster file and election loads byte-identical
+to the previous build (per-file and per-election). Smoke test `sosroster`.
+
+Possible follow-ups: precinct numbers repeat across counties, so the Precinct report merges them in a
+statewide roster (filter by County first); several daily early voting rosters could be read
+as one roster where each voter's first appearance approximates the day voted.
+
 ## Downloaded rosters (2026-10-12)
 
 Saved under `Voter_Rosters/TX_<County>_County/` as `<Code>_<county file name>`
@@ -461,5 +545,4 @@ site is gone and the Internet Archive was "Temporarily Offline" (retry later).
 4. ~~Cumulative files with no voting date~~ — Date Voted left blank (Voting Totals shows
    "(no date)").
 5. ~~PDF-only counties (Webb, Bexar)~~ — supported (see "PDF rosters").
-6. The SOS portal: survey it now (it may cover every county for statewide elections) or
-   later?
+6. ~~The SOS portal~~ — surveyed and supported (see "Texas Secretary of State rosters").

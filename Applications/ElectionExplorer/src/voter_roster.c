@@ -371,6 +371,67 @@ static EeVotingMethod method_from_calendar(uint32_t date)
     return EE_VM_NONE;
 }
 
+/* The day of the election a Secretary of State roster's file name names
+ * ("STATEWIDE.2026 REPUBLICAN PRIMARY ELECTION.ElectionDay.09_07_2026.zip": the second
+ * dot-separated field), as yyyymmdd: a primary runoff the fourth Tuesday in May, a primary
+ * the first Tuesday in March, a general election the Tuesday after the first Monday in
+ * November. 0 for a special election (its own date), any other name, or no year. */
+static uint32_t sos_election_day(const char *file_name)
+{
+    char e[160];
+    const char *p = strchr(file_name, '.');
+    const char *q;
+    size_t n;
+    size_t i;
+    long y = 0;
+    long day;
+    unsigned m;
+    if (p == NULL || (q = strchr(++p, '.')) == NULL)
+    {
+        return 0;
+    }
+    n = (size_t)(q - p);
+    if (n >= sizeof(e))
+    {
+        return 0;
+    }
+    memcpy(e, p, n);
+    e[n] = '\0';
+    for (i = 0; i + 4 <= n; i++)
+    {
+        if ((i == 0 || !is_digit(e[i - 1])) && e[i] == '2' && e[i + 1] == '0' && is_digit(e[i + 2]) &&
+            is_digit(e[i + 3]) && !is_digit(e[i + 4]))
+        {
+            y = 2000 + (e[i + 2] - '0') * 10 + (e[i + 3] - '0');
+            break;
+        }
+    }
+    if (y == 0 || contains_ci(e, "special"))
+    {
+        return 0;
+    }
+    if (contains_ci(e, "primary") && contains_ci(e, "runoff"))
+    {
+        m = 5;
+        day = nth_weekday(y, 5, 2, 4);
+    }
+    else if (contains_ci(e, "primary"))
+    {
+        m = 3;
+        day = nth_weekday(y, 3, 2, 1);
+    }
+    else if (contains_ci(e, "general"))
+    {
+        m = 11;
+        day = nth_weekday(y, 11, 1, 1) + 1;
+    }
+    else
+    {
+        return 0;
+    }
+    return (uint32_t)y * 10000u + m * 100u + (uint32_t)(day - days_from_civil(y, m, 1) + 1);
+}
+
 /* Parse a numeric date "M[M]<sep>D[D]<sep>YYYY", "YYYY-MM-DD", "D[D]-MON-YY[YY]" or
  * "MMDDYYYY" found anywhere in @p s; returns yyyymmdd or 0. File names use only these: a
  * date spelled out in a file name ("ABBM LIST November 5 2024") names the election. */
@@ -976,6 +1037,10 @@ typedef struct RosterSource
     uint32_t date;            /* yyyymmdd from the file name, 0 unknown */
     BOOL updated;             /* "<name>_Updated" correction */
     BOOL in_person;           /* "IN PERSON" in the file name (Brazoria): never a mail list */
+    BOOL sos_list;            /* read as a Secretary of State turnout roster */
+    uint32_t sos_ed_date;     /* its in-person rows' election day (yyyymmdd), 0 none */
+    BOOL have_crc;            /* a ZIP entry: crc is its CRC-32 */
+    uint32_t crc;
     int skip;                 /* SKIP_* */
     int copy_of;              /* source index this file duplicates (SKIP_COPY) */
     uint32_t rec_begin;
@@ -989,7 +1054,8 @@ enum
     SKIP_REPEATED,
     SKIP_COPY,
     SKIP_UNSUPPORTED,
-    SKIP_REFERENCE /* a county's disclaimer, file layout or polling-place list */
+    SKIP_REFERENCE, /* a county's disclaimer, file layout or polling-place list */
+    SKIP_IDENTICAL  /* the same contents as a ZIP entry of a later selection */
 };
 
 typedef struct OpenZip
@@ -1042,6 +1108,10 @@ typedef struct HeaderMap
     BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
                      * as "Column N", never taken as notes */
     BOOL split_pct; /* Tarrant: a 6-digit precinct is precinct (4) + subcode (2) */
+    BOOL sos_list;  /* the Secretary of State's turnout roster (COUNTY, VOTER_NAME, ID_VOTER,
+                     * VOTING_METHOD, PRECINCT): cumulative, no voting date */
+    uint32_t sos_ed_date; /* an SOS Election Day roster's election day (yyyymmdd, from the
+                           * election name), given to its in-person rows; 0 none */
     int vt_scheme;  /* VT_*: how its vote-type codes read */
     int nx;
     int xcol[ROSTER_MAX_EXTRA];
@@ -1094,6 +1164,8 @@ typedef struct Loader
     uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
     uint32_t limited_forms; /* Limited Ballot poll lists (SOS form 5-38) read from PDFs */
     WBuf limited_dates;     /* those whose file-name date is not during early voting */
+    uint32_t sos_no_date;   /* records of Secretary of State turnout rosters (none has a
+                             * Date Voted) */
     /* progress */
     volatile LONG *cancel;
     EeLoadProgressFn progress_fn;
@@ -1373,13 +1445,14 @@ static void map_init(HeaderMap *m)
 }
 
 /* How well a header label names the state Voter ID (VUID): 1 = a state ID ("VUID",
- * "SOS Voter ID", "State Voter ID", "StateVoterID", Dallas's "State ID" / "StateIDNumber"),
- * 2 = a generic "Voter ID", 3 = a county's own number ("County Voter ID", Dallas: used
- * only when there is nothing better), 0 = not a voter ID. */
+ * "SOS Voter ID", "State Voter ID", "StateVoterID", Dallas's "State ID" / "StateIDNumber",
+ * the Secretary of State's "ID_VOTER"), 2 = a generic "Voter ID", 3 = a county's own number
+ * ("County Voter ID", Dallas: used only when there is nothing better), 0 = not a voter ID. */
 static int vuid_rank(const char *lab)
 {
     if (contains_ci(lab, "vuid") || contains_ci(lab, "sos voter") || contains_ci(lab, "state voter") ||
-        contains_ci(lab, "statevoter") || strncmp(lab, "state id", 8) == 0 || strncmp(lab, "stateid", 7) == 0)
+        contains_ci(lab, "statevoter") || strncmp(lab, "state id", 8) == 0 || strncmp(lab, "stateid", 7) == 0 ||
+        strcmp(lab, "id voter") == 0 || strcmp(lab, "idvoter") == 0)
         return 1;
     if (contains_ci(lab, "county voter"))
         return 3;
@@ -1420,6 +1493,9 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     BOOL has_subcode = FALSE;
     BOOL exact_pct = FALSE;
     BOOL county_pct = FALSE;
+    BOOL id_voter = FALSE;
+    BOOL county_col = FALSE;
+    BOOL method_col = FALSE;
     int titled = 0;
     int best_vuid = 0;
     map_init(m);
@@ -1473,9 +1549,13 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         {
             has_subcode = TRUE;
         }
+        id_voter |= (strcmp(lab, "id voter") == 0);
+        county_col |= (strcmp(lab, "county") == 0 || strcmp(lab, "county name") == 0);
+        method_col |= (strcmp(lab, "voting method") == 0);
     }
     m->rich = (titled >= 15);
     m->split_pct = sos_vuid && !has_subcode;
+    m->sos_list = id_voter && county_col && method_col;
     m->limited_form = limited_form;
     m->ncols = (int)r->row_len[row];
     for (c = 0; c < r->row_len[row]; c++)
@@ -1571,9 +1651,15 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         }
         else if (m->nx < ROSTER_MAX_EXTRA)
         {
-            int x = extra_col(L, title);
+            int x;
             int k;
             int again = 1;
+            if (m->sos_list && (strcmp(lab, "county") == 0 || strcmp(lab, "county name") == 0))
+            {
+                /* early voting rosters say "COUNTY", Election Day ZIPs "COUNTY_NAME" */
+                StringCchCopyA(title, ARRAYSIZE(title), "County");
+            }
+            x = extra_col(L, title);
             for (k = 0; k < m->nx && x >= 0; k++)
             {
                 if (m->xid[k] == (uint32_t)x)
@@ -2083,6 +2169,10 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     if (method == EE_VM_NONE && calendar_ok)
     {
         method = method_from_calendar(date);
+    }
+    if (m->sos_ed_date != 0 && method == EE_VM_ELECTION_DAY)
+    {
+        date = m->sos_ed_date; /* an SOS Election Day roster's IN-PERSON row */
     }
     if (method != sheet_method && method != EE_VM_NONE)
     {
@@ -2619,6 +2709,24 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         wb_append(&L->date_fixes, s->name);
         date = title_date;
     }
+    if (m.sos_list)
+    {
+        /* The Secretary of State's turnout rosters give no voting date: an early voting
+         * roster is cumulative ("Cumulative Totals Thru Close of Business" on the day in
+         * the file name), an Election Day roster's file name has the download day. MAIL-IN
+         * rows are mail; IN-PERSON rows take the file's method ("EarlyVoting" /
+         * "ElectionDay"), else the calendar's for the file's day. */
+        if (method == EE_VM_NONE)
+        {
+            method = method_from_calendar(s->date);
+        }
+        s->sos_list = TRUE;
+        date = 0;
+        /* Election Day voters in person voted on the election's day, which follows from
+         * the election's name (not for a special election). Mail rows stay undated. */
+        m.sos_ed_date = (method == EE_VM_ELECTION_DAY) ? sos_election_day(s->name8) : 0;
+        s->sos_ed_date = m.sos_ed_date;
+    }
     /* No method from the file name or title rows and none per row: a sheet with a mail
      * list's columns is the mail list; an in-person roster's method follows from its date. */
     calendar_ok = FALSE;
@@ -2748,7 +2856,35 @@ static BOOL has_timestamp(const char *s)
 static BOOL is_reference_name(const char *name)
 {
     return contains_ci(name, "disclaimer") || contains_ci(name, "readme") || contains_ci(name, "read me") ||
-           contains_ci(name, "file layout") || contains_ci(name, "poll code");
+           contains_ci(name, "file layout") || contains_ci(name, "poll code") ||
+           contains_ci(name, "polling_place_info"); /* the Secretary of State's ZIPs */
+}
+
+/* The Secretary of State's turnout site names its downloads "<COUNTY or STATEWIDE>.<election
+ * name>.<EarlyVoting|ElectionDay>.<MM_DD_YYYY>.<csv|zip>" (the date: the roster's day for
+ * early voting, the download day for Election Day). Its ZIPs hold the roster as
+ * "STATEWIDE_VOTER_INFO.csv" for every election and party, so that entry is named after
+ * its ZIP (party, method and date then come from the ZIP's name, and two parties' rosters
+ * are not taken for one file). FALSE for any other entry. */
+static BOOL sos_entry_name(const wchar_t *zip_path, const wchar_t *entry, wchar_t *out, size_t cch)
+{
+    char z8[MAX_PATH * 3];
+    char e8[MAX_PATH * 3];
+    wchar_t *dot;
+    WideCharToMultiByte(CP_UTF8, 0, base_name(zip_path), -1, z8, (int)sizeof(z8), NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, entry, -1, e8, (int)sizeof(e8), NULL, NULL);
+    if (!(contains_ci(z8, ".earlyvoting.") || contains_ci(z8, ".electionday.")) || !contains_ci(e8, "voter_info"))
+    {
+        return FALSE;
+    }
+    StringCchCopyW(out, cch, base_name(zip_path));
+    dot = wcsrchr(out, L'.');
+    if (dot != NULL)
+    {
+        *dot = L'\0';
+    }
+    StringCchCatW(out, cch, path_ext(entry));
+    return TRUE;
 }
 
 /* Fill name / key / date / method / updated from the display name. */
@@ -2892,9 +3028,20 @@ static BOOL expand_inputs(Loader *L, const wchar_t *const *paths, int count)
                 {
                     continue;
                 }
-                if (add_source(L, p, b, L->nzips - 1, e, st.m_uncomp_size) == NULL)
                 {
-                    return FALSE;
+                    wchar_t sos[MAX_PATH];
+                    RosterSource *s;
+                    if (sos_entry_name(p, b, sos, ARRAYSIZE(sos)))
+                    {
+                        b = sos;
+                    }
+                    s = add_source(L, p, b, L->nzips - 1, e, st.m_uncomp_size);
+                    if (s == NULL)
+                    {
+                        return FALSE;
+                    }
+                    s->have_crc = TRUE;
+                    s->crc = st.m_crc32;
                 }
             }
         }
@@ -2959,6 +3106,26 @@ static void mark_superseded(Loader *L)
             if (a->updated == b->updated && _wcsicmp(a->name, b->name) == 0 && j > i)
             {
                 a->skip = SKIP_REPEATED; /* the later input's copy is used */
+                break;
+            }
+        }
+    }
+    /* The same file downloaded on two days under two names (the Secretary of State's
+     * Election Day ZIPs carry the download date): ZIP entries of identical size and CRC
+     * in different ZIPs. The later input's copy is used. */
+    for (i = 0; i < L->nsrc; i++)
+    {
+        RosterSource *a = &L->src[i];
+        if (a->skip != SKIP_NONE || !a->have_crc || a->size == 0)
+        {
+            continue;
+        }
+        for (j = i + 1; j < L->nsrc; j++)
+        {
+            const RosterSource *b = &L->src[j];
+            if (b->skip == SKIP_NONE && b->have_crc && b->zip != a->zip && b->size == a->size && b->crc == a->crc)
+            {
+                a->skip = SKIP_IDENTICAL;
                 break;
             }
         }
@@ -4044,6 +4211,92 @@ static void note_file_list(Loader *L, WBuf *b, int skip, const wchar_t *label)
     }
 }
 
+/* The Secretary of State's turnout rosters read: early voting rosters (cumulative through
+ * the day in their file names; two of one party repeat each other's voters) and Election
+ * Day rosters (their file names carry the download day). */
+static void note_sos_lists(Loader *L, WBuf *b)
+{
+    uint32_t ev = 0;
+    uint32_t ed = 0;       /* Election Day rosters whose election day is known */
+    uint32_t ed_blank = 0; /* ... and not known (a special election) */
+    uint32_t ed_day = 0;   /* that day when all agree, else UINT32_MAX */
+    uint32_t thru = 0;
+    BOOL repeats = FALSE;
+    int i;
+    int j;
+    for (i = 0; i < L->nsrc; i++)
+    {
+        const RosterSource *s = &L->src[i];
+        if (!s->sos_list || s->skip != SKIP_NONE)
+        {
+            continue;
+        }
+        if (s->method == EE_VM_ELECTION_DAY)
+        {
+            if (s->sos_ed_date == 0)
+            {
+                ed_blank++;
+            }
+            else
+            {
+                ed++;
+                ed_day = (ed_day == 0 || ed_day == s->sos_ed_date) ? s->sos_ed_date : UINT32_MAX;
+            }
+            continue;
+        }
+        ev++;
+        if (s->date > thru)
+        {
+            thru = s->date;
+        }
+        for (j = i + 1; j < L->nsrc && !repeats; j++)
+        {
+            const RosterSource *t = &L->src[j];
+            repeats = t->sos_list && t->skip == SKIP_NONE && t->method == s->method &&
+                      (t->party == s->party ||
+                       (t->party != NULL && s->party != NULL && strcmp(t->party, s->party) == 0));
+        }
+    }
+    if (ev > 0)
+    {
+        wchar_t through[40] = L"";
+        if (thru != 0)
+        {
+            StringCchPrintfW(through, ARRAYSIZE(through), L" through %02lu/%02lu/%04lu",
+                             (unsigned long)((thru / 100u) % 100u), (unsigned long)(thru % 100u),
+                             (unsigned long)(thru / 10000u));
+        }
+        wb_printf(b, L"\r\n\r\n%lu Texas Secretary of State early voting roster%s read (cumulative%s): %s every "
+                     L"voter so far with no voting date, so Date Voted is blank.",
+                  (unsigned long)ev, ev == 1 ? L"" : L"s", through, ev == 1 ? L"it lists" : L"each lists");
+        if (repeats)
+        {
+            wb_append(b, L" A later roster repeats an earlier one's voters: load only the latest, or load two "
+                         L"in separate windows and Compare them to see who was added or dropped.");
+        }
+    }
+    if (ed > 0)
+    {
+        wchar_t day[24] = L"";
+        if (ed_day != UINT32_MAX)
+        {
+            StringCchPrintfW(day, ARRAYSIZE(day), L" (%02lu/%02lu/%04lu)", (unsigned long)((ed_day / 100u) % 100u),
+                             (unsigned long)(ed_day % 100u), (unsigned long)(ed_day / 10000u));
+        }
+        wb_printf(b, L"\r\n\r\n%lu Texas Secretary of State Election Day roster%s read: in-person voters get the "
+                     L"day of the election named in the file name%s as Date Voted; mail ballots have no date "
+                     L"(the date at the end of the file name is the day it was downloaded).",
+                  (unsigned long)ed, ed == 1 ? L"" : L"s", day);
+    }
+    if (ed_blank > 0)
+    {
+        wb_printf(b, L"\r\n\r\n%lu Texas Secretary of State Election Day roster%s read whose election is not a "
+                     L"primary, primary runoff or general election (a special election, say): %s no voting date "
+                     L"(the date in the file name is the day it was downloaded), so Date Voted is blank.",
+                  (unsigned long)ed_blank, ed_blank == 1 ? L"" : L"s", ed_blank == 1 ? L"it gives" : L"they give");
+    }
+}
+
 static void build_note(Loader *L)
 {
     EeRosterLoadInfo *in = L->info;
@@ -4077,6 +4330,8 @@ static void build_note(Loader *L)
         wb_append(&b, L"\r\n\r\nNot loaded:");
         note_file_list(L, &b, SKIP_SUPERSEDED, L"original file(s) replaced by a corrected (_Updated) file");
         note_file_list(L, &b, SKIP_REPEATED, L"file(s) also in a later selection (loaded once)");
+        note_file_list(L, &b, SKIP_IDENTICAL,
+                       L"file(s) identical to a file in a later selection (the same download saved twice)");
         note_file_list(L, &b, SKIP_COPY, L"file(s) whose voters all appear in a file of another voting method");
         note_file_list(L, &b, SKIP_UNSUPPORTED,
                        L"PDF or other file(s) that cannot be read (a scanned PDF, or not a roster table)");
@@ -4122,6 +4377,7 @@ static void build_note(Loader *L)
                      L"Date Voted is blank: %s",
                   L->limited_dates.p);
     }
+    note_sos_lists(L, &b);
     if (L->date_fixes.len > 0)
     {
         wb_printf(&b, L"\r\n\r\nThe date in these file names disagreed with the sheet's own date, which "
@@ -4165,13 +4421,15 @@ static void build_note(Loader *L)
                      L"Voter ID or name.",
                   n1, in->rows_redacted == 1 ? L"" : L"s");
     }
-    if (in->rows_no_date)
+    if (in->rows_no_date > L->sos_no_date)
     {
-        fmt_count(in->rows_no_date, n1, ARRAYSIZE(n1));
+        /* (the Secretary of State's rosters are explained above) */
+        uint32_t nd = in->rows_no_date - L->sos_no_date;
+        fmt_count(nd, n1, ARRAYSIZE(n1));
         wb_printf(&b, L"\r\n\r\n%s record%s have no Date Voted: the county's file gives no voting date for "
                      L"them (e.g. a cumulative early voting or Election Day list, provisional ballots, or "
                      L"an official roster that lists only \x201CIn Person\x201D or \x201CMail\x201D).",
-                  n1, in->rows_no_date == 1 ? L"" : L"s");
+                  n1, nd == 1 ? L"" : L"s");
     }
     if (in->vuids_duplicated)
     {
@@ -4329,6 +4587,10 @@ static EeLoadStatus emit_table(Loader *L, const int *order, EeVoterTable *out)
             if (rec->date == 0)
             {
                 L->info->rows_no_date++;
+                if (L->src[rec->source].sos_list)
+                {
+                    L->sos_no_date++;
+                }
             }
             emitted++;
             if ((emitted & 0x3FFF) == 0)
@@ -4533,6 +4795,7 @@ EeLoadStatus EeRoster_LoadFiles(const wchar_t *const *paths,
                 info->superseded_files++;
                 break;
             case SKIP_REPEATED:
+            case SKIP_IDENTICAL:
                 info->repeated_files++;
                 break;
             case SKIP_COPY:

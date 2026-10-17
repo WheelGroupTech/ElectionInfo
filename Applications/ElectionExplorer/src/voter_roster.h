@@ -12,8 +12,8 @@
  *
  * so the table's normalized Voter ID / Precinct / Name columns, filters, duplicate
  * scans, export, reports and compare all work as for a voter list. Bracketed columns
- * appear only when some row has a value. Travis, Tarrant, Harris and Dallas County,
- * TX formats are supported. See docs/voter-roster-design.md and
+ * appear only when some row has a value. The formats of 15 Texas counties and the Texas
+ * Secretary of State's turnout rosters are supported. See docs/voter-roster-design.md and
  * docs/voter-roster-county-survey.md.
  */
 #pragma once

@@ -175,6 +175,13 @@ with Election_Name joined; "BBM Recvd" dates; CountyElectionPrecinct), Galveston
 "LAST  FIRST MIDDLE" names vs a Dallas sheet's "SANDRA  GLEDHILL", Williamson's
 Voting Method "AV" (mail) on a 10/13 ballot (outside the 17-day early-voting window) and a
 blank method cell in an all-"AV" column;
+`sosroster` covers the Texas Secretary of State's turnout rosters: a loose statewide early
+voting CSV (`COUNTY`, `ID_VOTER`, MAIL-IN / IN-PERSON, a "Jr" suffix, no Date Voted) and
+Election Day ZIPs whose roster is `STATEWIDE_VOTER_INFO.csv` for both parties (named after
+the ZIP, so the party comes from it), a polling-place file beside it (reference, not read),
+the same ZIP saved under two download dates (loaded once), a voter on both parties'
+rosters, and Election Day dates from the election name (primary 03/03/2026, primary runoff
+05/26/2026, 2024 general 11/05/2024; mail rows and a special election blank);
 `dupvote` covers `EeVoterTable_MarkDuplicateVotersVoting` (Show Duplicate Voters Voting):
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without

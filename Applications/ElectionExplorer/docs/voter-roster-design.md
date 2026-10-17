@@ -8,8 +8,8 @@ Texas counties publish, during an election, rosters of who has voted: mail ballo
 received, early in-person voters, and (after the fact) Election Day voters. The format
 is not specified by law, and every county differs. Election Explorer 1.4 adds a
 **Voter Roster** window to load, browse, filter, report on, export and compare these
-rosters, starting with **Travis County, TX**. Other top-10 Texas counties and the Texas
-SOS roster data come after 1.4.
+rosters, starting with **Travis County, TX**. 14 more Texas counties and the Texas SOS
+statewide rosters followed before release (see `voter-roster-county-survey.md`).
 
 ## What Travis County actually publishes (surveyed 2026-10-10)
 

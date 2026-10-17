@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-14
+**Last updated:** 2026-10-17
 
 ### In progress — Voter Roster feature for 1.4 (steps 1–5 DONE, UNCOMMITTED)
 
@@ -116,6 +116,17 @@
   single-code column take that code; the calendar's early-voting window is now 17 days
   (was 21: it called 10/13 mail early voting). Survey doc "Williamson snapshots"; smoke
   `counties` extended. Snapshot policy unchanged (D1: both kept, duplicates flagged).
+- **Texas SOS rosters (2026-10-17, UNCOMMITTED):** the SOS turnout site's statewide / county
+  early voting CSVs (`COUNTY, VOTER_NAME, ID_VOTER, VOTING_METHOD, PRECINCT`, cumulative) and
+  Election Day ZIPs (`STATEWIDE_VOTER_INFO.csv` + polling-place file) load: Date Voted blank
+  except Election Day IN-PERSON rows, which get the election day from the election name
+  (primary / runoff / general; special elections blank -- user decision 2026-10-17),
+  County column, party from the file name, ZIP entry named after its ZIP, identical ZIP entries
+  (same size + CRC in two ZIPs, e.g. one ZIP downloaded twice) loaded once -- the last rule
+  applies to every county. Survey doc "Texas Secretary of State rosters" (site API, formats,
+  validation, follow-ups); Help, RELEASES (1,442 chars), STORE-LISTING; smoke `sosroster`.
+  Found: 118 Voter IDs on both the P26 DEM and REP Election Day rosters. Needs the user's
+  click-test (load the four P26 ZIPs; the G26 10/17 CSV).
 
 ### Committed — release notes file
 

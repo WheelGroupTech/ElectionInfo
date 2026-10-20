@@ -157,7 +157,8 @@ shifted row, a two-space file name) and a TSV round trip;
 `pdfroster` covers PDF rosters (`read_pdf_table`; needs `src\pdf_reader.c`): a
 two-page Bexar-style mail list (cells centered under their headers via the font's
 /Widths, a title line, no header on page 2, a "Page 2 of 2" footer, a suffix column, a
-blank middle name) and a PDF with no roster table (listed as not readable);
+blank middle name), a Bell-style roster (a short name left-aligned under a centered NAME,
+nearer the Voter ID title) and a PDF with no roster table (listed as not readable);
 `limitedpdf` covers Limited Ballot poll lists (SOS form 5-38) printed to PDF (needs
 `src\pdf_reader.c`): names as separate merge-field runs (a two-word first name, a two-word
 surname, an empty middle name with "BABIN Jr", a surname drawn in two pieces) or one run
@@ -174,7 +175,8 @@ row and the VUID / name columns swapped), Montgomery (one row per jurisdiction, 
 with Election_Name joined; "BBM Recvd" dates; CountyElectionPrecinct), Galveston's
 "LAST  FIRST MIDDLE" names vs a Dallas sheet's "SANDRA  GLEDHILL", Williamson's
 Voting Method "AV" (mail) on a 10/13 ballot (outside the 17-day early-voting window) and a
-blank method cell in an all-"AV" column;
+blank method cell in an all-"AV" column, Collin's mail list with a ballot not received yet
+("-": skipped, noted) and its check-in sheet (CertificateNumber = VUID, VoteDate);
 `sosroster` covers the Texas Secretary of State's turnout rosters: a loose statewide early
 voting CSV (`COUNTY`, `ID_VOTER`, MAIL-IN / IN-PERSON, a "Jr" suffix, no Date Voted) and
 Election Day ZIPs whose roster is `STATEWIDE_VOTER_INFO.csv` for both parties (named after

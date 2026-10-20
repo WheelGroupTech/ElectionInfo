@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-20
 
 ### In progress — Voter Roster feature for 1.4 (steps 1–5 DONE, UNCOMMITTED)
 
@@ -127,6 +127,16 @@
   validation, follow-ups); Help, RELEASES (1,442 chars), STORE-LISTING; smoke `sosroster`.
   Found: 118 Voter IDs on both the P26 DEM and REP Election Day rosters. Needs the user's
   click-test (load the four P26 ZIPs; the G26 10/17 CSV).
+- **G26 early voting update (2026-10-20):** Travis 10/19 ZIP checked (40,777 in person =
+  county figure; 5,076 mail; 40 Limited). New rosters downloaded for every top-20 county
+  (`Voter_Rosters/TX_<County>_County/G26_*`; new folders Collin, Fort Bend, Bell, Nueces, Hays,
+  Lubbock SOS only) plus SOS county CSVs 10/14-10/19 for all 20 (county CSVs are DAILY, not
+  cumulative). Loader fixes: PDF table runs under no title go to the nearest unfilled column
+  (Bell lost 208 rows); `CertificateNumber` = Voter ID, `VoteDate` = Date Voted (Collin,
+  Webb); mail rows with "-" received date = not returned, skipped + noted (Collin 10,257).
+  Survey doc "Early voting update (2026-10-20)" has the per-county table. Smoke green.
+  Daily downloads continue through 10/30 (Collin, Bell, Fort Bend, Williamson, Denton keep
+  no history).
 
 ### Committed — release notes file
 

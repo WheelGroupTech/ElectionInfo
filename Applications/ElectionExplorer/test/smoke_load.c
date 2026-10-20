@@ -8369,7 +8369,8 @@ static BOOL proster_write(const wchar_t *path, TBuf *pages, int npages)
 /* PDF rosters (tag: pdfroster): a Bexar-style mail list printed to PDF from Excel --
  * cells centered under their headers, a title line above the header, a second page with
  * no header row and a "Page 2 of 2" footer, a name suffix column, a blank middle name --
- * and a PDF with no roster table (listed as not readable). */
+ * a Bell-style roster (a short name, left-aligned under a centered NAME title, nearer the
+ * Voter ID title) and a PDF with no roster table (listed as not readable). */
 static int test_pdf_roster(void)
 {
     static const double k_cx[7] = {70, 150, 215, 270, 360, 450, 525};
@@ -8382,8 +8383,9 @@ static int test_pdf_roster(void)
         {"2166120393", "ALEMAN REYES", "", "DAVID", "MANUEL", "10/6/2026", "S 3072.01"}};
     TBuf pages[2] = {{0}, {0}};
     TBuf other = {0};
-    wchar_t p1[MAX_PATH], p2[MAX_PATH];
-    const wchar_t *paths[2];
+    TBuf bell = {0};
+    wchar_t p1[MAX_PATH], p2[MAX_PATH], p3[MAX_PATH];
+    const wchar_t *paths[3];
     EeVoterTable t;
     EeRosterLoadInfo info;
     wchar_t err[256];
@@ -8409,26 +8411,39 @@ static int test_pdf_roster(void)
     }
     ok = ok && proster_text(&pages[1], 300, 40, "Page 2 of 2");
     ok = ok && proster_text(&other, 300, 700, "Poll List for Limited Ballot Voters");
+    /* Bell: names left-aligned under a centered "NAME"; a short one lies nearer the
+     * Voter ID title but belongs to the Name column. */
+    ok = ok && tb_printf(&bell, "BT /F1 10 Tf 1 0 0 1 38 740 Tm (SOS_VOTERID) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 233 740 Tm (NAME) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 391 740 Tm (PRECINCT) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 477 740 Tm (ACTIVITYDATE) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 42 724 Tm (2119903329) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 123 724 Tm (LEE, AL) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 406 724 Tm (105) Tj ET\n"
+                                "BT /F1 10 Tf 1 0 0 1 485 724 Tm (19-OCT-26) Tj ET\n");
     GetTempPathW(MAX_PATH, p1);
     StringCchCopyW(p2, MAX_PATH, p1);
     StringCchCatW(p1, MAX_PATH, L"G26_ABBM_Recvd_10052026.pdf");
+    StringCchCopyW(p3, MAX_PATH, p2);
     StringCchCatW(p2, MAX_PATH, L"10.22.2025 Limited Ballot.pdf");
+    StringCchCatW(p3, MAX_PATH, L"G26_20261019_EV.pdf");
     EeVoterTable_Init(&t);
     ZeroMemory(&info, sizeof(info));
-    if (!ok || !proster_write(p1, pages, 2) || !proster_write(p2, &other, 1))
+    if (!ok || !proster_write(p1, pages, 2) || !proster_write(p2, &other, 1) || !proster_write(p3, &bell, 1))
     {
         wprintf(L"pdfroster: could not write the PDFs\n");
         goto done;
     }
     paths[0] = p1;
     paths[1] = p2;
-    if (EeRoster_LoadFiles(paths, 2, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    paths[2] = p3;
+    if (EeRoster_LoadFiles(paths, 3, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
     {
         wprintf(L"pdfroster: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 4 || info.method_rows[EE_VM_MAIL] != 4 || info.unsupported_files != 1 ||
-        info.rows_non_voter != 0 || info.rows_no_date != 0 || info.files_read != 1)
+    if (t.row_count != 5 || info.method_rows[EE_VM_MAIL] != 4 || info.unsupported_files != 1 ||
+        info.rows_non_voter != 0 || info.rows_no_date != 0 || info.files_read != 2)
     {
         wprintf(L"pdfroster: rows %u mail %u unsupported %u nonvoter %u nodate %u files %u\n", t.row_count,
                 info.method_rows[EE_VM_MAIL], info.unsupported_files, info.rows_non_voter, info.rows_no_date,
@@ -8446,7 +8461,10 @@ static int test_pdf_roster(void)
         !rt_expect(&t, L"ADAMIUK", L"JOAO", L"Precinct", L"S 3089.01") ||
         !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Date Voted", L"10/06/2026") ||
         !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Voting Method", L"Mail Ballot") ||
-        !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Source File", L"G26_ABBM_Recvd_10052026.pdf"))
+        !rt_expect(&t, L"ALEMAN REYES", L"DAVID", L"Source File", L"G26_ABBM_Recvd_10052026.pdf") ||
+        !rt_expect(&t, L"LEE", L"AL", L"VUID", L"2119903329") ||
+        !rt_expect(&t, L"LEE", L"AL", L"Precinct", L"105") ||
+        !rt_expect(&t, L"LEE", L"AL", L"Voting Method", L"Early Vote In-Person"))
     {
         goto done;
     }
@@ -8471,10 +8489,12 @@ done:
     free(pages[0].p);
     free(pages[1].p);
     free(other.p);
+    free(bell.p);
     EeRoster_FreeInfo(&info);
     EeVoterTable_Clear(&t);
     DeleteFileW(p1);
     DeleteFileW(p2);
+    DeleteFileW(p3);
     if (rc != 0)
     {
         wprintf(L"pdfroster test failed\n");
@@ -8704,7 +8724,9 @@ done:
  * - Galveston's "WARD  SHARON MARIE" (LAST, two spaces, FIRST MIDDLE) vs a Dallas sheet's
  *   "SANDRA  GLEDHILL" (an empty middle name);
  * - Williamson: Voting Method "AV" (mail) on a 10/13 ballot -- before early voting, which
- *   starts at most 17 days before Nov 3 -- and a row whose method cell is blank. */
+ *   starts at most 17 days before Nov 3 -- and a row whose method cell is blank;
+ * - Collin: a mail list that also lists a ballot not received yet ("-": skipped, noted) and
+ *   an early voting check-in sheet ("CertificateNumber" = the VUID, "VoteDate"). */
 static int test_county_rosters(void)
 {
     static const struct
@@ -8756,6 +8778,15 @@ static int test_county_rosters(void)
          "Name,State ID,Address,Polling Place,Date,Precinct,Split,Party\r\n"
          "SANDRA  GLEDHILL,1000118421,1 MAIN ST GARLAND TX 75043,V2713R,46084.6006944444,1716,01,REP\r\n"
          "LINDA DALE TOMLINSON,1000118423,1613 BLACKHAWK LN GARLAND TX 75043,V2713R,46084.6006944444,1716,01,REP\r\n"},
+        {L"G26_absentee-returns-through-october-19-2026.csv",
+         "VUID,LastName,FirstName,MiddleName,NameSuffix,BirthDate,Precinct,BallotStyle,MailDate,ReceivedDate,"
+         "ReturnDate\r\n"
+         "2143304890,ABDI,HERVE,,,1952-07-26,55.01,54G,2026-09-22,2026-10-07,2026-10-14\r\n"
+         "1076679584,AARON,WILLIAM,F,III,1963-11-29,111.02,79G,2026-10-06,-,-\r\n"},
+        {L"G26_early-voting-through-october-19-2026.csv",
+         "VoterName,VoterAddress,CertificateNumber,Precinct,VoteDate,VotedBallotStyle1,VoteType,VotedPhase\r\n"
+         "\"AALDERINK, RAFE AARON\",\"2448 BRYCEWOOD LN, PLANO, TX 75025\",1077076274,121,2026-10-19,25G,Regular,"
+         "Early Voting\r\n"},
         {L"G26_VoterTurnout_261013_202610131840074642.csv",
          "VUID,Name,Precinct,Election Name,Voting Method,Ballot Date\r\n"
          "1168600721,\"AARON,CHARLES SIDNEY\",393,2026 NOVEMBER 3 JOINT GENERAL AND SPECIAL ELECTION,AV,10/13/2026\r\n"
@@ -8790,7 +8821,7 @@ static int test_county_rosters(void)
         wprintf(L"counties: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 18 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+    if (t.row_count != 20 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
         info.vuids_duplicated != 0)
     {
         wprintf(L"counties: rows %u unknown %u nonvoter %u dup %u\n", t.row_count, info.method_rows[EE_VM_NONE],
@@ -8827,12 +8858,18 @@ static int test_county_rosters(void)
         !rt_expect(&t, L"TOMLINSON", L"LINDA", L"Middle Name", L"DALE") ||
         !rt_expect(&t, L"AARON", L"CHARLES", L"Voting Method", L"Mail Ballot") ||
         !rt_expect(&t, L"AARON", L"CHARLES", L"Date Voted", L"10/13/2026") ||
-        !rt_expect(&t, L"HURT", L"SHANNA", L"Voting Method", L"Mail Ballot"))
+        !rt_expect(&t, L"HURT", L"SHANNA", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"ABDI", L"HERVE", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"ABDI", L"HERVE", L"Date Voted", L"10/07/2026") ||
+        !rt_expect(&t, L"AALDERINK", L"RAFE", L"VUID", L"1077076274") ||
+        !rt_expect(&t, L"AALDERINK", L"RAFE", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"AALDERINK", L"RAFE", L"Date Voted", L"10/19/2026"))
     {
         goto done;
     }
     if (info.note == NULL || wcsstr(info.note, L"1 row merged") == NULL ||
-        wcsstr(info.note, L"P26_2026-02-19-IN PERSON-DEM.csv") == NULL)
+        wcsstr(info.note, L"P26_2026-02-19-IN PERSON-DEM.csv") == NULL ||
+        wcsstr(info.note, L"1 mail ballot listed as sent but not received yet") == NULL)
     {
         wprintf(L"counties: note: %s\n", info.note ? info.note : L"(none)");
         goto done;

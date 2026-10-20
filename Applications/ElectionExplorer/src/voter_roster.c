@@ -1163,6 +1163,7 @@ typedef struct Loader
     WBuf swapped; /* sheets whose Voter ID / name columns were read by their contents */
     uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
     uint32_t limited_forms; /* Limited Ballot poll lists (SOS form 5-38) read from PDFs */
+    uint32_t not_returned;  /* mail list rows for ballots not received yet ("-"): skipped */
     WBuf limited_dates;     /* those whose file-name date is not during early voting */
     uint32_t sos_no_date;   /* records of Secretary of State turnout rosters (none has a
                              * Date Voted) */
@@ -1457,8 +1458,10 @@ static int vuid_rank(const char *lab)
     if (contains_ci(lab, "county voter"))
         return 3;
     if (contains_ci(lab, "voter id") || contains_ci(lab, "voterid") || strcmp(lab, "cert") == 0 ||
-        strcmp(lab, "cert #") == 0 || strcmp(lab, "cert#") == 0)
-        return 2; /* Hidalgo / Lubbock "CERT" (the VUID); Tarrant's "Certificate" is not */
+        strcmp(lab, "cert #") == 0 || strcmp(lab, "cert#") == 0 || strcmp(lab, "certificatenumber") == 0 ||
+        strcmp(lab, "certificate number") == 0)
+        return 2; /* Hidalgo / Lubbock "CERT", Collin / Webb "CertificateNumber" (the VUID);
+                   * Tarrant's "Certificate" is not */
     return 0;
 }
 
@@ -1611,9 +1614,11 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                                  strcmp(lab, "receiveddate") == 0 || strcmp(lab, "date received") == 0 ||
                                  strcmp(lab, "check-in") == 0 || strcmp(lab, "check in") == 0 ||
                                  strcmp(lab, "check-in date") == 0 || strcmp(lab, "checkin date") == 0 ||
-                                 strcmp(lab, "status date") == 0 || strcmp(lab, "ballot date") == 0))
+                                 strcmp(lab, "status date") == 0 || strcmp(lab, "ballot date") == 0 ||
+                                 strcmp(lab, "votedate") == 0 || strcmp(lab, "vote date") == 0))
             m->date = ci; /* Dallas: "Date" (P26 rosters), "Date Ballot Returned" (precincts);
-                           * Bexar / Brazoria "Ballot Received Date", Webb "ReceivedDate" */
+                           * Bexar / Brazoria "Ballot Received Date", Webb "ReceivedDate", Collin
+                           * "VoteDate" */
         else if (m->source < 0 && contains_ci(lab, "source file"))
             m->source = ci;
         else if (m->pct < 0 &&
@@ -2122,6 +2127,19 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     else if (!named)
     {
         return; /* Limited Ballot form: unused numbered lines */
+    }
+
+    /* A mail list that also lists ballots sent but not back yet (Collin: "-" in its
+     * ReceivedDate column) -- those voters have not voted. */
+    if (m->mail_hint && m->date >= 0)
+    {
+        char dv[8];
+        clean_text(cell_at(r, row, m->date), dv, sizeof(dv));
+        if (strcmp(dv, "-") == 0)
+        {
+            L->not_returned++;
+            return;
+        }
     }
 
     /* Canonical export columns override the sheet-level method / date; an export's
@@ -3780,51 +3798,100 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                     continue;
                 }
             }
-            /* A data line: each run to the column it overlaps most. */
+            /* A data line: each run to the column it overlaps most. A run under no title
+             * goes to the nearest column this line has not filled yet (Bell: a short name,
+             * left-aligned under a centered "NAME", lies nearer the Voter ID title, but
+             * the Voter ID column already holds the number); else the nearest. */
             for (c = 0; c < ncols; c++)
             {
                 cells[c][0] = '\0';
                 cellp[c] = cells[c];
             }
-            for (k = 0; k < ln->count; k++)
             {
-                const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
-                float x0 = r->x;
-                float x1 = r->x + pdf_run_width(r);
-                float mid = (x0 + x1) / 2.0f;
-                float best_ov = 0.0f;
-                float best_d = 1e30f;
-                int best = -1;
-                int nearest = 0;
-                char t[PDF_TABLE_CELL];
-                for (c = 0; c < ncols; c++)
+                int col_of[256];
+                BOOL filled[PDF_TABLE_MAX_COLS] = {FALSE};
+                uint32_t nk = ln->count < ARRAYSIZE(col_of) ? ln->count : (uint32_t)ARRAYSIZE(col_of);
+                int pass;
+                for (k = 0; k < nk; k++)
                 {
-                    float lo = x0 > cx0[c] ? x0 : cx0[c];
-                    float hi = x1 < cx1[c] ? x1 : cx1[c];
-                    float d = mid - (cx0[c] + cx1[c]) / 2.0f;
-                    if (hi - lo > best_ov)
+                    col_of[k] = -1;
+                }
+                for (pass = 0; pass < 2; pass++)
+                {
+                    for (k = 0; k < nk; k++)
                     {
-                        best_ov = hi - lo;
-                        best = c;
+                        const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
+                        float x0 = r->x;
+                        float x1 = r->x + pdf_run_width(r);
+                        float mid = (x0 + x1) / 2.0f;
+                        float best_ov = 0.0f;
+                        float best_d = 1e30f;
+                        float empty_d = 1e30f;
+                        int best = -1;
+                        int nearest = 0;
+                        int nearest_empty = -1;
+                        char t[PDF_TABLE_CELL];
+                        if (col_of[k] >= 0)
+                        {
+                            continue;
+                        }
+                        pdf_run_text(&pt, r, t, sizeof(t));
+                        for (c = 0; c < ncols; c++)
+                        {
+                            float lo = x0 > cx0[c] ? x0 : cx0[c];
+                            float hi = x1 < cx1[c] ? x1 : cx1[c];
+                            float d = mid - (cx0[c] + cx1[c]) / 2.0f;
+                            if (hi - lo > best_ov)
+                            {
+                                best_ov = hi - lo;
+                                best = c;
+                            }
+                            if (d < 0)
+                                d = -d;
+                            if (d < best_d)
+                            {
+                                best_d = d;
+                                nearest = c;
+                            }
+                            if (!filled[c] && d < empty_d)
+                            {
+                                empty_d = d;
+                                nearest_empty = c;
+                            }
+                        }
+                        if (pass == 0)
+                        {
+                            if (best < 0)
+                            {
+                                continue; /* placed in the second pass */
+                            }
+                        }
+                        else
+                        {
+                            best = (nearest_empty >= 0) ? nearest_empty : nearest;
+                        }
+                        col_of[k] = best;
+                        if (t[0] != '\0')
+                        {
+                            filled[best] = TRUE;
+                        }
                     }
-                    if (d < 0)
-                        d = -d;
-                    if (d < best_d)
+                }
+                for (k = 0; k < ln->count; k++)
+                {
+                    char t[PDF_TABLE_CELL];
+                    int col = (k < nk) ? col_of[k] : ncols - 1;
+                    pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                    if (col < 0)
                     {
-                        best_d = d;
-                        nearest = c;
+                        continue;
                     }
+                    if (cells[col][0] != '\0')
+                    {
+                        StringCchCatA(cells[col], PDF_TABLE_CELL, " ");
+                    }
+                    StringCchCatA(cells[col], PDF_TABLE_CELL, t);
                 }
-                if (best < 0)
-                {
-                    best = nearest;
-                }
-                pdf_run_text(&pt, r, t, sizeof(t));
-                if (cells[best][0] != '\0')
-                {
-                    StringCchCatA(cells[best], PDF_TABLE_CELL, " ");
-                }
-                StringCchCatA(cells[best], PDF_TABLE_CELL, t);
             }
             if (!rows_sink(sc, cellp, (uint32_t)ncols))
             {
@@ -4362,6 +4429,14 @@ static void build_note(Loader *L)
         wb_printf(&b, L"\r\n\r\n%lu worksheet(s) had no header row; the header of a sheet with the same "
                      L"columns was used: %s",
                   (unsigned long)in->recovered_sheets, L->recovered.p ? L->recovered.p : L"");
+    }
+    if (L->not_returned > 0)
+    {
+        wchar_t nn[32];
+        fmt_count(L->not_returned, nn, ARRAYSIZE(nn));
+        wb_printf(&b, L"\r\n\r\n%s mail ballot%s listed as sent but not received yet (\x201C-\x201D for the received "
+                     L"date) %s not loaded: those voters have not voted yet.",
+                  nn, L->not_returned == 1 ? L"" : L"s", L->not_returned == 1 ? L"was" : L"were");
     }
     if (L->limited_forms > 0)
     {

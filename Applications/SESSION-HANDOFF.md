@@ -108,7 +108,8 @@
   for name; every other load byte-identical. Smoke test `limitedpdf`. Help, RELEASES (1,442
   chars), STORE-LISTING, survey doc "Limited Ballot PDFs", design doc D2 updated. Needs the
   user's click-test (load the G25 or P26 Travis ZIP; Voting Totals' Limited column).
-- **Next:** final validation and the 1.4.0.0 Store bundle when the user is ready. Known
+- **1.4.0.0 Store bundle BUILT (2026-10-20):** `Build/msix/ElectionExplorer.Package_1.4.0.0_x64_arm64_bundle.msixupload` (4.3 MB). Verified: bundle + both packages `WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-...980D6` / 1.4.0.0; both EXEs File/ProductVersion 1.4.0.0 (x64 = 0x8664, ARM64 = 0xAA64) with the latest roster help text; 19 logo images each; runFullTrust only. Smoke 60/60; x64 + ARM64 Release rebuild clean. LESSON: an incremental wapproj build reused stale `bin/<arch>/Release/Upload/AppxManifest.xml` (1.3.0.0) inside a 1.4.0.0 bundle -- always delete the package's bin/obj/BundleArtifacts (or /t:Rebuild) after a version bump and check the inner manifests. Help / RELEASES (1,442 chars) / STORE-LISTING (6,170) now say 18 counties (+ Collin, Fort Bend, Bell). User to submit in Partner Center (paste RELEASES 1.4 note as "What's new").
+- **Next:** submit 1.4.0.0; daily roster downloads run via the scheduled task (Oct 21 - Nov 4). Known
   leftovers: Bexar P26 02-19 headerless mail CSV, Brazoria rejected-ballot sheets
   (not readable, listed).
 - **Williamson snapshots (2026-10-14):** the user's 10/13 workbook is a cumulative snapshot

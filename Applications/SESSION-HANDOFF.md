@@ -142,8 +142,18 @@
   now cover the 50 most populous counties (Census 2025 estimates; ranks 1-20 = the counties
   already tracked). All 30 new counties get SOS county CSVs; 16 post their own rosters and
   have script functions (79 files on 10/21); Wichita's PDFs are behind a Cloudflare challenge
-  (listed for manual download). Survey doc "Counties 21-50 (2026-10-21)". **Next:** try the
-  loader on the 16 new layouts (mostly PDFs: Smith, Gregg, Hunt, Potter, Brazos, ...).
+  (listed for manual download). Survey doc "Counties 21-50 (2026-10-21)".
+- **Counties 21-50 loader support (2026-10-21, UNCOMMITTED):** all 16 load (Guadalupe's
+  scanned mail PDFs excepted); per-county counts vs independent ID counts and SOS 10/19 in
+  the survey doc's "Loader support (2026-10-21)". `pdf_reader`: opt-in `split_gaps` (TJ
+  column kerns -> runs) and `rot` (rotated pages); `voter_roster.c`: Voter ID / precinct
+  affinity, row numbers, touching runs, page footers/titles, new titles, Time-as-date,
+  short-year and weekday file-name dates, M/D/YY cells, stacked headers. Help topic updated
+  (main.c). Smoke 61/61 (new `county50`); Release x64 + ARM64 clean. Regression: existing
+  counties identical except Harris/Dallas row ORDER (file-name dates from "10-19-26").
+  Ships as **1.4.1.0, planned for the night of 2026-10-22** (user decision: wait for one
+  more day's rosters). Before building: reload all 50 counties' 10/21 files (c50 counts vs
+  independent ID counts and SOS), then version bump, RELEASES / STORE-LISTING, clean bundle.
 
 ### Committed — release notes file
 

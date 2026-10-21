@@ -55,6 +55,9 @@ extern "C"
                             * font's glyph widths (valid when has_width); the run's
                             * position does not include it (runs are not advanced) */
         int has_width;
+        int rot; /* text direction in user space, degrees counterclockwise: 0 = left to
+                  * right, 90 = bottom to top, 180, 270 = top to bottom (a page printed
+                  * rotated, e.g. landscape through a portrait driver) */
     } EePdfTextRun;
 
     /** Text runs of one page, in content-stream order. Reused across pages. */
@@ -66,6 +69,10 @@ extern "C"
         char *text; /* UTF-8 text pool referenced by runs */
         size_t text_len;
         size_t text_cap;
+        int split_gaps; /* set by the caller (kept across pages): a TJ word-gap kern ends the
+                         * run and the text after it starts a new run at its own position
+                         * (tables printed through a PostScript driver draw each line as one
+                         * TJ with the column gaps as kerns); off = the gap becomes a space */
     } EePdfPageText;
 
     /**

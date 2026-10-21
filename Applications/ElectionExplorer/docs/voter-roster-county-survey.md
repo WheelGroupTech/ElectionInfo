@@ -637,9 +637,70 @@ seen to carry a VUID column (only a few were sampled).
 | 49 | Coryell | SOS only |
 | 50 | Walker | SOS only |
 
-The first download on 10/21 got 79 county files (16 counties). The loader has not been tried
-on these layouts yet; several are PDFs in new layouts (Gregg, Hunt, Potter, Smith, Brazos, Tom
-Green, Bowie, Henderson, Angelina, Guadalupe, McLennan, Randall, Victoria).
+The first download on 10/21 got 79 county files (16 counties).
+
+### Loader support (2026-10-21)
+
+All 16 load except Guadalupe's mail lists, which are scanned images (ScandAll PRO, no text
+layer: listed as not readable). Checked against an independent count of 10-digit Voter IDs
+per file (`pdftotext -raw`, CSV text, XLSX XML) and against the SOS county CSV for 10/19:
+
+| County | Loaded (files of 10/21) | 10/19 in person: loaded / SOS |
+|---|---|---|
+| McLennan | 11,958 = IDs in the PDF; no method or date in the list | - / 4,912 |
+| Smith | 5,863 + 5,982 in person, 1,308 + 1,568 mail (= IDs) | 5,863 / 5,827 |
+| Brazos | 4,561 in person, 906 mail (17 daily PDFs, = IDs) | 4,561 / 4,563 |
+| Grayson | 5,497 + 4,788 check-ins, 920 mail | 5,497 / 5,457 |
+| Randall | 8,520 in person (10/19-10/20, from "Time"), 1,503 mail (rotated page) | 4,394 / 4,399 |
+| Wichita | 2,945 + 2,783 check-ins, 698 mail (= IDs) | 2,945 / 2,942 |
+| Gregg | 3,677 + 3,536 in person, 839 mail | 3,677 / 2 (SOS lags) |
+| Hunt | 10/20 file 3,920 (cumulative, 10/19 + 10/20); 10/19 file 1,808 of 2,362 | 1,840 (10/20 file) / 1,798 |
+| Tom Green | 2,634 in person, 1,131 mail (= IDs) | 2,634 / 2,620 |
+| Bastrop | 3,143 + 2,888 in person, 824 mail (= IDs) | 3,143 / 3,143 |
+| Potter | 4,148 in person (cumulative, no date), 812 mail (= IDs) | - / 2,179 |
+| Bowie | 2,023 in person, 696 mail (20 daily PDFs) | 2,023 / 2,027 |
+| Victoria | 2,872 (1,114 mail + 1,758 in person dated 10/20 only), PDF and XLSX alike | - / 1,655 |
+| Henderson | 3,257 + 2,823 (= IDs) | 3,257 / 3,257 |
+| Angelina | 2,566 (= IDs) | 2,566 / 2,566 |
+
+Loader changes (`pdf_reader.c`, `voter_roster.c`):
+
+- **TJ column gaps** (`EePdfPageText.split_gaps`, set by the roster reader only): Acrobat
+  Distiller output (Randall, Gregg) draws each printed line as one TJ with the columns set
+  apart by kerns; a word-gap kern now ends the run and the text after it starts a new run
+  at its own position (off = a space, as before, for the Hart readers).
+- **Rotated pages** (`EePdfTextRun.rot`): Randall's mail roster reads bottom to top; the
+  runs are turned into the reading frame before lines are formed.
+- **Cells**: a run under no title that is a Voter ID goes to the Voter ID column, a short
+  number to the precinct column (Brazos); an untitled row number left of the table is
+  dropped (Potter); runs that touch inside one clip join without a space, also in the
+  header (Gregg "MiddleNam" + "e"; Hunt's touching titles are in separate clips); a line
+  with "N of M" and no Voter ID is a page footer (Gregg); on a page without a header row,
+  lines above its first Voter ID line are titles (Bowie).
+- **Titles**: "Prct" (Smith), "SFX", "Vote Method" (Victoria; "IN PERSON" there = early
+  voting or Election Day by the row's date, never the file name's "mail"), "ballot
+  returned", "Ballot Received", "Ballot Status Date", "Date Rec'd", a bare "Voter" as the
+  name when nothing else names it (Bowie), Hunt's printed-short "voter_state_vot"; a
+  check-in "Time" / "checkin_time" holding date + time is Date Voted when the sheet has no
+  date column and nearly every row has a date in it (not Bexar's mostly empty
+  "Check-in Time").
+- **Dates**: cell dates "M/D/YY" (Tom Green); file-name dates "MMDDYY" / "M.D.YY" when the
+  name has no other date and no digit run of 7+ (Randall's and Hidalgo's upload stamps),
+  and a weekday + month + day (Bastrop "Monday-October-19": the latest year, up to next
+  year, in which that day was that weekday).
+- **Stacked headers** (Grayson's check-in report): 3+ consecutive rows of one or two
+  digit-free titles become one header, each title over the nearest data column at or left
+  of it.
+
+Known gaps: Hunt's revised 10/19 file switches to a shifted column order without a header
+on pages 41-54 (554 rows left out, counted as non-voter rows; its 10/20 file lists 10/19
+too). McLennan's list gives no method or date. Victoria re-posts one file each day; its 10/19
+in-person voters were already gone on 10/21. Potter's cumulative early voting roster has no
+dates: the downloader now names its snapshots `_YYYY-MM-DD-hh-mm-ss` (a save time, not a
+voting day). Harris's `Cumulative_EV_ToPost_1126_10-19-26.csv` entries now get their
+file-name date too (same rows, ordered by date).
+
+Smoke test `county50` covers every rule above with synthetic files.
 
 ## Open questions for the user
 

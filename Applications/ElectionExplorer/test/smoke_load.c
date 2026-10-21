@@ -8891,6 +8891,203 @@ cleanup:
     return rc;
 }
 
+/* Rosters of Texas counties 21-50 (tag: county50; needs src\pdf_reader.c). PDFs: a line
+ * drawn as one TJ with the columns set apart by kerns, a check-in "Time" holding the date,
+ * a title drawn in two touching pieces, a footer in two runs ("... 87.121" / "1 of 2"), a
+ * second page whose title line precedes the rows (Randall, Gregg, Bowie); a page printed
+ * rotated (Randall's mail roster); numbers right-aligned past left-aligned titles (Brazos);
+ * an untitled row number left of the table (Potter). Text files: a stacked header with the
+ * titles right of their data (Grayson), "MAIL" / "IN PERSON" under "VOTE METHOD" in a list
+ * named "mail and in person" (Victoria), "M/D/YY" dates under "ballot returned" and a
+ * "101926" file-name date (Tom Green), a weekday file name (Bastrop), "M.D.YY" and "Prct"
+ * (Smith), a bare "Voter" name title with "Date Rec'd" (Bowie), and Hunt's truncated
+ * "voter_state_vot" title. */
+static int test_county50(void)
+{
+    static const struct
+    {
+        const wchar_t *name;
+        const char *text;
+    } k_text[] = {
+        {L"October 20 2026 EV Check-in Report.csv",
+         "Check-In Report Early Voting\r\n\r\n"
+         ",,,,,,,,,,,,,Precinct\r\n,,,,,,,,,,Voter ID\r\n,,,,Voter Name\r\n"
+         ",,,,,,,,,,,,,,,,,,,,Check-in Date,,,,,,,Phase\r\n,,,,,,,Voter Address\r\n\r\n"
+         ",,\"GRAY, ANNA B\",,,\"1 MAIN ST, SHERMAN, TX\",,,1206590038,,,105,,,,,,,46315,,,,,,,,Early Voting\r\n"
+         ",,\"GRAY, BEN C\",,,\"2 MAIN ST, SHERMAN, TX\",,,1205839982,,,109,,,,,,,46315,,,,,,,,Early Voting\r\n"
+         ",,\"GRAY, CAL D\",,,\"3 MAIN ST, SHERMAN, TX\",,,1204735374,,,108,,,,,,,46315,,,,,,,,Early Voting\r\n"},
+        {L"10-20-2026 mail and in person.csv",
+         "VUID,NAME,CHECK-IN,PCT,VOTE METHOD\r\n"
+         "1000265154,\"VICK,ANN\",10/7/2026,33,MAIL\r\n1000055552,\"VICK,BOB\",10/20/2026,18,IN PERSON\r\n"},
+        {L"101926BallotsByMail.csv", "VUID,Last Name,First Name,ballot returned\r\n1129533079,TOMG,AMY,10/5/26\r\n"},
+        {L"101926Roster.csv", "VUID,First,Last,Precinct\r\n2135074028,DAN,TOMG,358\r\n"},
+        {L"Monday-October-19.csv", "Voter_ID,Voter_Name,Precinct\r\n1124783309,\"BAST, CARL\",S 1009.4\r\n"},
+        {L"10.19.26 In Person Voter List.csv",
+         "In Person Voter List - 10/19/2026\r\nNovember 3, 2026 General Election\r\n"
+         "Voter id,Voter name,Prct\r\n1128449190,\"SMIT, DORA M\",100\r\n"},
+        {L"BBM Received 10.16.2026.csv", "VUID,Voter,Date Rec'd\r\n1019481895,\"BOWI, ED\",10/16/2026\r\n"},
+        {L"Vote History 10.20.26.csv",
+         "election_name,voter_state_vot,voter_first_na,voter_last_n,checkin_tim\r\n"
+         "2026 NOVEMBER J,1012439904,FAY,HUNT,10/19/2026 8:00\r\n"},
+    };
+    TBuf ev[2] = {{0}, {0}};
+    TBuf rot = {0}, brz = {0}, pot = {0};
+    wchar_t dir[MAX_PATH];
+    wchar_t pbuf[ARRAYSIZE(k_text) + 4][MAX_PATH];
+    const wchar_t *paths[ARRAYSIZE(k_text) + 4];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    int i, n = (int)ARRAYSIZE(k_text);
+    BOOL ok;
+    int rc = 1;
+
+    /* Randall / Gregg: one TJ per line (6 pt per character); "MiddleNam" + "e" touch. */
+    ok = tb_printf(&ev[0], "BT /F1 10 Tf 1 0 0 1 36 740 Tm [(No.)-2000(Precinct)-1000(State ID)-1000(Name)-12000(Time)]"
+                           " TJ ET\n"
+                           "BT /F1 10 Tf 1 0 0 1 400 740 Tm (PollingPlac) Tj ET BT /F1 10 Tf 1 0 0 1 466 740 Tm (e) Tj ET\n"
+                           "BT /F1 10 Tf 1 0 0 1 36 724 Tm [(1)-2000(131)-4000(1025668955)-2000(RAND ANN BLACK)-1000"
+                           "(10/19/2026 8:00)] TJ ET\n"
+                           "BT /F1 10 Tf 1 0 0 1 400 724 Tm (Annex) Tj ET\n"
+                           "BT /F1 10 Tf 1 0 0 1 36 30 Tm (Texas Election Code 87.121) Tj ET\n"
+                           "BT /F1 10 Tf 1 0 0 1 500 30 Tm (1 of 2) Tj ET\n") &&
+         tb_printf(&ev[1], "BT /F1 10 Tf 1 0 0 1 200 760 Tm (Daily Early Voting List) Tj ET\n"
+                           "BT /F1 10 Tf 1 0 0 1 36 740 Tm [(2)-2000(332)-4000(1162550445)-2000(KURT CHASE RALS)-1000"
+                           "(10/20/2026 9:15)] TJ ET\n");
+    /* Randall's mail roster: every run reads bottom to top (rotated 90 degrees). */
+    ok = ok && tb_printf(&rot, "BT /F1 10 Tf 0 1 -1 0 66 50 Tm (VUID) Tj ET BT /F1 10 Tf 0 1 -1 0 66 150 Tm (Name) Tj ET"
+                               " BT /F1 10 Tf 0 1 -1 0 66 300 Tm (Ballot Received Date) Tj ET\n"
+                               "BT /F1 10 Tf 0 1 -1 0 81 50 Tm (2192976532) Tj ET"
+                               " BT /F1 10 Tf 0 1 -1 0 81 150 Tm (MORA, LARS) Tj ET"
+                               " BT /F1 10 Tf 0 1 -1 0 81 320 Tm (9/24/2026) Tj ET\n");
+    /* Brazos: "26" and the Voter ID right-aligned past their left-aligned titles. */
+    ok = ok && tb_printf(&brz, "BT /F1 10 Tf 1 0 0 1 53 740 Tm (SELECTED ELECTION) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 228 740 Tm (Pct) Tj ET BT /F1 10 Tf 1 0 0 1 279 740 Tm (VUID) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 372 740 Tm (Voter Name) Tj ET\n"
+                               "BT /F1 10 Tf 1 0 0 1 53 724 Tm (2026 GENERAL) Tj ET BT /F1 10 Tf 1 0 0 1 263 724 Tm (26) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 312 724 Tm (1130963684) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 380 724 Tm (BRAZ, CY) Tj ET\n");
+    /* Potter: a row number left of the first title. */
+    ok = ok && tb_printf(&pot, "BT /F1 10 Tf 1 0 0 1 80 740 Tm (VUID) Tj ET BT /F1 10 Tf 1 0 0 1 179 740 Tm (Name) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 433 740 Tm (Precinct) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 490 740 Tm (Ballot Status Date) Tj ET\n"
+                               "BT /F1 10 Tf 1 0 0 1 62 724 Tm (1) Tj ET BT /F1 10 Tf 1 0 0 1 80 724 Tm (1165067040) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 179 724 Tm (POTT,DEB) Tj ET BT /F1 10 Tf 1 0 0 1 433 724 Tm (122) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 490 724 Tm (10/9/2026) Tj ET\n");
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < n + 4; i++)
+    {
+        static const wchar_t *const k_pdf[4] = {L"Early Voting Roster 10.20.26_202610210834156892.pdf",
+                                                L"Mail Ballot Roster 10.20.26.pdf", L"mail-09-23-2026-accessible.pdf",
+                                                L"Mail Ballot Roster_2026-10-21-09-13-23.pdf"};
+        StringCchCopyW(pbuf[i], MAX_PATH, dir);
+        StringCchCatW(pbuf[i], MAX_PATH, i < n ? k_text[i].name : k_pdf[i - n]);
+        paths[i] = pbuf[i];
+    }
+    for (i = 0; i < n && ok; i++)
+    {
+        ok = cvr_write_bytes(pbuf[i], k_text[i].text, strlen(k_text[i].text));
+    }
+    if (!ok || !proster_write(pbuf[n], ev, 2) || !proster_write(pbuf[n + 1], &rot, 1) ||
+        !proster_write(pbuf[n + 2], &brz, 1) || !proster_write(pbuf[n + 3], &pot, 1))
+    {
+        wprintf(L"county50: could not write the files\n");
+        goto cleanup;
+    }
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (EeRoster_LoadFiles(paths, n + 4, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"county50: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 16 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+        info.rows_no_date != 0 || info.unsupported_files != 0)
+    {
+        uint32_t r;
+        wprintf(L"county50: rows %u unknown %u nonvoter %u nodate %u unsupported %u\n", t.row_count,
+                info.method_rows[EE_VM_NONE], info.rows_non_voter, info.rows_no_date, info.unsupported_files);
+        for (r = 0; r < t.row_count; r++)
+        {
+            wchar_t last[64], date[32], src[128];
+            rt_cell(&t, r, L"Last Name", last, ARRAYSIZE(last));
+            rt_cell(&t, r, L"Date Voted", date, ARRAYSIZE(date));
+            rt_cell(&t, r, L"Source File", src, ARRAYSIZE(src));
+            wprintf(L"  %s | %s | %s\n", last, date, src);
+        }
+        goto done;
+    }
+    if (!rt_expect(&t, L"BLACK", L"RAND", L"VUID", L"1025668955") ||
+        !rt_expect(&t, L"BLACK", L"RAND", L"Precinct", L"131") ||
+        !rt_expect(&t, L"BLACK", L"RAND", L"Date Voted", L"10/19/2026") ||
+        !rt_expect(&t, L"BLACK", L"RAND", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"BLACK", L"RAND", L"PollingPlace", L"Annex") ||
+        !rt_expect(&t, L"RALS", L"KURT", L"Date Voted", L"10/20/2026") ||
+        !rt_expect(&t, L"MORA", L"LARS", L"VUID", L"2192976532") ||
+        !rt_expect(&t, L"MORA", L"LARS", L"Date Voted", L"09/24/2026") ||
+        !rt_expect(&t, L"MORA", L"LARS", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"BRAZ", L"CY", L"VUID", L"1130963684") ||
+        !rt_expect(&t, L"BRAZ", L"CY", L"Precinct", L"26") ||
+        !rt_expect(&t, L"BRAZ", L"CY", L"Date Voted", L"09/23/2026") ||
+        !rt_expect(&t, L"POTT", L"DEB", L"VUID", L"1165067040") ||
+        !rt_expect(&t, L"POTT", L"DEB", L"Precinct", L"122") ||
+        !rt_expect(&t, L"POTT", L"DEB", L"Date Voted", L"10/09/2026") ||
+        !rt_expect(&t, L"GRAY", L"ANNA", L"VUID", L"1206590038") ||
+        !rt_expect(&t, L"GRAY", L"ANNA", L"Precinct", L"105") ||
+        !rt_expect(&t, L"GRAY", L"ANNA", L"Date Voted", L"10/20/2026") ||
+        !rt_expect(&t, L"GRAY", L"ANNA", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"VICK", L"ANN", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"VICK", L"ANN", L"Date Voted", L"10/07/2026") ||
+        !rt_expect(&t, L"VICK", L"BOB", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"VICK", L"BOB", L"Date Voted", L"10/20/2026") ||
+        !rt_expect(&t, L"TOMG", L"AMY", L"Date Voted", L"10/05/2026") ||
+        !rt_expect(&t, L"TOMG", L"AMY", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"TOMG", L"DAN", L"Date Voted", L"10/19/2026") ||
+        !rt_expect(&t, L"TOMG", L"DAN", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"BAST", L"CARL", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"SMIT", L"DORA", L"Precinct", L"100") ||
+        !rt_expect(&t, L"SMIT", L"DORA", L"Date Voted", L"10/19/2026") ||
+        !rt_expect(&t, L"SMIT", L"DORA", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"BOWI", L"ED", L"VUID", L"1019481895") ||
+        !rt_expect(&t, L"BOWI", L"ED", L"Date Voted", L"10/16/2026") ||
+        !rt_expect(&t, L"HUNT", L"FAY", L"VUID", L"1012439904") ||
+        !rt_expect(&t, L"HUNT", L"FAY", L"Date Voted", L"10/19/2026"))
+    {
+        goto done;
+    }
+    {
+        /* Bastrop: "Monday-October-19" is a recent year's October 19 that fell on a Monday. */
+        wchar_t got[32];
+        uint32_t r = rt_find(&t, L"BAST", L"CARL");
+        rt_cell(&t, r, L"Date Voted", got, ARRAYSIZE(got));
+        if (wcsncmp(got, L"10/19/", 6) != 0)
+        {
+            wprintf(L"county50: Bastrop date '%s'\n", got);
+            goto done;
+        }
+    }
+    rc = 0;
+    wprintf(L"county50 ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+cleanup:
+    for (i = 0; i < n + 4; i++)
+    {
+        DeleteFileW(pbuf[i]);
+    }
+    free(ev[0].p);
+    free(ev[1].p);
+    free(rot.p);
+    free(brz.p);
+    free(pot.p);
+    if (rc != 0)
+    {
+        wprintf(L"county50 test failed\n");
+    }
+    return rc;
+}
+
 /* Texas Secretary of State turnout rosters (tag: sosroster): a loose statewide early voting
  * CSV (COUNTY, MAIL-IN / IN-PERSON, no voting date) and Election Day ZIPs that name their
  * roster "STATEWIDE_VOTER_INFO.csv" for every party (named after the ZIP instead), a
@@ -9053,6 +9250,7 @@ int wmain(void)
     failed |= test_pdf_roster();
     failed |= test_limited_pdf();
     failed |= test_county_rosters();
+    failed |= test_county50();
     failed |= test_sos_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();

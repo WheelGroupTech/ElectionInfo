@@ -591,6 +591,56 @@ Independent counts: Galveston 13,654, Dallas 76,243, Williamson 28,926 rows (25,
 10/19), Collin 34,522 rows, Bexar 42,765 VUID lines + 11 blank, Bell 7,111 / 1,685 lines, all
 equal to the loader. Smoke tests `counties` (Collin) and `pdfroster` (Bell layout).
 
+## Counties 21-50 (2026-10-21)
+
+The user extended tracking to the next 30 counties by population. Ranks are from the Census
+Bureau's 2025 county estimates (`co-est2025-alldata.csv`, `POPESTIMATE2025`). The 20 counties
+already tracked are exactly ranks 1-20 (Hays 19, Webb 20), and ranks 21-50 are the same set
+in the 2024 estimates. All 30 are added to the daily downloader's SOS list. SOS county ids come
+from `getFile?type=EVR_ELECTION` → `counties`. They follow FIPS order except **McLennan = 161**:
+the SOS sorts "Mc" after McCulloch, FIPS after Lynn.
+
+Surveyed 10/21. The 16 counties that post their own rosters each have a function in
+`Voter_Rosters/_download_tools/daily_rosters.py`, which holds the page URL. ✓ marks a roster
+seen to carry a VUID column (only a few were sampled).
+
+| # | County | Own roster (format, posting) |
+|---|---|---|
+| 21 | McLennan | one PDF "List of Early Voters: In-Person and By-Mail" (CivicPlus doc 18980, re-posted under a timestamped name) |
+| 22 | Jefferson | SOS only |
+| 23 | Smith | daily PDFs "MM.DD.26 In Person / Absentee Voter List" in a Laserfiche public portal (folder 41; JSON listing needs the portal's cookies) |
+| 24 | Brazos | daily PDFs "mail-MM-DD-2026" (from 9/23) and "in-person-MM-DD-2026" (`/roster/`); the 10/02 link points at the 9/30 file |
+| 25 | Ellis | SOS only (page quotes §87.121) |
+| 26 | Johnson | SOS only |
+| 27 | Kaufman | SOS only |
+| 28 | Comal | SOS only |
+| 29 | Guadalupe | daily returned-mail PDFs; "Early Voting Ballots Cast" is a count table, not a roster |
+| 30 | Midland | SOS only for G26 (it posted its own PDF in May) |
+| 31 | Parker | SOS only |
+| 32 | Ector | SOS only |
+| 33 | Grayson | daily XLSX "October DD 2026 EV Check-in Report" / "Absentee Voter List" |
+| 34 | Randall | two PDFs "Early Voting Roster" / "Mail Ballot Roster" (CivicPlus docs 4867 / 4827, re-posted daily) |
+| 35 | Taylor | SOS only (links the SOS for in person) |
+| 36 | Rockwall | SOS only |
+| 37 | Wichita | daily PDFs "Voter-Check-ins-MM.DD.2026", "Absentee-MM.DD.2026", **behind a Cloudflare bot challenge**: not downloaded by the script, which lists them for a manual download |
+| 38 | Gregg | daily PDFs "YYYY-MM-DD-Voter-Turnout" (check-ins: VUID, polling place, precinct) ✓ and "…-BBM-Voters" (VUID, precinct, mail and received dates) ✓ |
+| 39 | Hunt | daily PDFs "Vote(r) History MM.DD.26" (date, VUID, name, precinct, polling place) ✓ |
+| 40 | Liberty | SOS only |
+| 41 | Tom Green | daily PDFs "MMDDYYRoster" / "MMDDYYBallotsByMail" |
+| 42 | Bastrop | daily CSVs ("Monday-October-19-2.csv") + a mail CSV re-posted under a new name each day (`Mail-Ballots-14.csv`) |
+| 43 | Potter | two PDFs "Early Voting Roster" (VUID, precinct) ✓ / "Mail Ballot Roster" ✓ (Wix file URLs change with each upload) |
+| 44 | Bowie | daily CivicPlus PDFs "BBM Received M.D.2026" (from 9/22) and "M.D.2026 Early Vote History" |
+| 45 | Victoria | cumulative "MM-DD-2026 mail and in person" PDF + XLSX (CivicPlus docs 2846 / 2847) |
+| 46 | Henderson | daily CivicPlus PDFs "Early Voting October DD, 2026" |
+| 47 | Angelina | daily PDF `voter_history_MMDDYY.pdf` |
+| 48 | Orange | SOS only (no roster found) |
+| 49 | Coryell | SOS only |
+| 50 | Walker | SOS only |
+
+The first download on 10/21 got 79 county files (16 counties). The loader has not been tried
+on these layouts yet; several are PDFs in new layouts (Gregg, Hunt, Potter, Smith, Brazos, Tom
+Green, Bowie, Henderson, Angelina, Guadalupe, McLennan, Randall, Victoria).
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

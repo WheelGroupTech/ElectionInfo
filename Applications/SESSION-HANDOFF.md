@@ -138,6 +138,12 @@
   Survey doc "Early voting update (2026-10-20)" has the per-county table. Smoke green.
   Daily downloads continue through 10/30 (Collin, Bell, Fort Bend, Williamson, Denton keep
   no history).
+- **Counties 21-50 added (2026-10-21, user request):** the daily downloader and scheduled task
+  now cover the 50 most populous counties (Census 2025 estimates; ranks 1-20 = the counties
+  already tracked). All 30 new counties get SOS county CSVs; 16 post their own rosters and
+  have script functions (79 files on 10/21); Wichita's PDFs are behind a Cloudflare challenge
+  (listed for manual download). Survey doc "Counties 21-50 (2026-10-21)". **Next:** try the
+  loader on the 16 new layouts (mostly PDFs: Smith, Gregg, Hunt, Potter, Brazos, ...).
 
 ### Committed — release notes file
 

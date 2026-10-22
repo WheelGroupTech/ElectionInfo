@@ -529,6 +529,29 @@ static uint32_t find_date(const char *s)
     return (d != 0) ? d : mdy_month_name(s);
 }
 
+/* A date cell "M[M]/D[D]/YY" with a 2-digit year (Tom Green "10/19/26"), alone or before a
+ * time -> 20YYmmdd, else 0. Only for a Date Voted column. */
+static uint32_t slash_yy_cell(const char *s)
+{
+    unsigned a = 0, b = 0, y = 0;
+    int k;
+    while (*s == ' ')
+        s++;
+    for (k = 0; k < 2 && is_digit(*s); k++, s++)
+        a = a * 10u + (unsigned)(*s - '0');
+    if (k == 0 || *s++ != '/')
+        return 0;
+    for (k = 0; k < 2 && is_digit(*s); k++, s++)
+        b = b * 10u + (unsigned)(*s - '0');
+    if (k == 0 || *s++ != '/')
+        return 0;
+    for (k = 0; k < 3 && is_digit(*s); k++, s++)
+        y = y * 10u + (unsigned)(*s - '0');
+    if (k != 2 || (*s != '\0' && *s != ' ') || a < 1 || a > 12 || b < 1 || b > 31)
+        return 0;
+    return (2000u + y) * 10000u + a * 100u + b;
+}
+
 /* An Excel date serial written as a plain number ("45965.4649189815": a workbook whose
  * date column has no date format -- Dallas's G25 rosters) -> yyyymmdd, else 0. Only
  * 5-digit day counts are taken (1954-2119), so years, ZIP codes and IDs never match. */
@@ -1097,6 +1120,8 @@ typedef struct HeaderMap
     int vuid, pct, first, last, middle, suffix, full, party, notes, aname, aaddr, method, date,
         source, vtype;
     int adate;      /* Harris "ActivityDate" column (also kept as an extra), or -1 */
+    int tdate;      /* a check-in "Time" holding date and time (also kept), or -1: see
+                     * use_time_date */
     int pct_alt;    /* Harris "NEWPRECINCT" (also kept): the precinct when PRECINCT is blank */
     int site;       /* Hidalgo "SITE" (also kept): "EV-..." / "ED-..." names the method */
     BOOL mail_hint; /* a mail list's columns (received / return date, ballot status) */
@@ -1163,6 +1188,7 @@ typedef struct Loader
     WBuf swapped; /* sheets whose Voter ID / name columns were read by their contents */
     uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
     uint32_t limited_forms; /* Limited Ballot poll lists (SOS form 5-38) read from PDFs */
+    uint32_t not_returned;  /* mail list rows for ballots not received yet ("-"): skipped */
     WBuf limited_dates;     /* those whose file-name date is not during early voting */
     uint32_t sos_no_date;   /* records of Secretary of State turnout rosters (none has a
                              * Date Voted) */
@@ -1441,7 +1467,7 @@ static void map_init(HeaderMap *m)
     ZeroMemory(m, sizeof(*m));
     m->vuid = m->pct = m->first = m->last = m->middle = m->suffix = m->full = m->party =
         m->notes = m->aname = m->aaddr = m->method = m->date = m->source = m->vtype = m->adate =
-            m->pct_alt = m->site = -1;
+            m->pct_alt = m->site = m->tdate = -1;
 }
 
 /* How well a header label names the state Voter ID (VUID): 1 = a state ID ("VUID",
@@ -1452,13 +1478,16 @@ static int vuid_rank(const char *lab)
 {
     if (contains_ci(lab, "vuid") || contains_ci(lab, "sos voter") || contains_ci(lab, "state voter") ||
         contains_ci(lab, "statevoter") || strncmp(lab, "state id", 8) == 0 || strncmp(lab, "stateid", 7) == 0 ||
+        strncmp(lab, "voter state v", 13) == 0 || /* Hunt "voter_state_voter_id", cut short in print */
         strcmp(lab, "id voter") == 0 || strcmp(lab, "idvoter") == 0)
         return 1;
     if (contains_ci(lab, "county voter"))
         return 3;
     if (contains_ci(lab, "voter id") || contains_ci(lab, "voterid") || strcmp(lab, "cert") == 0 ||
-        strcmp(lab, "cert #") == 0 || strcmp(lab, "cert#") == 0)
-        return 2; /* Hidalgo / Lubbock "CERT" (the VUID); Tarrant's "Certificate" is not */
+        strcmp(lab, "cert #") == 0 || strcmp(lab, "cert#") == 0 || strcmp(lab, "certificatenumber") == 0 ||
+        strcmp(lab, "certificate number") == 0)
+        return 2; /* Hidalgo / Lubbock "CERT", Collin / Webb "CertificateNumber" (the VUID);
+                   * Tarrant's "Certificate" is not */
     return 0;
 }
 
@@ -1496,6 +1525,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     BOOL id_voter = FALSE;
     BOOL county_col = FALSE;
     BOOL method_col = FALSE;
+    BOOL name_title = FALSE; /* a name column other than a bare "Voter" */
     int titled = 0;
     int best_vuid = 0;
     map_init(m);
@@ -1526,7 +1556,12 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         {
             m->by_entity = TRUE;
         }
+        if (contains_ci(lab, "name") || contains_ci(lab, "first") || contains_ci(lab, "last"))
+        {
+            name_title = TRUE;
+        }
         if (contains_ci(lab, "received date") || contains_ci(lab, "ballot received") ||
+            strcmp(lab, "ballot returned") == 0 || strncmp(lab, "date rec", 8) == 0 ||
             strcmp(lab, "receiveddate") == 0 || strcmp(lab, "date received") == 0 ||
             strcmp(lab, "return date") == 0 || strcmp(lab, "returndate") == 0 ||
             contains_ci(lab, "ballot status") || strcmp(lab, "absentee") == 0)
@@ -1592,7 +1627,7 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         {
             /* chosen above */
         }
-        else if (m->method < 0 && contains_ci(lab, "voting method"))
+        else if (m->method < 0 && (contains_ci(lab, "voting method") || strcmp(lab, "vote method") == 0))
             m->method = ci;
         else if (m->vtype < 0 && (contains_ci(lab, "vote type") || strcmp(lab, "votetype") == 0 ||
                                   strcmp(lab, "checkin type") == 0 || strcmp(lab, "check-in type") == 0 ||
@@ -1611,29 +1646,36 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                                  strcmp(lab, "receiveddate") == 0 || strcmp(lab, "date received") == 0 ||
                                  strcmp(lab, "check-in") == 0 || strcmp(lab, "check in") == 0 ||
                                  strcmp(lab, "check-in date") == 0 || strcmp(lab, "checkin date") == 0 ||
-                                 strcmp(lab, "status date") == 0 || strcmp(lab, "ballot date") == 0))
+                                 strcmp(lab, "status date") == 0 || strcmp(lab, "ballot date") == 0 ||
+                                 strcmp(lab, "votedate") == 0 || strcmp(lab, "vote date") == 0 ||
+                                 strcmp(lab, "ballot returned") == 0 || strcmp(lab, "ballot received") == 0 ||
+                                 contains_ci(lab, "status date") || strncmp(lab, "date rec", 8) == 0))
             m->date = ci; /* Dallas: "Date" (P26 rosters), "Date Ballot Returned" (precincts);
-                           * Bexar / Brazoria "Ballot Received Date", Webb "ReceivedDate" */
+                           * Bexar / Brazoria "Ballot Received Date", Webb "ReceivedDate", Collin
+                           * "VoteDate"; Tom Green "ballot returned", Wichita "Ballot Received",
+                           * Bastrop / Potter "Ballot Status Date", Bowie "Date Rec'd" */
         else if (m->source < 0 && contains_ci(lab, "source file"))
             m->source = ci;
         else if (m->pct < 0 &&
                  (county_pct ? (strcmp(lab, "countyelectionprecinct") == 0 || strcmp(lab, "county election precinct") == 0)
                   : exact_pct ? strcmp(lab, "precinct") == 0
-                              : (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0)))
-            m->pct = ci;
+                              : (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0 ||
+                                 strcmp(lab, "prct") == 0)))
+            m->pct = ci; /* Smith "Prct" */
         else if (m->first < 0 && contains_ci(lab, "first"))
             m->first = ci;
         else if (m->middle < 0 && contains_ci(lab, "middle"))
             m->middle = ci;
         else if (m->last < 0 && contains_ci(lab, "last"))
             m->last = ci;
-        else if (m->suffix < 0 && contains_ci(lab, "suffix"))
+        else if (m->suffix < 0 && (contains_ci(lab, "suffix") || strcmp(lab, "sfx") == 0))
             m->suffix = ci;
         else if (m->full < 0 && (contains_ci(lab, "name of voter") || strcmp(lab, "voter name") == 0 ||
                                  strcmp(lab, "votername") == 0 || strcmp(lab, "full name") == 0 ||
                                  strcmp(lab, "voter full name") == 0 ||
                                  (strncmp(lab, "name of ", 8) == 0 && contains_ci(lab, "voter")) ||
-                                 (!limited_form && strcmp(lab, "name") == 0)))
+                                 (!limited_form && strcmp(lab, "name") == 0) ||
+                                 (!name_title && strcmp(lab, "voter") == 0))) /* Bowie's mail lists */
             m->full = ci;
         else if (limited_form && m->aname < 0 && strcmp(lab, "name") == 0)
             m->aname = ci;
@@ -1681,6 +1723,11 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                 if (m->adate < 0 && (strcmp(lab, "activitydate") == 0 || strcmp(lab, "activity date") == 0))
                 {
                     m->adate = ci; /* may become Date Voted: see use_activity_date */
+                }
+                if (m->tdate < 0 && (strcmp(lab, "time") == 0 || strncmp(lab, "checkin tim", 11) == 0 ||
+                                     strncmp(lab, "check-in tim", 12) == 0 || strncmp(lab, "check in tim", 12) == 0))
+                {
+                    m->tdate = ci; /* Randall "Time", Hunt "checkin_time": "10/19/2026 8:00" */
                 }
                 if (m->pct_alt < 0 && strcmp(lab, "newprecinct") == 0)
                 {
@@ -2124,6 +2171,19 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         return; /* Limited Ballot form: unused numbered lines */
     }
 
+    /* A mail list that also lists ballots sent but not back yet (Collin: "-" in its
+     * ReceivedDate column) -- those voters have not voted. */
+    if (m->mail_hint && m->date >= 0)
+    {
+        char dv[8];
+        clean_text(cell_at(r, row, m->date), dv, sizeof(dv));
+        if (strcmp(dv, "-") == 0)
+        {
+            L->not_returned++;
+            return;
+        }
+    }
+
     /* Canonical export columns override the sheet-level method / date; an export's
      * Voting Method label also wins over its kept Vote Type code (a mixed Tarrant +
      * Harris export holds both code schemes). */
@@ -2158,7 +2218,30 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         {
             d = serial_date_cell(cell_at(r, row, m->date));
         }
+        if (d == 0)
+        {
+            d = slash_yy_cell(cell_at(r, row, m->date));
+        }
         date = d; /* blank in the export stays blank */
+    }
+    if (m->method >= 0)
+    {
+        /* "In Person" in a method column names no single method (Victoria's list "mail and
+         * in person": MAIL / IN PERSON; Angelina IN-PERSON): the calendar decides by the
+         * row's date, else the file's; never the file name's "mail". */
+        const char *mv = cell_at(r, row, m->method);
+        if (contains_ci(mv, "in person") || contains_ci(mv, "in-person") || contains_ci(mv, "inperson"))
+        {
+            EeVotingMethod cm = method_from_calendar(date != 0 ? date : sheet_date);
+            if (cm != EE_VM_NONE)
+            {
+                method = cm;
+            }
+            else if (method == EE_VM_MAIL)
+            {
+                method = EE_VM_NONE;
+            }
+        }
     }
     /* Nothing named the method: a polling-site name ("EV-The Mansion", "ED-UTRGV"), else
      * the election calendar for an in-person roster's date (see method_from_calendar). */
@@ -2359,6 +2442,160 @@ static void use_activity_date(HeaderMap *m, const SheetRows *r, uint32_t from)
             m->nx--;
             break;
         }
+    }
+}
+
+/* Grayson's check-in report (a printed report saved as a workbook) stands its titles on
+ * rows of their own, one or two per row ("Precinct", "Voter ID", "Voter Name", "Check-in
+ * Date" + "Phase", "Voter Address"), each a column or two right of its data. When the
+ * header row found has at most two titles and is part of a block of 3+ such rows, the
+ * block becomes one header row: each title goes to the nearest data column at or left of
+ * it (data columns: filled in most of the first data rows). */
+#define STACKED_MAX_COLS 64
+
+typedef struct StackedHeader
+{
+    SheetRows rows; /* one row: the titles, by data column */
+    char pool[2048];
+    uint32_t cells[STACKED_MAX_COLS];
+    uint32_t row_start;
+    uint32_t row_len;
+    uint32_t top;       /* first title row */
+    uint32_t data_from; /* first row after the titles */
+} StackedHeader;
+
+static uint32_t filled_cells(const SheetRows *r, uint32_t row)
+{
+    uint32_t c, n = 0;
+    for (c = 0; c < r->row_len[row]; c++)
+    {
+        const char *v = cell_at(r, row, (int)c);
+        while (*v == ' ')
+            v++;
+        n += (*v != '\0');
+    }
+    return n;
+}
+
+static BOOL title_row(const SheetRows *r, uint32_t row)
+{
+    uint32_t c, n = filled_cells(r, row);
+    if (n < 1 || n > 2)
+    {
+        return FALSE;
+    }
+    for (c = 0; c < r->row_len[row]; c++)
+    {
+        const char *v = cell_at(r, row, (int)c);
+        if (v[0] != '\0' && (!has_letter(v) || strlen(v) > 40 || strpbrk(v, "0123456789") != NULL))
+        {
+            return FALSE; /* a title, not a report line with a date ("... - 10/19/2026") */
+        }
+    }
+    return TRUE;
+}
+
+static BOOL stacked_header(const SheetRows *r, uint32_t h, StackedHeader *sh)
+{
+    uint32_t top = h, bot = h, row, c, sampled = 0, width = 0;
+    uint32_t hits[STACKED_MAX_COLS] = {0};
+    const char *title[STACKED_MAX_COLS] = {NULL};
+    size_t used = 0;
+    if (!title_row(r, h))
+    {
+        return FALSE;
+    }
+    while (top > 0 && title_row(r, top - 1))
+        top--;
+    while (bot + 1 < r->nrows && title_row(r, bot + 1))
+        bot++;
+    if (bot - top < 2)
+    {
+        return FALSE;
+    }
+    for (row = bot + 1; row < r->nrows && sampled < 30; row++)
+    {
+        if (filled_cells(r, row) < 3)
+        {
+            continue;
+        }
+        sampled++;
+        for (c = 0; c < r->row_len[row] && c < STACKED_MAX_COLS; c++)
+        {
+            hits[c] += (cell_at(r, row, (int)c)[0] != '\0');
+        }
+    }
+    if (sampled < 3)
+    {
+        return FALSE;
+    }
+    for (row = top; row <= bot; row++)
+    {
+        for (c = 0; c < r->row_len[row] && c < STACKED_MAX_COLS; c++)
+        {
+            int d;
+            if (cell_at(r, row, (int)c)[0] == '\0')
+                continue;
+            for (d = (int)c; d >= 0 && hits[d] * 2 < sampled; d--)
+            {
+            }
+            if (d >= 0 && title[d] == NULL)
+            {
+                title[d] = cell_at(r, row, (int)c);
+                if ((uint32_t)d + 1 > width)
+                    width = (uint32_t)d + 1;
+            }
+        }
+    }
+    ZeroMemory(&sh->rows, sizeof(sh->rows));
+    for (c = 0; c < width; c++)
+    {
+        const char *t = title[c] != NULL ? title[c] : "";
+        size_t len = strlen(t) + 1;
+        if (used + len > sizeof(sh->pool))
+            return FALSE;
+        memcpy(sh->pool + used, t, len);
+        sh->cells[c] = (uint32_t)used;
+        used += len;
+    }
+    sh->row_start = 0;
+    sh->row_len = width;
+    sh->rows.pool = sh->pool;
+    sh->rows.pool_len = used;
+    sh->rows.cells = sh->cells;
+    sh->rows.ncells = width;
+    sh->rows.row_start = &sh->row_start;
+    sh->rows.row_len = &sh->row_len;
+    sh->rows.nrows = 1;
+    sh->top = top;
+    sh->data_from = bot + 1;
+    return row_is_header(&sh->rows, 0);
+}
+
+/* A check-in "Time" column (Randall, Hunt) becomes Date Voted when the sheet has no Date
+ * Voted column and the column holds a date (not just a time of day) in nearly all of the
+ * first rows -- not Bexar's mail lists, whose "Check-in Time" is filled in a few rows
+ * only; it stays an extra column too, for the time. */
+static void use_time_date(HeaderMap *m, const SheetRows *r, uint32_t from)
+{
+    uint32_t row;
+    uint32_t seen = 0;
+    uint32_t dated = 0;
+    if (m->tdate < 0 || m->date >= 0)
+    {
+        return;
+    }
+    for (row = from; row < r->nrows && seen < 50; row++)
+    {
+        if (!row_empty(r, row))
+        {
+            seen++;
+            dated += (find_date(cell_at(r, row, m->tdate)) != 0);
+        }
+    }
+    if (seen > 0 && dated * 10 >= seen * 9)
+    {
+        m->date = m->tdate;
     }
 }
 
@@ -2589,17 +2826,24 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
     if (h != UINT32_MAX)
     {
         const char *fix[64];
+        StackedHeader sh;
+        data_from = h + 1;
         if (r->row_len[h] <= ARRAYSIZE(fix) && repair_header(r, h, fix, (int)ARRAYSIZE(fix)))
         {
             map_header(L, r, h, &m, fix);
             L->info->recovered_sheets++;
             append_name(&L->recovered, s->name, sheet_name);
         }
+        else if (stacked_header(r, h, &sh))
+        {
+            map_header(L, &sh.rows, 0, &m, NULL);
+            h = sh.top; /* the rows above the titles are the title rows */
+            data_from = sh.data_from;
+        }
         else
         {
             map_header(L, r, h, &m, NULL);
         }
-        data_from = h + 1;
         *wb_map = m;
         *wb_have = TRUE;
         if (m.ncols >= 1 && m.ncols <= 16)
@@ -2652,6 +2896,7 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         append_name(&L->swapped, s->name, sheet_name);
     }
     use_activity_date(&m, r, data_from);
+    use_time_date(&m, r, data_from);
     m.gap_comma = sheet_gap_comma(r, data_from, m.full);
 
     /* Title rows: roster date, method words, and the party of a primary sheet. */
@@ -2851,6 +3096,112 @@ static BOOL has_timestamp(const char *s)
     return FALSE;
 }
 
+/* File-name dates without a 4-digit year, tried when the name has no other date (and no
+ * digit run of 7 or more, such as Randall's or Hidalgo's upload timestamps):
+ * "MMDDYY" as one 6-digit token (Tom Green "101926Roster", Angelina "voter_history_101926"),
+ * "M.D.YY" / "M-D-YY" / "M_D_YY" (Smith "10.19.26 In Person Voter List", Hunt), and a
+ * weekday with month and day (Bastrop "Monday-October-19"): the latest year up to next
+ * year in which that day falls on that weekday. yyyymmdd, or 0. */
+static uint32_t find_date_short_year(const char *s)
+{
+    static const char *const k_days[7] = {"sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"};
+    size_t n = strlen(s);
+    size_t i;
+    size_t run = 0;
+    for (i = 0; i < n; i++)
+    {
+        run = is_digit(s[i]) ? run + 1 : 0;
+        if (run >= 7)
+        {
+            return 0;
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        const char *p = s + i;
+        unsigned a, b, y;
+        if (!is_digit(*p) || (i > 0 && is_digit(s[i - 1])))
+        {
+            continue;
+        }
+        if (strspn(p, "0123456789") == 6)
+        {
+            a = (unsigned)((p[0] - '0') * 10 + (p[1] - '0'));
+            b = (unsigned)((p[2] - '0') * 10 + (p[3] - '0'));
+            y = 2000u + (unsigned)((p[4] - '0') * 10 + (p[5] - '0'));
+        }
+        else
+        {
+            const char *q = p;
+            char sep;
+            int k;
+            a = b = y = 0;
+            for (k = 0; k < 2 && is_digit(*q); k++, q++)
+                a = a * 10u + (unsigned)(*q - '0');
+            sep = *q;
+            if (is_digit(sep) || (sep != '.' && sep != '-' && sep != '_'))
+                continue;
+            for (q++, k = 0; k < 2 && is_digit(*q); k++, q++)
+                b = b * 10u + (unsigned)(*q - '0');
+            if (k == 0 || *q != sep)
+                continue;
+            for (q++, k = 0; k < 3 && is_digit(*q); k++, q++)
+                y = y * 10u + (unsigned)(*q - '0');
+            if (k != 2)
+                continue;
+            y += 2000u;
+        }
+        if (a >= 1 && a <= 12 && b >= 1 && b <= 31)
+        {
+            return y * 10000u + a * 100u + b;
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        int wd;
+        if (i > 0 && ((s[i - 1] >= 'a' && s[i - 1] <= 'z') || (s[i - 1] >= 'A' && s[i - 1] <= 'Z')))
+        {
+            continue;
+        }
+        for (wd = 0; wd < 7; wd++)
+        {
+            size_t len = strlen(k_days[wd]);
+            size_t mlen = 0;
+            const char *q = s + i + len;
+            int m;
+            unsigned d = 0;
+            int k;
+            SYSTEMTIME now;
+            long yy;
+            if (_strnicmp(s + i, k_days[wd], len) != 0 || (*q != ' ' && *q != '-' && *q != '_' && *q != ','))
+            {
+                continue;
+            }
+            while (*q == ' ' || *q == '-' || *q == '_' || *q == ',')
+                q++;
+            if ((m = month_word(q, &mlen)) == 0)
+                continue;
+            q += mlen;
+            while (*q == ' ' || *q == '-' || *q == '_')
+                q++;
+            for (k = 0; k < 2 && is_digit(*q); k++, q++)
+                d = d * 10u + (unsigned)(*q - '0');
+            if (k == 0 || is_digit(*q) || d < 1 || d > 31)
+                continue;
+            GetLocalTime(&now);
+            for (yy = (long)now.wYear + 1; yy > (long)now.wYear - 7; yy--)
+            {
+                long days = days_from_civil(yy, (unsigned)m, d);
+                if ((int)(((days + 4) % 7 + 7) % 7) == wd)
+                {
+                    return (uint32_t)yy * 10000u + (unsigned)m * 100u + d;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 /* A county's reference file packed beside its rosters: a disclaimer or read-me, a file
  * layout, or a polling-place list ("1122 Locations with Poll Codes.xlsx"). */
 static BOOL is_reference_name(const char *name)
@@ -2896,6 +3247,10 @@ static void parse_source_name(RosterSource *s)
     size_t i;
     WideCharToMultiByte(CP_UTF8, 0, s->name, -1, s->name8, (int)sizeof(s->name8), NULL, NULL);
     s->date = has_timestamp(s->name8) ? 0 : find_date_numeric(s->name8);
+    if (s->date == 0 && !has_timestamp(s->name8) && mdy_month_name(s->name8) == 0)
+    {
+        s->date = find_date_short_year(s->name8);
+    }
     s->method = method_from_name(s->name8);
     s->party = party_from_name(s->name8);
     s->in_person = contains_ci(s->name8, "in person") || contains_ci(s->name8, "in-person") ||
@@ -3234,6 +3589,26 @@ static void pdf_run_text(const EePdfPageText *pt, const EePdfTextRun *r, char *o
     memcpy(tmp, pt->text + r->text_off, n);
     tmp[n] = '\0';
     clean_text(tmp, out, cap);
+}
+
+/* Run @p b starts where run @p a ends, inside a word, in the same clip: one word drawn in
+ * two pieces (Hunt's cells, each clipped on its own, may touch: two titles). */
+static BOOL pdf_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
+{
+    float end = a->x + pdf_run_width(a);
+    float tol = 0.12f * b->font_size; /* Gregg: a 0.08 em seam inside "MiddleName" */
+    return a->has_width && b->has_width && a->text_len > 0 && b->text_len > 0 && a->clip_id == b->clip_id &&
+           pt->text[a->text_off + a->text_len - 1] != ' ' && pt->text[b->text_off] != ' ' && b->x - end < tol &&
+           end - b->x < tol && (a->y - b->y < 1.0f && b->y - a->y < 1.0f);
+}
+
+/* A short precinct-like value: a digit first, at most 8 characters of digits, letters,
+ * '.' or '-' ("1", "26", "202.05", "14A"). */
+static BOOL pdf_precinct_like(const char *t)
+{
+    size_t n = strlen(t);
+    return n >= 1 && n <= 8 && is_digit(t[0]) &&
+           strspn(t, "0123456789.-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") == n;
 }
 
 /* A line is the header when one of its runs names the Voter ID. */
@@ -3576,6 +3951,8 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
     uint32_t lines_cap = 0;
     float cx0[PDF_TABLE_MAX_COLS], cx1[PDF_TABLE_MAX_COLS];
     int ncols = 0;
+    int vcol = -1; /* the header's Voter ID and precinct columns */
+    int pcol = -1;
     BOOL header_emitted = FALSE;
     uint32_t npages;
     uint32_t page;
@@ -3603,12 +3980,14 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
         return 0;
     }
     EePdf_PageTextInit(&pt);
+    pt.split_gaps = 1; /* Randall, Gregg: one TJ per printed line, columns set apart by kerns */
     npages = EePdf_PageCount(pdf);
     for (page = 0; page < npages; page++)
     {
         uint32_t i;
         uint32_t nlines = 0;
         uint32_t hdr_line = UINT32_MAX;
+        uint32_t first_id_line;
         uint32_t li;
         if (!EePdf_ExtractPageText(pdf, page, &pt))
         {
@@ -3636,6 +4015,30 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
             ord = no;
             lines = nl;
             ord_cap = lines_cap = pt.nruns;
+        }
+        {
+            /* A page printed rotated (Randall's mail roster: every run reads bottom to
+             * top): turn the run origins into the reading frame, lines across and down. */
+            uint32_t dirs[4] = {0, 0, 0, 0};
+            uint32_t turn = 0;
+            for (i = 0; i < pt.nruns; i++)
+            {
+                dirs[(uint32_t)(pt.runs[i].rot / 90) & 3u]++;
+            }
+            for (i = 1; i < 4; i++)
+            {
+                if (dirs[i] > dirs[turn])
+                {
+                    turn = i;
+                }
+            }
+            for (i = 0; turn != 0 && i < pt.nruns; i++)
+            {
+                EePdfTextRun *r = &pt.runs[i];
+                float x = r->x, y = r->y;
+                r->x = (turn == 1) ? y : (turn == 3) ? -y : -x;
+                r->y = (turn == 1) ? -x : (turn == 3) ? x : -y;
+            }
         }
         for (i = 0; i < pt.nruns; i++)
         {
@@ -3720,11 +4123,37 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
             }
             continue;
         }
+        first_id_line = UINT32_MAX;
+        if (hdr_line == UINT32_MAX)
+        {
+            /* A page without a header row: one-run title lines above its first line with a
+             * Voter ID (Bowie repeats "November 3, 2026 Joint General Election" / "Daily
+             * Received Ballots by Mail" on every page) are not rows. */
+            for (li = 0; li < nlines && first_id_line == UINT32_MAX; li++)
+            {
+                uint32_t k;
+                for (k = 0; k < lines[li].count; k++)
+                {
+                    char t[PDF_TABLE_CELL];
+                    pdf_run_text(&pt, &pt.runs[ord[lines[li].first + k]], t, sizeof(t));
+                    if (vuid_valid(t))
+                    {
+                        first_id_line = li;
+                        break;
+                    }
+                }
+            }
+        }
         for (li = 0; li < nlines; li++)
         {
             const PdfLine *ln = &lines[li];
             uint32_t k;
             int c;
+            if (first_id_line != UINT32_MAX && li < first_id_line && ln->count == 1)
+            {
+                continue; /* a one-run title line (a voter without a Voter ID has more runs:
+                           * Bexar's check-in list) */
+            }
             if (li == hdr_line)
             {
                 /* (Re)define the columns from this header; emit it once. */
@@ -3732,11 +4161,35 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                 for (k = 0; k < ln->count && ncols < PDF_TABLE_MAX_COLS; k++)
                 {
                     const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
+                    if (ncols > 0 && k > 0 && pdf_runs_touch(&pt, &pt.runs[ord[ln->first + k - 1]], r))
+                    {
+                        /* one title drawn in pieces (Gregg: "MiddleNam" + "e") */
+                        char t[PDF_TABLE_CELL];
+                        pdf_run_text(&pt, r, t, sizeof(t));
+                        StringCchCatA(cells[ncols - 1], PDF_TABLE_CELL, t);
+                        cx1[ncols - 1] = r->x + pdf_run_width(r);
+                        continue;
+                    }
                     cx0[ncols] = r->x;
                     cx1[ncols] = r->x + pdf_run_width(r);
                     pdf_run_text(&pt, r, cells[ncols], PDF_TABLE_CELL);
                     cellp[ncols] = cells[ncols];
                     ncols++;
+                }
+                vcol = pcol = -1;
+                for (c = 0; c < ncols; c++)
+                {
+                    char lab[96];
+                    header_label(cells[c], lab, sizeof(lab));
+                    if (vcol < 0 && vuid_rank(lab) > 0)
+                    {
+                        vcol = c;
+                    }
+                    else if (pcol < 0 && (contains_ci(lab, "precinct") || strncmp(lab, "pct", 3) == 0 ||
+                                          strcmp(lab, "prct") == 0))
+                    {
+                        pcol = c;
+                    }
                 }
                 if (!header_emitted)
                 {
@@ -3768,63 +4221,142 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                 }
                 continue;
             }
-            if (ln->count == 1)
             {
-                /* a page number ("Page 2 of 36") is not a row */
-                char t[PDF_TABLE_CELL];
-                unsigned a = 0, b = 0;
-                pdf_run_text(&pt, &pt.runs[ord[ln->first]], t, sizeof(t));
-                if (_strnicmp(t, "page ", 5) == 0 &&
-                    (sscanf_s(t + 5, "%u of %u", &a, &b) == 2 || sscanf_s(t + 5, "%u", &a) == 1))
+                /* a page number ("Page 2 of 36"; Gregg: "Texas Election Code § 87.121" ...
+                 * "1 of 69") on a line without a Voter ID is not a row */
+                BOOL page_no = FALSE;
+                BOOL id = FALSE;
+                for (k = 0; k < ln->count; k++)
+                {
+                    char t[PDF_TABLE_CELL];
+                    char tail[8] = "";
+                    unsigned a = 0, b = 0;
+                    pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                    if ((_strnicmp(t, "page ", 5) == 0 &&
+                         (sscanf_s(t + 5, "%u of %u", &a, &b) == 2 || sscanf_s(t + 5, "%u", &a) == 1)) ||
+                        sscanf_s(t, "%u of %u%1s", &a, &b, tail, (unsigned)sizeof(tail)) == 2)
+                    {
+                        page_no = TRUE;
+                    }
+                    id |= vuid_like(t);
+                }
+                if (page_no && !id)
                 {
                     continue;
                 }
             }
-            /* A data line: each run to the column it overlaps most. */
+            /* A data line: each run to the column it overlaps most. A run under no title
+             * goes to the nearest column this line has not filled yet (Bell: a short name,
+             * left-aligned under a centered "NAME", lies nearer the Voter ID title, but
+             * the Voter ID column already holds the number); else the nearest. */
             for (c = 0; c < ncols; c++)
             {
                 cells[c][0] = '\0';
                 cellp[c] = cells[c];
             }
-            for (k = 0; k < ln->count; k++)
             {
-                const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
-                float x0 = r->x;
-                float x1 = r->x + pdf_run_width(r);
-                float mid = (x0 + x1) / 2.0f;
-                float best_ov = 0.0f;
-                float best_d = 1e30f;
-                int best = -1;
-                int nearest = 0;
-                char t[PDF_TABLE_CELL];
-                for (c = 0; c < ncols; c++)
+                int col_of[256];
+                BOOL filled[PDF_TABLE_MAX_COLS] = {FALSE};
+                uint32_t nk = ln->count < ARRAYSIZE(col_of) ? ln->count : (uint32_t)ARRAYSIZE(col_of);
+                int pass;
+                for (k = 0; k < nk; k++)
                 {
-                    float lo = x0 > cx0[c] ? x0 : cx0[c];
-                    float hi = x1 < cx1[c] ? x1 : cx1[c];
-                    float d = mid - (cx0[c] + cx1[c]) / 2.0f;
-                    if (hi - lo > best_ov)
+                    col_of[k] = -1;
+                }
+                for (pass = 0; pass < 2; pass++)
+                {
+                    for (k = 0; k < nk; k++)
                     {
-                        best_ov = hi - lo;
-                        best = c;
+                        const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
+                        float x0 = r->x;
+                        float x1 = r->x + pdf_run_width(r);
+                        float mid = (x0 + x1) / 2.0f;
+                        float best_ov = 0.0f;
+                        float best_d = 1e30f;
+                        float empty_d = 1e30f;
+                        int best = -1;
+                        int nearest = 0;
+                        int nearest_empty = -1;
+                        char t[PDF_TABLE_CELL];
+                        if (col_of[k] >= 0)
+                        {
+                            continue;
+                        }
+                        pdf_run_text(&pt, r, t, sizeof(t));
+                        for (c = 0; c < ncols; c++)
+                        {
+                            float lo = x0 > cx0[c] ? x0 : cx0[c];
+                            float hi = x1 < cx1[c] ? x1 : cx1[c];
+                            float d = mid - (cx0[c] + cx1[c]) / 2.0f;
+                            if (hi - lo > best_ov)
+                            {
+                                best_ov = hi - lo;
+                                best = c;
+                            }
+                            if (d < 0)
+                                d = -d;
+                            if (d < best_d)
+                            {
+                                best_d = d;
+                                nearest = c;
+                            }
+                            if (!filled[c] && d < empty_d)
+                            {
+                                empty_d = d;
+                                nearest_empty = c;
+                            }
+                        }
+                        if (pass == 0)
+                        {
+                            if (best < 0)
+                            {
+                                continue; /* placed in the second pass */
+                            }
+                        }
+                        else if (vcol >= 0 && !filled[vcol] && vuid_valid(t))
+                        {
+                            best = vcol; /* Brazos: right-aligned numbers past left-aligned titles */
+                        }
+                        else if (pcol >= 0 && !filled[pcol] && pdf_precinct_like(t))
+                        {
+                            best = pcol;
+                        }
+                        else if (nearest_empty < 0 && ncols > 0 && x1 <= cx0[0] + 1.0f &&
+                                 t[0] != '\0' && strspn(t, "0123456789") == strlen(t) && strlen(t) <= 5)
+                        {
+                            col_of[k] = -2; /* Potter: an untitled row number left of the table */
+                            continue;
+                        }
+                        else
+                        {
+                            best = (nearest_empty >= 0) ? nearest_empty : nearest;
+                        }
+                        col_of[k] = best;
+                        if (t[0] != '\0')
+                        {
+                            filled[best] = TRUE;
+                        }
                     }
-                    if (d < 0)
-                        d = -d;
-                    if (d < best_d)
+                }
+                const EePdfTextRun *last[PDF_TABLE_MAX_COLS]; /* the run that ends each cell */
+                for (k = 0; k < ln->count; k++)
+                {
+                    char t[PDF_TABLE_CELL];
+                    const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
+                    int col = (k < nk) ? col_of[k] : ncols - 1;
+                    pdf_run_text(&pt, r, t, sizeof(t));
+                    if (col < 0)
                     {
-                        best_d = d;
-                        nearest = c;
+                        continue;
                     }
+                    /* runs that touch continue a word (Gregg: "GR" + "EGG COUNTY ...") */
+                    if (cells[col][0] != '\0' && !pdf_runs_touch(&pt, last[col], r))
+                    {
+                        StringCchCatA(cells[col], PDF_TABLE_CELL, " ");
+                    }
+                    StringCchCatA(cells[col], PDF_TABLE_CELL, t);
+                    last[col] = r;
                 }
-                if (best < 0)
-                {
-                    best = nearest;
-                }
-                pdf_run_text(&pt, r, t, sizeof(t));
-                if (cells[best][0] != '\0')
-                {
-                    StringCchCatA(cells[best], PDF_TABLE_CELL, " ");
-                }
-                StringCchCatA(cells[best], PDF_TABLE_CELL, t);
             }
             if (!rows_sink(sc, cellp, (uint32_t)ncols))
             {
@@ -4362,6 +4894,14 @@ static void build_note(Loader *L)
         wb_printf(&b, L"\r\n\r\n%lu worksheet(s) had no header row; the header of a sheet with the same "
                      L"columns was used: %s",
                   (unsigned long)in->recovered_sheets, L->recovered.p ? L->recovered.p : L"");
+    }
+    if (L->not_returned > 0)
+    {
+        wchar_t nn[32];
+        fmt_count(L->not_returned, nn, ARRAYSIZE(nn));
+        wb_printf(&b, L"\r\n\r\n%s mail ballot%s listed as sent but not received yet (\x201C-\x201D for the received "
+                     L"date) %s not loaded: those voters have not voted yet.",
+                  nn, L->not_returned == 1 ? L"" : L"s", L->not_returned == 1 ? L"was" : L"were");
     }
     if (L->limited_forms > 0)
     {

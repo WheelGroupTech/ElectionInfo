@@ -143,7 +143,8 @@ Status as of 2026-10-22:
   for name; every other load byte-identical. Smoke test `limitedpdf`. Help, RELEASES (1,442
   chars), STORE-LISTING, survey doc "Limited Ballot PDFs", design doc D2 updated. Needs the
   user's click-test (load the G25 or P26 Travis ZIP; Voting Totals' Limited column).
-- **Next:** final validation and the 1.4.0.0 Store bundle when the user is ready. Known
+- **1.4.0.0 Store bundle BUILT (2026-10-20):** `Build/msix/ElectionExplorer.Package_1.4.0.0_x64_arm64_bundle.msixupload` (4.3 MB). Verified: bundle + both packages `WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-...980D6` / 1.4.0.0; both EXEs File/ProductVersion 1.4.0.0 (x64 = 0x8664, ARM64 = 0xAA64) with the latest roster help text; 19 logo images each; runFullTrust only. Smoke 60/60; x64 + ARM64 Release rebuild clean. LESSON: an incremental wapproj build reused stale `bin/<arch>/Release/Upload/AppxManifest.xml` (1.3.0.0) inside a 1.4.0.0 bundle -- always delete the package's bin/obj/BundleArtifacts (or /t:Rebuild) after a version bump and check the inner manifests. Help / RELEASES (1,442 chars) / STORE-LISTING (6,170) now say 18 counties (+ Collin, Fort Bend, Bell). User to submit in Partner Center (paste RELEASES 1.4 note as "What's new").
+- **Next:** submit 1.4.0.0; daily roster downloads run via the scheduled task (Oct 21 - Nov 4). Known
   leftovers: Bexar P26 02-19 headerless mail CSV, Brazoria rejected-ballot sheets
   (not readable, listed).
 - **Williamson snapshots (2026-10-14):** the user's 10/13 workbook is a cumulative snapshot
@@ -162,6 +163,32 @@ Status as of 2026-10-22:
   validation, follow-ups); Help, RELEASES (1,442 chars), STORE-LISTING; smoke `sosroster`.
   Found: 118 Voter IDs on both the P26 DEM and REP Election Day rosters. Needs the user's
   click-test (load the four P26 ZIPs; the G26 10/17 CSV).
+- **G26 early voting update (2026-10-20):** Travis 10/19 ZIP checked (40,777 in person =
+  county figure; 5,076 mail; 40 Limited). New rosters downloaded for every top-20 county
+  (`Voter_Rosters/TX_<County>_County/G26_*`; new folders Collin, Fort Bend, Bell, Nueces, Hays,
+  Lubbock SOS only) plus SOS county CSVs 10/14-10/19 for all 20 (county CSVs are DAILY, not
+  cumulative). Loader fixes: PDF table runs under no title go to the nearest unfilled column
+  (Bell lost 208 rows); `CertificateNumber` = Voter ID, `VoteDate` = Date Voted (Collin,
+  Webb); mail rows with "-" received date = not returned, skipped + noted (Collin 10,257).
+  Survey doc "Early voting update (2026-10-20)" has the per-county table. Smoke green.
+  Daily downloads continue through 10/30 (Collin, Bell, Fort Bend, Williamson, Denton keep
+  no history).
+- **Counties 21-50 added (2026-10-21, user request):** the daily downloader and scheduled task
+  now cover the 50 most populous counties (Census 2025 estimates; ranks 1-20 = the counties
+  already tracked). All 30 new counties get SOS county CSVs; 16 post their own rosters and
+  have script functions (79 files on 10/21); Wichita's PDFs are behind a Cloudflare challenge
+  (listed for manual download). Survey doc "Counties 21-50 (2026-10-21)".
+- **Counties 21-50 loader support (2026-10-21, UNCOMMITTED):** all 16 load (Guadalupe's
+  scanned mail PDFs excepted); per-county counts vs independent ID counts and SOS 10/19 in
+  the survey doc's "Loader support (2026-10-21)". `pdf_reader`: opt-in `split_gaps` (TJ
+  column kerns -> runs) and `rot` (rotated pages); `voter_roster.c`: Voter ID / precinct
+  affinity, row numbers, touching runs, page footers/titles, new titles, Time-as-date,
+  short-year and weekday file-name dates, M/D/YY cells, stacked headers. Help topic updated
+  (main.c). Smoke 61/61 (new `county50`); Release x64 + ARM64 clean. Regression: existing
+  counties identical except Harris/Dallas row ORDER (file-name dates from "10-19-26").
+  Ships as **1.4.1.0, planned for the night of 2026-10-22** (user decision: wait for one
+  more day's rosters). Before building: reload all 50 counties' 10/21 files (c50 counts vs
+  independent ID counts and SOS), then version bump, RELEASES / STORE-LISTING, clean bundle.
 
 ### Committed — release notes file
 

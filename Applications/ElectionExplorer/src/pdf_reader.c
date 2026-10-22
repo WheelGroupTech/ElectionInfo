@@ -2975,13 +2975,13 @@ static void path_end(Interp *in)
     in->has_path = 0;
 }
 
-static BOOL show_text(Interp *in, const PdfObj *str_or_array)
+/* Add a run for the text decoded since @p start, drawn from advance @p adv0 to @p adv1
+ * (text space, 1/1000 em) after the text matrix origin. */
+static BOOL push_run(Interp *in, size_t start, double adv0, double adv1)
 {
     EePdfPageText *pt = in->pt;
     const GState *g = &in->gs[in->gsp];
     EePdfTextRun *r;
-    size_t start = pt->text_len;
-    double adv = 0.0; /* advance in text space units of 1/1000 em */
     if (pt->nruns == pt->cap_runs)
     {
         uint32_t nc = pt->cap_runs ? pt->cap_runs * 2 : 256;
@@ -2993,6 +2993,41 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
         pt->runs = nr;
         pt->cap_runs = nc;
     }
+    r = &pt->runs[pt->nruns++];
+    {
+        /* Text space -> user space: the horizontal and vertical unit vectors through the
+         * text matrix and the CTM. */
+        const double *t = in->tm;
+        const double *c = g->ctm;
+        double hx = t[0] * c[0] + t[1] * c[2], hy = t[0] * c[1] + t[1] * c[3];
+        double vx = t[2] * c[0] + t[3] * c[2], vy = t[2] * c[1] + t[3] * c[3];
+        double hs = sqrt(hx * hx + hy * hy), vs = sqrt(vx * vx + vy * vy);
+        double dx = adv0 / 1000.0 * in->font_size;
+        r->font_size = (float)(in->font_size * vs);
+        r->has_width = (in->font != NULL && in->font->has_widths);
+        r->width = r->has_width ? (float)((adv1 - adv0) / 1000.0 * in->font_size * hs) : 0.0f;
+        r->x = (float)(in->tm[4] * c[0] + in->tm[5] * c[2] + c[4] + dx * hx);
+        r->y = (float)(in->tm[4] * c[1] + in->tm[5] * c[3] + c[5] + dx * hy);
+        r->rot = (fabs(hx) >= fabs(hy)) ? (hx >= 0 ? 0 : 180) : (hy > 0 ? 90 : 270);
+    }
+    r->has_clip = g->has_clip;
+    r->clip_x0 = (float)g->cx0;
+    r->clip_y0 = (float)g->cy0;
+    r->clip_x1 = (float)g->cx1;
+    r->clip_y1 = (float)g->cy1;
+    r->clip_id = g->has_clip ? g->clip_id : 0;
+    r->text_off = (uint32_t)start;
+    r->text_len = (uint32_t)(pt->text_len - start);
+    return TRUE;
+}
+
+static BOOL show_text(Interp *in, const PdfObj *str_or_array)
+{
+    EePdfPageText *pt = in->pt;
+    size_t start = pt->text_len;
+    double adv = 0.0;  /* advance in text space units of 1/1000 em */
+    double adv0 = 0.0; /* where the current run starts (split_gaps) */
+    BOOL split = pt->split_gaps && in->font != NULL && in->font->has_widths;
     if (str_or_array->t == PO_STR)
     {
         if (!font_decode(in->font, str_or_array->u.s, str_or_array->n, pt))
@@ -3023,39 +3058,35 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
             }
             else if (it->t == PO_INT || it->t == PO_REAL)
             {
-                adv -= obj_num(it); /* TJ adjustment, thousandths of an em */
-                if (obj_num(it) < -200.0 && !text_put_cp(pt, ' '))
+                if (obj_num(it) < -200.0)
                 {
                     /* a large negative kern in TJ is a word gap */
-                    return FALSE;
+                    if (split)
+                    {
+                        if (pt->text_len > start)
+                        {
+                            if (!push_run(in, start, adv0, adv))
+                            {
+                                return FALSE;
+                            }
+                            start = pt->text_len;
+                        }
+                        adv0 = adv - obj_num(it);
+                    }
+                    else if (!text_put_cp(pt, ' '))
+                    {
+                        return FALSE;
+                    }
                 }
+                adv -= obj_num(it); /* TJ adjustment, thousandths of an em */
             }
         }
     }
-    r = &pt->runs[pt->nruns++];
+    if (split && pt->text_len == start && pt->nruns > 0 && adv0 > 0.0)
     {
-        /* Text space -> user space: the horizontal and vertical unit vectors through the
-         * text matrix and the CTM. */
-        const double *t = in->tm;
-        const double *c = g->ctm;
-        double hx = t[0] * c[0] + t[1] * c[2], hy = t[0] * c[1] + t[1] * c[3];
-        double vx = t[2] * c[0] + t[3] * c[2], vy = t[2] * c[1] + t[3] * c[3];
-        double hs = sqrt(hx * hx + hy * hy), vs = sqrt(vx * vx + vy * vy);
-        r->font_size = (float)(in->font_size * vs);
-        r->has_width = (in->font != NULL && in->font->has_widths);
-        r->width = r->has_width ? (float)(adv / 1000.0 * in->font_size * hs) : 0.0f;
+        return TRUE; /* the array ended with a gap */
     }
-    r->x = (float)(in->tm[4] * g->ctm[0] + in->tm[5] * g->ctm[2] + g->ctm[4]);
-    r->y = (float)(in->tm[4] * g->ctm[1] + in->tm[5] * g->ctm[3] + g->ctm[5]);
-    r->has_clip = g->has_clip;
-    r->clip_x0 = (float)g->cx0;
-    r->clip_y0 = (float)g->cy0;
-    r->clip_x1 = (float)g->cx1;
-    r->clip_y1 = (float)g->cy1;
-    r->clip_id = g->has_clip ? g->clip_id : 0;
-    r->text_off = (uint32_t)start;
-    r->text_len = (uint32_t)(pt->text_len - start);
-    return TRUE;
+    return push_run(in, start, adv0, adv);
 }
 
 static void text_newline(Interp *in, double tx, double ty)

@@ -536,6 +536,172 @@ Nothing available: Collin, Bell (posting starts with early voting on 10/19), For
 (still shows the June runoff; no archive), Nueces, Hays. Dallas 2020–2023: the old Clarity
 site is gone and the Internet Archive was "Temporarily Offline" (retry later).
 
+## Early voting update (2026-10-20)
+
+Early voting for the November 3, 2026 general election began Monday 10/19. Downloaded on 10/20
+into `Voter_Rosters/TX_<County>_County/` as `G26_<county file name>`; county files posted
+under the same name every day (Harris, Tarrant) get `_2026-10-20` before the extension, El
+Paso's undated early voting workbook its link text (`G26_Early Voting 10-19-2026_...`).
+
+| County | New files (county site) | Loaded (10/19 in person / mail) | SOS county CSV 10/19 in person |
+|---|---|---|---|
+| Travis | user's `G26-Voter-Rosters_2026-10-19.zip` | 40,777 / 5,076 + 40 Limited (= county's 40,777) | 40,777 |
+| Harris | `Cumulative_EV_ToPost_1126` (10/19), `Cumulative_BBM_ToPost_1126` (10/20) ZIPs | 104,659 / 24,794 | 7,031 (partial) |
+| Dallas | In-Person-Early-Voting-Turnout-Report, Mail-Ballot-Returns-Report 10.19.26 (+ a turnout-by-location report: not a roster) | 76,243 / 11,239 | 103,056 |
+| Tarrant | `Early_voting_in_person_report`, `absentee_returned_voter_report` ZIPs (site's ev_reports) | 50,409 (no date) / 11,935 | 17 (partial) |
+| Bexar | mail PDFs 10/07-10/19, `voter_check_in_details 10-19-2026.pdf` (1,297 pages) | 42,776 / 14,614 | 30,707 |
+| Collin (new) | `early-voting-through-october-19-2026.xlsx`, `absentee-returns-through-...xlsx` | 34,425 + 97 provisional / 3,883 | 5,936 |
+| Denton | `1126_10-19_Early-Voting-Roster-1.xlsx`, `1126_10-19_Returned_Mail_Roster.xlsx` | 34,739 / 5,003 | 34,536 |
+| Fort Bend (new) | `EV-10-19_1.xlsx`, `Mail-Ballot-List-2026-10-19.xlsx` | 31,831 / 2,337 | 1 (partial) |
+| Hidalgo | `EV Roster November 3, 2026 (Cumulative).csv`, ABBM list (10/20) | 17,448 / 4,921 | 17,828 |
+| El Paso | mail CSVs 10/09-10/17, early voting xlsx 10/19 | 17,516 / 25,319 (mail snapshots overlap) | 1,215 (partial) |
+| Montgomery | daily ZIPs 10/12-10/19 | 13,568 / 5,387 + 11 Limited | 13,555 |
+| Williamson | `VoterTurnout_261019b` snapshot | 25,694 / 4,524 (with the older snapshots) | 11,737 |
+| Cameron | countywide `01_Cameron_County10-19-2026.xlsx`, `MAIL-GN26-...-CC-2026-10-19.xlsx` (per-entity files skipped: subsets) | 9,424 / 1,071 | 9,427 |
+| Brazoria | `2026-10-19 IN PERSON`, mail 10/19 and 09-28 thru 10-16 | 14,322 / 2,388 | 14,312 |
+| Bell (new) | `20261019_EV.pdf`, `20261019_BBM.pdf` | 7,111 / 1,685 | 7,094 |
+| Galveston | mail CSVs 10/12-10/19, `Checkins_10192026.xlsx` | 13,654 / 2,042 | 6,248 |
+| Webb | mail PDFs 10/09-10/19, `Check-in Report ... 10-19-2026.pdf` | 4,944 / 345 | 4,921 |
+| Lubbock, Nueces, Hays (new) | none: the county links the SOS site | SOS files below | 8,855 / 1,586 / 10,251 |
+
+The **SOS county CSVs** (`G26_<COUNTY>.2026 NOVEMBER GENERAL ELECTION.EarlyVoting.<MM_DD_YYYY>.csv`,
+`VOTER_NAME, ID_VOTER, VOTING_METHOD, PRECINCT`, no county column) were saved for all 20
+counties for 10/14-10/19 where the SOS had data (an empty response = nothing reported that
+day; 10/14-10/18 are mail only). Unlike the statewide report, a county CSV holds **only that
+day's** voters: Travis's 10/14, 10/16 and 10/19 files share no Voter ID (141, 486, 1,464 mail;
+40,777 in person on 10/19); 40,766 of Travis's 40,777 in-person voters are on the county's own
+roster. The loader dates its rows from the file name (no county column, so not `sos_list`).
+Several counties' SOS numbers are far behind their own rosters (Harris, Tarrant, Fort Bend, El
+Paso, Galveston, Williamson, Bexar, Collin): for those counties use the county's files.
+
+Loader fixes found with these files (`voter_roster.c`):
+
+- **PDF tables** (`read_pdf_table`): a run under no column title goes to the nearest column
+  not yet filled on its line. Bell's names are left-aligned under a centered `NAME`; a short
+  name lay nearer the `SOS_VOTERID` title, was appended to the Voter ID cell and the row
+  dropped as a non-voter (208 of 7,111). Bell now = `pdftotext -raw` (7,111 / 1,685 lines).
+- **`CertificateNumber`** (Collin's and Webb's check-in reports: the VUID) is a Voter ID title
+  (generic rank; Tarrant's plain `Certificate` is still not one); **`VoteDate`** is Date Voted.
+- **Mail lists with unreturned ballots**: Collin's "absentee returns" workbook lists every
+  ballot mailed, with `-` in `ReceivedDate` for the 10,257 not back yet; a mail list row
+  whose received date is `-` is skipped and counted ("... sent but not received yet ... not
+  loaded").
+
+Independent counts: Galveston 13,654, Dallas 76,243, Williamson 28,926 rows (25,694 `EV` on
+10/19), Collin 34,522 rows, Bexar 42,765 VUID lines + 11 blank, Bell 7,111 / 1,685 lines, all
+equal to the loader. Smoke tests `counties` (Collin) and `pdfroster` (Bell layout).
+
+## Counties 21-50 (2026-10-21)
+
+The user extended tracking to the next 30 counties by population. Ranks are from the Census
+Bureau's 2025 county estimates (`co-est2025-alldata.csv`, `POPESTIMATE2025`). The 20 counties
+already tracked are exactly ranks 1-20 (Hays 19, Webb 20), and ranks 21-50 are the same set
+in the 2024 estimates. All 30 are added to the daily downloader's SOS list. SOS county ids come
+from `getFile?type=EVR_ELECTION` → `counties`. They follow FIPS order except **McLennan = 161**:
+the SOS sorts "Mc" after McCulloch, FIPS after Lynn.
+
+Surveyed 10/21. The 16 counties that post their own rosters each have a function in
+`Voter_Rosters/_download_tools/daily_rosters.py`, which holds the page URL. ✓ marks a roster
+seen to carry a VUID column (only a few were sampled).
+
+| # | County | Own roster (format, posting) |
+|---|---|---|
+| 21 | McLennan | one PDF "List of Early Voters: In-Person and By-Mail" (CivicPlus doc 18980, re-posted under a timestamped name) |
+| 22 | Jefferson | SOS only |
+| 23 | Smith | daily PDFs "MM.DD.26 In Person / Absentee Voter List" in a Laserfiche public portal (folder 41; JSON listing needs the portal's cookies) |
+| 24 | Brazos | daily PDFs "mail-MM-DD-2026" (from 9/23) and "in-person-MM-DD-2026" (`/roster/`); the 10/02 link points at the 9/30 file |
+| 25 | Ellis | SOS only (page quotes §87.121) |
+| 26 | Johnson | SOS only |
+| 27 | Kaufman | SOS only |
+| 28 | Comal | SOS only |
+| 29 | Guadalupe | daily returned-mail PDFs; "Early Voting Ballots Cast" is a count table, not a roster |
+| 30 | Midland | SOS only for G26 (it posted its own PDF in May) |
+| 31 | Parker | SOS only |
+| 32 | Ector | SOS only |
+| 33 | Grayson | daily XLSX "October DD 2026 EV Check-in Report" / "Absentee Voter List" |
+| 34 | Randall | two PDFs "Early Voting Roster" / "Mail Ballot Roster" (CivicPlus docs 4867 / 4827, re-posted daily) |
+| 35 | Taylor | SOS only (links the SOS for in person) |
+| 36 | Rockwall | SOS only |
+| 37 | Wichita | daily PDFs "Voter-Check-ins-MM.DD.2026", "Absentee-MM.DD.2026", **behind a Cloudflare bot challenge**: not downloaded by the script, which lists them for a manual download |
+| 38 | Gregg | daily PDFs "YYYY-MM-DD-Voter-Turnout" (check-ins: VUID, polling place, precinct) ✓ and "…-BBM-Voters" (VUID, precinct, mail and received dates) ✓ |
+| 39 | Hunt | daily PDFs "Vote(r) History MM.DD.26" (date, VUID, name, precinct, polling place) ✓ |
+| 40 | Liberty | SOS only |
+| 41 | Tom Green | daily PDFs "MMDDYYRoster" / "MMDDYYBallotsByMail" |
+| 42 | Bastrop | daily CSVs ("Monday-October-19-2.csv") + a mail CSV re-posted under a new name each day (`Mail-Ballots-14.csv`) |
+| 43 | Potter | two PDFs "Early Voting Roster" (VUID, precinct) ✓ / "Mail Ballot Roster" ✓ (Wix file URLs change with each upload) |
+| 44 | Bowie | daily CivicPlus PDFs "BBM Received M.D.2026" (from 9/22) and "M.D.2026 Early Vote History" |
+| 45 | Victoria | cumulative "MM-DD-2026 mail and in person" PDF + XLSX (CivicPlus docs 2846 / 2847) |
+| 46 | Henderson | daily CivicPlus PDFs "Early Voting October DD, 2026" |
+| 47 | Angelina | daily PDF `voter_history_MMDDYY.pdf` |
+| 48 | Orange | SOS only (no roster found) |
+| 49 | Coryell | SOS only |
+| 50 | Walker | SOS only |
+
+The first download on 10/21 got 79 county files (16 counties).
+
+### Loader support (2026-10-21)
+
+All 16 load except Guadalupe's mail lists, which are scanned images (ScandAll PRO, no text
+layer: listed as not readable). Checked against an independent count of 10-digit Voter IDs
+per file (`pdftotext -raw`, CSV text, XLSX XML) and against the SOS county CSV for 10/19:
+
+| County | Loaded (files of 10/21) | 10/19 in person: loaded / SOS |
+|---|---|---|
+| McLennan | 11,958 = IDs in the PDF; no method or date in the list | - / 4,912 |
+| Smith | 5,863 + 5,982 in person, 1,308 + 1,568 mail (= IDs) | 5,863 / 5,827 |
+| Brazos | 4,561 in person, 906 mail (17 daily PDFs, = IDs) | 4,561 / 4,563 |
+| Grayson | 5,497 + 4,788 check-ins, 920 mail | 5,497 / 5,457 |
+| Randall | 8,520 in person (10/19-10/20, from "Time"), 1,503 mail (rotated page) | 4,394 / 4,399 |
+| Wichita | 2,945 + 2,783 check-ins, 698 mail (= IDs) | 2,945 / 2,942 |
+| Gregg | 3,677 + 3,536 in person, 839 mail | 3,677 / 2 (SOS lags) |
+| Hunt | 10/20 file 3,920 (cumulative, 10/19 + 10/20); 10/19 file 1,808 of 2,362 | 1,840 (10/20 file) / 1,798 |
+| Tom Green | 2,634 in person, 1,131 mail (= IDs) | 2,634 / 2,620 |
+| Bastrop | 3,143 + 2,888 in person, 824 mail (= IDs) | 3,143 / 3,143 |
+| Potter | 4,148 in person (cumulative, no date), 812 mail (= IDs) | - / 2,179 |
+| Bowie | 2,023 in person, 696 mail (20 daily PDFs) | 2,023 / 2,027 |
+| Victoria | 2,872 (1,114 mail + 1,758 in person dated 10/20 only), PDF and XLSX alike | - / 1,655 |
+| Henderson | 3,257 + 2,823 (= IDs) | 3,257 / 3,257 |
+| Angelina | 2,566 (= IDs) | 2,566 / 2,566 |
+
+Loader changes (`pdf_reader.c`, `voter_roster.c`):
+
+- **TJ column gaps** (`EePdfPageText.split_gaps`, set by the roster reader only): Acrobat
+  Distiller output (Randall, Gregg) draws each printed line as one TJ with the columns set
+  apart by kerns; a word-gap kern now ends the run and the text after it starts a new run
+  at its own position (off = a space, as before, for the Hart readers).
+- **Rotated pages** (`EePdfTextRun.rot`): Randall's mail roster reads bottom to top; the
+  runs are turned into the reading frame before lines are formed.
+- **Cells**: a run under no title that is a Voter ID goes to the Voter ID column, a short
+  number to the precinct column (Brazos); an untitled row number left of the table is
+  dropped (Potter); runs that touch inside one clip join without a space, also in the
+  header (Gregg "MiddleNam" + "e"; Hunt's touching titles are in separate clips); a line
+  with "N of M" and no Voter ID is a page footer (Gregg); on a page without a header row,
+  lines above its first Voter ID line are titles (Bowie).
+- **Titles**: "Prct" (Smith), "SFX", "Vote Method" (Victoria; "IN PERSON" there = early
+  voting or Election Day by the row's date, never the file name's "mail"), "ballot
+  returned", "Ballot Received", "Ballot Status Date", "Date Rec'd", a bare "Voter" as the
+  name when nothing else names it (Bowie), Hunt's printed-short "voter_state_vot"; a
+  check-in "Time" / "checkin_time" holding date + time is Date Voted when the sheet has no
+  date column and nearly every row has a date in it (not Bexar's mostly empty
+  "Check-in Time").
+- **Dates**: cell dates "M/D/YY" (Tom Green); file-name dates "MMDDYY" / "M.D.YY" when the
+  name has no other date and no digit run of 7+ (Randall's and Hidalgo's upload stamps),
+  and a weekday + month + day (Bastrop "Monday-October-19": the latest year, up to next
+  year, in which that day was that weekday).
+- **Stacked headers** (Grayson's check-in report): 3+ consecutive rows of one or two
+  digit-free titles become one header, each title over the nearest data column at or left
+  of it.
+
+Known gaps: Hunt's revised 10/19 file switches to a shifted column order without a header
+on pages 41-54 (554 rows left out, counted as non-voter rows; its 10/20 file lists 10/19
+too). McLennan's list gives no method or date. Victoria re-posts one file each day; its 10/19
+in-person voters were already gone on 10/21. Potter's cumulative early voting roster has no
+dates: the downloader now names its snapshots `_YYYY-MM-DD-hh-mm-ss` (a save time, not a
+voting day). Harris's `Cumulative_EV_ToPost_1126_10-19-26.csv` entries now get their
+file-name date too (same rows, ordered by date).
+
+Smoke test `county50` covers every rule above with synthetic files.
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

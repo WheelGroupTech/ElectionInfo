@@ -9,9 +9,8 @@
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
 
 Python scripts for checking the Nov 3, 2026 Travis County sample ballots against the
-ES&S EVS 6.3 Ballot Detail Listing. All four are committed except the 2026-10-22 edits
-(**UNCOMMITTED:** `parse_ballot_detail_listing.py` CSV input,
-`compare_listing_to_sample_ballots.py` folder input). All lint 10/10.
+ES&S EVS 6.3 Ballot Detail Listing. All committed (latest: `043ecb5`, 2026-10-22 — CSV
+listing input, folder input, `Scripts/README.md` entries). All lint 10/10.
 
 - `process_g26_sample_bbm_ballots.py <combined.pdf>` — splits the county's combined
   sample-ballot PDF (6,236 pages; 736 styles × Full, FED, LB in that order) into
@@ -1236,11 +1235,10 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 
 ## Next steps
 
-- **G26 ballot scripts (see top):** commit the 2026-10-22 script edits. When the county
-  re-issues **LB** sample ballots, run `compare_listing_to_sample_ballots.py` against
-  the 10.21 listing (LB ovals moved on the same 12 styles). Ask whether any mail
-  ballots were printed from the old ESD 9 layout. (G26 scripts are now listed in
-  `Scripts/README.md`, uncommitted.)
+- **G26 ballot scripts (see top):** when the county re-issues **LB** sample ballots, run
+  `compare_listing_to_sample_ballots.py` against the 10.21 listing (LB ovals moved on
+  the same 12 styles). Ask whether any mail ballots were printed from the old ESD 9
+  layout.
 
 - **Dominion + RCV (uncommitted, see top):** click-test loading an SF zip (e.g.
   `G24_CVR_Export_20241202143051.zip`), Reports → Tabulate Ranked-Choice Contests,

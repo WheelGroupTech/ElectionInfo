@@ -5,7 +5,7 @@
 #
 # License: MIT License
 #
-# Python script to parse the Ballot Detail Listing (Excel format) exported by
+# Python script to parse the Ballot Detail Listing (Excel or CSV format) exported by
 # the ES&S EVS 6.3 for the November 3, 2026 Joint General and Special
 # Elections, and write one CSV row per selection oval.
 #
@@ -76,13 +76,20 @@ def cell_text(row, index):
 
 
 #-----------------------------------------------------------------------------
-# read_cards()
+# read_rows()
 #
-# This function reads the listing and returns a list of cards, each with its
-# header fields, precinct, and the list of selections in listing order.
+# This function yields the rows of the listing from either the Excel or the
+# CSV export.  The two have the same layout, but in the CSV export the table
+# columns shift from one report page to the next, so the columns are found
+# from the titles on each page.
 #-----------------------------------------------------------------------------
-def read_cards(pathname):
-    """Reads the cards and selections from the listing workbook"""
+def read_rows(pathname):
+    """Yields the rows of the listing as tuples of cell values"""
+
+    if pathname.lower().endswith(".csv"):
+        with open(pathname, encoding="utf-8-sig", newline="") as f:
+            yield from (tuple(row) for row in csv.reader(f))
+        return
 
     with warnings.catch_warnings():
         # The EVS export has no default style, which openpyxl warns about
@@ -92,6 +99,18 @@ def read_cards(pathname):
 
     # The export does not record the sheet dimensions correctly
     sheet.reset_dimensions()
+    yield from sheet.iter_rows(values_only=True)
+    workbook.close()
+
+
+#-----------------------------------------------------------------------------
+# read_cards()
+#
+# This function reads the listing and returns a list of cards, each with its
+# header fields, precinct, and the list of selections in listing order.
+#-----------------------------------------------------------------------------
+def read_cards(pathname):
+    """Reads the cards and selections from the listing"""
 
     cards = []
     card_header = None       # most recent card header match
@@ -99,7 +118,7 @@ def read_cards(pathname):
     columns = None           # column of each TABLE_TITLES entry
     contest = None           # fields of the current contest
 
-    for line_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+    for line_number, row in enumerate(read_rows(pathname), start=1):
         cells = [(i, str(c).strip()) for i, c in enumerate(row) if c is not None and str(c).strip()]
         if not cells:
             continue
@@ -166,7 +185,6 @@ def read_cards(pathname):
 
         cards[-1]["selections"].append(dict(contest, **{"Candidate": candidate, "Row": int(grid_row), "Col": int(grid_col)}))
 
-    workbook.close()
     return cards
 
 
@@ -238,7 +256,7 @@ def main():
     """Main function"""
 
     if len(sys.argv) not in (2, 3):
-        print("Usage: python parse_ballot_detail_listing.py <listing.xlsx> [output.csv]")
+        print("Usage: python parse_ballot_detail_listing.py <listing.xlsx or listing.csv> [output.csv]")
         return False
     input_pathname = sys.argv[1]
     output_pathname = sys.argv[2] if len(sys.argv) == 3 else "ballot_detail_listing.csv"

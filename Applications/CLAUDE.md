@@ -46,3 +46,10 @@ changelog. Git history is the permanent record.
 Active application: **ElectionExplorer** — a Win32 (C11, no MFC) GUI voter-list
 explorer. See [ElectionExplorer/](ElectionExplorer/) and
 [SESSION-HANDOFF.md](SESSION-HANDOFF.md) for current state.
+
+Also active (outside this tree): the **G26 ballot-definition scripts** in
+[`Scripts/Travis_County_Elections/2026-11-03_General/`](../Scripts/Travis_County_Elections/2026-11-03_General/)
+— Python (PyMuPDF, openpyxl) checks of the Travis County sample ballots against the
+ES&S Ballot Detail Listing. Their state and open items are in the "G26 ballot scripts"
+section of [SESSION-HANDOFF.md](SESSION-HANDOFF.md). Run Python that reads county
+files with `python -I`, and lint with `python -m pylint` (the scripts are kept at 10/10).

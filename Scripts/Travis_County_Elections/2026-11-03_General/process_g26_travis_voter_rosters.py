@@ -1,5 +1,5 @@
 #-----------------------------------------------------------------------------
-# process_l26_travis_voter_rosters.py
+# process_g26_travis_voter_rosters.py
 #
 # Copyright (c) 2026 Daniel M. Teal
 #
@@ -7,7 +7,7 @@
 #
 # Python script to process Excel voter rosters from Travis County Elections.
 #-----------------------------------------------------------------------------
-"""process_l26_travis_voter_rosters.py""" # for pylint
+"""process_g26_travis_voter_rosters.py""" # for pylint
 # pylint: disable=line-too-long,unused-variable,too-many-branches, too-many-locals
 # pylint: disable=too-many-statements
 

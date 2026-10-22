@@ -113,6 +113,18 @@ Scripts for the **May 26, 2026 Travis County primary runoff**.
 | `merge_sup_into_pr26_travis_registered_voters.py` | Merges a supplemental registered-voter list into the main runoff registered-voter file |
 | `process_pr26_rid_voters.py` | Summarizes RID lists against the runoff voter roster |
 
+### `2026-11-03_General/`
+
+Scripts for the **November 3, 2026 Travis County Joint General and Special Elections**. The ballot tools check the county's ES&S EVS 6.3 sample ballots against its Ballot Detail Listing. They need PyMuPDF (`pymupdf`), plus `openpyxl` for the Excel listing.
+
+| File | Overview |
+|------|----------|
+| `process_g26_travis_voter_rosters.py` | Builds the general-election voter roster database from Travis Excel rosters |
+| `process_g26_sample_bbm_ballots.py` | Splits the combined sample-ballot PDF (each ballot style three times: full, federal-only, and limited ballot) into per-style PDFs in `Full/`, `Federal/`, and `LB/` folders |
+| `parse_ballot_detail_listing.py` | Reads the Ballot Detail Listing (Excel or CSV export) and writes one CSV row per oval with its card, side, grid row/column, and six-digit `CCRRSP` barcode |
+| `compare_listing_to_sample_ballots.py` | Checks the sample ballots (the combined PDF or a folder of per-style PDFs) against the parsed listing: oval positions and labels, the card code marks, sheet/page footers, and missing or duplicate cards |
+| `compare_proposition_translations.py` | Extracts the English and Spanish text of every proposition, flags untranslated headers, numbers or tax-increase statements in only one language, wording that differs between styles, and propositions missing from limited ballots, and writes a side-by-side CSV for translation review |
+
 ---
 
 ## `Travis_County_Voter_Registration/`

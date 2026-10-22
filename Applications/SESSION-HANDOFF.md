@@ -4,7 +4,42 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-22 (G26 ballot scripts section); ElectionExplorer sections 2026-10-17
+
+### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
+
+Python scripts for checking the Nov 3, 2026 Travis County sample ballots against the
+ES&S EVS 6.3 Ballot Detail Listing. All four are committed except the 2026-10-22 edits
+(**UNCOMMITTED:** `parse_ballot_detail_listing.py` CSV input,
+`compare_listing_to_sample_ballots.py` folder input). All lint 10/10.
+
+- `process_g26_sample_bbm_ballots.py <combined.pdf>` — splits the county's combined
+  sample-ballot PDF (6,236 pages; 736 styles × Full, FED, LB in that order) into
+  `Full/`, `Federal/`, `LB/` folders. PyMuPDF (pypdf can't open the AES-256 file).
+- `parse_ballot_detail_listing.py <listing.xlsx|.csv> [out.csv]` — one row per oval with
+  side, card (page) and zero-padded `CCRRSP` barcode. Card headers `N - [FED |LB ]ppp STYLE[ [2]]`;
+  side = where Col/Row resets. The CSV export shifts columns per report page (handled).
+- `compare_listing_to_sample_ballots.py <parsed.csv> <combined.pdf | folder> [report]` —
+  oval positions + labels, card code marks, footers, missing/duplicate cards. Grid is
+  measured relative to the outermost timing marks (county PDFs are cropped/shifted).
+- `compare_proposition_translations.py <combined.pdf> [prefix]` — EN/ES proposition text
+  split by font (Spanish is italic); automated checks + side-by-side CSV for human review.
+
+Facts established: timing grid 26 cols × 93 rows; code column rows 2/3 = FED/LB, row 7 =
+card 2, rows 15–28 = card style number 1–736 (100A=1 … 491D=736); no ID links a voter's
+two sheets; no contest spans both cards.
+
+Status as of 2026-10-22:
+- County re-issued **Full** sample ballots (`OneDrive/…/G26 Sample Ballots/`) + listing
+  `G26 Ballot Detail Listing 10.21.2026.csv` (internal report date 10/06/2026). Only the
+  12 ESD 9 Prop A styles changed (290C/E/G/H, 291B/C/E, 323B/D/F/G, 324F): Spanish fixed,
+  ESD 9 A/B ovals moved down 5 rows in both Full and LB. All 736 new Full PDFs match the
+  10.21 listing (80,907 ovals, 0 mismatches). Folder has a stray `392E - Copy.pdf`.
+- Still unfixed in county materials: Manor ISD Spanish header says "Proposition";
+  contest header "Elección de Donos"; 126F/392E footers say "Sheet 1 of 2" on 1-card
+  ballots; ESD 10 wording differs on 324B/D/H; Manor A–D and Sunset Valley A missing
+  from LB ballots; ESD 9 Spanish "se escribe" (→ describe); several minor Spanish
+  wording issues (Hidden Lakes, Sunfield B/D scope, Austin F "el/al").
 
 ### In progress — Voter Roster feature for 1.4 (steps 1–5 DONE, UNCOMMITTED)
 
@@ -1173,6 +1208,12 @@ Verified: x64 Debug **and** Release build clean (0 warnings); smoke tests all pa
 </details>
 
 ## Next steps
+
+- **G26 ballot scripts (see top):** commit the 2026-10-22 script edits. When the county
+  re-issues **LB** sample ballots, run `compare_listing_to_sample_ballots.py` against
+  the 10.21 listing (LB ovals moved on the same 12 styles). Ask whether any mail
+  ballots were printed from the old ESD 9 layout. (G26 scripts are now listed in
+  `Scripts/README.md`, uncommitted.)
 
 - **Dominion + RCV (uncommitted, see top):** click-test loading an SF zip (e.g.
   `G24_CVR_Export_20241202143051.zip`), Reports → Tabulate Ranked-Choice Contests,

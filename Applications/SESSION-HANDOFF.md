@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-22 (G26 ballot scripts section); ElectionExplorer sections 2026-10-17
+**Last updated:** 2026-10-22 (1.4.1.0 submitted; G26 ballot scripts section); other ElectionExplorer sections 2026-10-17
 
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
 
@@ -185,14 +185,14 @@ Status as of 2026-10-22:
   short-year and weekday file-name dates, M/D/YY cells, stacked headers. Help topic updated
   (main.c). Smoke 61/61 (new `county50`); Release x64 + ARM64 clean. Regression: existing
   counties identical except Harris/Dallas row ORDER (file-name dates from "10-19-26").
-- **1.4.1.0 Store bundle BUILT (2026-10-22, UNCOMMITTED):**
+- **1.4.1.0 Store bundle SUBMITTED to the Store (built + committed 2026-10-22):**
   `Build/msix/ElectionExplorer.Package_1.4.1.0_x64_arm64_bundle.msixupload` (4.4 MB), clean
   rebuild (package bin/obj/BundleArtifacts deleted first). Verified: bundle + both packages
   1.4.1.0 / `WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-...980D6`; EXEs 1.4.1.0 (x64
   0x8664, ARM64 0xAA64) with the 33-county help text; 19 images each; runFullTrust only.
   Last fix: Wichita's wrapped PDF rows (survey doc). Smoke 61/61; regression byte-identical
   except Wichita. Version in the 3 version files; RELEASES 1.4.1.0 note (1,034 chars);
-  STORE-LISTING says 33 counties. **Next:** user submits 1.4.1.0 in Partner Center.
+  STORE-LISTING says 33 counties. Submitted 2026-10-22; awaiting certification.
 - **County roster reports:** `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-2{1,2}.md/.pdf`
   (50 counties, data through 10/20 and 10/21). Plus `..._2026-10-22_Supplement.md/.pdf` and
   `_Supplement_Records.csv` (7,974 records): VUID + county/SOS file name + line/row/page for

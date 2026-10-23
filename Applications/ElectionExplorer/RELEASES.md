@@ -3,7 +3,7 @@
 Microsoft Store releases, newest first. Each entry's text is the Store listing's
 "What's new in this version" note and can be pasted into Partner Center as is.
 
-## 1.4.1.0 (bundle built 2026-10-22; not yet submitted)
+## 1.4.1.0 (submitted 2026-10-22)
 
 New in 1.4.1: Voter rosters from 15 more Texas counties (McLennan, Smith, Brazos, Grayson, Randall, Wichita, Gregg, Hunt, Tom Green, Bastrop, Potter, Bowie, Victoria, Henderson, and Angelina), for 33 counties in all, plus the Texas Secretary of State's rosters. Rosters printed to PDF are read more reliably: lines printed as one string with the columns spaced apart, pages printed sideways, numbers set to the right of their column titles, untitled row numbers, page titles repeated on every page, and records wrapped onto a second line. A check-in time that includes the date becomes the Date Voted, and file names dated with a 2-digit year ("10.19.26", "101926") or a weekday ("Monday-October-19") are understood. A "Vote Method" column of MAIL and IN PERSON is read row by row, a workbook saved from a printed report with its column titles on separate rows loads correctly, and more precinct and date column titles are recognized, so El Paso's mail lists now show their precincts and Denton's early voting roster its voting dates.
 

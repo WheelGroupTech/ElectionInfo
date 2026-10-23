@@ -8896,7 +8896,8 @@ cleanup:
  * a title drawn in two touching pieces, a footer in two runs ("... 87.121" / "1 of 2"), a
  * second page whose title line precedes the rows (Randall, Gregg, Bowie); a page printed
  * rotated (Randall's mail roster); numbers right-aligned past left-aligned titles (Brazos);
- * an untitled row number left of the table (Potter). Text files: a stacked header with the
+ * an untitled row number left of the table (Potter); records wrapped onto a second line
+ * with the row number on a line of its own (Wichita's absentee list). Text files: a stacked header with the
  * titles right of their data (Grayson), "MAIL" / "IN PERSON" under "VOTE METHOD" in a list
  * named "mail and in person" (Victoria), "M/D/YY" dates under "ballot returned" and a
  * "101926" file-name date (Tom Green), a weekday file name (Bastrop), "M.D.YY" and "Prct"
@@ -8931,10 +8932,10 @@ static int test_county50(void)
          "2026 NOVEMBER J,1012439904,FAY,HUNT,10/19/2026 8:00\r\n"},
     };
     TBuf ev[2] = {{0}, {0}};
-    TBuf rot = {0}, brz = {0}, pot = {0};
+    TBuf rot = {0}, brz = {0}, pot = {0}, wch = {0};
     wchar_t dir[MAX_PATH];
-    wchar_t pbuf[ARRAYSIZE(k_text) + 4][MAX_PATH];
-    const wchar_t *paths[ARRAYSIZE(k_text) + 4];
+    wchar_t pbuf[ARRAYSIZE(k_text) + 5][MAX_PATH];
+    const wchar_t *paths[ARRAYSIZE(k_text) + 5];
     EeVoterTable t;
     EeRosterLoadInfo info;
     wchar_t err[256];
@@ -8974,12 +8975,29 @@ static int test_county50(void)
                                "BT /F1 10 Tf 1 0 0 1 62 724 Tm (1) Tj ET BT /F1 10 Tf 1 0 0 1 80 724 Tm (1165067040) Tj ET"
                                " BT /F1 10 Tf 1 0 0 1 179 724 Tm (POTT,DEB) Tj ET BT /F1 10 Tf 1 0 0 1 433 724 Tm (122) Tj ET"
                                " BT /F1 10 Tf 1 0 0 1 490 724 Tm (10/9/2026) Tj ET\n");
-    GetTempPathW(MAX_PATH, dir);
-    for (i = 0; i < n + 4; i++)
+    /* Wichita: each record on two lines (the election and the voter's name wrap), the row
+     * number on a third line left of the table. */
+    ok = ok && tb_printf(&wch, "BT /F1 10 Tf 1 0 0 1 40 770 Tm (Selected - Election) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 185 770 Tm (VUID) Tj ET BT /F1 10 Tf 1 0 0 1 247 770 Tm (Name) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 392 770 Tm (Precinct) Tj ET\n");
+    for (i = 0; i < 4 && ok; i++)
     {
-        static const wchar_t *const k_pdf[4] = {L"Early Voting Roster 10.20.26_202610210834156892.pdf",
+        static const char *const k_first[4] = {"ANNA", "BETH", "CARA", "DORA"};
+        static const char *const k_mid[4] = {"MARIE", "ROSE", "JEAN", "LEE"};
+        int y = 740 - 29 * i;
+        ok = tb_printf(&wch, "BT /F1 10 Tf 1 0 0 1 40 %d Tm (2026 NOVEMBER GENERAL) Tj ET"
+                             " BT /F1 10 Tf 1 0 0 1 185 %d Tm (113539323%d) Tj ET"
+                             " BT /F1 10 Tf 1 0 0 1 247 %d Tm (WICH,%s) Tj ET BT /F1 10 Tf 1 0 0 1 392 %d Tm (P 402) Tj ET\n"
+                             "BT /F1 10 Tf 1 0 0 1 40 %d Tm (ELECTION) Tj ET BT /F1 10 Tf 1 0 0 1 247 %d Tm (%s) Tj ET\n"
+                             "BT /F1 10 Tf 1 0 0 1 15 %d Tm (%d) Tj ET\n",
+                       y, y, i, y, k_first[i], y, y - 12, y - 12, k_mid[i], y - 16, i + 1);
+    }
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < n + 5; i++)
+    {
+        static const wchar_t *const k_pdf[5] = {L"Early Voting Roster 10.20.26_202610210834156892.pdf",
                                                 L"Mail Ballot Roster 10.20.26.pdf", L"mail-09-23-2026-accessible.pdf",
-                                                L"Mail Ballot Roster_2026-10-21-09-13-23.pdf"};
+                                                L"Mail Ballot Roster_2026-10-21-09-13-23.pdf", L"Absentee-10.21.2026.pdf"};
         StringCchCopyW(pbuf[i], MAX_PATH, dir);
         StringCchCatW(pbuf[i], MAX_PATH, i < n ? k_text[i].name : k_pdf[i - n]);
         paths[i] = pbuf[i];
@@ -8989,19 +9007,20 @@ static int test_county50(void)
         ok = cvr_write_bytes(pbuf[i], k_text[i].text, strlen(k_text[i].text));
     }
     if (!ok || !proster_write(pbuf[n], ev, 2) || !proster_write(pbuf[n + 1], &rot, 1) ||
-        !proster_write(pbuf[n + 2], &brz, 1) || !proster_write(pbuf[n + 3], &pot, 1))
+        !proster_write(pbuf[n + 2], &brz, 1) || !proster_write(pbuf[n + 3], &pot, 1) ||
+        !proster_write(pbuf[n + 4], &wch, 1))
     {
         wprintf(L"county50: could not write the files\n");
         goto cleanup;
     }
     EeVoterTable_Init(&t);
     ZeroMemory(&info, sizeof(info));
-    if (EeRoster_LoadFiles(paths, n + 4, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    if (EeRoster_LoadFiles(paths, n + 5, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
     {
         wprintf(L"county50: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 16 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+    if (t.row_count != 20 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
         info.rows_no_date != 0 || info.unsupported_files != 0)
     {
         uint32_t r;
@@ -9051,7 +9070,12 @@ static int test_county50(void)
         !rt_expect(&t, L"BOWI", L"ED", L"VUID", L"1019481895") ||
         !rt_expect(&t, L"BOWI", L"ED", L"Date Voted", L"10/16/2026") ||
         !rt_expect(&t, L"HUNT", L"FAY", L"VUID", L"1012439904") ||
-        !rt_expect(&t, L"HUNT", L"FAY", L"Date Voted", L"10/19/2026"))
+        !rt_expect(&t, L"HUNT", L"FAY", L"Date Voted", L"10/19/2026") ||
+        !rt_expect(&t, L"WICH", L"ANNA", L"VUID", L"1135393230") ||
+        !rt_expect(&t, L"WICH", L"ANNA", L"Middle Name", L"MARIE") ||
+        !rt_expect(&t, L"WICH", L"DORA", L"Middle Name", L"LEE") ||
+        !rt_expect(&t, L"WICH", L"DORA", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"WICH", L"DORA", L"Date Voted", L"10/21/2026"))
     {
         goto done;
     }
@@ -9072,7 +9096,7 @@ done:
     EeRoster_FreeInfo(&info);
     EeVoterTable_Clear(&t);
 cleanup:
-    for (i = 0; i < n + 4; i++)
+    for (i = 0; i < n + 5; i++)
     {
         DeleteFileW(pbuf[i]);
     }
@@ -9081,6 +9105,7 @@ cleanup:
     free(rot.p);
     free(brz.p);
     free(pot.p);
+    free(wch.p);
     if (rc != 0)
     {
         wprintf(L"county50 test failed\n");

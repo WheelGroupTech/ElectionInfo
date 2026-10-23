@@ -185,9 +185,16 @@ Status as of 2026-10-22:
   short-year and weekday file-name dates, M/D/YY cells, stacked headers. Help topic updated
   (main.c). Smoke 61/61 (new `county50`); Release x64 + ARM64 clean. Regression: existing
   counties identical except Harris/Dallas row ORDER (file-name dates from "10-19-26").
-  Ships as **1.4.1.0, planned for the night of 2026-10-22** (user decision: wait for one
-  more day's rosters). Before building: reload all 50 counties' 10/21 files (c50 counts vs
-  independent ID counts and SOS), then version bump, RELEASES / STORE-LISTING, clean bundle.
+- **1.4.1.0 Store bundle BUILT (2026-10-22, UNCOMMITTED):**
+  `Build/msix/ElectionExplorer.Package_1.4.1.0_x64_arm64_bundle.msixupload` (4.4 MB), clean
+  rebuild (package bin/obj/BundleArtifacts deleted first). Verified: bundle + both packages
+  1.4.1.0 / `WheelGroupTech.ElectionExplorer` / `CN=19C9DED9-...980D6`; EXEs 1.4.1.0 (x64
+  0x8664, ARM64 0xAA64) with the 33-county help text; 19 images each; runFullTrust only.
+  Last fix: Wichita's wrapped PDF rows (survey doc). Smoke 61/61; regression byte-identical
+  except Wichita. Version in the 3 version files; RELEASES 1.4.1.0 note (1,034 chars);
+  STORE-LISTING says 33 counties. **Next:** user submits 1.4.1.0 in Partner Center.
+- **County roster reports:** `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-2{1,2}.md/.pdf`
+  (50 counties, data through 10/20 and 10/21).
 
 ### Committed — release notes file
 

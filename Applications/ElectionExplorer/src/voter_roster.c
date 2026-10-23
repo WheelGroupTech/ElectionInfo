@@ -3602,6 +3602,26 @@ static BOOL pdf_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const
            end - b->x < tol && (a->y - b->y < 1.0f && b->y - a->y < 1.0f);
 }
 
+static int __cdecl pdf_float_cmp(const void *a, const void *b)
+{
+    float x = *(const float *)a, y = *(const float *)b;
+    return (x < y) ? -1 : (x > y) ? 1 : 0;
+}
+
+/* Emit the pending data row @p row of @p *n cells and clear it. FALSE when the sink fails. */
+static BOOL pdf_flush_row(SinkCtx *sc, char (*row)[PDF_TABLE_CELL], int *n)
+{
+    const char *cellp[PDF_TABLE_MAX_COLS];
+    int c;
+    for (c = 0; c < *n; c++)
+    {
+        cellp[c] = row[c];
+    }
+    c = *n;
+    *n = 0;
+    return rows_sink(sc, cellp, (uint32_t)c);
+}
+
 /* A short precinct-like value: a digit first, at most 8 characters of digits, letters,
  * '.' or '-' ("1", "26", "202.05", "14A"). */
 static BOOL pdf_precinct_like(const char *t)
@@ -3953,6 +3973,10 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
     int ncols = 0;
     int vcol = -1; /* the header's Voter ID and precinct columns */
     int pcol = -1;
+    char pend[PDF_TABLE_MAX_COLS][PDF_TABLE_CELL]; /* the data row not yet emitted (it may wrap) */
+    int pend_n = 0;
+    float pend_y = 0.0f; /* baseline of its first line */
+    float pitch = 0.0f;  /* row spacing of the page (0 = unknown) */
     BOOL header_emitted = FALSE;
     uint32_t npages;
     uint32_t page;
@@ -4142,6 +4166,39 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                         break;
                     }
                 }
+            }
+        }
+        {
+            /* The page's row spacing: the median gap between consecutive lines that hold a
+             * Voter ID (kept from the previous page when a page has too few). */
+            float gaps[512];
+            uint32_t ng = 0;
+            float prev_y = 0.0f;
+            BOOL have_prev = FALSE;
+            for (li = 0; li < nlines; li++)
+            {
+                uint32_t k;
+                for (k = 0; k < lines[li].count; k++)
+                {
+                    char t[PDF_TABLE_CELL];
+                    pdf_run_text(&pt, &pt.runs[ord[lines[li].first + k]], t, sizeof(t));
+                    if (vuid_valid(t))
+                    {
+                        float y = pt.runs[ord[lines[li].first]].y;
+                        if (have_prev && prev_y - y > 0.0f && ng < ARRAYSIZE(gaps))
+                        {
+                            gaps[ng++] = prev_y - y;
+                        }
+                        prev_y = y;
+                        have_prev = TRUE;
+                        break;
+                    }
+                }
+            }
+            if (ng >= 3)
+            {
+                qsort(gaps, ng, sizeof(gaps[0]), pdf_float_cmp);
+                pitch = gaps[ng / 2];
             }
         }
         for (li = 0; li < nlines; li++)
@@ -4358,11 +4415,63 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                     last[col] = r;
                 }
             }
-            if (!rows_sink(sc, cellp, (uint32_t)ncols))
             {
-                result = -1;
-                break;
+                /* Wichita's October 21 absentee list wraps a record onto a second line (the
+                 * rest of the election name and of the voter's name) and prints the row
+                 * number on a line of its own: a line without a Voter ID that lies closer
+                 * below the row than the page's row spacing continues the row; a lone row
+                 * number left of the table is dropped. A voter without a Voter ID (Bexar) is
+                 * a full row spacing below the row above. */
+                float y = pt.runs[ord[ln->first]].y;
+                BOOL id = FALSE;
+                for (k = 0; k < ln->count; k++)
+                {
+                    char t[PDF_TABLE_CELL];
+                    pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                    id |= vuid_like(t);
+                }
+                if (ln->count == 1 && ncols > 0)
+                {
+                    const EePdfTextRun *r = &pt.runs[ord[ln->first]];
+                    char t[PDF_TABLE_CELL];
+                    pdf_run_text(&pt, r, t, sizeof(t));
+                    if (t[0] != '\0' && strlen(t) <= 5 && strspn(t, "0123456789") == strlen(t) &&
+                        r->x + pdf_run_width(r) <= cx0[0] + 1.0f)
+                    {
+                        continue;
+                    }
+                }
+                if (pend_n > 0 && !id && pitch > 0.0f && pend_y - y > 0.0f && pend_y - y < 0.85f * pitch)
+                {
+                    for (c = 0; c < ncols && c < pend_n; c++)
+                    {
+                        if (cells[c][0] != '\0')
+                        {
+                            if (pend[c][0] != '\0')
+                            {
+                                StringCchCatA(pend[c], PDF_TABLE_CELL, " ");
+                            }
+                            StringCchCatA(pend[c], PDF_TABLE_CELL, cells[c]);
+                        }
+                    }
+                    continue;
+                }
+                if (pend_n > 0 && !pdf_flush_row(sc, pend, &pend_n))
+                {
+                    result = -1;
+                    break;
+                }
+                for (c = 0; c < ncols; c++)
+                {
+                    StringCchCopyA(pend[c], PDF_TABLE_CELL, cells[c]);
+                }
+                pend_n = ncols;
+                pend_y = y;
             }
+        }
+        if (result == 0 && pend_n > 0 && !pdf_flush_row(sc, pend, &pend_n))
+        {
+            result = -1;
         }
         if (result < 0)
         {

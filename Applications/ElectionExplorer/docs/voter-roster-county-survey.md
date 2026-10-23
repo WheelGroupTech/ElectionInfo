@@ -702,6 +702,15 @@ file-name date too (same rows, ordered by date).
 
 Smoke test `county50` covers every rule above with synthetic files.
 
+**Wrapped rows (2026-10-22, for 1.4.1.0):** Wichita's absentee list changed layout on 10/21
+(precinct instead of received date; the election and the voter's name wrap onto a second line;
+the row number on a third). A PDF line with no Voter ID that lies closer below the row above
+than 0.85 of the page's row spacing (the median gap between lines that hold a Voter ID) now
+continues that row, and a lone row number left of the table is dropped. Wichita 10/21: 898
+voters (= its distinct IDs) instead of 993 rows with 95 empty ones; 10/19: full names, 1
+skipped line instead of 699. Every other county loads byte-identical (regression incl. all 16
+county 21-50 folders).
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

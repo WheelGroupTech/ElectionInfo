@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-22 (1.4.1.0 submitted; G26 ballot scripts section); other ElectionExplorer sections 2026-10-17
+**Last updated:** 2026-10-24 (.xls support + Jefferson, uncommitted); 2026-10-22 (1.4.1.0 submitted; G26 ballot scripts section)
 
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
 
@@ -200,6 +200,22 @@ Status as of 2026-10-22:
   `_Supplement_Records.csv` (7,974 records): VUID + county/SOS file name + line/row/page for
   the §6.1, 6.4–6.11 anomalies, for county and SOS staff. §6.2 (Tarrant redaction) excluded;
   no names, no local paths (file names only).
+
+### UNCOMMITTED — legacy .xls (Excel 97-2003) support + Jefferson County (2026-10-24)
+
+- New `ElectionExplorer/src/xls.c` / `xls.h` (in the .vcxproj + filters): OLE2 compound file
+  (FAT / DIFAT / mini stream, bounds-checked) + BIFF8 records (SST with CONTINUE, LABELSST,
+  LABEL, NUMBER, RK, MULRK, FORMULA + STRING, BOOLERR; FORMAT / XF number formats as xlsx.c).
+  `EeXlsx_ListSheetsMem` / `EeXlsx_ReadSheetMem` sniff the OLE2 signature and hand off, so
+  rosters (`kind_from_ext`), voter lists (`path_has_xlsx_ext`, `is_xlsx_path`) and the sheet
+  picker take `.xls`. Open-dialog filters, help (Loading, Roster loading: Jefferson) and roster
+  error messages list `.xls`. BIFF5 / encrypted files get a clear error.
+- `voter_roster.c`: a `<MMDDYYYY>to<MMDDYYYY>` file-name range gives the end date
+  (`range_end_date`, Jefferson's mail list); an all-`*` VUID on a named row = blank Voter ID.
+- Smoke 62/62 (new `xls`: authored BIFF8 in regular sectors and the mini stream). Release
+  x64 + ARM64 clean. Jefferson 10/19-10/23: 29,106 in-person + 1,754 mail rows.
+- Downloader (`Voter_Rosters/_download_tools/daily_rosters.py`, gitignored): `jefferson()`.
+- **Next:** user commits; ships in the next version (1.4.2.0?) — add a RELEASES note then.
 
 ### Committed — release notes file
 

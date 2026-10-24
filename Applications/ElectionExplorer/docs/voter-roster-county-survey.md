@@ -607,7 +607,7 @@ seen to carry a VUID column (only a few were sampled).
 | # | County | Own roster (format, posting) |
 |---|---|---|
 | 21 | McLennan | one PDF "List of Early Voters: In-Person and By-Mail" (CivicPlus doc 18980, re-posted under a timestamped name) |
-| 22 | Jefferson | SOS only |
+| 22 | Jefferson | own rosters found 2026-10-24 (the user): daily `JeffersonCountyInPersonVotingMMDDYYYY.xls` (Voter_ID, Voter_Name) and a cumulative `JeffersonCountyMailBallotsReceived11032026-01012026toMMDDYYYY.xls` (election, VUID, name), Excel 97-2003 files on jeffcotxvotes.gov |
 | 23 | Smith | daily PDFs "MM.DD.26 In Person / Absentee Voter List" in a Laserfiche public portal (folder 41; JSON listing needs the portal's cookies) |
 | 24 | Brazos | daily PDFs "mail-MM-DD-2026" (from 9/23) and "in-person-MM-DD-2026" (`/roster/`); the 10/02 link points at the 9/30 file |
 | 25 | Ellis | SOS only (page quotes §87.121) |
@@ -710,6 +710,20 @@ continues that row, and a lone row number left of the table is dropped. Wichita 
 voters (= its distinct IDs) instead of 993 rows with 95 empty ones; 10/19: full names, 1
 skipped line instead of 699. Every other county loads byte-identical (regression incl. all 16
 county 21-50 folders).
+
+**Jefferson and .xls (2026-10-24):** Jefferson County posts its rosters as legacy Excel
+97-2003 `.xls` files (BIFF8 in an OLE2 compound file), which Election Explorer could not read.
+`src/xls.c` now reads them; `EeXlsx_ListSheetsMem` / `EeXlsx_ReadSheetMem` hand any compound file
+to it, so rosters, voter lists and the sheet picker accept `.xls` like `.xlsx` (same cell text:
+dates by number format, zero-pad formats, integers without ".0"). Jefferson's files carry only
+VUID and name: in-person dates come from the file name, the method from the election calendar.
+The mail list's name holds the election date and then a range (`11032026-01012026to10232026`):
+a `<date>to<date>` range now gives the list date (the end), not the first date. Six in-person rows
+mask the VUID as `**********` with the name shown: kept as voters with a blank Voter ID (they
+were dropped as non-voter rows). Through 10/23: 29,106 in-person rows and 1,754 mail ballots,
+matching an independent count; 99.94% agreement with the SOS files over 10/19-10/23. The
+downloader's `jefferson()` takes the October / November uploads (the page also lists June's
+Port Arthur runoff files).
 
 ## Open questions for the user
 

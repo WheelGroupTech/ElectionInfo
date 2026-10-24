@@ -26,13 +26,17 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
   src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
 (The `xlsx` round-trip test authors a tiny `.xlsx` in memory via miniz, so
 `src\xlsx.c` and `src\third_party\miniz\miniz.c` are required to build the tests.
+`xls` authors legacy Excel 97-2003 workbooks in memory (a BIFF8 stream in an OLE2 compound
+file, once in regular sectors and once in the mini stream) and needs `src\xls.c`; it checks
+shared strings split across a CONTINUE record, RK / MULRK / NUMBER / FORMULA / BOOLERR cells,
+date and zero-pad formats, and a voter-list and a Jefferson County roster load of `.xls` files.
 `xlsxns` authors a workbook whose SpreadsheetML elements all carry a namespace prefix
 (`<x:row>`, as the OpenXML SDK writes them), with a BOM and a package-absolute sheet
 target, and checks cells, a shared string holding a literal `<x:b>`, and a date style.

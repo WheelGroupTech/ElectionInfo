@@ -5935,19 +5935,13 @@ void EeVoterTable_BuilderEnd(EeVoterTableBuilder *b, BOOL keep)
     free(b);
 }
 
-/* Case-insensitive test for a ".xlsx" path suffix. */
+/* Case-insensitive test for an Excel workbook path: ".xlsx", or ".xls" (Excel 97-2003,
+ * which the .xlsx reader also reads). */
 static BOOL path_has_xlsx_ext(const wchar_t *path)
 {
     size_t n = wcslen(path);
-    if (n < 5)
-    {
-        return FALSE;
-    }
-    {
-        const wchar_t *e = path + (n - 5);
-        return (e[0] == L'.' && (e[1] == L'x' || e[1] == L'X') && (e[2] == L'l' || e[2] == L'L') &&
-                (e[3] == L's' || e[3] == L'S') && (e[4] == L'x' || e[4] == L'X'));
-    }
+    const wchar_t *dot = wcsrchr(path, L'.');
+    return n >= 4 && dot != NULL && (_wcsicmp(dot, L".xlsx") == 0 || _wcsicmp(dot, L".xls") == 0);
 }
 
 EeLoadStatus EeVoterTable_LoadFromFile(const wchar_t *path,

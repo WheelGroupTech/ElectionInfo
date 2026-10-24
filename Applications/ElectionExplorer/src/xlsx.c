@@ -15,6 +15,7 @@
  */
 
 #include "xlsx.h"
+#include "xls.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -1944,6 +1945,11 @@ EeLoadStatus EeXlsx_ListSheetsMem(const void *data,
         xlsx_err(error_message, error_cch, L"Invalid arguments.");
         return EeLoadStatus_Error;
     }
+    if (EeXls_IsCompoundFile(data, size))
+    {
+        /* a legacy Excel 97-2003 workbook (.xls) */
+        return EeXls_ListSheetsMem(data, size, names, max_sheets, out_count, error_message, error_cch);
+    }
     mz_zip_zero_struct(&zip);
     if (!mz_zip_reader_init_mem(&zip, data, size, 0))
     {
@@ -2057,6 +2063,12 @@ EeLoadStatus EeXlsx_ReadSheetMem(const void *data,
     {
         xlsx_err(error_message, error_cch, L"Invalid arguments.");
         return EeLoadStatus_Error;
+    }
+    if (EeXls_IsCompoundFile(data, size))
+    {
+        /* a legacy Excel 97-2003 workbook (.xls) */
+        return EeXls_ReadSheetMem(data, size, sheet_index, sink, sink_ctx, cancel_flag, progress_fn,
+                                  progress_user, error_message, error_cch);
     }
     mz_zip_zero_struct(&zip);
     if (!mz_zip_reader_init_mem(&zip, data, size, 0))

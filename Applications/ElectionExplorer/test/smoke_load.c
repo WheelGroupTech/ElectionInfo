@@ -9,6 +9,7 @@
 #include "ee_cvr.h"
 #include "ocr_win.h"
 #include "voter_roster.h"
+#include "xls.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -9253,6 +9254,442 @@ done:
     return rc;
 }
 
+/* Byte builder for the .xls fixtures. */
+typedef struct XlsB
+{
+    unsigned char *p;
+    size_t n;
+    size_t cap;
+} XlsB;
+
+static BOOL xb_put(XlsB *b, const void *d, size_t n)
+{
+    if (b->n + n > b->cap)
+    {
+        size_t ncap = b->cap ? b->cap * 2 : 1024;
+        unsigned char *np;
+        while (ncap < b->n + n)
+        {
+            ncap *= 2;
+        }
+        np = (unsigned char *)realloc(b->p, ncap);
+        if (np == NULL)
+        {
+            return FALSE;
+        }
+        b->p = np;
+        b->cap = ncap;
+    }
+    memcpy(b->p + b->n, d, n);
+    b->n += n;
+    return TRUE;
+}
+
+static void xb_set16(unsigned char *p, unsigned v)
+{
+    p[0] = (unsigned char)(v & 0xFF);
+    p[1] = (unsigned char)((v >> 8) & 0xFF);
+}
+
+static void xb_set32(unsigned char *p, uint32_t v)
+{
+    xb_set16(p, v & 0xFFFF);
+    xb_set16(p + 2, (v >> 16) & 0xFFFF);
+}
+
+static BOOL xb_u8(XlsB *b, unsigned v)
+{
+    unsigned char t = (unsigned char)v;
+    return xb_put(b, &t, 1);
+}
+
+static BOOL xb_u16(XlsB *b, unsigned v)
+{
+    unsigned char t[2];
+    xb_set16(t, v);
+    return xb_put(b, t, 2);
+}
+
+static BOOL xb_u32(XlsB *b, uint32_t v)
+{
+    unsigned char t[4];
+    xb_set32(t, v);
+    return xb_put(b, t, 4);
+}
+
+/* One BIFF record: type, length, body. */
+static BOOL xb_rec(XlsB *b, unsigned id, const XlsB *body)
+{
+    return xb_u16(b, id) && xb_u16(b, (unsigned)body->n) && xb_put(b, body->p, body->n);
+}
+
+/* A cell record's row / column / XF prefix (a fresh body). */
+static BOOL xb_cell(XlsB *body, unsigned row, unsigned col, unsigned xf)
+{
+    body->n = 0;
+    return xb_u16(body, row) && xb_u16(body, col) && xb_u16(body, xf);
+}
+
+/* XLUnicodeString with 8-bit characters. */
+static BOOL xb_str(XlsB *b, const char *s)
+{
+    return xb_u16(b, (unsigned)strlen(s)) && xb_u8(b, 0) && xb_put(b, s, strlen(s));
+}
+
+/* A BIFF8 workbook stream with one worksheet ("Voters") after a chart sheet, three XFs
+ * (General, a built-in date, a custom "00000"), and an SST whose last string switches to
+ * 2-byte characters in a CONTINUE record. Cells: LABELSST, LABEL, NUMBER, RK (integer, x100),
+ * MULRK, a FORMULA with its string result in a STRING record, BOOLERR, with row 2 written out
+ * of column order. Padded with zeros to @p pad_to bytes. */
+static BOOL xls_build_workbook(XlsB *wb, size_t pad_to)
+{
+    static const unsigned char k_garcia[] = {'G', 0, 'A', 0, 'R', 0, 'C', 0, 0xCD, 0, 'A', 0, ',', 0, ' ', 0,
+                                             'J', 0, 'O', 0, 'S', 0, 0xC9, 0};
+    static const unsigned char k_john[] = {',', 0, ' ', 0, 'J', 0, 'O', 0, 'H', 0, 'N', 0};
+    static const unsigned char k_zero12[12] = {0};
+    static const unsigned char k_zero16[16] = {0};
+    XlsB r = {0};
+    size_t pos_at;
+    double v;
+    int i;
+    BOOL ok;
+
+    wb->n = 0;
+    /* globals */
+    ok = xb_u16(&r, 0x0600) && xb_u16(&r, 0x0005) && xb_put(&r, k_zero12, 12) && xb_rec(wb, 0x0809, &r);
+    r.n = 0;
+    ok = ok && xb_u16(&r, 164) && xb_str(&r, "00000") && xb_rec(wb, 0x041E, &r);
+    for (i = 0; i < 3 && ok; i++)
+    {
+        static const unsigned k_fmt[3] = {0, 14, 164};
+        r.n = 0;
+        ok = xb_u16(&r, 0) && xb_u16(&r, k_fmt[i]) && xb_put(&r, k_zero16, 16) && xb_rec(wb, 0x00E0, &r);
+    }
+    r.n = 0;
+    ok = ok && xb_u32(&r, 0) && xb_u8(&r, 0) && xb_u8(&r, 2) && xb_u8(&r, 6) && xb_u8(&r, 0) &&
+         xb_put(&r, "Chart1", 6) && xb_rec(wb, 0x0085, &r);
+    r.n = 0;
+    ok = ok && xb_u32(&r, 0) && xb_u8(&r, 0) && xb_u8(&r, 0) && xb_u8(&r, 6) && xb_u8(&r, 0) &&
+         xb_put(&r, "Voters", 6);
+    pos_at = wb->n + 4; /* the BOUNDSHEET's sheet offset, patched below */
+    ok = ok && xb_rec(wb, 0x0085, &r);
+    r.n = 0;
+    ok = ok && xb_u32(&r, 4) && xb_u32(&r, 4) && xb_str(&r, "Voter_ID") && xb_str(&r, "Voter_Name") &&
+         xb_u16(&r, 12) && xb_u8(&r, 1) && xb_put(&r, k_garcia, sizeof(k_garcia)) && xb_u16(&r, 11) &&
+         xb_u8(&r, 0) && xb_put(&r, "SMITH", 5) && xb_rec(wb, 0x00FC, &r);
+    r.n = 0;
+    ok = ok && xb_u8(&r, 1) && xb_put(&r, k_john, sizeof(k_john)) && xb_rec(wb, 0x003C, &r);
+    r.n = 0;
+    ok = ok && xb_rec(wb, 0x000A, &r);
+    if (!ok)
+    {
+        free(r.p);
+        return FALSE;
+    }
+    xb_set32(wb->p + pos_at, (uint32_t)wb->n);
+
+    /* the worksheet */
+    r.n = 0;
+    ok = xb_u16(&r, 0x0600) && xb_u16(&r, 0x0010) && xb_put(&r, k_zero12, 12) && xb_rec(wb, 0x0809, &r);
+    ok = ok && xb_cell(&r, 0, 0, 0) && xb_u32(&r, 0) && xb_rec(wb, 0x00FD, &r);
+    ok = ok && xb_cell(&r, 0, 1, 0) && xb_u32(&r, 1) && xb_rec(wb, 0x00FD, &r);
+    ok = ok && xb_cell(&r, 0, 2, 0) && xb_str(&r, "BirthDate") && xb_rec(wb, 0x0204, &r);
+    ok = ok && xb_cell(&r, 0, 3, 0) && xb_str(&r, "Postal") && xb_rec(wb, 0x0204, &r);
+    v = 1121480267.0;
+    ok = ok && xb_cell(&r, 1, 0, 0) && xb_put(&r, &v, 8) && xb_rec(wb, 0x0203, &r);
+    ok = ok && xb_cell(&r, 1, 1, 0) && xb_u32(&r, 2) && xb_rec(wb, 0x00FD, &r);
+    ok = ok && xb_cell(&r, 1, 2, 1) && xb_u32(&r, (43831u << 2) | 2u) && xb_rec(wb, 0x027E, &r);
+    ok = ok && xb_cell(&r, 1, 3, 2) && xb_u32(&r, (7001u << 2) | 2u) && xb_rec(wb, 0x027E, &r);
+    r.n = 0;
+    ok = ok && xb_u16(&r, 2) && xb_u16(&r, 2) && xb_u16(&r, 1) && xb_u32(&r, (43832u << 2) | 2u) && xb_u16(&r, 2) &&
+         xb_u32(&r, (501u << 2) | 2u) && xb_u16(&r, 3) && xb_rec(wb, 0x00BD, &r);
+    ok = ok && xb_cell(&r, 2, 1, 0) && xb_u32(&r, 3) && xb_rec(wb, 0x00FD, &r);
+    v = 1121480268.0;
+    ok = ok && xb_cell(&r, 2, 0, 0) && xb_put(&r, &v, 8) && xb_rec(wb, 0x0203, &r);
+    ok = ok && xb_cell(&r, 3, 0, 0) && xb_u32(&r, 0) && xb_u16(&r, 0) && xb_u16(&r, 0xFFFF) && xb_u16(&r, 0) &&
+         xb_u32(&r, 0) && xb_u16(&r, 0) && xb_rec(wb, 0x0006, &r);
+    r.n = 0;
+    ok = ok && xb_str(&r, "**********") && xb_rec(wb, 0x0207, &r);
+    ok = ok && xb_cell(&r, 3, 1, 0) && xb_str(&r, "DOE, JANE") && xb_rec(wb, 0x0204, &r);
+    ok = ok && xb_cell(&r, 3, 2, 0) && xb_u8(&r, 0x07) && xb_u8(&r, 1) && xb_rec(wb, 0x0205, &r);
+    ok = ok && xb_cell(&r, 3, 3, 0) && xb_u32(&r, (123u << 2) | 3u) && xb_rec(wb, 0x027E, &r);
+    r.n = 0;
+    ok = ok && xb_rec(wb, 0x000A, &r);
+    while (ok && wb->n < pad_to)
+    {
+        ok = xb_u8(wb, 0);
+    }
+    free(r.p);
+    return ok;
+}
+
+static void xls_dir_entry(unsigned char *e, const char *name, unsigned type, uint32_t child, uint32_t start,
+                          uint32_t size)
+{
+    size_t k;
+    for (k = 0; name[k] != '\0'; k++)
+    {
+        xb_set16(e + 2 * k, (unsigned char)name[k]);
+    }
+    xb_set16(e + 64, (unsigned)((k + 1) * 2));
+    e[66] = (unsigned char)type;
+    e[67] = 1;
+    xb_set32(e + 68, 0xFFFFFFFFu);
+    xb_set32(e + 72, 0xFFFFFFFFu);
+    xb_set32(e + 76, child);
+    xb_set32(e + 116, start);
+    xb_set32(e + 120, size);
+}
+
+/* Wrap a workbook stream in a compound file with 512-byte sectors: in the mini stream
+ * (@p mini, for a stream under 4096 bytes) or in regular sectors. */
+static BOOL xls_wrap_cfb(const XlsB *wb, BOOL mini, XlsB *out)
+{
+    static const unsigned char k_sig[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
+    const uint32_t eoc = 0xFFFFFFFEu, free_sect = 0xFFFFFFFFu;
+    uint32_t fat[128];
+    unsigned char sect[512];
+    size_t data_len = mini ? ((wb->n + 63) / 64) * 64 : wb->n;
+    uint32_t data_sect = (uint32_t)((data_len + 511) / 512);
+    uint32_t i = data_sect;
+    uint32_t minifat_sid = mini ? i++ : eoc;
+    uint32_t dir_sid = i++;
+    uint32_t fat_sid = i++;
+    BOOL ok = TRUE;
+
+    out->n = 0;
+    if (i > 128)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < 128; i++)
+    {
+        fat[i] = free_sect;
+    }
+    for (i = 0; i < data_sect; i++)
+    {
+        fat[i] = (i + 1 < data_sect) ? i + 1 : eoc;
+    }
+    if (mini)
+    {
+        fat[minifat_sid] = eoc;
+    }
+    fat[dir_sid] = eoc;
+    fat[fat_sid] = 0xFFFFFFFDu;
+
+    memset(sect, 0, sizeof(sect));
+    memcpy(sect, k_sig, 8);
+    xb_set16(sect + 0x18, 0x3E);
+    xb_set16(sect + 0x1A, 3);
+    xb_set16(sect + 0x1C, 0xFFFE);
+    xb_set16(sect + 0x1E, 9);
+    xb_set16(sect + 0x20, 6);
+    xb_set32(sect + 0x2C, 1);
+    xb_set32(sect + 0x30, dir_sid);
+    xb_set32(sect + 0x38, 4096);
+    xb_set32(sect + 0x3C, mini ? minifat_sid : eoc);
+    xb_set32(sect + 0x40, mini ? 1u : 0u);
+    xb_set32(sect + 0x44, eoc);
+    xb_set32(sect + 0x4C, fat_sid);
+    for (i = 1; i < 109; i++)
+    {
+        xb_set32(sect + 0x4C + 4 * i, free_sect);
+    }
+    ok = xb_put(out, sect, 512);
+    for (i = 0; i < data_sect && ok; i++)
+    {
+        size_t off = (size_t)i * 512;
+        size_t k = (wb->n > off) ? ((wb->n - off < 512) ? wb->n - off : 512) : 0;
+        memset(sect, 0, sizeof(sect));
+        memcpy(sect, wb->p + off, k);
+        ok = xb_put(out, sect, 512);
+    }
+    if (mini && ok)
+    {
+        uint32_t nm = (uint32_t)(data_len / 64);
+        memset(sect, 0xFF, sizeof(sect));
+        for (i = 0; i < nm; i++)
+        {
+            xb_set32(sect + 4 * i, (i + 1 < nm) ? i + 1 : eoc);
+        }
+        ok = xb_put(out, sect, 512);
+    }
+    memset(sect, 0, sizeof(sect));
+    xls_dir_entry(sect, "Root Entry", 5, 1, mini ? 0 : eoc, mini ? (uint32_t)data_len : 0);
+    xls_dir_entry(sect + 128, "Workbook", 2, 0xFFFFFFFFu, 0, (uint32_t)wb->n);
+    for (i = 2; i < 4; i++)
+    {
+        xb_set32(sect + 128 * i + 68, 0xFFFFFFFFu);
+        xb_set32(sect + 128 * i + 72, 0xFFFFFFFFu);
+        xb_set32(sect + 128 * i + 76, 0xFFFFFFFFu);
+    }
+    ok = ok && xb_put(out, sect, 512);
+    for (i = 0; i < 128; i++)
+    {
+        xb_set32(sect + 4 * i, fat[i]);
+    }
+    return ok && xb_put(out, sect, 512);
+}
+
+/* Rows collected from a workbook read. */
+typedef struct XlsRows
+{
+    char cell[8][4][32];
+    uint32_t width[8];
+    uint32_t n;
+} XlsRows;
+
+static BOOL xls_rows_sink(void *ctx, const char *const *cells, uint32_t ncells)
+{
+    XlsRows *r = (XlsRows *)ctx;
+    uint32_t c;
+    if (r->n >= 8)
+    {
+        return FALSE;
+    }
+    r->width[r->n] = ncells;
+    for (c = 0; c < ncells && c < 4; c++)
+    {
+        StringCchCopyA(r->cell[r->n][c], 32, cells[c]);
+    }
+    r->n++;
+    return TRUE;
+}
+
+/* Legacy Excel 97-2003 workbooks (tag: xls): a compound file with the workbook stream in
+ * regular sectors and one in the mini stream, read through the .xls API and the .xlsx
+ * entry points; then a voter-list load and a Jefferson County roster load of .xls files
+ * (a mail list whose file name holds a date range, and a masked Voter ID). */
+static int test_xls(void)
+{
+    static const char *const k_want[4][4] = {{"Voter_ID", "Voter_Name", "BirthDate", "Postal"},
+                                             {"1121480267", "GARC\xC3\x8D" "A, JOS\xC3\x89", "2020-01-01", "07001"},
+                                             {"1121480268", "SMITH, JOHN", "2020-01-02", "00501"},
+                                             {"**********", "DOE, JANE", "#DIV/0!", "1.23"}};
+    XlsB wb = {0}, file = {0};
+    wchar_t names[4][EE_XLSX_SHEET_NAME_CCH];
+    wchar_t err[256] = L"";
+    wchar_t dir[MAX_PATH];
+    wchar_t list_path[MAX_PATH];
+    wchar_t roster_path[MAX_PATH];
+    const wchar_t *paths[1];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    int count = 0;
+    int pass;
+    int rc = 1;
+
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(list_path, MAX_PATH, L"%see_xls_list.xls", dir);
+    StringCchPrintfW(roster_path, MAX_PATH, L"%sJeffersonCountyMailBallotsReceived11032026-01012026to10232026.xls",
+                     dir);
+    for (pass = 0; pass < 2; pass++)
+    {
+        BOOL mini = (pass == 1);
+        XlsRows rows;
+        uint32_t r, c;
+        ZeroMemory(&rows, sizeof(rows));
+        if (!xls_build_workbook(&wb, mini ? 0 : 5000) || !xls_wrap_cfb(&wb, mini, &file))
+        {
+            wprintf(L"xls: could not author the workbook\n");
+            goto done;
+        }
+        if (!EeXls_IsCompoundFile(file.p, file.n) || EeXls_IsCompoundFile("PK\x03\x04", 4))
+        {
+            wprintf(L"xls: signature test\n");
+            goto done;
+        }
+        if (EeXls_ListSheetsMem(file.p, file.n, names, 4, &count, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+            count != 1 || wcscmp(names[0], L"Voters") != 0)
+        {
+            wprintf(L"xls: sheets (mini %d) count %d err %s\n", mini, count, err);
+            goto done;
+        }
+        if (EeXlsx_ListSheetsMem(file.p, file.n, names, 4, &count, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+            count != 1)
+        {
+            wprintf(L"xls: sheets through the .xlsx entry point (mini %d): %s\n", mini, err);
+            goto done;
+        }
+        if ((mini ? EeXlsx_ReadSheetMem(file.p, file.n, 0, xls_rows_sink, &rows, NULL, NULL, NULL, err,
+                                        ARRAYSIZE(err))
+                  : EeXls_ReadSheetMem(file.p, file.n, 0, xls_rows_sink, &rows, NULL, NULL, NULL, err,
+                                       ARRAYSIZE(err))) != EeLoadStatus_Ok ||
+            rows.n != 4)
+        {
+            wprintf(L"xls: read (mini %d) rows %u err %s\n", mini, rows.n, err);
+            goto done;
+        }
+        for (r = 0; r < 4; r++)
+        {
+            for (c = 0; c < 4; c++)
+            {
+                if (rows.width[r] != 4 || strcmp(rows.cell[r][c], k_want[r][c]) != 0)
+                {
+                    wprintf(L"xls: (mini %d) row %u col %u = '%S', want '%S'\n", mini, r, c, rows.cell[r][c],
+                            k_want[r][c]);
+                    goto done;
+                }
+            }
+        }
+        if (EeXls_ReadSheetMem(file.p, file.n, 1, xls_rows_sink, &rows, NULL, NULL, NULL, err, ARRAYSIZE(err)) !=
+            EeLoadStatus_Error)
+        {
+            wprintf(L"xls: sheet 1 should not exist\n");
+            goto done;
+        }
+    }
+
+    /* Voter list: File > Load Voter List reads an .xls like an .xlsx. */
+    if (!cvr_write_bytes(list_path, file.p, file.n) ||
+        EeVoterTable_LoadFromFile(list_path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        t.row_count != 3)
+    {
+        wprintf(L"xls: voter list load rows %u err %s\n", t.row_count, err);
+        goto done;
+    }
+    EeVoterTable_Clear(&t);
+
+    /* Roster: the mail list's date is the end of its range; a masked ID is a voter without one. */
+    paths[0] = roster_path;
+    if (!cvr_write_bytes(roster_path, file.p, file.n) ||
+        EeRoster_LoadFiles(paths, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"xls: roster load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 3 || info.rows_non_voter != 0 || info.method_rows[EE_VM_MAIL] != 3)
+    {
+        wprintf(L"xls: roster rows %u nonvoter %u mail %u\n", t.row_count, info.rows_non_voter,
+                info.method_rows[EE_VM_MAIL]);
+        goto done;
+    }
+    if (!rt_expect(&t, L"GARCÍA", L"JOSÉ", L"VUID", L"1121480267") ||
+        !rt_expect(&t, L"GARCÍA", L"JOSÉ", L"Date Voted", L"10/23/2026") ||
+        !rt_expect(&t, L"SMITH", L"JOHN", L"BirthDate", L"2020-01-02") ||
+        !rt_expect(&t, L"DOE", L"JANE", L"VUID", L"") || !rt_expect(&t, L"DOE", L"JANE", L"Voting Method", L"Mail Ballot"))
+    {
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"xls ok\n");
+
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    DeleteFileW(list_path);
+    DeleteFileW(roster_path);
+    free(wb.p);
+    free(file.p);
+    if (rc != 0)
+    {
+        wprintf(L"xls test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -9304,6 +9741,7 @@ int wmain(void)
     failed |= test_xlsx_roundtrip();
     failed |= test_xlsx_styles();
     failed |= test_xlsx_prefixed();
+    failed |= test_xls();
     failed |= test_cvr();
     failed |= test_cvr_multiselect();
     failed |= test_cvr_tabulate();

@@ -170,6 +170,7 @@
     <ClCompile Include="src\filter.c" />
     <ClCompile Include="src\settings.c" />
     <ClCompile Include="src\xlsx.c" />
+    <ClCompile Include="src\xls.c" />
     <ClCompile Include="src\csv_sheet.c" />
     <ClCompile Include="src\ee_cvr.c" />
     <ClCompile Include="src\hart_cvr.c" />
@@ -193,6 +194,7 @@
     <ClInclude Include="src\filter.h" />
     <ClInclude Include="src\settings.h" />
     <ClInclude Include="src\xlsx.h" />
+    <ClInclude Include="src\xls.h" />
     <ClInclude Include="src\csv_sheet.h" />
     <ClInclude Include="src\ee_cvr.h" />
     <ClInclude Include="src\pdf_reader.h" />

@@ -11,6 +11,10 @@
  * v1 (Phases 1-2) emits cell values as stored: text as-is, numbers as their
  * stored decimal, dates as serials, booleans as TRUE/FALSE, error cells as their
  * error text. Style-driven date/number formatting is a Phase 3 follow-up.
+ *
+ * Legacy Excel 97-2003 workbooks (.xls, an OLE2 compound file) are recognized by
+ * their signature and read by xls.c with the same row shape, so every function
+ * here also accepts an .xls file or buffer.
  */
 #pragma once
 

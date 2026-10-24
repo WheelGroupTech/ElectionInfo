@@ -259,19 +259,12 @@ static int App_ClampZoom(int zoom_percent);
 static EeMapEngine App_ClampMapEngine(int engine);
 static int App_PickSheet(AppState *app, const wchar_t (*names)[EE_XLSX_SHEET_NAME_CCH], int count);
 
-/* Case-insensitive test for a ".xlsx" path suffix. */
+/* Case-insensitive test for an Excel workbook path: ".xlsx", or ".xls" (Excel 97-2003,
+ * which the .xlsx reader also reads). */
 static BOOL is_xlsx_path(const wchar_t *path)
 {
-    size_t n = (path != NULL) ? wcslen(path) : 0;
-    if (n < 5)
-    {
-        return FALSE;
-    }
-    {
-        const wchar_t *e = path + (n - 5);
-        return (e[0] == L'.' && (e[1] == L'x' || e[1] == L'X') && (e[2] == L'l' || e[2] == L'L') &&
-                (e[3] == L's' || e[3] == L'S') && (e[4] == L'x' || e[4] == L'X'));
-    }
+    const wchar_t *dot = (path != NULL) ? wcsrchr(path, L'.') : NULL;
+    return dot != NULL && (_wcsicmp(dot, L".xlsx") == 0 || _wcsicmp(dot, L".xls") == 0);
 }
 static LRESULT CALLBACK FrozenSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK ScrollSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -2140,8 +2133,8 @@ static void App_BeginOpenVoterList(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Voter lists (*.csv;*.txt;*.xlsx)\0*.csv;*.txt;*.xlsx\0"
-                      L"Excel workbooks (*.xlsx)\0*.xlsx\0"
+    ofn.lpstrFilter = L"Voter lists (*.csv;*.txt;*.xlsx;*.xls)\0*.csv;*.txt;*.xlsx;*.xls\0"
+                      L"Excel workbooks (*.xlsx;*.xls)\0*.xlsx;*.xls\0"
                       L"CSV (*.csv)\0*.csv\0"
                       L"Tab-delimited (*.txt)\0*.txt\0"
                       L"All files (*.*)\0*.*\0";
@@ -8868,7 +8861,7 @@ static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 static const wchar_t k_HelpLoading[] =
     L"Load Voter List (File menu, or Ctrl+O) opens a county voter-registration export: "
-    L"comma- or tab-delimited text (.csv, .txt) or an Excel workbook (.xlsx — if it has "
+    L"comma- or tab-delimited text (.csv, .txt) or an Excel workbook (.xlsx or .xls — if it has "
     L"several sheets you pick one). Large lists load in the background with a progress "
     L"bar and can be canceled.\r\n\r\n"
     L"Counties lay out their files differently, so Election Explorer reads the header "
@@ -8896,12 +8889,13 @@ static const wchar_t k_HelpLoading[] =
 static const wchar_t k_HelpRosterLoading[] =
     L"Load Voter Roster (File menu) opens the rosters a county publishes during an election "
     L"— who has voted, by day and voting method. Select one or more ZIP files as published, "
-    L"Excel workbooks (.xlsx), CSV / TSV files (including a roster exported from this "
+    L"Excel workbooks (.xlsx, or .xls from Excel 97-2003), CSV / TSV files (including a roster "
+    L"exported from this "
     L"window), or PDF rosters. Rosters from these Texas counties are supported: Travis, "
     L"Tarrant, Harris, Dallas, Bexar, Collin, Denton, Fort Bend, Hidalgo, El Paso, Montgomery, "
     L"Williamson, Cameron, Brazoria, Bell, Galveston, Lubbock, Webb, McLennan, Smith, Brazos, "
     L"Grayson, Randall, Wichita, Gregg, Hunt, Tom Green, Bastrop, Potter, Bowie, Victoria, "
-    L"Henderson, and Angelina, plus the statewide and county rosters of the "
+    L"Henderson, Angelina, and Jefferson, plus the statewide and county rosters of the "
     L"Texas Secretary of State. If a selected file cannot be read, the load "
     L"summary lists it; when none can, a message names them. Large "
     L"rosters load in the background with a progress bar, an estimate of the time remaining, "
@@ -8976,7 +8970,9 @@ static const wchar_t k_HelpRosterLoading[] =
     L"roster with no voting dates (McLennan's list of early voters, Potter's early voting "
     L"roster) leaves Date Voted blank, and McLennan's list names no voting method. A report "
     L"saved as a workbook with its titles on rows of their own (Grayson's check-in report) is "
-    L"read with each title over its column.\r\n\r\n"
+    L"read with each title over its column. A file-name date range (Jefferson's mail list "
+    L"\"…01012026to10232026\") gives the day the list runs through, and a Voter ID "
+    L"masked as \"**********\" (Jefferson) leaves that voter's ID blank.\r\n\r\n"
     L"•  Limited Ballot poll lists (the Secretary of State's form 5-38, which Travis posts "
     L"for each day of early voting, also inside its ZIPs) are recognized by their title, as a "
     L"PDF or a workbook. The form gives only each voter's name: a limited ballot voter is not "
@@ -16219,8 +16215,8 @@ static void App_BeginOpenRoster(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Voter rosters (*.zip;*.xlsx;*.csv;*.tsv;*.txt;*.pdf)\0"
-                      L"*.zip;*.xlsx;*.csv;*.tsv;*.txt;*.pdf\0"
+    ofn.lpstrFilter = L"Voter rosters (*.zip;*.xlsx;*.xls;*.csv;*.tsv;*.txt;*.pdf)\0"
+                      L"*.zip;*.xlsx;*.xls;*.csv;*.tsv;*.txt;*.pdf\0"
                       L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 65536;

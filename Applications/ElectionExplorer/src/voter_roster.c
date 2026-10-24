@@ -2130,6 +2130,10 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
     {
         vuid[0] = '\0'; /* a named voter with a "0" placeholder ID (Montgomery): no Voter ID */
     }
+    if (named && vuid[0] != '\0' && strspn(vuid, "*") == strlen(vuid))
+    {
+        vuid[0] = '\0'; /* a named voter whose ID is masked ("**********", Jefferson): no Voter ID */
+    }
 
     if (m->vuid >= 0)
     {
@@ -3062,8 +3066,8 @@ static const wchar_t *base_name(const wchar_t *p)
 
 static SrcKind kind_from_ext(const wchar_t *ext)
 {
-    if (_wcsicmp(ext, L".xlsx") == 0)
-        return SRC_XLSX;
+    if (_wcsicmp(ext, L".xlsx") == 0 || _wcsicmp(ext, L".xls") == 0)
+        return SRC_XLSX; /* the .xlsx reader also reads Excel 97-2003 .xls (xls.c) */
     if (_wcsicmp(ext, L".csv") == 0 || _wcsicmp(ext, L".tsv") == 0 || _wcsicmp(ext, L".txt") == 0)
         return SRC_TEXT;
     if (_wcsicmp(ext, L".pdf") == 0)
@@ -3238,6 +3242,28 @@ static BOOL sos_entry_name(const wchar_t *zip_path, const wchar_t *entry, wchar_
     return TRUE;
 }
 
+/* The end of a date range "<MMDDYYYY>to<MMDDYYYY>" in a file name: the day a cumulative
+ * list runs through (Jefferson "MailBallotsReceived11032026-01012026to10232026": the
+ * election, then the period covered). yyyymmdd, or 0. */
+static uint32_t range_end_date(const char *s)
+{
+    size_t n = strlen(s);
+    size_t i;
+    for (i = 8; i + 10 <= n; i++)
+    {
+        char tok[9];
+        if (lc(s[i]) != 't' || lc(s[i + 1]) != 'o' || strspn(s + i - 8, "0123456789") != 8 ||
+            (i > 8 && is_digit(s[i - 9])) || strspn(s + i + 2, "0123456789") != 8)
+        {
+            continue;
+        }
+        memcpy(tok, s + i + 2, 8); /* SAFE: 8 digits checked above */
+        tok[8] = '\0';
+        return find_date_numeric(tok);
+    }
+    return 0;
+}
+
 /* Fill name / key / date / method / updated from the display name. */
 static void parse_source_name(RosterSource *s)
 {
@@ -3247,6 +3273,10 @@ static void parse_source_name(RosterSource *s)
     size_t i;
     WideCharToMultiByte(CP_UTF8, 0, s->name, -1, s->name8, (int)sizeof(s->name8), NULL, NULL);
     s->date = has_timestamp(s->name8) ? 0 : find_date_numeric(s->name8);
+    if (s->date != 0 && range_end_date(s->name8) != 0)
+    {
+        s->date = range_end_date(s->name8);
+    }
     if (s->date == 0 && !has_timestamp(s->name8) && mdy_month_name(s->name8) == 0)
     {
         s->date = find_date_short_year(s->name8);
@@ -5495,14 +5525,14 @@ EeLoadStatus EeRoster_LoadFiles(const wchar_t *const *paths,
                              any_pdf ? L"A PDF can be loaded only when it is a voter roster table printed from a "
                                        L"spreadsheet (with a Voter ID column). Scanned PDFs and other reports cannot "
                                        L"be read; use the county's Excel or CSV files instead."
-                                     : L"Voter rosters can be loaded from .zip, .xlsx, .csv, .tsv, .txt, or PDF "
+                                     : L"Voter rosters can be loaded from .zip, .xlsx, .xls, .csv, .tsv, .txt, or PDF "
                                        L"roster files.");
             set_err(error_message, error_cch, msg);
         }
         else
         {
             set_err(error_message, error_cch,
-                    L"No voter roster files (.xlsx, .csv, .tsv, or a PDF roster table) could be read in the "
+                    L"No voter roster files (.xlsx, .xls, .csv, .tsv, or a PDF roster table) could be read in the "
                     L"selection.");
         }
         free(m.p);

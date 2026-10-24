@@ -194,7 +194,9 @@ Status as of 2026-10-22:
   except Wichita. Version in the 3 version files; RELEASES 1.4.1.0 note (1,034 chars);
   STORE-LISTING says 33 counties. Submitted 2026-10-22; awaiting certification.
 - **County roster reports:** `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-2{1,2}.md/.pdf`
-  (50 counties, data through 10/20 and 10/21). Plus `..._2026-10-22_Supplement.md/.pdf` and
+  and `..._2026-10-23.md/.pdf` + `_Supplement.md/.pdf` + `_Supplement_Records.csv` (data through 10/22,
+  11,659 records; new: Williamson 10/22 mail precincts scrambled, Smith/Tarrant voter in person in
+  both, state fixed Dallas turnout table). Earlier: (50 counties, data through 10/20 and 10/21). Plus `..._2026-10-22_Supplement.md/.pdf` and
   `_Supplement_Records.csv` (7,974 records): VUID + county/SOS file name + line/row/page for
   the §6.1, 6.4–6.11 anomalies, for county and SOS staff. §6.2 (Tarrant redaction) excluded;
   no names, no local paths (file names only).

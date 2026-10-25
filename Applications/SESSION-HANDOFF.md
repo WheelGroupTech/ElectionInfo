@@ -201,16 +201,20 @@ Status as of 2026-10-22:
   the §6.1, 6.4–6.11 anomalies, for county and SOS staff. §6.2 (Tarrant redaction) excluded;
   no names, no local paths (file names only).
 
-### UNCOMMITTED — October 23 roster layouts (Hunt / Gregg / Wichita) + 10/24 report (2026-10-24)
+### October 23 roster layouts + 10/24 report (committed 2026-10-24); PDF stray-piece fixes (UNCOMMITTED, 2026-10-25)
 
 - `voter_roster.c`: a site title starting "polling pl" (Hunt "Polling Pl": "BBM" = mail);
   `pdf_runs_abut` / `pdf_run_overflow` (Gregg's clipped last letter continues the polling place, not the
   precinct); a number wholly left of the table is a row number unless column 0 is the precinct
   (Wichita 10/23 absentee: no "P 402 1" precincts, 50 voters recovered). Smoke 63/63 (new `county1023`);
   regression: only Wichita, Gregg, Hunt change. Survey doc + test README updated.
+- 2026-10-25 (also uncommitted): rows dropped by a stray piece in the Voter ID column — a run that
+  touches the run drawn before it continues that cell (replaces `pdf_run_overflow`; new
+  `pdf_run_short_letters`, `pdf_prev_drawn`), short letters under "VUID" join the previous run, the
+  Voter ID claims its column first in pass 2. Brazos +1, Gregg +16 voters. Smoke 64/64 (`pdfstray`).
 - Reports: `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-24.md/.pdf`
   + `_Supplement.md/.pdf` + `_Supplement_Records.csv` (data through 10/23, 17,176 records; Jefferson in).
-- **Next:** user commits; the loader fixes ship with .xls in the next version (add a RELEASES note).
+- **Next:** user commits the 2026-10-25 fixes; all loader fixes ship with .xls in the next version (add a RELEASES note).
 
 ### Committed — legacy .xls (Excel 97-2003) support + Jefferson County (2026-10-24)
 

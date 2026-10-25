@@ -3639,25 +3639,39 @@ static BOOL pdf_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const
     return a->clip_id == b->clip_id && pdf_runs_abut(pt, a, b);
 }
 
-/* The clipped end of an overflowing cell: a few letters that start where the run before them
- * ends but in another clip region (Gregg's October 23 report draws the last letter of a long
- * polling-place name, cut off by its cell, as a run of its own). They continue that word. */
-static BOOL pdf_run_overflow(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
+/* One to three letters drawn as a run of their own: the end of a word (Gregg draws the last
+ * letter of a long name or polling place, or of a middle name, separately). */
+static BOOL pdf_run_short_letters(const EePdfPageText *pt, const EePdfTextRun *r)
 {
     uint32_t i;
-    if (a->clip_id == b->clip_id || b->text_len > 3 || !pdf_runs_abut(pt, a, b))
+    if (r->text_len == 0 || r->text_len > 3)
     {
         return FALSE;
     }
-    for (i = 0; i < b->text_len; i++)
+    for (i = 0; i < r->text_len; i++)
     {
-        char ch = pt->text[b->text_off + i];
+        char ch = pt->text[r->text_off + i];
         if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')))
         {
             return FALSE;
         }
     }
     return TRUE;
+}
+
+/* Index in a line's runs (@p line_ord, @p n run indexes) of the run drawn just before run @p ri,
+ * or -1 when that run is not on the line. */
+static int pdf_prev_drawn(const uint32_t *line_ord, uint32_t n, uint32_t ri)
+{
+    uint32_t k;
+    for (k = 0; ri > 0 && k < n; k++)
+    {
+        if (line_ord[k] == ri - 1)
+        {
+            return (int)k;
+        }
+    }
+    return -1;
 }
 
 static int __cdecl pdf_float_cmp(const void *a, const void *b)
@@ -4371,15 +4385,38 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
             }
             {
                 int col_of[256];
+                BOOL joined[256]; /* a word's last letters: appended to the run drawn before */
                 BOOL filled[PDF_TABLE_MAX_COLS] = {FALSE};
                 uint32_t nk = ln->count < ARRAYSIZE(col_of) ? ln->count : (uint32_t)ARRAYSIZE(col_of);
+                BOOL line_vuid = FALSE;
                 int pass;
                 for (k = 0; k < nk; k++)
                 {
+                    char t[PDF_TABLE_CELL];
                     col_of[k] = -1;
+                    joined[k] = FALSE;
+                    pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                    line_vuid |= vuid_valid(t);
                 }
                 for (pass = 0; pass < 2; pass++)
                 {
+                    if (pass == 1 && vcol >= 0 && !filled[vcol])
+                    {
+                        /* The line's Voter ID claims its column before the other runs left
+                         * for this pass (Brazos: a "FED" precinct, set between the "Pct" and
+                         * "VUID" titles, lies nearer the VUID title than the Voter ID does). */
+                        for (k = 0; k < nk; k++)
+                        {
+                            char t[PDF_TABLE_CELL];
+                            pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                            if (col_of[k] < 0 && vuid_valid(t))
+                            {
+                                col_of[k] = vcol;
+                                filled[vcol] = TRUE;
+                                break;
+                            }
+                        }
+                    }
                     for (k = 0; k < nk; k++)
                     {
                         const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
@@ -4392,6 +4429,7 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                         int best = -1;
                         int nearest = 0;
                         int nearest_empty = -1;
+                        int kp;
                         char t[PDF_TABLE_CELL];
                         if (col_of[k] >= 0)
                         {
@@ -4423,10 +4461,25 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                         }
                         if (pass == 0)
                         {
-                            if (best < 0)
+                            if (best < 0 || (best == vcol && line_vuid && pdf_run_short_letters(&pt, r)))
                             {
                                 continue; /* placed in the second pass */
                             }
+                        }
+                        else if ((kp = pdf_prev_drawn(ord + ln->first, nk, ord[ln->first + k])) >= 0 &&
+                                 col_of[kp] >= 0 &&
+                                 (pdf_runs_abut(&pt, &pt.runs[ord[ln->first + kp]], r) ||
+                                  (best == vcol && line_vuid && pdf_run_short_letters(&pt, r))))
+                        {
+                            /* The rest of a word drawn as a run of its own (Gregg): it touches
+                             * the end of the run drawn before it (a name in two pieces, a long
+                             * name's or polling place's last letter, clipped or not), or, a few
+                             * letters, lies under the Voter ID title on a line that has its
+                             * Voter ID (a middle name's last letter). It continues that run's
+                             * cell; a piece that would not join it on its own (another clip, or
+                             * drawn elsewhere on the line) is appended to the cell. */
+                            best = col_of[kp];
+                            joined[k] = !pdf_runs_touch(&pt, &pt.runs[ord[ln->first + kp]], r);
                         }
                         else if (ncols > 0 && pcol != 0 && x1 <= cx0[0] + 1.0f && t[0] != '\0' &&
                                  strspn(t, "0123456789") == strlen(t) && strlen(t) <= 5)
@@ -4436,11 +4489,6 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                              * 23 absentee list), where it must not pass for a precinct. */
                             col_of[k] = -2;
                             continue;
-                        }
-                        else if (k > 0 && col_of[k - 1] >= 0 &&
-                                 pdf_run_overflow(&pt, &pt.runs[ord[ln->first + k - 1]], r))
-                        {
-                            best = col_of[k - 1]; /* Gregg: a cell's clipped last letter */
                         }
                         else if (vcol >= 0 && !filled[vcol] && vuid_valid(t))
                         {
@@ -4474,19 +4522,26 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                     const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
                     int col = (k < nk) ? col_of[k] : ncols - 1;
                     pdf_run_text(&pt, r, t, sizeof(t));
-                    if (col < 0)
+                    if (col < 0 || (k < nk && joined[k]))
                     {
                         continue;
                     }
-                    /* runs that touch continue a word (Gregg: "GR" + "EGG COUNTY ...", and a
-                     * polling place's clipped last letter) */
-                    if (cells[col][0] != '\0' && !pdf_runs_touch(&pt, last[col], r) &&
-                        !pdf_run_overflow(&pt, last[col], r))
+                    /* runs that touch continue a word (Gregg: "GR" + "EGG COUNTY ...") */
+                    if (cells[col][0] != '\0' && !pdf_runs_touch(&pt, last[col], r))
                     {
                         StringCchCatA(cells[col], PDF_TABLE_CELL, " ");
                     }
                     StringCchCatA(cells[col], PDF_TABLE_CELL, t);
                     last[col] = r;
+                }
+                for (k = 0; k < nk; k++)
+                {
+                    if (joined[k] && col_of[k] >= 0)
+                    {
+                        char t[PDF_TABLE_CELL];
+                        pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                        StringCchCatA(cells[col_of[k]], PDF_TABLE_CELL, t); /* no space: one word */
+                    }
                 }
             }
             {

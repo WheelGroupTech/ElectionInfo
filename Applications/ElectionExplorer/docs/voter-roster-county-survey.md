@@ -737,6 +737,19 @@ precinct ("P 402 1") and 50 of 971 voters were lost: a number lying wholly left 
 always a row number unless the first column is the precinct. Regression: only those three counties
 change. Smoke test `county1023`.
 
+**Rows lost to a stray piece in the Voter ID column (2026-10-25):** checking why 11 files' loaded
+VUID counts differed from a raw count of 10-digit numbers found 17 voters the loader dropped as non-voter
+rows (the others were checker artifacts: date-time decimals and a phone number in Dallas's workbooks,
+older same-named Harris ZIP entries; and Travis's deliberate skip of a row holding only a VUID). Gregg's
+check-in PDFs draw some names in two touching pieces, or a name's last letter on its own, and the piece
+lay nearer the "State ID" title; Gregg's mail list draws a middle name's last letter at the left margin
+under "VUID"; Brazos puts "FED" (a federal-only ballot) between the "Pct" and "VUID" titles, where it
+took the Voter ID column before the Voter ID. Now a run outside every title that touches the end of the
+run drawn just before it continues that run's cell (replacing the October 23 clipped-letter rule), one to
+three letters under "VUID" on a line with its Voter ID join the run drawn before them, and the line's
+Voter ID claims its column first in the second pass. Regression: Brazos +1, Gregg +16 (and a middle
+name's last letter no longer read as a suffix), one Angelina middle name now whole. Smoke test `pdfstray`.
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

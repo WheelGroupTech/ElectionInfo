@@ -9229,6 +9229,169 @@ done:
     return rc;
 }
 
+/* Row of @p t whose VUID is @p vuid, or UINT32_MAX. */
+static uint32_t rt_find_vuid(const EeVoterTable *t, const wchar_t *vuid)
+{
+    uint32_t r;
+    for (r = 0; r < t->row_count; r++)
+    {
+        wchar_t v[32];
+        rt_cell(t, r, L"VUID", v, ARRAYSIZE(v));
+        if (wcscmp(v, vuid) == 0)
+        {
+            return r;
+        }
+    }
+    return UINT32_MAX;
+}
+
+/* PDF roster rows that were dropped because a piece of text landed in the Voter ID column
+ * (tag: pdfstray; needs src\pdf_reader.c). Gregg check-ins: a name drawn in two touching
+ * pieces whose second piece lies nearer the "State ID" title, and a name's last letter drawn
+ * on its own past the name; Gregg mail list: a middle name's last letter drawn at the left
+ * margin under the "VUID" title; Brazos: a "FED" precinct between the "Pct" and "VUID"
+ * titles, nearer "VUID" than the Voter ID itself. */
+static int test_pdf_strays(void)
+{
+    TBuf greg = {0}, bbm = {0}, braz = {0};
+    wchar_t dir[MAX_PATH];
+    wchar_t pbuf[3][MAX_PATH];
+    const wchar_t *paths[3];
+    static const wchar_t *const k_names[3] = {L"2026-10-20-Voter-Turnout-a.pdf", L"2026-10-20-2_00PM-BBM-Voters.pdf",
+                                              L"mail-10-05-2026-accessible.pdf"};
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    wchar_t got[64];
+    uint32_t r;
+    int i;
+    BOOL ok;
+    int rc = 1;
+
+    ok = tb_printf(&greg, "BT /F1 10 Tf 1 0 0 1 62.88 740 Tm (No.) Tj ET BT /F1 10 Tf 1 0 0 1 85.32 740 Tm (Name) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 275.05 740 Tm (State ID) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 347.82 740 Tm (Polling Place) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 510.83 740 Tm (Precinct) Tj ET\n"
+                          /* "ESWORTHY" (193.4-241.4) touches "ROBERTA JEAN NETTL" */
+                          "BT /F1 10 Tf 1 0 0 1 66 724 Tm (1) Tj ET BT /F1 10 Tf 1 0 0 1 85.4 724 Tm (ROBERTA JEAN NETTL) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 193.4 724 Tm (ESWORTHY) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 275.2 724 Tm (2179398941) Tj ET BT /F1 10 Tf 1 0 0 1 348.2 724 Tm (ANNEX) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 523 724 Tm (05) Tj ET\n"
+                          /* "S" (247.4-253.4) ends "ANNABELLE ALEXANDRA AUGUSTO" */
+                          "BT /F1 10 Tf 1 0 0 1 66 708 Tm (2) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 85.4 708 Tm (ANNABELLE ALEXANDRA AUGUSTO) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 247.4 708 Tm (S) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 275.2 708 Tm (2179398942) Tj ET BT /F1 10 Tf 1 0 0 1 348.2 708 Tm (ANNEX) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 523 708 Tm (16) Tj ET\n");
+    ok = ok && tb_printf(&bbm, "BT /F1 10 Tf 1 0 0 1 52.92 740 Tm (VUID) Tj ET BT /F1 10 Tf 1 0 0 1 119.99 740 Tm (Last Name) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 208.55 740 Tm (First Name) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 276.08 740 Tm (Middle Name) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 391.84 740 Tm (PCT) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 489.52 740 Tm (Received Date) Tj ET\n"
+                               "BT /F1 10 Tf 1 0 0 1 52.94 724 Tm (1059218361) Tj ET BT /F1 10 Tf 1 0 0 1 120.19 724 Tm (GARZ) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 209.08 724 Tm (JUAN) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 276.96 724 Tm (CHRISTOPHE) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 52.94 724 Tm (R) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 405.49 724 Tm (10) Tj ET"
+                               " BT /F1 10 Tf 1 0 0 1 503.64 724 Tm (10/16/2026) Tj ET\n");
+    ok = ok && tb_printf(&braz, "BT /F1 5.88 Tf 1 0 0 1 52.44 740 Tm (SELECTED ELECTION) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 145.08 740 Tm (Pct) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 171.96 740 Tm (VUID) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 230 740 Tm (Voter Name) Tj ET\n"
+                                "BT /F1 5.88 Tf 1 0 0 1 52.44 732 Tm (2026 GENERAL) Tj ET BT /F1 5.88 Tf 1 0 0 1 163.32 732 Tm (12) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 188.76 732 Tm (1060305661) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 230 732 Tm (SOTO, ANA) Tj ET\n"
+                                "BT /F1 5.88 Tf 1 0 0 1 52.44 724 Tm (2026 GENERAL) Tj ET BT /F1 5.88 Tf 1 0 0 1 159.72 724 Tm (FED) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 188.76 724 Tm (2215816951) Tj ET"
+                                " BT /F1 5.88 Tf 1 0 0 1 230 724 Tm (LINO, BEA) Tj ET\n");
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < 3; i++)
+    {
+        StringCchCopyW(pbuf[i], MAX_PATH, dir);
+        StringCchCatW(pbuf[i], MAX_PATH, k_names[i]);
+        paths[i] = pbuf[i];
+    }
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(pbuf[0], &greg, 1) || !proster_write(pbuf[1], &bbm, 1) || !proster_write(pbuf[2], &braz, 1))
+    {
+        wprintf(L"pdfstray: could not write the files\n");
+        goto done;
+    }
+    if (EeRoster_LoadFiles(paths, 3, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"pdfstray: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 5 || info.rows_non_voter != 0)
+    {
+        wprintf(L"pdfstray: rows %u nonvoter %u\n", t.row_count, info.rows_non_voter);
+        goto done;
+    }
+    {
+        static const struct
+        {
+            const wchar_t *vuid;
+            const wchar_t *title;
+            const wchar_t *want;
+        } k_want[] = {
+            {L"2179398941", L"Precinct", L"05"},
+            {L"2179398942", L"Precinct", L"16"},
+            {L"1059218361", L"Middle Name", L"CHRISTOPHER"},
+            {L"1059218361", L"Voting Method", L"Mail Ballot"},
+            {L"2215816951", L"Precinct", L"FED"},
+            {L"1060305661", L"Precinct", L"12"},
+        };
+        for (i = 0; i < (int)ARRAYSIZE(k_want); i++)
+        {
+            r = rt_find_vuid(&t, k_want[i].vuid);
+            if (r == UINT32_MAX)
+            {
+                wprintf(L"pdfstray: %s not loaded\n", k_want[i].vuid);
+                goto done;
+            }
+            rt_cell(&t, r, k_want[i].title, got, ARRAYSIZE(got));
+            if (wcscmp(got, k_want[i].want) != 0)
+            {
+                wprintf(L"pdfstray: %s %s = '%s', want '%s'\n", k_want[i].vuid, k_want[i].title, got, k_want[i].want);
+                goto done;
+            }
+        }
+    }
+    /* Both Gregg names keep every letter (one of the four name cells ends with the piece). */
+    for (i = 0; i < 2; i++)
+    {
+        static const wchar_t *const k_end[2] = {L"ESWORTHY", L"AUGUSTOS"};
+        wchar_t last[64], first[64], mid[64];
+        r = rt_find_vuid(&t, i == 0 ? L"2179398941" : L"2179398942");
+        rt_cell(&t, r, L"Last Name", last, ARRAYSIZE(last));
+        rt_cell(&t, r, L"First Name", first, ARRAYSIZE(first));
+        rt_cell(&t, r, L"Middle Name", mid, ARRAYSIZE(mid));
+        if (wcsstr(last, k_end[i]) == NULL && wcsstr(first, k_end[i]) == NULL && wcsstr(mid, k_end[i]) == NULL)
+        {
+            wprintf(L"pdfstray: name '%s' '%s' '%s' lacks %s\n", first, mid, last, k_end[i]);
+            goto done;
+        }
+    }
+    rc = 0;
+    wprintf(L"pdfstray ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    for (i = 0; i < 3; i++)
+    {
+        DeleteFileW(pbuf[i]);
+    }
+    free(greg.p);
+    free(bbm.p);
+    free(braz.p);
+    if (rc != 0)
+    {
+        wprintf(L"pdfstray test failed\n");
+    }
+    return rc;
+}
+
 /* Texas Secretary of State turnout rosters (tag: sosroster): a loose statewide early voting
  * CSV (COUNTY, MAIL-IN / IN-PERSON, no voting date) and Election Day ZIPs that name their
  * roster "STATEWIDE_VOTER_INFO.csv" for every party (named after the ZIP instead), a
@@ -9829,6 +9992,7 @@ int wmain(void)
     failed |= test_county_rosters();
     failed |= test_county50();
     failed |= test_county1023();
+    failed |= test_pdf_strays();
     failed |= test_sos_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();

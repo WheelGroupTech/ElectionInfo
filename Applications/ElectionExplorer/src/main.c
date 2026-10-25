@@ -4210,7 +4210,7 @@ static void FilterDlg_Layout(HWND hwnd, AppState *app)
     }
 
     x = m;
-    hdwp = BeginDeferWindowPos(12);
+    hdwp = BeginDeferWindowPos(14);
     hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_PROMPT, m, prompt_y, cw - m * 2, row_h);
     hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_COLUMN, x, add_y, Scale(app, 170), Scale(app, 200));
     x += Scale(app, 176);
@@ -4226,6 +4226,15 @@ static void FilterDlg_Layout(HWND hwnd, AppState *app)
     hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_REMOVE, x, add_y, btn_w, btn_h);
     hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_LIST, m, list_y, cw - m * 2, list_h);
     hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_RESET, m, btn_y, btn_w, btn_h);
+    /* Export / Load sit between Reset and the Apply / OK / Cancel group. */
+    hdwp = FilterDlg_Defer(hdwp, hwnd, IDC_FLT_EXPORT, m + btn_w + gap, btn_y, Scale(app, 110), btn_h);
+    hdwp = FilterDlg_Defer(hdwp,
+                           hwnd,
+                           IDC_FLT_LOAD,
+                           m + btn_w + gap * 2 + Scale(app, 110),
+                           btn_y,
+                           Scale(app, 110),
+                           btn_h);
     hdwp = FilterDlg_Defer(hdwp,
                            hwnd,
                            IDC_FLT_APPLY,
@@ -4242,6 +4251,20 @@ static void FilterDlg_Layout(HWND hwnd, AppState *app)
 
     /* Keep the button row above the list if a resize ever clips. */
     SetWindowPos(GetDlgItem(hwnd, IDC_FLT_RESET),
+                 HWND_TOP,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(hwnd, IDC_FLT_EXPORT),
+                 HWND_TOP,
+                 0,
+                 0,
+                 0,
+                 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(GetDlgItem(hwnd, IDC_FLT_LOAD),
                  HWND_TOP,
                  0,
                  0,
@@ -4312,6 +4335,201 @@ static void FilterDlg_Close(HWND hwnd, FilterDlgState *st)
         FilterDlg_RestoreOwner(st->app);
     }
     DestroyWindow(hwnd);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Export Filter / Load Filter (voter list, voter roster and CVR filter windows) */
+/* -------------------------------------------------------------------------- */
+
+static void App_BaseNameNoExt(const wchar_t *path, wchar_t *out, size_t cch);
+
+static wchar_t g_filter_dir[MAX_PATH]; /* folder of the last exported or loaded filter */
+
+static void FilterFile_RememberDir(const wchar_t *path)
+{
+    wchar_t *slash;
+    StringCchCopyW(g_filter_dir, ARRAYSIZE(g_filter_dir), path);
+    slash = wcsrchr(g_filter_dir, L'\\');
+    if (slash != NULL)
+    {
+        *slash = L'\0';
+    }
+    else
+    {
+        g_filter_dir[0] = L'\0';
+    }
+}
+
+/* TRUE when @p path ends with @p ext (case-insensitive). */
+static BOOL FilterFile_HasExt(const wchar_t *path, const wchar_t *ext)
+{
+    size_t n = wcslen(path);
+    size_t e = wcslen(ext);
+    return n >= e && _wcsicmp(path + (n - e), ext) == 0;
+}
+
+/* The columns a voter-list or roster window's filter offers (the roster's shown columns). */
+static EeFilterColumnRef *FilterFile_AppColumns(const AppState *app, uint32_t *out_n)
+{
+    uint32_t n = app->is_roster ? app->nroster_cols : app->table.column_count;
+    EeFilterColumnRef *cols = (EeFilterColumnRef *)calloc(n ? n : 1, sizeof(EeFilterColumnRef));
+    uint32_t i;
+    *out_n = 0;
+    if (cols == NULL)
+    {
+        return NULL;
+    }
+    for (i = 0; i < n; i++)
+    {
+        uint32_t c = app->is_roster ? app->roster_cols[i] : i;
+        cols[i].column = c;
+        cols[i].title = (c < app->table.column_count && app->table.column_titles[c]) ? app->table.column_titles[c] : L"";
+    }
+    *out_n = n;
+    return cols;
+}
+
+/* Export Filter: save the window's rules (as listed, applied or not) with the standard
+ * Save As dialog. Suggests "<loaded file> Filter.filter.csv"; *.filter.tsv writes tabs. */
+static void FilterFile_Export(HWND owner,
+                              const EeFilterSet *rules,
+                              const EeFilterColumnRef *cols,
+                              uint32_t ncols,
+                              const wchar_t *base,
+                              const wchar_t *fallback)
+{
+    OPENFILENAMEW ofn;
+    wchar_t file[MAX_PATH];
+    wchar_t err[256] = L"";
+    wchar_t delim = L',';
+
+    if (rules == NULL || rules->count == 0)
+    {
+        MessageBoxW(owner, L"There are no filter rules to export.", L"Export Filter", MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    StringCchPrintfW(file, ARRAYSIZE(file), L"%s Filter.filter.csv",
+                     (base != NULL && base[0] != L'\0') ? base : fallback);
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = L"Election Explorer filter, CSV (*.filter.csv)\0*.filter.csv\0"
+                      L"Election Explorer filter, tab-delimited (*.filter.tsv)\0*.filter.tsv\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = ARRAYSIZE(file);
+    ofn.lpstrInitialDir = g_filter_dir[0] ? g_filter_dir : NULL;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOREADONLYRETURN | OFN_EXPLORER;
+    ofn.lpstrTitle = L"Export Filter";
+    if (!GetSaveFileNameW(&ofn))
+    {
+        return;
+    }
+    /* An explicitly typed .csv / .tsv decides the format; a name without one gets the chosen
+     * type's double extension (asking before replacing a file of that name). */
+    if (FilterFile_HasExt(file, L".tsv"))
+    {
+        delim = L'\t';
+    }
+    else if (!FilterFile_HasExt(file, L".csv"))
+    {
+        delim = (ofn.nFilterIndex == 2) ? L'\t' : L',';
+        StringCchCatW(file, ARRAYSIZE(file), delim == L'\t' ? L".filter.tsv" : L".filter.csv");
+        if (GetFileAttributesW(file) != INVALID_FILE_ATTRIBUTES)
+        {
+            wchar_t msg[MAX_PATH + 64];
+            StringCchPrintfW(msg, ARRAYSIZE(msg), L"%s already exists.\r\nDo you want to replace it?", file);
+            if (MessageBoxW(owner, msg, L"Export Filter", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2) != IDYES)
+            {
+                return;
+            }
+        }
+    }
+    if (!EeFilter_SaveFile(file, rules, cols, ncols, delim, err, ARRAYSIZE(err)))
+    {
+        MessageBoxW(owner, err, L"Export Filter", MB_ICONERROR | MB_OK);
+        return;
+    }
+    FilterFile_RememberDir(file);
+}
+
+/* Load Filter: replace @p rules with a saved filter chosen in the standard Open dialog. The
+ * window's columns are matched by title; rules it cannot use are listed. TRUE when @p rules
+ * changed (the caller refreshes its list; the rules take effect on Apply / OK). */
+static BOOL FilterFile_Load(HWND owner,
+                            EeFilterSet *rules,
+                            const EeFilterColumnRef *cols,
+                            uint32_t ncols,
+                            uint32_t relation_mask,
+                            const EeVoterTable *validate)
+{
+    OPENFILENAMEW ofn;
+    wchar_t file[MAX_PATH] = L"";
+    wchar_t err[256] = L"";
+    wchar_t skipped[2048];
+    EeFilterSet loaded;
+    uint32_t nskip = 0;
+    uint32_t i;
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = L"Election Explorer filters (*.filter.csv;*.filter.tsv)\0*.filter.csv;*.filter.tsv\0"
+                      L"CSV or tab-delimited files (*.csv;*.tsv;*.txt)\0*.csv;*.tsv;*.txt\0"
+                      L"All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = ARRAYSIZE(file);
+    ofn.lpstrInitialDir = g_filter_dir[0] ? g_filter_dir : NULL;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+    ofn.lpstrTitle = L"Load Filter";
+    if (!GetOpenFileNameW(&ofn))
+    {
+        return FALSE;
+    }
+    FilterFile_RememberDir(file);
+    EeFilter_Init(&loaded);
+    if (!EeFilter_LoadFile(file, cols, ncols, relation_mask, &loaded, &nskip, skipped, ARRAYSIZE(skipped), err,
+                           ARRAYSIZE(err)))
+    {
+        MessageBoxW(owner, err, L"Load Filter", MB_ICONERROR | MB_OK);
+        return FALSE;
+    }
+    /* A voter list's date column needs a date to compare with less than / more than. */
+    for (i = 0; validate != NULL && i < loaded.count;)
+    {
+        if (!EeFilter_RuleIsValid(&loaded.rules[i], validate))
+        {
+            wchar_t line[EE_FILTER_VALUE_CCH + 96];
+            StringCchPrintfW(line, ARRAYSIZE(line), L"\"%s\": not a date for a date column.\r\n", loaded.rules[i].value);
+            StringCchCatW(skipped, ARRAYSIZE(skipped), line);
+            EeFilter_Remove(&loaded, i);
+            nskip++;
+            continue;
+        }
+        i++;
+    }
+    if (loaded.count == 0 && nskip == 0)
+    {
+        MessageBoxW(owner, L"The file holds no filter rules.", L"Load Filter", MB_ICONINFORMATION | MB_OK);
+        EeFilter_Clear(&loaded);
+        return FALSE;
+    }
+    if (!EeFilter_Copy(rules, &loaded))
+    {
+        MessageBoxW(owner, L"Out of memory loading the filter.", L"Load Filter", MB_ICONERROR | MB_OK);
+        EeFilter_Clear(&loaded);
+        return FALSE;
+    }
+    if (nskip > 0)
+    {
+        wchar_t msg[2400];
+        StringCchPrintfW(msg, ARRAYSIZE(msg), L"Loaded %u rule%s. %u rule%s could not be used here:\r\n\r\n%s",
+                         loaded.count, loaded.count == 1 ? L"" : L"s", nskip, nskip == 1 ? L"" : L"s", skipped);
+        MessageBoxW(owner, msg, L"Load Filter", MB_ICONWARNING | MB_OK);
+    }
+    EeFilter_Clear(&loaded);
+    return TRUE;
 }
 
 static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -4461,6 +4679,31 @@ static LRESULT CALLBACK FilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
                     FilterDlg_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
                     return 0;
+                case IDC_FLT_EXPORT:
+                case IDC_FLT_LOAD:
+                {
+                    uint32_t ncols = 0;
+                    EeFilterColumnRef *cols = FilterFile_AppColumns(st->app, &ncols);
+                    if (cols == NULL)
+                    {
+                        return 0;
+                    }
+                    if (LOWORD(wParam) == IDC_FLT_EXPORT)
+                    {
+                        wchar_t base[192];
+                        App_BaseNameNoExt(st->app->load_path, base, ARRAYSIZE(base));
+                        FilterFile_Export(hwnd, &st->draft, cols, ncols, base,
+                                          st->app->is_roster ? L"Voter Roster" : L"Voter List");
+                    }
+                    else if (FilterFile_Load(hwnd, &st->draft, cols, ncols, EE_FILTER_REL_ALL, &st->app->table))
+                    {
+                        st->edit_index = -1;
+                        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                        FilterDlg_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
+                    }
+                    free(cols);
+                    return 0;
+                }
                 case IDC_FLT_APPLY:
                     FilterDlg_Apply(st);
                     return 0;
@@ -4802,6 +5045,30 @@ static BOOL App_ShowFilter(AppState *app)
                     0,
                     hwnd,
                     (HMENU)(INT_PTR)IDC_FLT_RESET,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Export Filter\x2026",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_EXPORT,
+                    app->instance,
+                    NULL);
+    CreateWindowExW(0,
+                    L"BUTTON",
+                    L"Load Filter\x2026",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    (HMENU)(INT_PTR)IDC_FLT_LOAD,
                     app->instance,
                     NULL);
     CreateWindowExW(0,
@@ -9021,7 +9288,12 @@ static const wchar_t k_HelpOptions[] =
     L"•  Includes on DIFFERENT fields are AND'd — a row must satisfy each "                        \
     L"field that has Include rules.\r\n\r\n"                                                      \
     L"•  With no Include rules, every row is shown except those removed by "                       \
-    L"Exclude rules.\r\n\r\n"
+    L"Exclude rules.\r\n\r\n"                                                                 \
+    L"Export Filter… (in the Filter dialog) saves the listed rules to a file — UTF-8 CSV (\"….filter.csv\") or tab-delimited (\"….filter.tsv\"), which open in Excel. "                                                              \
+    L"Load Filter… replaces the listed rules with a saved filter; they take effect on Apply or "                                                              \
+    L"OK. Columns are matched by name, so a filter saved for one file works on another with the "                                                              \
+    L"same column names in any order; rules for columns this window does not have are listed and "                                                              \
+    L"left out.\r\n\r\n"
 
 static const wchar_t k_HelpFilters[] =
     L"Filters (Filter menu, or Ctrl+L) narrow the visible rows. Each rule targets "
@@ -9043,6 +9315,11 @@ static const wchar_t k_HelpFilters[] =
     L"Add rules in the Filter dialog, or right-click a cell and choose "
     L"Include/Exclude to add a rule for that value. Reset Filter clears all rules; "
     L"a disabled rule is kept but ignored.\r\n\r\n"
+    L"Export Filter… (in the Filter dialog) saves the listed rules to a file — UTF-8 CSV (\"….filter.csv\") or tab-delimited (\"….filter.tsv\"), which open in Excel. "
+    L"Load Filter… replaces the listed rules with a saved filter; they take effect on Apply or "
+    L"OK. Columns are matched by name, so a filter saved for one file works on another with the "
+    L"same column names in any order; rules for columns this window does not have are listed and "
+    L"left out.\r\n\r\n"
     L"Show Duplicate Voters lists voters who share a name and date of birth. Show "
     L"Duplicate Voters Voting does the same for voters who voted — whose Voter ID is in "
     L"an open voter roster — under two or more different Voter IDs (for example, two "
@@ -9248,7 +9525,12 @@ static const wchar_t k_CvrHelpFilters[] =
     L"for that value. The status bar shows how many records are shown; Reset Filter "
     L"clears all rules. Filtering does not change Tabulate All CVR Votes or the "
     L"per-column reports; Tabulate Filtered CVR Votes and Tabulate Filtered "
-    L"Ranked-Choice Contests count only the records the filter shows.";
+    L"Ranked-Choice Contests count only the records the filter shows.\r\n\r\n"
+    L"Export Filter… (in the Filter dialog) saves the listed rules to a file — UTF-8 CSV (\"….filter.csv\") or tab-delimited (\"….filter.tsv\"), which open in Excel. "
+    L"Load Filter… replaces the listed rules with a saved filter; they take effect on Apply or "
+    L"OK. Columns are matched by name, so a filter saved for one file works on another with the "
+    L"same column names in any order; rules for columns this window does not have are listed and "
+    L"left out. Only \"is\" and \"is not\" rules load into a CVR window.";
 
 static const wchar_t k_CvrHelpReports[] =
     L"Reports (Reports menu) summarize the loaded Cast Vote Records.\r\n\r\n"
@@ -15060,6 +15342,35 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                     SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
                     CvrFilt_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
                     return 0;
+                case IDC_FLT_EXPORT:
+                case IDC_FLT_LOAD:
+                {
+                    uint32_t ncols = st->cw->table.ncols;
+                    EeFilterColumnRef *cols =
+                        (EeFilterColumnRef *)calloc(ncols ? ncols : 1, sizeof(EeFilterColumnRef));
+                    uint32_t c;
+                    if (cols == NULL)
+                    {
+                        return 0;
+                    }
+                    for (c = 0; c < ncols; c++)
+                    {
+                        cols[c].column = c;
+                        cols[c].title = st->cw->table.col_titles[c] ? st->cw->table.col_titles[c] : L"";
+                    }
+                    if (LOWORD(wParam) == IDC_FLT_EXPORT)
+                    {
+                        FilterFile_Export(hwnd, &st->draft, cols, ncols, st->cw->base_name, L"Cast Vote Record");
+                    }
+                    else if (FilterFile_Load(hwnd, &st->draft, cols, ncols, EE_FILTER_REL_EQUALITY, NULL))
+                    {
+                        st->edit_index = -1;
+                        SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
+                        CvrFilt_RefreshList(GetDlgItem(hwnd, IDC_FLT_LIST), st);
+                    }
+                    free(cols);
+                    return 0;
+                }
                 case IDC_FLT_APPLY:
                     CvrFilt_Apply(st);
                     return 0;
@@ -15197,6 +15508,8 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
         {L"BUTTON", L"Add", BS_PUSHBUTTON, IDC_FLT_ADD},
         {L"BUTTON", L"Remove", BS_PUSHBUTTON, IDC_FLT_REMOVE},
         {L"BUTTON", L"Reset", BS_PUSHBUTTON, IDC_FLT_RESET},
+        {L"BUTTON", L"Export Filter\x2026", BS_PUSHBUTTON, IDC_FLT_EXPORT},
+        {L"BUTTON", L"Load Filter\x2026", BS_PUSHBUTTON, IDC_FLT_LOAD},
         {L"BUTTON", L"Apply", BS_PUSHBUTTON, IDC_FLT_APPLY},
         {L"BUTTON", L"OK", BS_DEFPUSHBUTTON, IDOK},
         {L"BUTTON", L"Cancel", BS_PUSHBUTTON, IDCANCEL},

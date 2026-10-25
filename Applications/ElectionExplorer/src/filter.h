@@ -123,6 +123,73 @@ extern "C"
     /** @brief Display label for Include/Exclude (never NULL). */
     const wchar_t *EeFilter_ActionText(EeFilterAction action);
 
+    /** A column a filter window offers: its title and the rule column index it stands for.
+     *  A saved filter names columns by title (and 1-based position in this list), so it
+     *  loads into another file whose columns are in a different order. */
+    typedef struct EeFilterColumnRef
+    {
+        const wchar_t *title;
+        uint32_t column;
+    } EeFilterColumnRef;
+
+    /** Relations a filter window supports, as a bit mask (1u << EeFilterRelation). */
+#define EE_FILTER_REL_ALL      0xFFu
+#define EE_FILTER_REL_EQUALITY ((1u << EeRel_Is) | (1u << EeRel_IsNot)) /* CVR: is / is not */
+
+    /**
+     * @brief Save @p set as a UTF-8 delimited file (with a BOM, for Excel): a header row
+     *        "Column, Column Number, Relation, Value, Action, Enabled" and one row per rule.
+     * @param path   Destination file (created or replaced).
+     * @param set    Rules to save (all of them, enabled or not).
+     * @param cols   The window's columns; a rule whose column is not listed is saved
+     *               with an empty title.
+     * @param ncols  Number of entries in @p cols.
+     * @param delim  L',' (CSV) or L'\t' (tab-delimited).
+     * @param error_message Optional; receives a message on failure.
+     * @param error_cch     Capacity of @p error_message.
+     * @return FALSE on invalid arguments or a write error.
+     */
+    BOOL EeFilter_SaveFile(const wchar_t *path,
+                           const EeFilterSet *set,
+                           const EeFilterColumnRef *cols,
+                           uint32_t ncols,
+                           wchar_t delim,
+                           wchar_t *error_message,
+                           size_t error_cch);
+
+    /**
+     * @brief Load rules saved by EeFilter_SaveFile (comma- or tab-delimited, detected from
+     *        the header) into @p out, replacing its rules.
+     *
+     * Columns are matched by title (case-insensitive); when several of @p cols share the
+     * title, the one at the saved Column Number wins, else the first. Rules naming a
+     * column the window does not have, or a relation outside @p relation_mask, are
+     * skipped and described in @p skipped (one per line). "Column Number" and "Enabled"
+     * are optional (a rule without Enabled is enabled).
+     * @param path          File to read.
+     * @param cols          The window's columns.
+     * @param ncols         Number of entries in @p cols.
+     * @param relation_mask Allowed relations (EE_FILTER_REL_ALL, EE_FILTER_REL_EQUALITY).
+     * @param out           Receives the loaded rules (cleared first).
+     * @param out_skipped   Optional; receives the number of rules skipped.
+     * @param skipped       Optional; receives the skipped rules' descriptions.
+     * @param skipped_cch   Capacity of @p skipped.
+     * @param error_message Optional; receives a message on failure.
+     * @param error_cch     Capacity of @p error_message.
+     * @return FALSE when the file cannot be read or is not a saved filter (@p out is then
+     *         left empty); TRUE otherwise, even when every rule was skipped.
+     */
+    BOOL EeFilter_LoadFile(const wchar_t *path,
+                           const EeFilterColumnRef *cols,
+                           uint32_t ncols,
+                           uint32_t relation_mask,
+                           EeFilterSet *out,
+                           uint32_t *out_skipped,
+                           wchar_t *skipped,
+                           size_t skipped_cch,
+                           wchar_t *error_message,
+                           size_t error_cch);
+
 #ifdef __cplusplus
 }
 #endif

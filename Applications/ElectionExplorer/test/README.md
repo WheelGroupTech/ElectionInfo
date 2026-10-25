@@ -42,6 +42,10 @@ wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is 
 `pdfstray` covers PDF rows that a stray piece of text knocked out of the Voter ID column: a name in two
 touching pieces and a name's separate last letter (Gregg), a middle name's last letter at the left margin
 (Gregg's mail list) and a "FED" precinct between the "Pct" and "VUID" titles (Brazos).
+`filterfile` saves filter rules with `EeFilter_SaveFile` (CSV and tab-delimited, with quoted values: a
+comma, quotes, a trailing space, an empty value) and loads them with `EeFilter_LoadFile` into columns in
+another order, choosing the saved Column Number between two columns with one title, skipping a missing
+column and (CVR) relations other than is / is not, and refusing a file that is not a saved filter.
 `xlsxns` authors a workbook whose SpreadsheetML elements all carry a namespace prefix
 (`<x:row>`, as the OpenXML SDK writes them), with a BOM and a package-absolute sheet
 target, and checks cells, a shared string holding a literal `<x:b>`, and a date style.

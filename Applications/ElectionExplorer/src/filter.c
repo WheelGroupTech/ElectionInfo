@@ -597,3 +597,559 @@ BOOL EeFilter_CollectDistinct(const EeVoterTable *table,
     *out_count = unique;
     return TRUE;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Saving and loading filters                                                 */
+/* -------------------------------------------------------------------------- */
+
+#define FILTER_FILE_MAX_BYTES (4u * 1024u * 1024u) /* a saved filter is a few KB */
+#define FILTER_FIELD_CCH      512                  /* CVR contest titles can be long */
+#define FILTER_MAX_FIELDS     16
+
+static const wchar_t k_FilterHeader[][16] = {L"Column", L"Column Number", L"Relation", L"Value", L"Action",
+                                             L"Enabled"};
+
+static void filt_err(wchar_t *dst, size_t cch, const wchar_t *msg)
+{
+    if (dst != NULL && cch > 0)
+    {
+        StringCchCopyW(dst, cch, msg);
+    }
+}
+
+/* Growable UTF-16 text. */
+typedef struct FiltText
+{
+    wchar_t *p;
+    size_t len;
+    size_t cap;
+} FiltText;
+
+static BOOL ftext_add(FiltText *b, const wchar_t *s, size_t n)
+{
+    if (b->len + n + 1 > b->cap)
+    {
+        size_t ncap = b->cap ? b->cap : 1024;
+        wchar_t *np;
+        while (ncap < b->len + n + 1)
+        {
+            ncap *= 2;
+        }
+        np = (wchar_t *)realloc(b->p, ncap * sizeof(wchar_t));
+        if (np == NULL)
+        {
+            return FALSE;
+        }
+        b->p = np;
+        b->cap = ncap;
+    }
+    memcpy(b->p + b->len, s, n * sizeof(wchar_t)); /* SAFE: capacity ensured above */
+    b->len += n;
+    b->p[b->len] = L'\0';
+    return TRUE;
+}
+
+/* Append one field, quoted when it holds the delimiter, a quote or a line break, or begins
+ * or ends with a space (a value such as "AUSTIN " must keep its space). */
+static BOOL ftext_field(FiltText *b, const wchar_t *s, wchar_t delim)
+{
+    size_t n = wcslen(s);
+    size_t i;
+    BOOL quote = n > 0 && (s[0] == L' ' || s[0] == L'\t' || s[n - 1] == L' ' || s[n - 1] == L'\t');
+    for (i = 0; i < n && !quote; i++)
+    {
+        quote = (s[i] == delim || s[i] == L'"' || s[i] == L'\r' || s[i] == L'\n');
+    }
+    if (!quote)
+    {
+        return ftext_add(b, s, n);
+    }
+    if (!ftext_add(b, L"\"", 1))
+    {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        if ((s[i] == L'"' && !ftext_add(b, L"\"", 1)) || !ftext_add(b, s + i, 1))
+        {
+            return FALSE;
+        }
+    }
+    return ftext_add(b, L"\"", 1);
+}
+
+BOOL EeFilter_SaveFile(const wchar_t *path,
+                       const EeFilterSet *set,
+                       const EeFilterColumnRef *cols,
+                       uint32_t ncols,
+                       wchar_t delim,
+                       wchar_t *error_message,
+                       size_t error_cch)
+{
+    static const unsigned char k_bom[3] = {0xEF, 0xBB, 0xBF};
+    FiltText b = {0};
+    wchar_t sep[2];
+    char *utf8 = NULL;
+    int n8 = 0;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    DWORD wrote = 0;
+    BOOL ok = FALSE;
+    uint32_t i;
+    uint32_t k;
+
+    if (path == NULL || set == NULL || (cols == NULL && ncols > 0) || (delim != L',' && delim != L'\t'))
+    {
+        filt_err(error_message, error_cch, L"Invalid arguments.");
+        return FALSE;
+    }
+    sep[0] = delim;
+    sep[1] = L'\0';
+    for (k = 0; k < ARRAYSIZE(k_FilterHeader); k++)
+    {
+        if ((k > 0 && !ftext_add(&b, sep, 1)) || !ftext_field(&b, k_FilterHeader[k], delim))
+        {
+            goto oom;
+        }
+    }
+    if (!ftext_add(&b, L"\r\n", 2))
+    {
+        goto oom;
+    }
+    for (i = 0; i < set->count; i++)
+    {
+        const EeFilterRule *r = &set->rules[i];
+        const wchar_t *title = L"";
+        wchar_t num[16] = L"";
+        for (k = 0; k < ncols; k++)
+        {
+            if (cols[k].column == r->column)
+            {
+                title = (cols[k].title != NULL) ? cols[k].title : L"";
+                StringCchPrintfW(num, ARRAYSIZE(num), L"%u", k + 1);
+                break;
+            }
+        }
+        if (!ftext_field(&b, title, delim) || !ftext_add(&b, sep, 1) || !ftext_field(&b, num, delim) ||
+            !ftext_add(&b, sep, 1) || !ftext_field(&b, EeFilter_RelationText(r->relation), delim) ||
+            !ftext_add(&b, sep, 1) || !ftext_field(&b, r->value, delim) || !ftext_add(&b, sep, 1) ||
+            !ftext_field(&b, EeFilter_ActionText(r->action), delim) || !ftext_add(&b, sep, 1) ||
+            !ftext_field(&b, r->enabled ? L"Yes" : L"No", delim) || !ftext_add(&b, L"\r\n", 2))
+        {
+            goto oom;
+        }
+    }
+    n8 = WideCharToMultiByte(CP_UTF8, 0, b.p, (int)b.len, NULL, 0, NULL, NULL);
+    utf8 = (n8 > 0) ? (char *)malloc((size_t)n8) : NULL;
+    if (utf8 == NULL || WideCharToMultiByte(CP_UTF8, 0, b.p, (int)b.len, utf8, n8, NULL, NULL) != n8)
+    {
+        goto oom;
+    }
+    h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        filt_err(error_message, error_cch, L"Could not create the filter file.");
+        goto done;
+    }
+    if (!WriteFile(h, k_bom, sizeof(k_bom), &wrote, NULL) || wrote != sizeof(k_bom) ||
+        !WriteFile(h, utf8, (DWORD)n8, &wrote, NULL) || wrote != (DWORD)n8)
+    {
+        filt_err(error_message, error_cch, L"Could not write the filter file.");
+        goto done;
+    }
+    ok = TRUE;
+    goto done;
+
+oom:
+    filt_err(error_message, error_cch, L"Out of memory saving the filter.");
+done:
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(h);
+    }
+    free(utf8);
+    free(b.p);
+    return ok;
+}
+
+/* Read a whole text file as UTF-16: UTF-8 (BOM optional), a UTF-16 LE file with its BOM,
+ * or, when the bytes are not valid UTF-8, the ANSI code page (a CSV re-saved by Excel). */
+static wchar_t *filt_read_text(const wchar_t *path, size_t *out_len, wchar_t *err, size_t errcch)
+{
+    HANDLE h;
+    LARGE_INTEGER sz;
+    unsigned char *raw = NULL;
+    DWORD got = 0;
+    wchar_t *w = NULL;
+    int nw;
+    const unsigned char *p;
+    int n;
+
+    *out_len = 0;
+    h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        filt_err(err, errcch, L"Could not open the filter file.");
+        return NULL;
+    }
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart < 0 || sz.QuadPart > FILTER_FILE_MAX_BYTES)
+    {
+        CloseHandle(h);
+        filt_err(err, errcch, L"The file is too large to be a saved filter.");
+        return NULL;
+    }
+    raw = (unsigned char *)malloc((size_t)sz.QuadPart + 2);
+    if (raw == NULL)
+    {
+        CloseHandle(h);
+        filt_err(err, errcch, L"Out of memory reading the filter file.");
+        return NULL;
+    }
+    if (sz.QuadPart > 0 && (!ReadFile(h, raw, (DWORD)sz.QuadPart, &got, NULL) || got != (DWORD)sz.QuadPart))
+    {
+        CloseHandle(h);
+        free(raw);
+        filt_err(err, errcch, L"Could not read the filter file.");
+        return NULL;
+    }
+    CloseHandle(h);
+    p = raw;
+    n = (int)got;
+    if (n >= 2 && p[0] == 0xFF && p[1] == 0xFE)
+    {
+        nw = (n - 2) / 2;
+        w = (wchar_t *)malloc(((size_t)nw + 1) * sizeof(wchar_t));
+        if (w != NULL)
+        {
+            memcpy(w, p + 2, (size_t)nw * sizeof(wchar_t)); /* SAFE: nw wchar_t fit */
+            w[nw] = L'\0';
+            *out_len = (size_t)nw;
+        }
+        free(raw);
+        return w;
+    }
+    if (n >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF)
+    {
+        p += 3;
+        n -= 3;
+    }
+    nw = (n > 0) ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (const char *)p, n, NULL, 0) : 0;
+    if (n > 0 && nw > 0)
+    {
+        w = (wchar_t *)malloc(((size_t)nw + 1) * sizeof(wchar_t));
+        if (w != NULL)
+        {
+            MultiByteToWideChar(CP_UTF8, 0, (const char *)p, n, w, nw);
+        }
+    }
+    else if (n > 0)
+    {
+        nw = MultiByteToWideChar(CP_ACP, 0, (const char *)p, n, NULL, 0);
+        w = (nw > 0) ? (wchar_t *)malloc(((size_t)nw + 1) * sizeof(wchar_t)) : NULL;
+        if (w != NULL)
+        {
+            MultiByteToWideChar(CP_ACP, 0, (const char *)p, n, w, nw);
+        }
+    }
+    else
+    {
+        nw = 0;
+        w = (wchar_t *)malloc(sizeof(wchar_t));
+    }
+    free(raw);
+    if (w == NULL)
+    {
+        filt_err(err, errcch, L"Out of memory reading the filter file.");
+        return NULL;
+    }
+    w[nw] = L'\0';
+    *out_len = (size_t)nw;
+    return w;
+}
+
+/* The next record's fields (RFC 4180 quoting; a quoted field may hold the delimiter, quotes
+ * and line breaks). Returns the number of fields, 0 at the end of the text. A field longer
+ * than FILTER_FIELD_CCH - 1 characters is cut short. */
+static uint32_t filt_next_record(const wchar_t **pp,
+                                 const wchar_t *end,
+                                 wchar_t delim,
+                                 wchar_t (*fields)[FILTER_FIELD_CCH])
+{
+    const wchar_t *p = *pp;
+    uint32_t nf = 0;
+    if (p >= end)
+    {
+        return 0;
+    }
+    for (;;)
+    {
+        wchar_t tmp[FILTER_FIELD_CCH];
+        wchar_t *out = (nf < FILTER_MAX_FIELDS) ? fields[nf] : tmp;
+        size_t o = 0;
+        if (p < end && *p == L'"')
+        {
+            p++;
+            while (p < end)
+            {
+                if (*p == L'"')
+                {
+                    if (p + 1 < end && p[1] == L'"')
+                    {
+                        p++; /* a doubled quote is one quote */
+                    }
+                    else
+                    {
+                        p++;
+                        break;
+                    }
+                }
+                if (o + 1 < FILTER_FIELD_CCH)
+                {
+                    out[o++] = *p;
+                }
+                p++;
+            }
+            while (p < end && *p != delim && *p != L'\r' && *p != L'\n')
+            {
+                p++; /* text after the closing quote */
+            }
+        }
+        else
+        {
+            while (p < end && *p != delim && *p != L'\r' && *p != L'\n')
+            {
+                if (o + 1 < FILTER_FIELD_CCH)
+                {
+                    out[o++] = *p;
+                }
+                p++;
+            }
+        }
+        out[o] = L'\0';
+        nf++;
+        if (p < end && *p == delim)
+        {
+            p++;
+            continue;
+        }
+        if (p < end && *p == L'\r')
+        {
+            p++;
+        }
+        if (p < end && *p == L'\n')
+        {
+            p++;
+        }
+        break;
+    }
+    *pp = p;
+    return (nf < FILTER_MAX_FIELDS) ? nf : FILTER_MAX_FIELDS;
+}
+
+/* @p s without leading and trailing spaces, copied to @p out. */
+static void filt_trim(const wchar_t *s, wchar_t *out, size_t cch)
+{
+    size_t n;
+    while (*s == L' ' || *s == L'\t')
+    {
+        s++;
+    }
+    StringCchCopyW(out, cch, s);
+    n = wcslen(out);
+    while (n > 0 && (out[n - 1] == L' ' || out[n - 1] == L'\t'))
+    {
+        out[--n] = L'\0';
+    }
+}
+
+/* Append "@p line\r\n" to the skipped-rules text (cut short when full). */
+static void filt_note(wchar_t *skipped, size_t cch, const wchar_t *line)
+{
+    if (skipped != NULL && cch > 0)
+    {
+        StringCchCatW(skipped, cch, line);
+        StringCchCatW(skipped, cch, L"\r\n");
+    }
+}
+
+BOOL EeFilter_LoadFile(const wchar_t *path,
+                       const EeFilterColumnRef *cols,
+                       uint32_t ncols,
+                       uint32_t relation_mask,
+                       EeFilterSet *out,
+                       uint32_t *out_skipped,
+                       wchar_t *skipped,
+                       size_t skipped_cch,
+                       wchar_t *error_message,
+                       size_t error_cch)
+{
+    wchar_t(*f)[FILTER_FIELD_CCH] = NULL;
+    wchar_t *text = NULL;
+    size_t len = 0;
+    const wchar_t *p;
+    const wchar_t *end;
+    const wchar_t *nl;
+    wchar_t delim;
+    int idx[ARRAYSIZE(k_FilterHeader)];
+    uint32_t nf;
+    uint32_t k;
+    uint32_t rule_no = 0;
+    uint32_t nskip = 0;
+    BOOL ok = FALSE;
+
+    if (out_skipped != NULL)
+    {
+        *out_skipped = 0;
+    }
+    if (skipped != NULL && skipped_cch > 0)
+    {
+        skipped[0] = L'\0';
+    }
+    if (path == NULL || out == NULL || (cols == NULL && ncols > 0))
+    {
+        filt_err(error_message, error_cch, L"Invalid arguments.");
+        return FALSE;
+    }
+    EeFilter_Clear(out);
+    f = (wchar_t(*)[FILTER_FIELD_CCH])malloc(sizeof(wchar_t) * FILTER_FIELD_CCH * FILTER_MAX_FIELDS);
+    text = (f != NULL) ? filt_read_text(path, &len, error_message, error_cch) : NULL;
+    if (f == NULL)
+    {
+        filt_err(error_message, error_cch, L"Out of memory reading the filter file.");
+    }
+    if (text == NULL)
+    {
+        goto done;
+    }
+    p = text;
+    end = text + len;
+
+    /* The header names the columns (in any order); its first line gives the delimiter. */
+    delim = L',';
+    for (nl = p; nl < end && *nl != L'\n'; nl++)
+    {
+        if (*nl == L'\t')
+        {
+            delim = L'\t';
+            break;
+        }
+    }
+    do
+    {
+        nf = filt_next_record(&p, end, delim, f);
+    } while (nf == 1 && f[0][0] == L'\0'); /* blank lines */
+    for (k = 0; k < ARRAYSIZE(k_FilterHeader); k++)
+    {
+        uint32_t c;
+        idx[k] = -1;
+        for (c = 0; c < nf; c++)
+        {
+            wchar_t t[64];
+            filt_trim(f[c], t, ARRAYSIZE(t));
+            if (_wcsicmp(t, k_FilterHeader[k]) == 0)
+            {
+                idx[k] = (int)c;
+                break;
+            }
+        }
+    }
+    if (idx[0] < 0 || idx[2] < 0 || idx[3] < 0 || idx[4] < 0)
+    {
+        filt_err(error_message, error_cch,
+                 L"This file is not a saved Election Explorer filter: its first line must name the "
+                 L"columns Column, Relation, Value and Action.");
+        goto done;
+    }
+
+    while ((nf = filt_next_record(&p, end, delim, f)) > 0)
+    {
+        EeFilterRule r;
+        wchar_t title[FILTER_FIELD_CCH];
+        wchar_t rel[64];
+        wchar_t act[32];
+        wchar_t en[16];
+        wchar_t line[FILTER_FIELD_CCH + 128];
+        unsigned long num = 0;
+        int rel_i = -1;
+        int col_k = -1;
+        if (nf == 1 && f[0][0] == L'\0')
+        {
+            continue; /* blank line */
+        }
+        rule_no++;
+        ZeroMemory(&r, sizeof(r));
+        filt_trim((uint32_t)idx[0] < nf ? f[idx[0]] : L"", title, ARRAYSIZE(title));
+        filt_trim((uint32_t)idx[2] < nf ? f[idx[2]] : L"", rel, ARRAYSIZE(rel));
+        filt_trim((uint32_t)idx[4] < nf ? f[idx[4]] : L"", act, ARRAYSIZE(act));
+        filt_trim((idx[5] >= 0 && (uint32_t)idx[5] < nf) ? f[idx[5]] : L"Yes", en, ARRAYSIZE(en));
+        if (idx[1] >= 0 && (uint32_t)idx[1] < nf)
+        {
+            num = wcstoul(f[idx[1]], NULL, 10);
+        }
+        StringCchCopyW(r.value, ARRAYSIZE(r.value), (uint32_t)idx[3] < nf ? f[idx[3]] : L"");
+        for (k = 0; k <= (uint32_t)EeRel_Excludes; k++)
+        {
+            if (_wcsicmp(rel, EeFilter_RelationText((EeFilterRelation)k)) == 0)
+            {
+                rel_i = (int)k;
+                break;
+            }
+        }
+        /* the saved column number decides among columns sharing the title */
+        if (num >= 1 && num <= ncols && cols[num - 1].title != NULL && _wcsicmp(cols[num - 1].title, title) == 0)
+        {
+            col_k = (int)(num - 1);
+        }
+        for (k = 0; col_k < 0 && k < ncols; k++)
+        {
+            if (cols[k].title != NULL && _wcsicmp(cols[k].title, title) == 0)
+            {
+                col_k = (int)k;
+            }
+        }
+        StringCchPrintfW(line, ARRAYSIZE(line), L"Rule %u (%s %s \"%s\"): ", rule_no, title[0] ? title : L"(no column)",
+                         rel, r.value);
+        if (col_k < 0)
+        {
+            StringCchCatW(line, ARRAYSIZE(line), L"this window has no column of that name.");
+        }
+        else if (rel_i < 0)
+        {
+            StringCchCatW(line, ARRAYSIZE(line), L"unknown relation.");
+        }
+        else if ((relation_mask & (1u << (uint32_t)rel_i)) == 0)
+        {
+            StringCchCatW(line, ARRAYSIZE(line), L"this window filters only with \"is\" and \"is not\".");
+        }
+        else if (_wcsicmp(act, L"Include") != 0 && _wcsicmp(act, L"Exclude") != 0)
+        {
+            StringCchCatW(line, ARRAYSIZE(line), L"the action must be Include or Exclude.");
+        }
+        else
+        {
+            r.column = cols[col_k].column;
+            r.relation = (EeFilterRelation)rel_i;
+            r.action = (_wcsicmp(act, L"Exclude") == 0) ? EeFilt_Exclude : EeFilt_Include;
+            r.enabled = !(_wcsicmp(en, L"No") == 0 || _wcsicmp(en, L"N") == 0 || _wcsicmp(en, L"False") == 0 ||
+                          wcscmp(en, L"0") == 0);
+            if (!EeFilter_Add(out, &r))
+            {
+                filt_err(error_message, error_cch, L"Out of memory loading the filter.");
+                EeFilter_Clear(out);
+                goto done;
+            }
+            continue;
+        }
+        nskip++;
+        filt_note(skipped, skipped_cch, line);
+    }
+    if (out_skipped != NULL)
+    {
+        *out_skipped = nskip;
+    }
+    ok = TRUE;
+
+done:
+    free(text);
+    free(f);
+    return ok;
+}

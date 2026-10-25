@@ -201,7 +201,21 @@ Status as of 2026-10-22:
   the §6.1, 6.4–6.11 anomalies, for county and SOS staff. §6.2 (Tarrant redaction) excluded;
   no names, no local paths (file names only).
 
-### October 23 roster layouts + 10/24 report (committed 2026-10-24); PDF stray-piece fixes (UNCOMMITTED, 2026-10-25)
+### UNCOMMITTED — Export Filter / Load Filter (2026-10-25)
+
+- Filter windows (voter list, voter roster, CVR) gain "Export Filter…" and "Load Filter…" between
+  Reset and Apply (`IDC_FLT_EXPORT` / `IDC_FLT_LOAD`; `FilterFile_Export` / `FilterFile_Load` in main.c,
+  standard Save As / Open dialogs, last folder remembered). File: UTF-8 CSV with BOM, `*.filter.csv`
+  (or tab-delimited `*.filter.tsv`), header `Column, Column Number, Relation, Value, Action, Enabled`;
+  default name "<loaded file> Filter.filter.csv" (user decisions 2026-10-25). Load matches columns by
+  title (Column Number breaks ties), replaces the listed rules (applied on Apply / OK), lists rules it
+  cannot use (missing column; CVR takes only is / is not; a bad date for a date column).
+- Core in filter.c: `EeFilter_SaveFile` / `EeFilter_LoadFile` (`EeFilterColumnRef`, `EE_FILTER_REL_*`).
+  Help topics (voter list, roster, CVR Filters) describe the buttons. Smoke 65/65 (`filterfile`); Release
+  x64 + ARM64 clean; filter window captured with the new buttons in place.
+- **Next:** user commits; ships in the next version with .xls support (RELEASES note then).
+
+### Committed — October 23 roster layouts + 10/24 report (2026-10-24); PDF stray-piece fixes (2026-10-25)
 
 - `voter_roster.c`: a site title starting "polling pl" (Hunt "Polling Pl": "BBM" = mail);
   `pdf_runs_abut` / `pdf_run_overflow` (Gregg's clipped last letter continues the polling place, not the
@@ -214,7 +228,7 @@ Status as of 2026-10-22:
   Voter ID claims its column first in pass 2. Brazos +1, Gregg +16 voters. Smoke 64/64 (`pdfstray`).
 - Reports: `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-24.md/.pdf`
   + `_Supplement.md/.pdf` + `_Supplement_Records.csv` (data through 10/23, 17,176 records; Jefferson in).
-- **Next:** user commits the 2026-10-25 fixes; all loader fixes ship with .xls in the next version (add a RELEASES note).
+- Loader fixes ship with .xls in the next version (add a RELEASES note).
 
 ### Committed — legacy .xls (Excel 97-2003) support + Jefferson County (2026-10-24)
 

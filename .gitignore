@@ -215,3 +215,6 @@ Voter_Rosters/
 
 # Election Cast Vote Records (CVRs) - raw county and state exports, too large to push to GitHub
 Election_CVRs/
+
+# Election results - raw county and state exports, too large to push to GitHub
+Election_Results/

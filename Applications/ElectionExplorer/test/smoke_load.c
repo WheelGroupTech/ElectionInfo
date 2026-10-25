@@ -9968,6 +9968,132 @@ done:
     return rc;
 }
 
+/* Export Filter / Load Filter (tag: filterfile): EeFilter_SaveFile writes CSV and TSV with
+ * quoting (a comma, a quote, a trailing space, an empty value); EeFilter_LoadFile reads them
+ * back into a window whose columns are in another order, picks the saved Column Number among
+ * two columns with one title, skips a rule for a missing column and (for a CVR window) a
+ * relation other than is / is not, keeps a disabled rule disabled, and refuses a file that is
+ * not a saved filter. */
+static int test_filter_file(void)
+{
+    static const EeFilterColumnRef k_save_cols[] = {
+        {L"VUID", 0}, {L"Precinct", 1}, {L"MAIL_CITY", 2}, {L"Precinct", 3}, {L"Name", 4}};
+    /* the "other file": the same titles in another order, no Name column */
+    static const EeFilterColumnRef k_load_cols[] = {
+        {L"Precinct", 10}, {L"mail_city", 11}, {L"VUID", 12}, {L"Precinct", 13}};
+    static const struct
+    {
+        uint32_t column;
+        EeFilterRelation rel;
+        EeFilterAction act;
+        BOOL enabled;
+        const wchar_t *value;
+    } k_rules[] = {
+        {2, EeRel_Is, EeFilt_Exclude, TRUE, L"AUSTIN "},
+        {2, EeRel_Is, EeFilt_Exclude, TRUE, L""},
+        {4, EeRel_Contains, EeFilt_Include, TRUE, L"SMITH, \"JR\""},
+        {3, EeRel_BeginsWith, EeFilt_Include, FALSE, L"1\t2"},
+        {0, EeRel_IsNot, EeFilt_Exclude, TRUE, L"1000000001"},
+    };
+    wchar_t dir[MAX_PATH], csv[MAX_PATH], tsv[MAX_PATH], bad[MAX_PATH];
+    wchar_t err[256] = L"";
+    wchar_t skipped[1024];
+    EeFilterSet set, got;
+    uint32_t nskip = 0;
+    int i, pass;
+    int rc = 1;
+
+    EeFilter_Init(&set);
+    EeFilter_Init(&got);
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(csv, MAX_PATH, L"%see_test.filter.csv", dir);
+    StringCchPrintfW(tsv, MAX_PATH, L"%see_test.filter.tsv", dir);
+    StringCchPrintfW(bad, MAX_PATH, L"%see_test_notfilter.csv", dir);
+    for (i = 0; i < (int)ARRAYSIZE(k_rules); i++)
+    {
+        EeFilterRule r;
+        ZeroMemory(&r, sizeof(r));
+        r.column = k_rules[i].column;
+        r.relation = k_rules[i].rel;
+        r.action = k_rules[i].act;
+        r.enabled = k_rules[i].enabled;
+        StringCchCopyW(r.value, ARRAYSIZE(r.value), k_rules[i].value);
+        EeFilter_Add(&set, &r);
+    }
+    for (pass = 0; pass < 2; pass++)
+    {
+        const wchar_t *path = pass == 0 ? csv : tsv;
+        if (!EeFilter_SaveFile(path, &set, k_save_cols, ARRAYSIZE(k_save_cols), pass == 0 ? L',' : L'\t', err,
+                               ARRAYSIZE(err)))
+        {
+            wprintf(L"filterfile: save failed: %s\n", err);
+            goto done;
+        }
+        if (!EeFilter_LoadFile(path, k_load_cols, ARRAYSIZE(k_load_cols), EE_FILTER_REL_ALL, &got, &nskip, skipped,
+                               ARRAYSIZE(skipped), err, ARRAYSIZE(err)))
+        {
+            wprintf(L"filterfile: load failed: %s\n", err);
+            goto done;
+        }
+        /* the Name rule is skipped (no such column); the rest map to the other file's columns */
+        if (got.count != 4 || nskip != 1 || wcsstr(skipped, L"Name") == NULL ||
+            got.rules[0].column != 11 || wcscmp(got.rules[0].value, L"AUSTIN ") != 0 ||
+            got.rules[0].action != EeFilt_Exclude || got.rules[0].relation != EeRel_Is ||
+            got.rules[1].column != 11 || got.rules[1].value[0] != L'\0' ||
+            got.rules[2].column != 13 || wcscmp(got.rules[2].value, L"1\t2") != 0 ||
+            got.rules[2].relation != EeRel_BeginsWith || got.rules[2].enabled ||
+            got.rules[3].column != 12 || got.rules[3].relation != EeRel_IsNot || !got.rules[3].enabled)
+        {
+            wprintf(L"filterfile: pass %d: %u rules, %u skipped (%s)\n", pass, got.count, nskip, skipped);
+            for (i = 0; i < (int)got.count; i++)
+            {
+                wprintf(L"  col %u rel %d act %d en %d '%s'\n", got.rules[i].column, (int)got.rules[i].relation,
+                        (int)got.rules[i].action, got.rules[i].enabled, got.rules[i].value);
+            }
+            goto done;
+        }
+    }
+    /* A CVR window takes only is / is not; the Name column exists there under its title. */
+    if (!EeFilter_LoadFile(csv, k_save_cols, ARRAYSIZE(k_save_cols), EE_FILTER_REL_EQUALITY, &got, &nskip, skipped,
+                           ARRAYSIZE(skipped), err, ARRAYSIZE(err)) ||
+        got.count != 3 || nskip != 2 || wcsstr(skipped, L"\"is not\"") == NULL ||
+        wcscmp(got.rules[2].value, L"1000000001") != 0)
+    {
+        wprintf(L"filterfile: CVR load %u rules, %u skipped (%s) %s\n", got.count, nskip, skipped, err);
+        goto done;
+    }
+    /* the quoted value with a comma and quotes round-trips exactly into the same columns */
+    if (!EeFilter_LoadFile(csv, k_save_cols, ARRAYSIZE(k_save_cols), EE_FILTER_REL_ALL, &got, &nskip, skipped,
+                           ARRAYSIZE(skipped), err, ARRAYSIZE(err)) ||
+        got.count != 5 || nskip != 0 || got.rules[2].column != 4 || wcscmp(got.rules[2].value, L"SMITH, \"JR\"") != 0 ||
+        got.rules[3].column != 3)
+    {
+        wprintf(L"filterfile: same-column load %u rules %u skipped\n", got.count, nskip);
+        goto done;
+    }
+    if (!cvr_write_bytes(bad, "VUID,LAST_NAME\r\n1000000001,SMITH\r\n", 34) ||
+        EeFilter_LoadFile(bad, k_save_cols, ARRAYSIZE(k_save_cols), EE_FILTER_REL_ALL, &got, &nskip, skipped,
+                          ARRAYSIZE(skipped), err, ARRAYSIZE(err)) ||
+        got.count != 0 || wcsstr(err, L"not a saved Election Explorer filter") == NULL)
+    {
+        wprintf(L"filterfile: a voter list was not refused (%s)\n", err);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"filterfile ok\n");
+done:
+    EeFilter_Clear(&set);
+    EeFilter_Clear(&got);
+    DeleteFileW(csv);
+    DeleteFileW(tsv);
+    DeleteFileW(bad);
+    if (rc != 0)
+    {
+        wprintf(L"filterfile test failed\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -10001,6 +10127,7 @@ int wmain(void)
     failed |= test_house_number_dot_zero();
     failed |= test_lot_unit_ignored();
     failed |= test_filter_logic();
+    failed |= test_filter_file();
     failed |= test_empty_numeric_header();
     failed |= test_date_sort();
     failed |= test_duplicate_voter_ids();

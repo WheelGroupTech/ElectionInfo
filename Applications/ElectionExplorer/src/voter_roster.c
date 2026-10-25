@@ -1734,9 +1734,10 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                     m->pct_alt = ci;
                 }
                 if (m->site < 0 && (strcmp(lab, "site") == 0 || strcmp(lab, "ev site") == 0 ||
-                                    strcmp(lab, "polling place") == 0 || strcmp(lab, "location") == 0))
+                                    strncmp(lab, "polling pl", 10) == 0 || strcmp(lab, "location") == 0))
                 {
-                    m->site = ci; /* Hidalgo "EV-Elections Annex" / "ED-UTRGV" */
+                    m->site = ci; /* Hidalgo "EV-Elections Annex" / "ED-UTRGV"; Hunt "Polling Pl"
+                                   * (cut short in print): "FWCC-EV", "BBM" (a mail ballot) */
                 }
             }
         }
@@ -3623,13 +3624,40 @@ static void pdf_run_text(const EePdfPageText *pt, const EePdfTextRun *r, char *o
 
 /* Run @p b starts where run @p a ends, inside a word, in the same clip: one word drawn in
  * two pieces (Hunt's cells, each clipped on its own, may touch: two titles). */
-static BOOL pdf_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
+/* Run @p b starts where run @p a ends, on the same baseline, with no space between. */
+static BOOL pdf_runs_abut(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
 {
     float end = a->x + pdf_run_width(a);
     float tol = 0.12f * b->font_size; /* Gregg: a 0.08 em seam inside "MiddleName" */
-    return a->has_width && b->has_width && a->text_len > 0 && b->text_len > 0 && a->clip_id == b->clip_id &&
+    return a->has_width && b->has_width && a->text_len > 0 && b->text_len > 0 &&
            pt->text[a->text_off + a->text_len - 1] != ' ' && pt->text[b->text_off] != ' ' && b->x - end < tol &&
            end - b->x < tol && (a->y - b->y < 1.0f && b->y - a->y < 1.0f);
+}
+
+static BOOL pdf_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
+{
+    return a->clip_id == b->clip_id && pdf_runs_abut(pt, a, b);
+}
+
+/* The clipped end of an overflowing cell: a few letters that start where the run before them
+ * ends but in another clip region (Gregg's October 23 report draws the last letter of a long
+ * polling-place name, cut off by its cell, as a run of its own). They continue that word. */
+static BOOL pdf_run_overflow(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
+{
+    uint32_t i;
+    if (a->clip_id == b->clip_id || b->text_len > 3 || !pdf_runs_abut(pt, a, b))
+    {
+        return FALSE;
+    }
+    for (i = 0; i < b->text_len; i++)
+    {
+        char ch = pt->text[b->text_off + i];
+        if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 static int __cdecl pdf_float_cmp(const void *a, const void *b)
@@ -4400,6 +4428,20 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                                 continue; /* placed in the second pass */
                             }
                         }
+                        else if (ncols > 0 && pcol != 0 && x1 <= cx0[0] + 1.0f && t[0] != '\0' &&
+                                 strspn(t, "0123456789") == strlen(t) && strlen(t) <= 5)
+                        {
+                            /* An untitled row number left of the table (Potter), also on a line
+                             * it shares with a wrapped record's second line (Wichita's October
+                             * 23 absentee list), where it must not pass for a precinct. */
+                            col_of[k] = -2;
+                            continue;
+                        }
+                        else if (k > 0 && col_of[k - 1] >= 0 &&
+                                 pdf_run_overflow(&pt, &pt.runs[ord[ln->first + k - 1]], r))
+                        {
+                            best = col_of[k - 1]; /* Gregg: a cell's clipped last letter */
+                        }
                         else if (vcol >= 0 && !filled[vcol] && vuid_valid(t))
                         {
                             best = vcol; /* Brazos: right-aligned numbers past left-aligned titles */
@@ -4436,8 +4478,10 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                     {
                         continue;
                     }
-                    /* runs that touch continue a word (Gregg: "GR" + "EGG COUNTY ...") */
-                    if (cells[col][0] != '\0' && !pdf_runs_touch(&pt, last[col], r))
+                    /* runs that touch continue a word (Gregg: "GR" + "EGG COUNTY ...", and a
+                     * polling place's clipped last letter) */
+                    if (cells[col][0] != '\0' && !pdf_runs_touch(&pt, last[col], r) &&
+                        !pdf_run_overflow(&pt, last[col], r))
                     {
                         StringCchCatA(cells[col], PDF_TABLE_CELL, " ");
                     }

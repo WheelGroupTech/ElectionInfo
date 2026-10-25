@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-24 (.xls support + Jefferson, uncommitted); 2026-10-22 (1.4.1.0 submitted; G26 ballot scripts section)
+**Last updated:** 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
 
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
 
@@ -201,7 +201,18 @@ Status as of 2026-10-22:
   the §6.1, 6.4–6.11 anomalies, for county and SOS staff. §6.2 (Tarrant redaction) excluded;
   no names, no local paths (file names only).
 
-### UNCOMMITTED — legacy .xls (Excel 97-2003) support + Jefferson County (2026-10-24)
+### UNCOMMITTED — October 23 roster layouts (Hunt / Gregg / Wichita) + 10/24 report (2026-10-24)
+
+- `voter_roster.c`: a site title starting "polling pl" (Hunt "Polling Pl": "BBM" = mail);
+  `pdf_runs_abut` / `pdf_run_overflow` (Gregg's clipped last letter continues the polling place, not the
+  precinct); a number wholly left of the table is a row number unless column 0 is the precinct
+  (Wichita 10/23 absentee: no "P 402 1" precincts, 50 voters recovered). Smoke 63/63 (new `county1023`);
+  regression: only Wichita, Gregg, Hunt change. Survey doc + test README updated.
+- Reports: `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-24.md/.pdf`
+  + `_Supplement.md/.pdf` + `_Supplement_Records.csv` (data through 10/23, 17,176 records; Jefferson in).
+- **Next:** user commits; the loader fixes ship with .xls in the next version (add a RELEASES note).
+
+### Committed — legacy .xls (Excel 97-2003) support + Jefferson County (2026-10-24)
 
 - New `ElectionExplorer/src/xls.c` / `xls.h` (in the .vcxproj + filters): OLE2 compound file
   (FAT / DIFAT / mini stream, bounds-checked) + BIFF8 records (SST with CONTINUE, LABELSST,
@@ -215,7 +226,7 @@ Status as of 2026-10-22:
 - Smoke 62/62 (new `xls`: authored BIFF8 in regular sectors and the mini stream). Release
   x64 + ARM64 clean. Jefferson 10/19-10/23: 29,106 in-person + 1,754 mail rows.
 - Downloader (`Voter_Rosters/_download_tools/daily_rosters.py`, gitignored): `jefferson()`.
-- **Next:** user commits; ships in the next version (1.4.2.0?) — add a RELEASES note then.
+- Ships in the next version (1.4.2.0?) — add a RELEASES note then.
 
 ### Committed — release notes file
 

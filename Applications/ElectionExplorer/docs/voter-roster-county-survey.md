@@ -725,6 +725,18 @@ matching an independent count; 99.94% agreement with the SOS files over 10/19-10
 downloader's `jefferson()` takes the October / November uploads (the page also lists June's
 Port Arthur runoff files).
 
+**October 23 layouts (2026-10-24):** three files posted for 10/23 were misread. Hunt's "Vote History"
+titles its polling-place column "Polling Pl" (cut short) and lists mail ballots there as "BBM": the
+polling-site rule now takes any title starting "polling pl" (61 mail ballots that were counted as
+in-person). Gregg prints long polling-place names past their cells, the last letter as a separate run in
+another clip region, nearer the precinct column ("r 21" for precinct 21, 223 rows): a run of up to three
+letters that starts where the previous run ends, in another clip, now continues that run's word
+(`pdf_run_overflow`). Wichita's 10/23 absentee list prints each row number 2.4 pt below the record's
+wrapped second line, so the number shared that line and, looking like a precinct, went into the
+precinct ("P 402 1") and 50 of 971 voters were lost: a number lying wholly left of the table is now
+always a row number unless the first column is the precinct. Regression: only those three counties
+change. Smoke test `county1023`.
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

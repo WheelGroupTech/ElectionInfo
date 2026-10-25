@@ -37,6 +37,8 @@ test\smoke_load.exe
 file, once in regular sectors and once in the mini stream) and needs `src\xls.c`; it checks
 shared strings split across a CONTINUE record, RK / MULRK / NUMBER / FORMULA / BOOLERR cells,
 date and zero-pad formats, and a voter-list and a Jefferson County roster load of `.xls` files.
+`county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
+wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt).
 `xlsxns` authors a workbook whose SpreadsheetML elements all carry a namespace prefix
 (`<x:row>`, as the OpenXML SDK writes them), with a BOM and a package-absolute sheet
 target, and checks cells, a shared string holding a literal `<x:b>`, and a date style.

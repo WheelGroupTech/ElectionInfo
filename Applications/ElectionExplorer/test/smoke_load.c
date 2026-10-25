@@ -9114,6 +9114,121 @@ cleanup:
     return rc;
 }
 
+/* Roster layouts first seen in the October 23 files (tag: county1023; needs src\pdf_reader.c).
+ * Gregg: a polling place too long for its cell, its last letter drawn as a separate run in
+ * another clip region, nearer the precinct column than its own (it continues the polling
+ * place; the precinct stays "20"). Wichita: each row number printed a little below the
+ * wrapped second line of its record, so it shares that line (dropped, not taken for a
+ * precinct). Hunt: a "Polling Pl" title (cut short in print) whose "BBM" names a mail
+ * ballot. */
+static int test_county1023(void)
+{
+    static const char k_hunt[] = "Date,State ID,Name,Precinct,Polling Pl\r\n"
+                                 "10/23/2026,1012778811,\"HUNB, ANNE\",S 109,BBM\r\n"
+                                 "10/23/2026,1012778822,\"HUNB, BEN\",S 110,FWCC-EV\r\n";
+    TBuf greg = {0}, wich = {0};
+    wchar_t dir[MAX_PATH];
+    wchar_t pbuf[3][MAX_PATH];
+    const wchar_t *paths[3];
+    static const wchar_t *const k_names[3] = {L"2026-10-23-Voter-Turnout.pdf", L"Absentee-10.23.2026.pdf",
+                                              L"Vote History 10.23.2026.csv"};
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    int i;
+    BOOL ok;
+    int rc = 1;
+
+    /* Gregg: "Polling Place" spans 300-378, the name runs to 474 in its clip, "R" (474-480)
+     * lies nearer the "Precinct" title (490-538) than the polling place title. */
+    ok = tb_printf(&greg, "BT /F1 10 Tf 1 0 0 1 40 740 Tm (No.) Tj ET BT /F1 10 Tf 1 0 0 1 80 740 Tm (Name) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 200 740 Tm (State ID) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 300 740 Tm (Polling Place) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 490 740 Tm (Precinct) Tj ET\n"
+                          "BT /F1 10 Tf 1 0 0 1 46 724 Tm (1) Tj ET BT /F1 10 Tf 1 0 0 1 80 724 Tm (GREG, ZOE) Tj ET"
+                          " BT /F1 10 Tf 1 0 0 1 200 724 Tm (2124164299) Tj ET\n"
+                          "q 300 720 174 14 re W n BT /F1 10 Tf 1 0 0 1 300 724 Tm (BROADWAY BAPTIST CHURCH CENTE) Tj ET Q\n"
+                          "q 474 720 6 14 re W n BT /F1 10 Tf 1 0 0 1 474 724 Tm (R) Tj ET Q\n"
+                          "BT /F1 10 Tf 1 0 0 1 496 724 Tm (20) Tj ET\n");
+    /* Wichita, October 23: the row number (11.04 pt) 2.4 pt below the wrapped "ELECTION". */
+    ok = ok && tb_printf(&wich, "BT /F1 9.96 Tf 1 0 0 1 66.5 770.28 Tm (Selected - Election) Tj ET"
+                                " BT /F1 9.96 Tf 1 0 0 1 214.73 770.28 Tm (VUID) Tj ET"
+                                " BT /F1 9.96 Tf 1 0 0 1 276.77 770.28 Tm (Name) Tj ET"
+                                " BT /F1 9.96 Tf 1 0 0 1 476.62 770.28 Tm (Precinct) Tj ET\n");
+    for (i = 0; i < 4 && ok; i++)
+    {
+        static const char *const k_first[4] = {"AMY", "BEA", "CAT", "DEE"};
+        double y = 741.24 - 29.04 * i;
+        ok = tb_printf(&wich, "BT /F1 11.04 Tf 1 0 0 1 15 %.2f Tm (%d) Tj ET\n"
+                              "BT /F1 9.96 Tf 1 0 0 1 66.5 %.2f Tm (2026 NOVEMBER GENERAL) Tj ET"
+                              " BT /F1 9.96 Tf 1 0 0 1 66.5 %.2f Tm (ELECTION) Tj ET\n"
+                              "BT /F1 9.96 Tf 1 0 0 1 214.73 %.2f Tm (338233381%d) Tj ET"
+                              " BT /F1 9.96 Tf 1 0 0 1 276.77 %.2f Tm (WICK,%s) Tj ET"
+                              " BT /F1 9.96 Tf 1 0 0 1 476.62 %.2f Tm (P 402) Tj ET\n",
+                       y - 14.76, i + 1, y, y - 12.36, y, i, y, k_first[i], y);
+    }
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < 3; i++)
+    {
+        StringCchCopyW(pbuf[i], MAX_PATH, dir);
+        StringCchCatW(pbuf[i], MAX_PATH, k_names[i]);
+        paths[i] = pbuf[i];
+    }
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(pbuf[0], &greg, 1) || !proster_write(pbuf[1], &wich, 1) ||
+        !cvr_write_bytes(pbuf[2], k_hunt, strlen(k_hunt)))
+    {
+        wprintf(L"county1023: could not write the files\n");
+        goto done;
+    }
+    if (EeRoster_LoadFiles(paths, 3, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"county1023: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 7 || info.rows_non_voter != 0)
+    {
+        uint32_t r;
+        wprintf(L"county1023: rows %u nonvoter %u\n", t.row_count, info.rows_non_voter);
+        for (r = 0; r < t.row_count; r++)
+        {
+            wchar_t last[64], pct[32], src[128];
+            rt_cell(&t, r, L"Last Name", last, ARRAYSIZE(last));
+            rt_cell(&t, r, L"Precinct", pct, ARRAYSIZE(pct));
+            rt_cell(&t, r, L"Source File", src, ARRAYSIZE(src));
+            wprintf(L"  %s | %s | %s\n", last, pct, src);
+        }
+        goto done;
+    }
+    if (!rt_expect(&t, L"GREG", L"ZOE", L"Precinct", L"20") ||
+        !rt_expect(&t, L"GREG", L"ZOE", L"Polling Place", L"BROADWAY BAPTIST CHURCH CENTER") ||
+        !rt_expect(&t, L"WICK", L"AMY", L"Precinct", L"P 402") ||
+        !rt_expect(&t, L"WICK", L"DEE", L"Precinct", L"P 402") ||
+        !rt_expect(&t, L"WICK", L"DEE", L"VUID", L"3382333813") ||
+        !rt_expect(&t, L"HUNB", L"ANNE", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"HUNB", L"BEN", L"Voting Method", L"Early Vote In-Person"))
+    {
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"county1023 ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    for (i = 0; i < 3; i++)
+    {
+        DeleteFileW(pbuf[i]);
+    }
+    free(greg.p);
+    free(wich.p);
+    if (rc != 0)
+    {
+        wprintf(L"county1023 test failed\n");
+    }
+    return rc;
+}
+
 /* Texas Secretary of State turnout rosters (tag: sosroster): a loose statewide early voting
  * CSV (COUNTY, MAIL-IN / IN-PERSON, no voting date) and Election Day ZIPs that name their
  * roster "STATEWIDE_VOTER_INFO.csv" for every party (named after the ZIP instead), a
@@ -9713,6 +9828,7 @@ int wmain(void)
     failed |= test_limited_pdf();
     failed |= test_county_rosters();
     failed |= test_county50();
+    failed |= test_county1023();
     failed |= test_sos_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();

@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
+  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -36,7 +36,24 @@ test\smoke_load.exe
 `xls` authors legacy Excel 97-2003 workbooks in memory (a BIFF8 stream in an OLE2 compound
 file, once in regular sectors and once in the mini stream) and needs `src\xls.c`; it checks
 shared strings split across a CONTINUE record, RK / MULRK / NUMBER / FORMULA / BOOLERR cells,
-date and zero-pad formats, and a voter-list and a Jefferson County roster load of `.xls` files.
+date and zero-pad formats, a read of every sheet in one pass (`EeXlsx_ReadAllSheetsMem` handing the
+compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson County roster load of
+`.xls` files.
+`results` covers election results (`src\ee_results.c`):
+- a Clarity summary.csv (Windows-1252, with a "?" for a character it lacks), detail.txt (30-character
+  columns, a UTF-8 name), detail.xlsx (one sheet per contest) and detail.xml of one election load as one
+  result with no differences, the XML shown;
+- detail.xls as an Excel 2003 XML Spreadsheet (MergeAcross, ss:Index), and each other detail file alone,
+  give the XML's counts;
+- summary.csv alone splits two back-to-back contests with the same name;
+- a changed total is flagged;
+- ballots by vote type and contest figures are taken from the other files;
+- over/under votes, and precinct and vote-type tabulation;
+- a withheld ("protected") count;
+- the long-form export reloads exactly (CSV, and TSV filtered to one precinct);
+- another election groups apart;
+- a summary inside a ZIP loads;
+- a file that is not results is refused with its name.
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
 wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt),
 plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).

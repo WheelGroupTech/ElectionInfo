@@ -39,6 +39,9 @@
     <ClCompile Include="src\ee_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ee_results.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\hart_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -87,6 +90,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ee_cvr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ee_results.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\pdf_reader.h">

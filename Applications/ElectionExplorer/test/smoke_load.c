@@ -10,6 +10,7 @@
 #include "ocr_win.h"
 #include "voter_roster.h"
 #include "xls.h"
+#include "ee_results.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -9838,6 +9839,28 @@ static BOOL xls_rows_sink(void *ctx, const char *const *cells, uint32_t ncells)
     return TRUE;
 }
 
+/* Sheets and rows from EeXlsx_ReadAllSheetsMem. */
+typedef struct XlsAll
+{
+    XlsRows rows;
+    int sheets;
+    char name[64];
+} XlsAll;
+
+static BOOL xls_all_sheet(void *ctx, int index, const char *name)
+{
+    XlsAll *a = (XlsAll *)ctx;
+    (void)index;
+    a->sheets++;
+    StringCchCopyA(a->name, ARRAYSIZE(a->name), name);
+    return TRUE;
+}
+
+static BOOL xls_all_row(void *ctx, const char *const *cells, uint32_t ncells)
+{
+    return xls_rows_sink(&((XlsAll *)ctx)->rows, cells, ncells);
+}
+
 /* Legacy Excel 97-2003 workbooks (tag: xls): a compound file with the workbook stream in
  * regular sectors and one in the mini stream, read through the .xls API and the .xlsx
  * entry points; then a voter-list load and a Jefferson County roster load of .xls files
@@ -9871,6 +9894,7 @@ static int test_xls(void)
     {
         BOOL mini = (pass == 1);
         XlsRows rows;
+        XlsAll all;
         uint32_t r, c;
         ZeroMemory(&rows, sizeof(rows));
         if (!xls_build_workbook(&wb, mini ? 0 : 5000) || !xls_wrap_cfb(&wb, mini, &file))
@@ -9920,6 +9944,16 @@ static int test_xls(void)
             EeLoadStatus_Error)
         {
             wprintf(L"xls: sheet 1 should not exist\n");
+            goto done;
+        }
+        /* Every sheet in one pass (the .xlsx entry point hands a compound file over). */
+        ZeroMemory(&all, sizeof(all));
+        if (EeXlsx_ReadAllSheetsMem(file.p, file.n, xls_all_sheet, xls_all_row, &all, NULL, err,
+                                    ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+            all.sheets != 1 || strcmp(all.name, "Voters") != 0 || all.rows.n != 4 ||
+            strcmp(all.rows.cell[3][3], k_want[3][3]) != 0)
+        {
+            wprintf(L"xls: read all (mini %d) sheets %d rows %u err %s\n", mini, all.sheets, all.rows.n, err);
             goto done;
         }
     }
@@ -10098,6 +10132,617 @@ done:
     return rc;
 }
 
+/* --- Election results (ee_results.c) ------------------------------------- */
+
+/* A detail.txt line: pipe-separated cells, each padded to Clarity's 30 characters. */
+static void res_txt_line(RtBuf *b, const char *cells)
+{
+    const char *p = cells;
+    for (;;)
+    {
+        const char *e = strchr(p, '|');
+        size_t n = e != NULL ? (size_t)(e - p) : strlen(p);
+        size_t i;
+        rt_cat(b, p, n);
+        if (e == NULL)
+        {
+            break;
+        }
+        /* pad by characters, not bytes: count UTF-8 lead bytes */
+        {
+            size_t chars = 0;
+            for (i = 0; i < n; i++)
+            {
+                if (((unsigned char)p[i] & 0xC0) != 0x80)
+                {
+                    chars++;
+                }
+            }
+            for (; chars < 30; chars++)
+            {
+                rt_cat(b, " ", 1);
+            }
+        }
+        p = e + 1;
+    }
+    rt_cats(b, "\r\n");
+}
+
+/* A worksheet in Excel 2003 XML Spreadsheet form from pipe rows (blank cells skipped
+ * with ss:Index). */
+static void res_sml_sheet(RtBuf *b, const char *name, const char *const *rows, int n)
+{
+    int r;
+    rt_cats(b, "<ss:Worksheet ss:Name=\"");
+    rt_cats(b, name);
+    rt_cats(b, "\"><ss:Table>\r\n");
+    for (r = 0; r < n; r++)
+    {
+        const char *p = rows[r];
+        int c = 0;
+        BOOL skipped = FALSE;
+        rt_cats(b, "<ss:Row>");
+        for (;;)
+        {
+            const char *e = strchr(p, '|');
+            size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
+            if (len > 0)
+            {
+                char tmp[48];
+                if (skipped)
+                {
+                    StringCchPrintfA(tmp, ARRAYSIZE(tmp), "<ss:Cell ss:Index=\"%d\">", c + 1);
+                    rt_cats(b, tmp);
+                }
+                else
+                {
+                    rt_cats(b, "<ss:Cell>");
+                }
+                rt_cats(b, "<ss:Data ss:Type=\"String\">");
+                rt_cat(b, p, len);
+                rt_cats(b, "</ss:Data></ss:Cell>");
+                skipped = FALSE;
+            }
+            else
+            {
+                skipped = TRUE;
+            }
+            c++;
+            if (e == NULL)
+            {
+                break;
+            }
+            p = e + 1;
+        }
+        rt_cats(b, "</ss:Row>\r\n");
+    }
+    rt_cats(b, "</ss:Table></ss:Worksheet>\r\n");
+}
+
+/* Mayor: Alice 13/7 and Bob 7/4 in precincts 101/102 (Mail+Early); two contests both
+ * named "City of X, Council" with one choice each (Carol 8, Dan 6). */
+static const char *const k_res_turnout[] = {
+    "Precinct|Registered Voters|Mail|Early|Ballots Cast|Voter Turnout", "101|100|5|20|25|25.00%",
+    "102|80|1|11|12|15.00%", "Total:|180|6|31|37|20.56%"};
+static const char *const k_res_mayor[] = {
+    "City of X, Mayor ( 1)", "||Alice|||Bob Nguy\xE1\xBB\x85n",
+    "Precinct|Registered Voters|Mail|Early|Total Votes|Mail|Early|Total Votes|Total",
+    "101|100|3|10|13|2|5|7|20", "102|80|1|6|7|0|4|4|11", "Total:|180|4|16|20|2|9|11|31"};
+static const char *const k_res_carol[] = {"City of X, Council ( 1)", "||Carol",
+                                          "Precinct|Registered Voters|Mail|Early|Total Votes|Total",
+                                          "101|100|1|2|3|3", "102|80|2|3|5|5", "Total:|180|3|5|8|8"};
+static const char *const k_res_dan[] = {"City of X, Council ( 1)", "||Dan",
+                                        "Precinct|Registered Voters|Mail|Early|Total Votes|Total",
+                                        "101|100|0|4|4|4", "102|80|1|1|2|2", "Total:|180|1|5|6|6"};
+
+static const char k_res_xml[] =
+    "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<!--Election result snapshot-->\r\n"
+    "<ElectionResult><Timestamp>1/9/2026 1:00:00 PM CST</Timestamp>"
+    "<ElectionName>Test &amp; Special Election</ElectionName><ElectionDate>1/1/2026</ElectionDate>"
+    "<Region>Test</Region><VoterTurnout totalVoters=\"180\" ballotsCast=\"37\" voterTurnout=\"20.56\">"
+    "<Precincts><Precinct name=\"101\" totalVoters=\"100\" ballotsCast=\"25\" voterTurnout=\"25.00\" />"
+    "<Precinct name=\"102\" totalVoters=\"80\" ballotsCast=\"12\" voterTurnout=\"15.00\" />"
+    "</Precincts></VoterTurnout>"
+    "<Contest key=\"1\" text=\"City of X, Mayor\" voteFor=\"1\" isQuestion=\"false\">"
+    "<VoteType name=\"regVotersCounty\" votes=\"0\"><Precinct name=\"101\" votes=\"0\" /></VoteType>"
+    "<Choice key=\"1\" text=\"Alice\" party=\"NON\" totalVotes=\"20\">"
+    "<VoteType name=\"Mail\" votes=\"4\"><Precinct name=\"101\" votes=\"3\" /><Precinct name=\"102\" "
+    "votes=\"1\" /></VoteType><VoteType name=\"Early\" votes=\"16\"><Precinct name=\"101\" votes=\"10\" />"
+    "<Precinct name=\"102\" votes=\"6\" /></VoteType></Choice>"
+    "<Choice key=\"2\" text=\"Bob Nguy&#7877;n\" party=\"NON\" totalVotes=\"11\">"
+    "<VoteType name=\"Mail\" votes=\"2\"><Precinct name=\"101\" votes=\"2\" /><Precinct name=\"102\" "
+    "votes=\"0\" /></VoteType><VoteType name=\"Early\" votes=\"9\"><Precinct name=\"101\" votes=\"5\" />"
+    "<Precinct name=\"102\" votes=\"4\" /></VoteType></Choice></Contest>"
+    "<Contest key=\"2\" text=\"City of X, Council\" voteFor=\"1\" isQuestion=\"false\">"
+    "<Choice key=\"1\" text=\"Carol\" party=\"NON\" totalVotes=\"8\">"
+    "<VoteType name=\"Mail\" votes=\"3\"><Precinct name=\"101\" votes=\"1\" /><Precinct name=\"102\" "
+    "votes=\"2\" /></VoteType><VoteType name=\"Early\" votes=\"5\"><Precinct name=\"101\" votes=\"2\" />"
+    "<Precinct name=\"102\" votes=\"3\" /></VoteType></Choice></Contest>"
+    "<Contest key=\"3\" text=\"City of X, Council\" voteFor=\"1\" isQuestion=\"false\">"
+    "<VoteType name=\"Undervotes\" votes=\"3\"><Precinct name=\"101\" votes=\"2\" /><Precinct name=\"102\" "
+    "votes=\"1\" /></VoteType><VoteType name=\"Overvotes\" votes=\"1\"><Precinct name=\"101\" votes=\"0\" />"
+    "<Precinct name=\"102\" votes=\"1\" /></VoteType>"
+    "<Choice key=\"1\" text=\"Dan\" party=\"NON\" totalVotes=\"6\">"
+    "<VoteType name=\"Mail\" votes=\"1\"><Precinct name=\"101\" votes=\"0\" /><Precinct name=\"102\" "
+    "votes=\"1\" /></VoteType><VoteType name=\"Early\" votes=\"5\"><Precinct name=\"101\" votes=\"4\" />"
+    "<Precinct name=\"102\" votes=\"1\" /></VoteType></Choice></Contest></ElectionResult>\r\n";
+
+/* summary.csv as a Windows-1252 export writes it: the "?" stands for a character it lacks. */
+static const char k_res_summary[] =
+    "\"line number\",\"contest name\",\"choice name\",\"party name\",\"total votes\",\"percent of votes\","
+    "\"registered voters\",\"ballots cast\",\"num Precinct total\",\"num Precinct rptg\",\"over votes\","
+    "\"under votes\"\r\n"
+    "1,\"City of X, Mayor (Vote For 1)\",\"Alice\",\"NON\",20,64.52,180,37,2,2,\"0\",\"0\"\r\n"
+    "2,\"City of X, Mayor (Vote For 1)\",\"Bob Nguy?n\",\"NON\",11,35.48,180,37,2,2,\"0\",\"0\"\r\n"
+    "3,\"City of X, Council (Vote For 1)\",\"Carol\",\"NON\",8,100.00,180,37,2,2,\"0\",\"0\"\r\n"
+    "4,\"City of X, Council (Vote For 1)\",\"Dan\",\"NON\",6,100.00,180,37,2,2,\"0\",\"0\"\r\n";
+
+static int res_counts_equal(const EeResults *a, const EeResults *b)
+{
+    uint32_t c;
+    if (a->ncontests != b->ncontests || a->nchoices != b->nchoices || a->nprecincts != b->nprecincts ||
+        a->nvt != b->nvt)
+    {
+        return 0;
+    }
+    for (c = 0; c < a->ncontests; c++)
+    {
+        const EeResultsContest *x = &a->contests[c], *y = &b->contests[c];
+        size_t cells = (size_t)x->nchoices * x->npre * EE_RESULTS_NVT(a);
+        uint32_t k;
+        if (wcscmp(x->title, y->title) != 0 || x->vote_for != y->vote_for || x->npre != y->npre ||
+            (x->counts == NULL) != (y->counts == NULL) ||
+            (x->counts != NULL && memcmp(x->counts, y->counts, cells * sizeof(int32_t)) != 0))
+        {
+            return 0;
+        }
+        for (k = 0; k < x->nchoices; k++)
+        {
+            if (wcscmp(a->choices[x->first_choice + k].name, b->choices[y->first_choice + k].name) != 0 ||
+                a->choices[x->first_choice + k].total != b->choices[y->first_choice + k].total)
+            {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static BOOL res_load(const wchar_t *const *paths, uint32_t n, EeResults **out, uint32_t *nout, wchar_t *err)
+{
+    return EeResults_LoadFiles(paths, n, out, nout, NULL, NULL, NULL, err, 512) == EeLoadStatus_Ok;
+}
+
+/* Clarity results: summary.csv, detail.txt, detail.xlsx and detail.xml of one election load
+ * as one result, cross-checked with no differences; each detail file alone (also detail.xls
+ * as an Excel 2003 XML Spreadsheet) gives the same counts; summary.csv alone splits two same-named
+ * contests; a changed total is flagged; precinct / vote-type tabulation; the long-form
+ * export reloads exactly (also filtered); other elections group apart; a ZIP is read
+ * (tag: results). */
+static int test_results(void)
+{
+    wchar_t dir[MAX_PATH];
+    wchar_t p_sum[MAX_PATH], p_txt[MAX_PATH], p_xlsx[MAX_PATH], p_xls[MAX_PATH], p_xml[MAX_PATH];
+    wchar_t p_bad[MAX_PATH], p_zip[MAX_PATH], p_exp[MAX_PATH], p_oth[MAX_PATH];
+    wchar_t err[512] = L"";
+    RtBuf txt = {0}, sml = {0};
+    void *xlsx = NULL;
+    size_t xlsx_size = 0;
+    const char *sheet_names[5] = {"Table of Contents", "Registered Voters", "2", "3", "4"};
+    char *sheets[5] = {NULL, NULL, NULL, NULL, NULL};
+    static const char *const k_toc[] = {"", "", "Table of Contents", "Page|Contest", "1|Registered Voters",
+                                        "2|City of X, Mayor ( 1)"};
+    EeResults *all = NULL, *one = NULL, *ref = NULL;
+    uint32_t nall = 0, none = 0, nref = 0;
+    const wchar_t *paths[5];
+    int64_t tot[8], ovr[4], und[4];
+    uint8_t pmask[2], vmask[2];
+    char *buf = NULL;
+    size_t len = 0;
+    int i;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_sum, MAX_PATH, L"%sT_summary.csv", dir);
+    StringCchPrintfW(p_txt, MAX_PATH, L"%sT_detail.txt", dir);
+    StringCchPrintfW(p_xlsx, MAX_PATH, L"%sT_detail.xlsx", dir);
+    StringCchPrintfW(p_xls, MAX_PATH, L"%sT_detail.xls", dir);
+    StringCchPrintfW(p_xml, MAX_PATH, L"%sT_detail.xml", dir);
+    StringCchPrintfW(p_bad, MAX_PATH, L"%sT_bad_summary.csv", dir);
+    StringCchPrintfW(p_zip, MAX_PATH, L"%sT_summary.zip", dir);
+    StringCchPrintfW(p_exp, MAX_PATH, L"%sT_export.csv", dir);
+    StringCchPrintfW(p_oth, MAX_PATH, L"%sO_summary.csv", dir);
+
+    /* detail.txt */
+    rt_cats(&txt, "\r\n\r\n");
+    for (i = 0; i < (int)ARRAYSIZE(k_res_turnout); i++)
+    {
+        /* the TXT turnout table has no vote-type columns */
+        static const char *const k_t[] = {"Precinct|Registered Voters|Ballots Cast|Voter Turnout",
+                                          "101|100|25|25.00%", "102|80|12|15.00%", "Total:|180|37|20.56%"};
+        res_txt_line(&txt, k_t[i]);
+    }
+    {
+        const char *const *blocks[3] = {k_res_mayor, k_res_carol, k_res_dan};
+        for (i = 0; i < 3; i++)
+        {
+            int r;
+            rt_cats(&txt, "\r\n                                        ");
+            rt_cats(&txt, blocks[i][0]);
+            rt_cats(&txt, "\r\n");
+            /* names line: each name at its group's first 30-character column */
+            {
+                RtBuf nl = {0};
+                const char *p = blocks[i][1];
+                int col = 0;
+                for (;;)
+                {
+                    const char *e = strchr(p, '|');
+                    size_t n = e != NULL ? (size_t)(e - p) : strlen(p);
+                    while ((int)(nl.len) < col * 30)
+                    {
+                        rt_cat(&nl, " ", 1);
+                    }
+                    rt_cat(&nl, p, n);
+                    col++;
+                    if (e == NULL)
+                    {
+                        break; /* the last name may hold a multi-byte character: nothing follows */
+                    }
+                    p = e + 1;
+                }
+                rt_cat(&txt, nl.p, nl.len);
+                free(nl.p);
+            }
+            rt_cats(&txt, "\r\n");
+            for (r = 2; r < 6; r++)
+            {
+                char line[256];
+                StringCchCopyA(line, ARRAYSIZE(line), blocks[i][r]);
+                if (strncmp(line, "Total:", 6) == 0)
+                {
+                    /* the TXT writes "Totals:" in contest tables */
+                    char tmp[256];
+                    StringCchPrintfA(tmp, ARRAYSIZE(tmp), "Totals:%s", line + 6);
+                    StringCchCopyA(line, ARRAYSIZE(line), tmp);
+                }
+                if (r == 2)
+                {
+                    /* the TXT header says "Total" where the workbook says "Total Votes" */
+                    char tmp[256];
+                    char *q;
+                    StringCchCopyA(tmp, ARRAYSIZE(tmp), line);
+                    while ((q = strstr(tmp, "Total Votes")) != NULL)
+                    {
+                        memmove(q + 5, q + 11, strlen(q + 11) + 1);
+                    }
+                    StringCchCopyA(line, ARRAYSIZE(line), tmp);
+                }
+                res_txt_line(&txt, line);
+            }
+        }
+    }
+
+    /* detail.xlsx */
+    sheets[0] = rt_sheet_xml(k_toc, ARRAYSIZE(k_toc));
+    sheets[1] = rt_sheet_xml(k_res_turnout, ARRAYSIZE(k_res_turnout));
+    sheets[2] = rt_sheet_xml(k_res_mayor, ARRAYSIZE(k_res_mayor));
+    sheets[3] = rt_sheet_xml(k_res_carol, ARRAYSIZE(k_res_carol));
+    sheets[4] = rt_sheet_xml(k_res_dan, ARRAYSIZE(k_res_dan));
+
+    /* detail.xls as an Excel 2003 XML Spreadsheet (Clarity before 2025). The Mayor sheet is
+     * written by hand so its names row uses MergeAcross (and empty self-closed Data) the way
+     * Clarity's does; the other sheets use ss:Index for skipped cells. */
+    rt_cats(&sml, "\xEF\xBB\xBF<?xml version='1.0'?>\r\n<?mso-application progid='Excel.Sheet'?>\r\n"
+                  "<ss:Workbook xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\">\r\n");
+    res_sml_sheet(&sml, "Table of Contents", k_toc, ARRAYSIZE(k_toc));
+    res_sml_sheet(&sml, "Registered Voters", k_res_turnout, ARRAYSIZE(k_res_turnout));
+    rt_cats(&sml, "<ss:Worksheet ss:Name=\"2\"><ss:Table><ss:Row><ss:Cell ss:MergeAcross=\"4\"><ss:Data "
+                  "ss:Type=\"String\">City of X, Mayor ( 1)</ss:Data></ss:Cell></ss:Row>"
+                  "<ss:Row><ss:Cell><ss:Data ss:Type=\"String\" /></ss:Cell><ss:Cell><ss:Data "
+                  "ss:Type=\"String\" /></ss:Cell><ss:Cell ss:MergeAcross=\"2\"><ss:Data ss:Type=\"String\">"
+                  "Alice</ss:Data></ss:Cell><ss:Cell ss:MergeAcross=\"2\"><ss:Data ss:Type=\"String\">Bob "
+                  "Nguy\xE1\xBB\x85n</ss:Data></ss:Cell></ss:Row>\r\n");
+    {
+        /* the Mayor sheet's header and data rows, taken from a generated sheet */
+        RtBuf tmp = {0};
+        const char *a, *e;
+        res_sml_sheet(&tmp, "x", k_res_mayor + 2, 4);
+        a = tmp.p != NULL ? strstr(tmp.p, "<ss:Row>") : NULL;
+        e = tmp.p != NULL ? strstr(tmp.p, "</ss:Table>") : NULL;
+        if (a != NULL && e != NULL)
+        {
+            rt_cat(&sml, a, (size_t)(e - a));
+        }
+        free(tmp.p);
+    }
+    rt_cats(&sml, "</ss:Table></ss:Worksheet>\r\n");
+    res_sml_sheet(&sml, "3", k_res_carol, ARRAYSIZE(k_res_carol));
+    res_sml_sheet(&sml, "4", k_res_dan, ARRAYSIZE(k_res_dan));
+    rt_cats(&sml, "</ss:Workbook>\r\n");
+
+    if (txt.p == NULL || sml.p == NULL || sheets[0] == NULL || sheets[4] == NULL ||
+        !rt_xlsx(sheet_names, sheets, 5, &xlsx, &xlsx_size) ||
+        !cvr_write_bytes(p_sum, k_res_summary, strlen(k_res_summary)) ||
+        !cvr_write_bytes(p_txt, txt.p, txt.len) || !cvr_write_bytes(p_xlsx, xlsx, xlsx_size) ||
+        !cvr_write_bytes(p_xls, sml.p, sml.len) || !cvr_write_bytes(p_xml, k_res_xml, strlen(k_res_xml)))
+    {
+        wprintf(L"results: could not author the fixtures\n");
+        goto done;
+    }
+
+    /* Names: case, spaces and the Windows-1252 '?' (also for a surrogate pair). */
+    if (!EeResults_NamesMatch(L"Bob Nguy?n", L"Bob Nguy\x1EC5n") ||
+        !EeResults_NamesMatch(L" bob  NGUYEN", L"Bob Nguyen") || EeResults_NamesMatch(L"Bob", L"Bobby") ||
+        !EeResults_NamesMatch(L"A?B", L"A\xD83D\xDE00" L"B") || EeResults_NamesMatch(L"AB", L"A B"))
+    {
+        wprintf(L"results: name matching\n");
+        goto done;
+    }
+
+    /* Four files: one result, the XML shown, no differences. (The .xls and the .xlsx are
+     * both the XLS format, and a group holds one file of each format.) */
+    paths[0] = p_sum;
+    paths[1] = p_txt;
+    paths[2] = p_xlsx;
+    paths[3] = p_xml;
+    if (!res_load(paths, 4, &all, &nall, err) || nall != 1)
+    {
+        wprintf(L"results: load all: %u groups, %s\n", nall, err);
+        goto done;
+    }
+    if (all->nsources != 4 || all->sources[0].format != EE_RES_FMT_CLARITY_XML || !all->sources[0].primary ||
+        all->nissues != 0 || all->ncontests != 3 || all->nchoices != 4 || all->nprecincts != 2 ||
+        all->nvt != 2 || all->registered_total != 180 || all->ballots_total != 37 ||
+        all->formats != (EE_RES_FMT_CLARITY_SUMMARY | EE_RES_FMT_CLARITY_TXT | EE_RES_FMT_CLARITY_XLS |
+                         EE_RES_FMT_CLARITY_XML))
+    {
+        wprintf(L"results: all: sources %u issues %u contests %u choices %u pre %u vt %u reg %lld\n",
+                all->nsources, all->nissues, all->ncontests, all->nchoices, all->nprecincts, all->nvt,
+                (long long)all->registered_total);
+        for (i = 0; i < (int)all->nissues; i++)
+        {
+            wprintf(L"  [%u] %s\n", all->issues[i].source, all->issues[i].text);
+        }
+        goto done;
+    }
+    if (wcscmp(all->election_name, L"Test & Special Election") != 0 ||
+        wcscmp(all->choices[1].name, L"Bob Nguy\x1EC5n") != 0 || all->contests[0].vote_for != 1 ||
+        all->contests[0].is_question != 0 || all->contests[0].registered != 180 ||
+        all->contests[0].precincts_total != 2 || all->ballots_vt == NULL || all->ballots_vt[0] != 6 ||
+        all->ballots_vt[1] != 31 || !all->contests[2].has_over_under || all->contests[2].under_total != 3 ||
+        all->contests[2].over == NULL || all->contests[2].over[1] != 1 || all->contests[1].has_over_under ||
+        wcscmp(all->contests[1].title, L"City of X, Council") != 0 ||
+        wcscmp(all->contests[2].title, L"City of X, Council") != 0)
+    {
+        wprintf(L"results: all: election '%s', contest figures or adopted ballots by vote type\n",
+                all->election_name ? all->election_name : L"(none)");
+        goto done;
+    }
+    /* Mayor counts: [choice][precinct][vote type] */
+    {
+        static const int32_t k_mayor[8] = {3, 10, 1, 6, 2, 5, 0, 4};
+        if (all->contests[0].npre != 2 || memcmp(all->contests[0].counts, k_mayor, sizeof(k_mayor)) != 0)
+        {
+            wprintf(L"results: Mayor counts\n");
+            goto done;
+        }
+    }
+
+    /* Each detail file alone gives the XML's counts. */
+    for (i = 1; i < 5; i++)
+    {
+        paths[0] = (i == 1) ? p_txt : (i == 2) ? p_xlsx : (i == 3) ? p_xls : p_xml;
+        if (!res_load(paths, 1, &one, &none, err) || none != 1 || !res_counts_equal(one, all) ||
+            one->nissues != 0 || one->nprecincts != 2 || one->precincts[1].registered != 80)
+        {
+            wprintf(L"results: detail file %d alone: %s (issues %u)\n", i, err,
+                    one != NULL ? one->nissues : 0);
+            goto done;
+        }
+        EeResults_FreeArray(one, none);
+        one = NULL;
+    }
+
+    /* summary.csv alone: no precinct detail, the two Council contests apart. */
+    paths[0] = p_sum;
+    if (!res_load(paths, 1, &one, &none, err) || one->ncontests != 3 || EeResults_HasPrecinctDetail(one) ||
+        one->contests[1].nchoices != 1 || one->contests[2].nchoices != 1 || one->choices[3].total != 6 ||
+        one->contests[0].vote_for != 1 || wcscmp(one->contests[0].title, L"City of X, Mayor") != 0)
+    {
+        wprintf(L"results: summary alone: contests %u %s\n", one != NULL ? one->ncontests : 0, err);
+        goto done;
+    }
+    EeResults_FreeArray(one, none);
+    one = NULL;
+
+    /* A changed total is flagged against the shown file. */
+    {
+        char bad[sizeof(k_res_summary)];
+        char *q;
+        StringCchCopyA(bad, ARRAYSIZE(bad), k_res_summary);
+        q = strstr(bad, "\"NON\",20,");
+        q[7] = '1'; /* Alice 21 */
+        paths[0] = p_bad;
+        paths[1] = p_xml;
+        if (!cvr_write_bytes(p_bad, bad, strlen(bad)) || !res_load(paths, 2, &one, &none, err) || none != 1 ||
+            one->nissues != 1 || wcsstr(one->issues[0].text, L"Alice") == NULL ||
+            wcsstr(one->issues[0].text, L"21") == NULL || one->issues[0].source != 1)
+        {
+            wprintf(L"results: mismatch not flagged (%u issues) %s\n", one != NULL ? one->nissues : 0, err);
+            goto done;
+        }
+        EeResults_FreeArray(one, none);
+        one = NULL;
+    }
+
+    /* Tabulation by precinct and vote type. */
+    pmask[0] = 1;
+    pmask[1] = 0;
+    vmask[0] = 1;
+    vmask[1] = 0;
+    if (!EeResults_Tabulate(all, pmask, NULL, tot, NULL, ovr, und) || tot[0] != 13 || tot[1] != 7 ||
+        tot[2] != 3 || tot[3] != 4 || und[2] != 2 || ovr[2] != 0 ||
+        !EeResults_Tabulate(all, NULL, vmask, tot, NULL, NULL, NULL) || tot[0] != 4 || tot[1] != 2 ||
+        !EeResults_Tabulate(all, NULL, NULL, tot, NULL, ovr, und) || tot[0] != 20 || und[2] != 3)
+    {
+        wprintf(L"results: tabulate %lld %lld %lld %lld\n", (long long)tot[0], (long long)tot[1],
+                (long long)tot[2], (long long)tot[3]);
+        goto done;
+    }
+
+    /* The long-form export reloads exactly; a precinct-filtered one keeps precinct 101 only. */
+    if (!EeResults_FormatDetailUtf8(all, ',', NULL, NULL, NULL, &buf, &len) ||
+        !cvr_write_bytes(p_exp, buf, len))
+    {
+        wprintf(L"results: export\n");
+        goto done;
+    }
+    free(buf);
+    buf = NULL;
+    paths[0] = p_exp;
+    if (!res_load(paths, 1, &one, &none, err) || one->sources[0].format != EE_RES_FMT_EE_EXPORT ||
+        !res_counts_equal(one, all) || one->nissues != 0 || wcscmp(one->election_name, all->election_name) != 0 ||
+        wcscmp(one->timestamp, all->timestamp) != 0 || one->registered_total != 180 ||
+        one->contests[0].registered != 180 || one->ballots_vt == NULL || one->ballots_vt[1] != 31 ||
+        !one->contests[2].has_over_under || one->contests[2].over[1] != 1 || one->contests[0].is_question != 0)
+    {
+        wprintf(L"results: export reload: %s (issues %u)\n", err, one != NULL ? one->nissues : 0);
+        goto done;
+    }
+    EeResults_FreeArray(one, none);
+    one = NULL;
+    if (!EeResults_FormatDetailUtf8(all, '\t', pmask, NULL, NULL, &buf, &len) ||
+        !cvr_write_bytes(p_exp, buf, len))
+    {
+        wprintf(L"results: filtered export\n");
+        goto done;
+    }
+    free(buf);
+    buf = NULL;
+    if (!res_load(paths, 1, &one, &none, err) || one->nprecincts != 1 || one->choices[0].total != 13 ||
+        one->choices[1].total != 7 || one->nissues != 0)
+    {
+        wprintf(L"results: filtered export reload: %s\n", err);
+        goto done;
+    }
+    EeResults_FreeArray(one, none);
+    one = NULL;
+
+    /* A withheld ("protected") precinct count: noted once, not a total mismatch, kept by the
+     * export; a precinct-filtered tabulation is then not exact. */
+    {
+        char *prot = (char *)malloc(sizeof(k_res_xml) + 16);
+        const char *at = strstr(k_res_xml, "<Precinct name=\"102\" votes=\"6\" />");
+        BOOL ok = prot != NULL && at != NULL;
+        if (ok)
+        {
+            size_t head = (size_t)(at - k_res_xml);
+            memcpy(prot, k_res_xml, head);
+            StringCchCopyA(prot + head, sizeof(k_res_xml) + 16 - head,
+                           "<Precinct name=\"102\" votes=\"protected\" />");
+            StringCchCatA(prot, sizeof(k_res_xml) + 16, at + strlen("<Precinct name=\"102\" votes=\"6\" />"));
+            ok = cvr_write_bytes(p_xml, prot, strlen(prot));
+        }
+        free(prot);
+        paths[0] = p_xml;
+        if (!ok || !res_load(paths, 1, &one, &none, err) || one->contests[0].nprotected != 1 ||
+            one->nissues != 1 || wcsstr(one->issues[0].text, L"protected") == NULL ||
+            one->choices[0].total != 20 || EeResults_Tabulate(one, pmask, NULL, tot, NULL, NULL, NULL) ||
+            !EeResults_Tabulate(one, NULL, NULL, tot, NULL, NULL, NULL) || tot[0] != 20 ||
+            !EeResults_FormatDetailUtf8(one, ',', NULL, NULL, NULL, &buf, &len) ||
+            strstr(buf, ",protected") == NULL || !cvr_write_bytes(p_exp, buf, len))
+        {
+            wprintf(L"results: protected cell (%u issues) %s\n", one != NULL ? one->nissues : 0, err);
+            goto done;
+        }
+        free(buf);
+        buf = NULL;
+        EeResults_FreeArray(one, none);
+        one = NULL;
+        paths[0] = p_exp;
+        if (!res_load(paths, 1, &one, &none, err) || one->contests[0].nprotected != 1 ||
+            one->contests[0].protected_cells == NULL || one->contests[0].protected_cells[3] != 1)
+        {
+            wprintf(L"results: protected cell after reload: %s\n", err);
+            goto done;
+        }
+        EeResults_FreeArray(one, none);
+        one = NULL;
+        if (!cvr_write_bytes(p_xml, k_res_xml, strlen(k_res_xml)))
+        {
+            goto done;
+        }
+    }
+
+    /* Another election groups apart; the summary inside a ZIP loads with its entry name. */
+    {
+        static const char k_oth[] =
+            "\"line number\",\"contest name\",\"choice name\",\"party name\",\"total votes\"\r\n"
+            "1,\"County Judge (Vote For 1)\",\"Eve\",\"REP\",50\r\n"
+            "2,\"County Judge (Vote For 1)\",\"Fay\",\"DEM\",40\r\n";
+        mz_zip_archive zip;
+        void *zbuf = NULL;
+        size_t zsize = 0;
+        BOOL ok;
+        mz_zip_zero_struct(&zip);
+        ok = mz_zip_writer_init_heap(&zip, 0, 0) &&
+             mz_zip_writer_add_mem(&zip, "summary.csv", k_res_summary, strlen(k_res_summary),
+                                   MZ_DEFAULT_COMPRESSION) &&
+             mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize);
+        mz_zip_writer_end(&zip);
+        ok = ok && cvr_write_bytes(p_zip, zbuf, zsize) && cvr_write_bytes(p_oth, k_oth, strlen(k_oth));
+        mz_free(zbuf);
+        paths[0] = p_zip;
+        paths[1] = p_oth;
+        paths[2] = p_xml;
+        if (!ok || !res_load(paths, 3, &ref, &nref, err) || nref != 2 || ref[0].nsources != 2 ||
+            ref[0].sources[1].member == NULL || wcscmp(ref[0].sources[1].member, L"summary.csv") != 0 ||
+            ref[0].nissues != 0 || ref[1].ncontests != 1 || ref[1].nchoices != 2 || ref[1].nsources != 1)
+        {
+            wprintf(L"results: grouping: %u groups %s\n", nref, err);
+            goto done;
+        }
+    }
+
+    /* Not a results file: refused with its name. */
+    paths[0] = p_exp;
+    if (!cvr_write_bytes(p_exp, "VUID,Name\r\n1,X\r\n", 16) || res_load(paths, 1, &one, &none, err) ||
+        wcsstr(err, L"T_export.csv") == NULL)
+    {
+        wprintf(L"results: a non-results file was not refused (%s)\n", err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeArray(all, nall);
+    EeResults_FreeArray(one, none);
+    EeResults_FreeArray(ref, nref);
+    for (i = 0; i < 5; i++)
+    {
+        free(sheets[i]);
+    }
+    if (xlsx != NULL)
+    {
+        mz_free(xlsx);
+    }
+    free(txt.p);
+    free(sml.p);
+    free(buf);
+    DeleteFileW(p_sum);
+    DeleteFileW(p_txt);
+    DeleteFileW(p_xlsx);
+    DeleteFileW(p_xls);
+    DeleteFileW(p_xml);
+    DeleteFileW(p_bad);
+    DeleteFileW(p_zip);
+    DeleteFileW(p_exp);
+    DeleteFileW(p_oth);
+    wprintf(L"results: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -10170,5 +10815,6 @@ int wmain(void)
     failed |= test_xlsx_writein();
     failed |= test_dominion_cvr();
     failed |= test_rcv();
+    failed |= test_results();
     return failed == 0 ? 0 : 1;
 }

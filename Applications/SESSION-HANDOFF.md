@@ -4,7 +4,32 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
+**Last updated:** 2026-10-26 (1.5 Election Results plan + step 1 engine); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
+
+### UNCOMMITTED — Election Explorer 1.5: Election Results, step 1 done (2026-10-26)
+
+- **Plan, decisions D1–D8, and the step-1 status / format-variant table:**
+  `ElectionExplorer/docs/election-results-design.md`.
+- **New engine `src/ee_results.{c,h}`** (added to the .vcxproj and filters; not yet called from
+  `main.c`):
+  - Clarity summary.csv / detail.txt / detail.xls(x) / detail.xml loaders, plus our long-form export;
+  - grouping into elections and the cross-check;
+  - tabulation by precinct and vote-type masks;
+  - the export.
+- **`xlsx.c`/`xls.c` + headers:** new `EeXlsx_ReadAllSheetsMem` / `EeXls_ReadAllSheetsMem`, and the
+  `.xls` sheet list is now a heap array.
+- **Tests:** smoke test `results`, plus a read-all check in `xls`; the whole suite passes. Release
+  x64 and ARM64 build clean. `test/README.md` has the new build line (adds `src\ee_results.c`).
+- **Validated:** Travis G24/P26/PR26/L26 all four files agree, and export round trips are identical.
+  All 471 Clarity elections of the 50 counties load (sweep harness
+  `res_probe.c` + `sweep.sh` lives in the session scratchpad, not the repo).
+- **Next — step 2:** the Election Results window in `main.c`:
+  - File → Load Election Results… in every window;
+  - View Totals / By Precinct;
+  - Copy, and Options (zoom, party first);
+  - the status bar.
+- **Later:** step 7 review items are listed in the design doc. ES&S test set: the older Travis
+  2020–22 PDFs (G20 PDFs ↔ G20 CVR), then the other ~553 Electionware PDFs.
 
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
 

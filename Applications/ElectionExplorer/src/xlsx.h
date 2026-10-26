@@ -32,6 +32,9 @@ extern "C"
 #define EE_XLSX_MAX_SHEETS 64
     /** Capacity (in wchar_t, incl. NUL) of each sheet name buffer. */
 #define EE_XLSX_SHEET_NAME_CCH 96
+    /** Maximum worksheets streamed by EeXlsx_ReadAllSheetsMem (a Clarity results workbook
+     *  has one sheet per contest, so it can far exceed EE_XLSX_MAX_SHEETS). */
+#define EE_XLSX_MAX_ALL_SHEETS 4096
 
     /**
      * Row sink invoked once per worksheet row (header row included).
@@ -43,6 +46,15 @@ extern "C"
      * @return FALSE to abort the read (reported as EeLoadStatus_Cancelled).
      */
     typedef BOOL (*EeXlsxRowSink)(void *ctx, const char *const *cells, uint32_t ncells);
+
+    /**
+     * Called by EeXlsx_ReadAllSheetsMem before each worksheet's rows.
+     * @param ctx         Caller context (the sink context).
+     * @param sheet_index 0-based worksheet index in workbook order.
+     * @param name_utf8   The worksheet's name (UTF-8); valid only for this call.
+     * @return FALSE to stop reading (reported as EeLoadStatus_Cancelled).
+     */
+    typedef BOOL (*EeXlsxSheetFn)(void *ctx, int sheet_index, const char *name_utf8);
 
     /**
      * Enumerate worksheet names in workbook order (for a sheet picker).
@@ -106,6 +118,31 @@ extern "C"
                                      void *progress_user,
                                      wchar_t *error_message,
                                      size_t error_cch);
+
+    /**
+     * Stream every worksheet of a workbook in memory, in workbook order: @p sheet_fn
+     * announces each sheet, then @p sink receives its rows. Shared strings and styles are
+     * parsed once, so this is much faster than calling EeXlsx_ReadSheetMem per sheet. An
+     * .xls (compound file) is handed to EeXls_ReadAllSheetsMem. Embedded pictures are not
+     * reported (no "[write-in]" cells).
+     * @param data          The whole file. Only read; must stay valid for the call.
+     * @param size          Its size in bytes.
+     * @param sheet_fn      Sheet callback; see EeXlsxSheetFn.
+     * @param sink          Row callback; see EeXlsxRowSink.
+     * @param sink_ctx      Passed to @p sheet_fn and @p sink.
+     * @param cancel_flag   Optional; non-zero requests cancel (checked periodically).
+     * @param error_message Optional; receives a message on failure.
+     * @param error_cch     Capacity of @p error_message (incl. NUL).
+     * @return EeLoadStatus_Ok, _Cancelled (callback/flag aborted), or _Error.
+     */
+    EeLoadStatus EeXlsx_ReadAllSheetsMem(const void *data,
+                                         size_t size,
+                                         EeXlsxSheetFn sheet_fn,
+                                         EeXlsxRowSink sink,
+                                         void *sink_ctx,
+                                         volatile LONG *cancel_flag,
+                                         wchar_t *error_message,
+                                         size_t error_cch);
 
 #ifdef __cplusplus
 }

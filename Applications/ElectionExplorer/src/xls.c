@@ -932,8 +932,9 @@ typedef struct Globals
     uint8_t *xf_pad;
     XlsFmt *fmt;
     uint32_t nfmt, fmt_cap;
-    XlsSheet sheets[EE_XLSX_MAX_SHEETS];
+    XlsSheet *sheets; /* worksheets in workbook order (up to EE_XLSX_MAX_ALL_SHEETS) */
     int nsheets;
+    uint32_t sheets_cap;
 } Globals;
 
 static void globals_free(Globals *g)
@@ -944,6 +945,7 @@ static void globals_free(Globals *g)
     free(g->xf_kind);
     free(g->xf_pad);
     free(g->fmt);
+    free(g->sheets);
     ZeroMemory(g, sizeof(*g));
 }
 
@@ -995,12 +997,21 @@ static BOOL parse_globals(const uint8_t *s, size_t len, Globals *g, wchar_t *err
         {
             g->date1904 = (rd16(d) == 1);
         }
-        else if (id == BR_BOUNDSHEET && n >= 8 && g->nsheets < EE_XLSX_MAX_SHEETS)
+        else if (id == BR_BOUNDSHEET && n >= 8 && g->nsheets < EE_XLSX_MAX_ALL_SHEETS)
         {
             if (d[5] == 0) /* a worksheet (not a chart, macro or VB module sheet) */
             {
                 Buf nm = {0};
-                XlsSheet *sh = &g->sheets[g->nsheets];
+                XlsSheet *sh;
+                if (!grow((void **)&g->sheets,
+                          &g->sheets_cap,
+                          (uint32_t)g->nsheets + 1,
+                          sizeof(XlsSheet)))
+                {
+                    xls_err(err, errcch, L"Out of memory reading the .xls file.");
+                    return FALSE;
+                }
+                sh = &g->sheets[g->nsheets];
                 rec_at(&r, s, len, pos + 4 + 6, pos + 4 + n);
                 sh->pos = rd32(d);
                 sh->name[0] = '\0';
@@ -1433,20 +1444,19 @@ EeLoadStatus EeXls_ListSheetsMem(const void *data,
     return EeLoadStatus_Ok;
 }
 
-EeLoadStatus EeXls_ReadSheetMem(const void *data,
-                                size_t size,
-                                int sheet_index,
-                                EeXlsxRowSink sink,
-                                void *sink_ctx,
-                                volatile LONG *cancel_flag,
-                                EeLoadProgressFn progress_fn,
-                                void *progress_user,
-                                wchar_t *error_message,
-                                size_t error_cch)
+/* Read worksheet @p sheet_index of an open workbook and stream its rows to @p sink. */
+static EeLoadStatus emit_sheet(const uint8_t *stream,
+                               size_t stream_len,
+                               const Globals *g,
+                               int sheet_index,
+                               EeXlsxRowSink sink,
+                               void *sink_ctx,
+                               volatile LONG *cancel_flag,
+                               EeLoadProgressFn progress_fn,
+                               void *progress_user,
+                               wchar_t *error_message,
+                               size_t error_cch)
 {
-    uint8_t *stream = NULL;
-    size_t stream_len = 0;
-    Globals g;
     SheetCells sc = {0};
     const char **row_cells = NULL;
     EeLoadStatus status = EeLoadStatus_Error;
@@ -1454,21 +1464,7 @@ EeLoadStatus EeXls_ReadSheetMem(const void *data,
     uint32_t rows = 0;
     uint32_t last_pct = 0;
 
-    if (data == NULL || size == 0 || sink == NULL || sheet_index < 0)
-    {
-        xls_err(error_message, error_cch, L"Invalid arguments.");
-        return EeLoadStatus_Error;
-    }
-    if (!open_workbook(data, size, &stream, &stream_len, &g, error_message, error_cch))
-    {
-        return EeLoadStatus_Error;
-    }
-    if (sheet_index >= g.nsheets)
-    {
-        xls_err(error_message, error_cch, L"Worksheet index out of range.");
-        goto cleanup;
-    }
-    if (g.sheets[sheet_index].pos >= stream_len)
+    if (g->sheets[sheet_index].pos >= stream_len)
     {
         xls_err(error_message,
                 error_cch,
@@ -1477,8 +1473,8 @@ EeLoadStatus EeXls_ReadSheetMem(const void *data,
     }
     status = read_cells(stream,
                         stream_len,
-                        g.sheets[sheet_index].pos,
-                        &g,
+                        g->sheets[sheet_index].pos,
+                        g,
                         &sc,
                         cancel_flag,
                         error_message,
@@ -1512,7 +1508,7 @@ EeLoadStatus EeXls_ReadSheetMem(const void *data,
             {
                 row_cells[width++] = "";
             }
-            row_cells[c->col] = c->in_sst ? g.sst.p + c->off : sc.pool.p + c->off; /* later wins */
+            row_cells[c->col] = c->in_sst ? g->sst.p + c->off : sc.pool.p + c->off; /* later wins */
         }
         i = j;
         if (!sink(sink_ctx, row_cells, width))
@@ -1553,6 +1549,82 @@ cleanup:
     free(row_cells);
     free(sc.c);
     buf_free(&sc.pool);
+    return status;
+}
+
+EeLoadStatus EeXls_ReadSheetMem(const void *data,
+                                size_t size,
+                                int sheet_index,
+                                EeXlsxRowSink sink,
+                                void *sink_ctx,
+                                volatile LONG *cancel_flag,
+                                EeLoadProgressFn progress_fn,
+                                void *progress_user,
+                                wchar_t *error_message,
+                                size_t error_cch)
+{
+    uint8_t *stream = NULL;
+    size_t stream_len = 0;
+    Globals g;
+    EeLoadStatus status = EeLoadStatus_Error;
+
+    if (data == NULL || size == 0 || sink == NULL || sheet_index < 0)
+    {
+        xls_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    if (!open_workbook(data, size, &stream, &stream_len, &g, error_message, error_cch))
+    {
+        return EeLoadStatus_Error;
+    }
+    if (sheet_index >= g.nsheets)
+    {
+        xls_err(error_message, error_cch, L"Worksheet index out of range.");
+    }
+    else
+    {
+        status = emit_sheet(stream, stream_len, &g, sheet_index, sink, sink_ctx, cancel_flag,
+                            progress_fn, progress_user, error_message, error_cch);
+    }
+    free(stream);
+    globals_free(&g);
+    return status;
+}
+
+EeLoadStatus EeXls_ReadAllSheetsMem(const void *data,
+                                    size_t size,
+                                    EeXlsxSheetFn sheet_fn,
+                                    EeXlsxRowSink sink,
+                                    void *sink_ctx,
+                                    volatile LONG *cancel_flag,
+                                    wchar_t *error_message,
+                                    size_t error_cch)
+{
+    uint8_t *stream = NULL;
+    size_t stream_len = 0;
+    Globals g;
+    EeLoadStatus status = EeLoadStatus_Ok;
+    int i;
+
+    if (data == NULL || size == 0 || sheet_fn == NULL || sink == NULL)
+    {
+        xls_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    if (!open_workbook(data, size, &stream, &stream_len, &g, error_message, error_cch))
+    {
+        return EeLoadStatus_Error;
+    }
+    for (i = 0; i < g.nsheets && status == EeLoadStatus_Ok; i++)
+    {
+        if (!sheet_fn(sink_ctx, i, g.sheets[i].name))
+        {
+            status = EeLoadStatus_Cancelled;
+            break;
+        }
+        status = emit_sheet(stream, stream_len, &g, i, sink, sink_ctx, cancel_flag, NULL, NULL,
+                            error_message, error_cch);
+    }
     free(stream);
     globals_free(&g);
     return status;

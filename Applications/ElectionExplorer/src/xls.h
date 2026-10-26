@@ -80,6 +80,28 @@ extern "C"
                                     wchar_t *error_message,
                                     size_t error_cch);
 
+    /**
+     * Stream every worksheet of an .xls workbook in memory, in workbook order (see
+     * EeXlsx_ReadAllSheetsMem): the workbook globals are read once.
+     * @param data          The whole file. Only read; must stay valid for the call.
+     * @param size          Its size in bytes.
+     * @param sheet_fn      Called before each worksheet's rows; FALSE stops the read.
+     * @param sink          Row callback; see EeXlsxRowSink.
+     * @param sink_ctx      Passed to @p sheet_fn and @p sink.
+     * @param cancel_flag   Optional; non-zero requests cancel (checked periodically).
+     * @param error_message Optional; receives a message on failure.
+     * @param error_cch     Capacity of @p error_message (incl. NUL).
+     * @return EeLoadStatus_Ok, _Cancelled (callback/flag aborted), or _Error.
+     */
+    EeLoadStatus EeXls_ReadAllSheetsMem(const void *data,
+                                        size_t size,
+                                        EeXlsxSheetFn sheet_fn,
+                                        EeXlsxRowSink sink,
+                                        void *sink_ctx,
+                                        volatile LONG *cancel_flag,
+                                        wchar_t *error_message,
+                                        size_t error_cch);
+
 #ifdef __cplusplus
 }
 #endif

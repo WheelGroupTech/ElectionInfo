@@ -2199,3 +2199,121 @@ cleanup:
     mz_zip_reader_end(&zip);
     return status;
 }
+
+EeLoadStatus EeXlsx_ReadAllSheetsMem(const void *data,
+                                     size_t size,
+                                     EeXlsxSheetFn sheet_fn,
+                                     EeXlsxRowSink sink,
+                                     void *sink_ctx,
+                                     volatile LONG *cancel_flag,
+                                     wchar_t *error_message,
+                                     size_t error_cch)
+{
+    mz_zip_archive zip;
+    char *wb = NULL, *rels = NULL, *shared_xml = NULL, *styles_xml = NULL;
+    size_t wb_size = 0, rels_size = 0, shared_size = 0, styles_size = 0;
+    SheetRef *sheets = NULL;
+    SharedStrings shared = {0};
+    Styles styles = {0};
+    BOOL date1904 = FALSE;
+    int n;
+    int i;
+    EeLoadStatus status = EeLoadStatus_Error;
+
+    if (data == NULL || size == 0 || sheet_fn == NULL || sink == NULL)
+    {
+        xlsx_err(error_message, error_cch, L"Invalid arguments.");
+        return EeLoadStatus_Error;
+    }
+    if (EeXls_IsCompoundFile(data, size))
+    {
+        /* a legacy Excel 97-2003 workbook (.xls) */
+        return EeXls_ReadAllSheetsMem(data, size, sheet_fn, sink, sink_ctx, cancel_flag,
+                                      error_message, error_cch);
+    }
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_reader_init_mem(&zip, data, size, 0))
+    {
+        xlsx_err(error_message, error_cch, L"Not a valid .xlsx (ZIP) file.");
+        return EeLoadStatus_Error;
+    }
+    sheets = (SheetRef *)malloc(sizeof(SheetRef) * EE_XLSX_MAX_ALL_SHEETS);
+    if (sheets == NULL)
+    {
+        xlsx_err(error_message, error_cch, L"Out of memory reading the workbook.");
+        goto cleanup;
+    }
+    wb = extract_sml_part(&zip, "xl/workbook.xml", &wb_size);
+    rels = extract_part(&zip, "xl/_rels/workbook.xml.rels", &rels_size);
+    if (wb == NULL || rels == NULL)
+    {
+        xlsx_err(error_message, error_cch, L"Missing workbook parts.");
+        goto cleanup;
+    }
+    n = parse_workbook_sheets(wb, wb_size, sheets, EE_XLSX_MAX_ALL_SHEETS);
+    if (mem_find(wb, wb + wb_size, "date1904=\"1\"", 12) != NULL ||
+        mem_find(wb, wb + wb_size, "date1904=\"true\"", 15) != NULL)
+    {
+        date1904 = TRUE;
+    }
+    shared_xml = extract_sml_part(&zip, "xl/sharedStrings.xml", &shared_size);
+    if (shared_xml != NULL &&
+        !parse_shared_strings(shared_xml, shared_size, &shared, error_message, error_cch))
+    {
+        goto cleanup;
+    }
+    styles_xml = extract_sml_part(&zip, "xl/styles.xml", &styles_size);
+    if (styles_xml != NULL && !parse_styles(styles_xml, styles_size, &styles, error_message,
+                                            error_cch))
+    {
+        goto cleanup;
+    }
+
+    status = EeLoadStatus_Ok;
+    for (i = 0; i < n && status == EeLoadStatus_Ok; i++)
+    {
+        char sheet_part[260];
+        char *sheet_xml;
+        size_t sheet_size = 0;
+        XlsxReadCtx ctx;
+        if (!resolve_rid_target(rels, rels_size, sheets[i].rid, sheet_part,
+                                ARRAYSIZE(sheet_part)) ||
+            (sheet_xml = extract_sml_part(&zip, sheet_part, &sheet_size)) == NULL)
+        {
+            xlsx_err(error_message, error_cch, L"Could not read a worksheet.");
+            status = EeLoadStatus_Error;
+            break;
+        }
+        if (!sheet_fn(sink_ctx, i, sheets[i].name_utf8))
+        {
+            mz_free(sheet_xml);
+            status = EeLoadStatus_Cancelled;
+            break;
+        }
+        ZeroMemory(&ctx, sizeof(ctx));
+        ctx.shared = &shared;
+        ctx.styles = &styles;
+        ctx.date1904 = date1904;
+        ctx.sink = sink;
+        ctx.sink_ctx = sink_ctx;
+        ctx.cancel = cancel_flag;
+        ctx.bytes_total = sheet_size;
+        status = parse_worksheet(sheet_xml, sheet_size, &ctx, error_message, error_cch);
+        mz_free(sheet_xml);
+    }
+
+cleanup:
+    free(sheets);
+    shared_free(&shared);
+    styles_free(&styles);
+    if (styles_xml != NULL)
+        mz_free(styles_xml);
+    if (shared_xml != NULL)
+        mz_free(shared_xml);
+    if (rels != NULL)
+        mz_free(rels);
+    if (wb != NULL)
+        mz_free(wb);
+    mz_zip_reader_end(&zip);
+    return status;
+}

@@ -529,21 +529,25 @@ static uint32_t find_date(const char *s)
     return (d != 0) ? d : mdy_month_name(s);
 }
 
-/* A date cell "M[M]/D[D]/YY" with a 2-digit year (Tom Green "10/19/26"), alone or before a
- * time -> 20YYmmdd, else 0. Only for a Date Voted column. */
+/* A date cell "M[M]/D[D]/YY" with a 2-digit year (Tom Green "10/19/26"; Hunt "10.24.26" from
+ * October 24, also "-"), alone or before a time -> 20YYmmdd, else 0. Both separators must be
+ * the same character. Only for a Date Voted column. */
 static uint32_t slash_yy_cell(const char *s)
 {
     unsigned a = 0, b = 0, y = 0;
     int k;
+    char sep;
     while (*s == ' ')
         s++;
     for (k = 0; k < 2 && is_digit(*s); k++, s++)
         a = a * 10u + (unsigned)(*s - '0');
-    if (k == 0 || *s++ != '/')
+    sep = *s;
+    if (k == 0 || (sep != '/' && sep != '.' && sep != '-'))
         return 0;
+    s++;
     for (k = 0; k < 2 && is_digit(*s); k++, s++)
         b = b * 10u + (unsigned)(*s - '0');
-    if (k == 0 || *s++ != '/')
+    if (k == 0 || *s++ != sep)
         return 0;
     for (k = 0; k < 3 && is_digit(*s); k++, s++)
         y = y * 10u + (unsigned)(*s - '0');

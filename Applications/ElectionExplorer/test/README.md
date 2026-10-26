@@ -38,7 +38,8 @@ file, once in regular sectors and once in the mini stream) and needs `src\xls.c`
 shared strings split across a CONTINUE record, RK / MULRK / NUMBER / FORMULA / BOOLERR cells,
 date and zero-pad formats, and a voter-list and a Jefferson County roster load of `.xls` files.
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
-wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt).
+wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt),
+plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).
 `pdfstray` covers PDF rows that a stray piece of text knocked out of the Voter ID column: a name in two
 touching pieces and a name's separate last letter (Gregg), a middle name's last letter at the left margin
 (Gregg's mail list) and a "FED" precinct between the "Pct" and "VUID" titles (Brazos).

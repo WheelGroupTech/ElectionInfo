@@ -9123,9 +9123,11 @@ cleanup:
  * ballot. */
 static int test_county1023(void)
 {
+    /* Hunt writes "10.24.26" from October 24 (a 2-digit year with dots) */
     static const char k_hunt[] = "Date,State ID,Name,Precinct,Polling Pl\r\n"
                                  "10/23/2026,1012778811,\"HUNB, ANNE\",S 109,BBM\r\n"
-                                 "10/23/2026,1012778822,\"HUNB, BEN\",S 110,FWCC-EV\r\n";
+                                 "10/23/2026,1012778822,\"HUNB, BEN\",S 110,FWCC-EV\r\n"
+                                 "10.24.26,1012778833,\"HUNB, CAL\",S 111,FWCC-EV\r\n";
     TBuf greg = {0}, wich = {0};
     wchar_t dir[MAX_PATH];
     wchar_t pbuf[3][MAX_PATH];
@@ -9187,7 +9189,7 @@ static int test_county1023(void)
         wprintf(L"county1023: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 7 || info.rows_non_voter != 0)
+    if (t.row_count != 8 || info.rows_non_voter != 0)
     {
         uint32_t r;
         wprintf(L"county1023: rows %u nonvoter %u\n", t.row_count, info.rows_non_voter);
@@ -9207,7 +9209,9 @@ static int test_county1023(void)
         !rt_expect(&t, L"WICK", L"DEE", L"Precinct", L"P 402") ||
         !rt_expect(&t, L"WICK", L"DEE", L"VUID", L"3382333813") ||
         !rt_expect(&t, L"HUNB", L"ANNE", L"Voting Method", L"Mail Ballot") ||
-        !rt_expect(&t, L"HUNB", L"BEN", L"Voting Method", L"Early Vote In-Person"))
+        !rt_expect(&t, L"HUNB", L"BEN", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"HUNB", L"CAL", L"Date Voted", L"10/24/2026") ||
+        !rt_expect(&t, L"HUNB", L"CAL", L"Voting Method", L"Early Vote In-Person"))
     {
         goto done;
     }

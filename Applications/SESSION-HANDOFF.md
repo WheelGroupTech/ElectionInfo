@@ -201,7 +201,30 @@ Status as of 2026-10-22:
   the §6.1, 6.4–6.11 anomalies, for county and SOS staff. §6.2 (Tarrant redaction) excluded;
   no names, no local paths (file names only).
 
-### UNCOMMITTED — Export Filter / Load Filter (2026-10-25)
+### UNCOMMITTED — 10/25 roster review (data through 10/24) + Hunt "10.24.26" dates (2026-10-25)
+
+- `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_2026-10-25` (.md/.pdf) +
+  `_Supplement` (.md/.pdf) + `_Supplement_Records.csv` (15,276 records). Pipeline in scratchpad `report6/`
+  (dump6.sh file picks through 10/24; Brazoria takes each day's latest re-posted copy).
+- Loader: `slash_yy_cell` (voter_roster.c) also reads "M.D.YY" / "M-D-YY" date cells (Hunt's October 24
+  list "10.24.26"; its 2,001 rows had no date). Regression old vs new: only Hunt changed. Smoke 65/65
+  (`county1023` gained the case); Release x64 + ARM64 clean.
+- **Next:** user commits; RELEASES note with the next version.
+
+### UNCOMMITTED — Election results survey + downloads, 50 largest counties (2026-10-25)
+
+- `ElectionExplorer/docs/election-results-county-survey.md` (+ `election-results-manual-downloads.csv`):
+  where each county posts results, naming rules, what was downloaded, gaps. Files (2020-01-01 to
+  2026-10-25) are in `Election_Results/TX_<County>_County/` (untracked, ~6.5 GB besides Travis; Travis
+  untouched): 467 Clarity elections in 22 counties (IDs from county sites, Clarity `elections.json`
+  and the Internet Archive URL index), Comal on Enhanced Voting, Smith on Laserfiche, county PDFs/CSV.
+- Not downloaded: Brazoria, Johnson (403 to non-browser requests), Wichita (Cloudflare), plus 303
+  refused files (mostly McLennan after rate limiting) listed in the CSV for manual download.
+- Reusable downloader: `Election_Results/_download_tools/results_download.py` (gitignored, this machine;
+  state in `results_state.json`, logs + `manual_downloads.csv` in `Election_Results/_download_logs/`).
+  Survey doc "Refreshing" section has the commands. **Next:** user reviews/commits the doc; results-loading spec.
+
+### Committed — Export Filter / Load Filter (2026-10-25)
 
 - Filter windows (voter list, voter roster, CVR) gain "Export Filter…" and "Load Filter…" between
   Reset and Apply (`IDC_FLT_EXPORT` / `IDC_FLT_LOAD`; `FilterFile_Export` / `FilterFile_Load` in main.c,
@@ -213,7 +236,7 @@ Status as of 2026-10-22:
 - Core in filter.c: `EeFilter_SaveFile` / `EeFilter_LoadFile` (`EeFilterColumnRef`, `EE_FILTER_REL_*`).
   Help topics (voter list, roster, CVR Filters) describe the buttons. Smoke 65/65 (`filterfile`); Release
   x64 + ARM64 clean; filter window captured with the new buttons in place.
-- **Next:** user commits; ships in the next version with .xls support (RELEASES note then).
+- Ships in the next version with .xls support (RELEASES note then).
 
 ### Committed — October 23 roster layouts + 10/24 report (2026-10-24); PDF stray-piece fixes (2026-10-25)
 

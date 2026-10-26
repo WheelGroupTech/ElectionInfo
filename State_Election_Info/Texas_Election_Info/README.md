@@ -26,6 +26,18 @@ kept in sync.
 | `Texas_County_Election_Info.md` | Human-readable summary, statewide resources, notes, a table of all 254 counties, and per-county notes. |
 | `generate.py` | Regenerates the CSV and Markdown from the JSON. |
 
+## Early voting roster reviews
+
+Reviews of the November 3, 2026 early voting rosters compare each of the 50 most populous counties'
+own rosters with the Secretary of State's roster files, voter by voter.
+
+| File | Overview |
+|------|----------|
+| `Texas_Early_Voting_Roster_Review_<date>.md` / `.pdf` | The review for data through the previous day: how each county posts its rosters, county vs. state counts, anomalies and recommendations. |
+| `Texas_Early_Voting_Roster_Review_<date>_Supplement.md` / `.pdf` | Record locator for county and state staff: the VUID and file location of each anomalous record. |
+| `Texas_Early_Voting_Roster_Review_<date>_Supplement_Records.csv` | The complete record list behind the supplement. |
+| [`Texas_Early_Voting_Roster_Cross_County_Method.md`](Texas_Early_Voting_Roster_Cross_County_Method.md) | How the reviews compare each county's rosters with every other county's and with the state's files to find VUIDs on two counties' rosters (review sections 6.1, 6.7 and 6.8). |
+
 ## Record schema
 
 Each entry in the JSON `counties` array has these fields:

@@ -2,8 +2,9 @@
  * @file ee_results.h
  * @brief Election results: contest × choice totals, optionally broken down by precinct
  *        and vote type, loaded from Clarity Elections exports (summary.csv, detail.txt,
- *        detail.xls / detail.xlsx, detail.xml, or their ZIPs) and from Election
- *        Explorer's own results export.
+ *        detail.xls / detail.xlsx, detail.xml, or their ZIPs), from ES&S Electionware
+ *        results report PDFs (summary and precinct reports), from Hart Verity cumulative
+ *        and canvass report PDFs, and from Election Explorer's own results export.
  *
  * Several files of one election are loaded together: the richest file supplies the data
  * (XML > XLS/XLSX > TXT > summary) and every other file is cross-checked against it,
@@ -31,6 +32,10 @@ extern "C"
 #define EE_RES_FMT_CLARITY_XML     0x08u /* detail.xml */
 #define EE_RES_FMT_EE_EXPORT       0x10u /* Election Explorer results export (CSV/TSV) */
 #define EE_RES_FMT_EE_VIEW         0x20u /* Election Explorer displayed-view export */
+#define EE_RES_FMT_ESS_SUMMARY     0x40u /* ES&S Electionware summary results report (PDF) */
+#define EE_RES_FMT_ESS_PRECINCT    0x80u /* ES&S Electionware precinct results report (PDF) */
+#define EE_RES_FMT_HART_SUMMARY    0x100u /* Hart Verity cumulative results report (PDF) */
+#define EE_RES_FMT_HART_PRECINCT   0x200u /* Hart Verity canvass results report (PDF) */
 
 /** Unknown count (registered voters, ballots cast, precinct counts). */
 #define EE_RES_UNKNOWN (-1)
@@ -255,6 +260,16 @@ extern "C"
                              uint32_t n,
                              int64_t ballots,
                              EeResults *out);
+
+    /**
+     * The precinct of @p r that a precinct value from another source stands for: the same
+     * name, or else the longest precinct name it starts with when what follows is not a
+     * digit (a Hart CVR files ballots under precinct and ballot style, "315BS14" and
+     * "315-BS14" for precinct 315; "3150" is not 315).
+     *
+     * @return The precinct's name (owned by @p r), or NULL when none fits.
+     */
+    const wchar_t *EeResults_MatchPrecinctName(const EeResults *r, const wchar_t *name);
 
 /** EeResultsDiff.status */
 #define EE_DIFF_MATCH        0u

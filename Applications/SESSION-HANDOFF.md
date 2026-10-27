@@ -4,13 +4,29 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-26 (1.5 Election Results: plan, step 1 engine, step 2 window, step 3 filter, step 4 turnout report, step 5 compare, step 6 export, step 7 all Clarity counties); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
+**Last updated:** 2026-10-26 (1.5 Election Results: plan, step 1 engine, step 2 window, step 3 filter, step 4 turnout report, step 5 compare, step 6 export, step 7 all Clarity counties, step 8 ES&S + Hart PDFs); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
 
-### Election Explorer 1.5: Election Results, steps 1–7 committed (2026-10-26)
+### Election Explorer 1.5: Election Results, steps 1–7 + Reset View committed (2026-10-26)
 
-- **Uncommitted:** View → Reset View in the results window (`IDM_RES_VIEW_RESET` 40121) undoes a
-  column sort; greyed while unsorted; Help → Views and Options mentions it. Checked in the real app
-  (Travis G24: sort by Contest, then Reset View).
+- **Step 8 done (uncommitted): ES&S Electionware and Hart Verity results PDFs.**
+  - New `src/ee_results_pdf.{c,h}` (in the .vcxproj and filters; smoke build line updated), wired
+    in by `parse_results_pdf` in `ee_results.c`. New formats `EE_RES_FMT_ESS_SUMMARY/_PRECINCT`,
+    `EE_RES_FMT_HART_SUMMARY/_PRECINCT`.
+  - ES&S is read by structure, not font size, so the Travis 2020-22 template and the newer
+    Bexar/Angelina/Bowie one both read. Hart: cumulative and canvass (turned headings).
+  - Engine changes:
+    - `align_rows` pairs rows left over by name;
+    - `adopt_figures` takes election-wide registered/ballots;
+    - ZIPs skip members that are not results (Hart CSV/XLSX), with a note;
+    - new `EeResults_MatchPrecinctName`, used by `Cvr_BuildResults` (Hart CVR "315BS14" → 315).
+  - `main.c`: the Load dialog offers *.pdf; Help → Loading describes the PDFs.
+  - Validated:
+    - Travis: 13 PDF elections; G20 ↔ CVR exact except the county's own Barton Springs precinct
+      gap.
+    - Hays: 7 Hart elections; G25 and PR26 ↔ CVR exact at every level.
+    - Real-app Compare checked.
+    - Smoke `respdf`; Release x64/ARM64 clean.
+  - Details and the sweep of every results PDF: design doc "Step 8".
 
 - **Plan, decisions D1–D8, and the step-1 status / format-variant table:**
   `ElectionExplorer/docs/election-results-design.md`.
@@ -67,10 +83,12 @@
     Smoke `rescum`.
   - Design doc "Step 7" lists the findings.
 - **Next:**
-  - step 8: ES&S (older Travis PDFs first: G20 ↔ G20 CVR) and Hart PDF results;
   - step 9: help, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt.
-- **Later:** ES&S test set: the older Travis
-  2020–22 PDFs (G20 PDFs ↔ G20 CVR), then the other ~553 Electionware PDFs.
+- **Later:**
+  - other PDF layouts the sweep refuses (design doc "Step 8");
+  - Hart CSV exports;
+  - a vote-type breakdown for summary-only contests (the model keeps totals only);
+  - Dominion PDFs.
 
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)
 

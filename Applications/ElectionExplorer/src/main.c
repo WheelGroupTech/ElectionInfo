@@ -16292,8 +16292,19 @@ static const wchar_t k_ResHelpLoading[] =
     L"detailtxt.zip, detailxls.zip (or detailxlsx.zip) and detailxml.zip \x2014 or the files "
     L"inside them (summary.csv, detail.txt, detail.xls, detail.xlsx, detail.xml). An Election "
     L"Explorer results export (CSV or TSV) loads too.\r\n\r\n"
+    L"Results report PDFs:\r\n"
+    L"\x2022 ES&S Electionware: the summary (cumulative) results report and the precinct "
+    L"report (\"Precinct Summary Results Report\", \"Precinct Results\", \"Canvass\"). Write-in "
+    L"names are part of Write-In Totals. A PDF printed through a printer driver may have no "
+    L"readable text and is refused.\r\n"
+    L"\x2022 Hart Verity: the cumulative results report and the canvass results report (a "
+    L"county's ZIP of them loads too; the CSV files beside them are skipped). The canvass has "
+    L"no vote-type breakdown.\r\n"
+    L"A summary report gives totals only; the precinct report or canvass gives each "
+    L"precinct.\r\n\r\n"
     L"Several files of one election open as one window: the richest file is shown (XML, then "
-    L"XLS, then TXT, then the summary) and every other file is checked against it. Each "
+    L"XLS or a precinct report, then TXT, then a summary) and every other file is checked "
+    L"against it. Each "
     L"disagreement is listed in Reports \x2192 Display Load Summary\x2026, which opens by itself "
     L"when the files disagree. Files from different elections open in separate windows.\r\n\r\n"
     L"Clarity writes \"protected\" for counts a county withholds; they count as 0 in precinct "
@@ -16311,7 +16322,8 @@ static const wchar_t k_ResHelpFilters[] =
     L"different columns all apply; a matching Exclude always wins. Check boxes turn rules on "
     L"and off. Export Filter\x2026 saves the rules to a file and Load Filter\x2026 reads them "
     L"back, also in another results window. Filter \x2192 Reset Filter removes every rule.\r\n\r\n"
-    L"A precinct filter needs precinct detail (detail.txt, detail.xls(x) or detail.xml). For "
+    L"A precinct filter needs precinct detail (detail.txt, detail.xls(x), detail.xml, or a "
+    L"precinct report or canvass PDF). For "
     L"contests that have only summary totals, or precinct counts the county withheld, the "
     L"status bar notes that some totals cannot be filtered.";
 
@@ -18838,8 +18850,10 @@ typedef struct CvrPrecinctGroup
 } CvrPrecinctGroup;
 
 /* Results from a CVR window's tabulation (all ballots, or the filtered ones): per precinct
- * when the CVR has a real Precinct column, else totals. */
-static BOOL Cvr_BuildResults(CvrWindow *cw, BOOL filtered, EeResults *out)
+ * when the CVR has a real Precinct column, else totals. With @p names (the results being
+ * compared), a precinct value is filed under the precinct of @p names it stands for
+ * (EeResults_MatchPrecinctName: a Hart CVR's "315BS14" counts for precinct 315). */
+static BOOL Cvr_BuildResults(CvrWindow *cw, BOOL filtered, const EeResults *names, EeResults *out)
 {
     const EeCvrTable *t = &cw->table;
     const uint32_t *rows = filtered ? cw->disp : NULL;
@@ -18993,6 +19007,14 @@ static BOOL Cvr_BuildResults(CvrWindow *cw, BOOL filtered, EeResults *out)
                     items[nitems].choice = tals[g][k].selection;
                     /* a blank precinct cell still counts, under "(blank)" */
                     items[nitems].precinct = groups[g].name[0] != L'\0' ? groups[g].name : L"(blank)";
+                    if (names != NULL && groups[g].name[0] != L'\0')
+                    {
+                        const wchar_t *m = EeResults_MatchPrecinctName(names, groups[g].name);
+                        if (m != NULL)
+                        {
+                            items[nitems].precinct = m;
+                        }
+                    }
                     items[nitems].votes = tals[g][k].count;
                     nitems++;
                 }
@@ -19077,7 +19099,7 @@ static void App_RunResultsCompare(HWND from, HWND other)
         filtered = ans == IDYES;
     }
     old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    if (cvr != NULL && !Cvr_BuildResults(cvr, filtered, &cvr_res))
+    if (cvr != NULL && !Cvr_BuildResults(cvr, filtered, ra != NULL ? &ra->res : (rb != NULL ? &rb->res : NULL), &cvr_res))
     {
         SetCursor(old);
         MessageBoxW(from, L"Out of memory while tabulating the Cast Vote Records.", L"Compare",
@@ -20182,9 +20204,10 @@ static void App_BeginOpenResults(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Election Results (*.zip;*.csv;*.tsv;*.txt;*.xml;*.xls;*.xlsx)\0"
-                      L"*.zip;*.csv;*.tsv;*.txt;*.xml;*.xls;*.xlsx\0"
+    ofn.lpstrFilter = L"Election Results (*.zip;*.csv;*.tsv;*.txt;*.xml;*.xls;*.xlsx;*.pdf)\0"
+                      L"*.zip;*.csv;*.tsv;*.txt;*.xml;*.xls;*.xlsx;*.pdf\0"
                       L"Clarity ZIP files (*.zip)\0*.zip\0"
+                      L"Results report PDFs (*.pdf)\0*.pdf\0"
                       L"All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = 32768;

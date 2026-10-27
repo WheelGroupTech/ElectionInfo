@@ -5138,6 +5138,9 @@ static BOOL tpdf_row(TBuf *c, double *y_top, const char *t1, const char *t2,
     return ok;
 }
 
+/* The Info Producer tpdf_write writes; NULL = Microsoft Reporting Services (Hart). */
+static const char *g_tpdf_producer = NULL;
+
 /* Write a PDF whose pages have the given content streams. @p hart adds the Info Title
  * and the Type0/ToUnicode font; @p break_startxref writes a bogus negative startxref so
  * the reader must rebuild its object index by scanning. */
@@ -5187,8 +5190,9 @@ static BOOL tpdf_write(const wchar_t *path, TBuf *pages, int npages, BOOL break_
     ok = ok && tb_add(&b, k_Cmap, strlen(k_Cmap));
     ok = ok && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
     OBJ(6);
-    ok = ok && tb_printf(&b, "<< /Title (Count_CvrReport) /Producer (Microsoft Reporting "
-                             "Services PDF Rendering Extension 2019.11.0.0) >>\r\nendobj\r\n");
+    ok = ok && tb_printf(&b, "<< /Title (Count_CvrReport) /Producer (%s) >>\r\nendobj\r\n",
+                         g_tpdf_producer != NULL ? g_tpdf_producer
+                                                 : "Microsoft Reporting Services PDF Rendering Extension 2019.11.0.0");
     for (i = 0; i < npages && ok; i++)
     {
         int pn = 7 + i * 3;
@@ -10866,6 +10870,518 @@ done:
     return rc;
 }
 
+/* Helvetica advance width, as ee_results_pdf.c estimates it for a font without widths. */
+static double rpdf_w(const char *s, double size)
+{
+    double w = 0.0;
+    for (; *s != '\0'; s++)
+    {
+        char c = *s;
+        w += (c >= '0' && c <= '9') ? 0.556
+             : (c == ',' || c == '.' || c == ' ') ? 0.278
+             : c == '%'               ? 0.889
+             : c == '-'               ? 0.333
+             : (c >= 'A' && c <= 'Z') ? 0.667
+                                      : 0.5;
+    }
+    return w * size;
+}
+
+/* Text at (x, y) in font F5; @p rot90 turns it to read bottom to top. */
+static BOOL rpdf_text_at(TBuf *c, double x, double y, double size, const char *s, BOOL rot90)
+{
+    BOOL ok = rot90 ? tb_printf(c, "BT /F5 %.1f Tf 0 1 -1 0 %.2f %.2f Tm (", size, x, y)
+                    : tb_printf(c, "BT /F5 %.1f Tf %.2f %.2f Td (", size, x, y);
+    for (; *s != '\0' && ok; s++)
+    {
+        if (*s == '(' || *s == ')' || *s == '\\')
+        {
+            ok = tb_add(c, "\\", 1);
+        }
+        ok = ok && tb_add(c, s, 1);
+    }
+    return ok && tb_printf(c, ") Tj ET\n");
+}
+
+static BOOL rpdf_text(TBuf *c, double x, double y, double size, const char *s)
+{
+    return rpdf_text_at(c, x, y, size, s, FALSE);
+}
+
+/* Right-aligned at @p right. */
+static BOOL rpdf_right(TBuf *c, double right, double y, double size, const char *s)
+{
+    return rpdf_text_at(c, right - rpdf_w(s, size), y, size, s, FALSE);
+}
+
+/* An Electionware page heading (and precinct line) and footer. */
+static BOOL ess_page(TBuf *c, const char *title, const char *precinct)
+{
+    BOOL ok = rpdf_text(c, 20.0, 757.6, 13.0, title) && rpdf_text(c, 476.5, 757.6, 13.0, "OFFICIAL RESULTS") &&
+              rpdf_text(c, 20.0, 739.9, 13.0, "Test General Election") &&
+              rpdf_text(c, 20.0, 719.9, 13.0, "November 3, 2020") && rpdf_text(c, 509.0, 719.9, 13.0, "Test County");
+    if (precinct != NULL)
+    {
+        ok = ok && rpdf_text(c, 20.0, 693.2, 13.0, precinct);
+    }
+    return ok && rpdf_text(c, 32.0, 40.1, 10.0, "Election Summary - 11/12/2020    1:41 PM") &&
+           rpdf_text(c, 32.0, 27.8, 8.0, "Report generated with Electionware Copyright 2007-2019");
+}
+
+/* Electionware column headings at @p y: TOTAL, [VOTE %], "Election / Day", "Vote By / Mail". */
+static BOOL ess_heads(TBuf *c, double y, BOOL pct)
+{
+    BOOL ok = rpdf_text(c, 204.3, y, 10.0, "TOTAL");
+    if (pct)
+    {
+        ok = ok && rpdf_text(c, 262.5, y, 10.0, "VOTE %") && rpdf_text(c, 319.4, y + 5.8, 10.0, "Election") &&
+             rpdf_text(c, 329.1, y - 5.9, 10.0, "Day") && rpdf_text(c, 375.1, y + 5.8, 10.0, "Vote By") &&
+             rpdf_text(c, 382.8, y - 5.9, 10.0, "Mail");
+    }
+    else
+    {
+        ok = ok && rpdf_text(c, 260.4, y + 5.8, 10.0, "Election") && rpdf_text(c, 270.1, y - 5.9, 10.0, "Day") &&
+             rpdf_text(c, 316.1, y + 5.8, 10.0, "Vote By") && rpdf_text(c, 323.8, y - 5.9, 10.0, "Mail");
+    }
+    return ok;
+}
+
+/* A contest row: label (indented with @p x), TOTAL, VOTE % (or NULL), Election Day, Vote By
+ * Mail (NULL leaves a cell out; ed_vbm prints both as one string, "17 18"). */
+static BOOL ess_row(TBuf *c, double y, double x, const char *label, const char *tot, const char *pct,
+                    const char *ed, const char *vbm, const char *ed_vbm)
+{
+    BOOL ok = rpdf_text(c, x, y, 8.0, label);
+    if (tot != NULL)
+    {
+        ok = ok && rpdf_right(c, 248.0, y, 8.0, tot);
+    }
+    if (pct != NULL)
+    {
+        ok = ok && rpdf_right(c, 308.0, y, 8.0, pct);
+    }
+    if (ed_vbm != NULL)
+    {
+        /* Electionware sometimes shows two cells as one string: the first at its own place */
+        char first[16];
+        const char *sp = strchr(ed_vbm, ' ');
+        StringCchCopyNA(first, ARRAYSIZE(first), ed_vbm, sp != NULL ? (size_t)(sp - ed_vbm) : strlen(ed_vbm));
+        ok = ok && rpdf_text(c, 363.0 - rpdf_w(first, 8.0), y, 8.0, ed_vbm);
+    }
+    else
+    {
+        if (ed != NULL)
+        {
+            ok = ok && rpdf_right(c, 363.0, y, 8.0, ed);
+        }
+        if (vbm != NULL)
+        {
+            ok = ok && rpdf_right(c, 418.0, y, 8.0, vbm);
+        }
+    }
+    return ok;
+}
+
+/* A contest block from @p y down: title, Vote For, headings; rows follow. */
+static BOOL ess_contest(TBuf *c, double y, const char *title)
+{
+    return rpdf_text(c, 22.0, y, 12.0, title) && rpdf_text(c, 22.0, y - 12.2, 10.0, "Vote For 1") &&
+           ess_heads(c, y - 42.8, TRUE);
+}
+
+/* A Hart page heading ending with "Run Date". */
+static BOOL hart_page_head(TBuf *c, const char *title)
+{
+    return rpdf_text(c, 22.0, 761.2, 10.0, title) && rpdf_text(c, 260.4, 761.2, 10.0, "Test County, Texas") &&
+           rpdf_text(c, 523.2, 742.4, 8.0, "Registered Voters") &&
+           rpdf_text(c, 508.6, 728.0, 8.0, "200 of 1000 = 20.00%") &&
+           rpdf_text(c, 22.0, 716.5, 8.0, "March 3, 2026 Joint Primary Election") &&
+           rpdf_text(c, 280.6, 687.9, 10.0, "3/3/2026") && rpdf_text(c, 20.0, 683.3, 8.0, "Run Time") &&
+           rpdf_text(c, 136.9, 683.3, 8.0, "4:47 PM") && rpdf_text(c, 20.0, 668.9, 8.0, "Run Date") &&
+           rpdf_text(c, 124.7, 668.9, 8.0, "03/09/2026");
+}
+
+/* A Hart cumulative contest table from @p y: title and "Choice Party Early Voting Election
+ * Day Voting Total" headings. */
+static BOOL hart_cum_contest(TBuf *c, double y, const char *title)
+{
+    return rpdf_text(c, 20.0, y, 10.0, title) && rpdf_text(c, 20.0, y - 17.6, 9.0, "Choice") &&
+           rpdf_text(c, 179.9, y - 17.6, 9.0, "Party") && rpdf_text(c, 344.2, y - 17.6, 9.0, "Early Voting") &&
+           rpdf_text(c, 406.9, y - 17.6, 9.0, "Election Day Voting") && rpdf_text(c, 570.3, y - 17.6, 9.0, "Total");
+}
+
+/* A Hart cumulative row: name, party, then count and percentage per heading (the count 38.8
+ * left of the heading's right edge, the percentage at it). */
+static BOOL hart_cum_row(TBuf *c, double y, const char *name, const char *party, const char *ev,
+                         const char *ed, const char *tot)
+{
+    double r_ev = 344.2 + rpdf_w("Early Voting", 9.0), r_ed = 406.9 + rpdf_w("Election Day Voting", 9.0),
+           r_tot = 570.3 + rpdf_w("Total", 9.0);
+    BOOL ok = rpdf_text(c, name[strlen(name) - 1] == ':' ? 166.7 : 20.0, y, 8.0, name);
+    if (party != NULL)
+    {
+        ok = ok && rpdf_text(c, 179.9, y, 8.0, party);
+    }
+    return ok && rpdf_right(c, r_ev - 38.8, y, 8.0, ev) && rpdf_right(c, r_ev, y, 8.0, "50.00%") &&
+           rpdf_right(c, r_ed - 38.8, y, 8.0, ed) && rpdf_right(c, r_ed, y, 8.0, "50.00%") &&
+           rpdf_right(c, r_tot - 38.8, y, 8.0, tot) && rpdf_right(c, r_tot, y, 8.0, "50.00%");
+}
+
+/* A Hart canvass page: title, turned headings at the given x positions, then rows (each
+ * "name|v1|v2|..." with a value per heading). */
+static BOOL hart_canvass_page(TBuf *c, const char *title, const char *const *heads, int nheads,
+                              const char *const *rows, int nrows)
+{
+    BOOL ok = hart_page_head(c, "Canvass Results Report") && rpdf_text(c, 15.4, 642.4, 9.0, title) &&
+              rpdf_text(c, 15.4, 498.4, 8.0, "Precinct");
+    int h, r;
+    for (h = 0; h < nheads && ok; h++)
+    {
+        ok = rpdf_text_at(c, 118.1 + 36.0 * h, 505.0, 7.0, heads[h], TRUE);
+    }
+    for (r = 0; r < nrows && ok; r++)
+    {
+        double y = 484.8 - 14.8 * r;
+        char cell[64];
+        const char *p = rows[r];
+        int col = -1;
+        for (;;)
+        {
+            const char *e = strchr(p, '|');
+            size_t len = e != NULL ? (size_t)(e - p) : strlen(p);
+            StringCchCopyNA(cell, ARRAYSIZE(cell), p, len);
+            ok = ok && (col < 0 ? rpdf_text(c, 15.4, y, 7.0, cell)
+                                : rpdf_right(c, 118.1 + 36.0 * col + 12.5, y, 7.0, cell));
+            col++;
+            if (e == NULL)
+            {
+                break;
+            }
+            p = e + 1;
+        }
+    }
+    return ok;
+}
+
+/* A precinct page in the newer Electionware template (Bexar, Angelina, Bowie): 12 pt heading,
+ * 14 pt precinct and "Statistics" (printed below its own headings), 9 pt contest title over
+ * 7 pt "Vote For", 8 pt headings wrapped inside a word ("Provision" / "al"), candidate names
+ * wrapped onto a second line. Values: registered, ballots (total, ED, provisional), then the
+ * two candidates' total, ED and provisional. */
+static BOOL ess2_page(TBuf *c, const char *precinct, const char *const *v)
+{
+    BOOL ok = rpdf_text(c, 20.0, 760.9, 12.0, "Summary Results Report") &&
+              rpdf_text(c, 489.1, 760.9, 12.0, "OFFICIAL RESULTS") &&
+              rpdf_text(c, 20.0, 745.9, 12.0, "Test General Election") &&
+              rpdf_text(c, 20.0, 730.9, 12.0, "November 5, 2024") && rpdf_text(c, 521.3, 730.9, 12.0, "Test County") &&
+              rpdf_text(c, 20.0, 704.0, 14.0, precinct) && rpdf_text(c, 22.0, 38.6, 8.0, "Precinct Summary - 11/19/2024") &&
+              rpdf_text(c, 22.0, 24.6, 8.0, "Report generated with Electionware Copyright 2007-2020");
+    /* statistics: headings first, then "Statistics" just below them */
+    ok = ok && rpdf_text(c, 172.2, 689.6, 8.0, "TOTAL") && rpdf_text(c, 209.5, 689.6, 8.0, "Election") &&
+         rpdf_text(c, 244.2, 689.6, 8.0, "Provision") && rpdf_text(c, 20.0, 686.0, 14.0, "Statistics") &&
+         rpdf_text(c, 223.8, 680.2, 8.0, "Day") && rpdf_text(c, 262.0, 680.2, 8.0, "al") &&
+         rpdf_text(c, 22.0, 667.6, 8.0, "Registered Voters - Total") && rpdf_right(c, 200.0, 667.6, 8.0, v[0]) &&
+         rpdf_text(c, 22.0, 653.6, 8.0, "Ballots Cast - Total") && rpdf_right(c, 200.0, 653.6, 8.0, v[1]) &&
+         rpdf_right(c, 240.0, 653.6, 8.0, v[2]) && rpdf_right(c, 280.0, 653.6, 8.0, v[3]);
+    /* a contest */
+    ok = ok && rpdf_text(c, 30.0, 615.7, 9.0, "President/Vice President") &&
+         rpdf_text(c, 30.0, 606.5, 7.0, "Vote For 1") && rpdf_text(c, 182.2, 594.6, 8.0, "TOTAL") &&
+         rpdf_text(c, 216.9, 594.6, 8.0, "VOTE %") && rpdf_text(c, 259.5, 594.6, 8.0, "Election") &&
+         rpdf_text(c, 294.2, 594.6, 8.0, "Provision") && rpdf_text(c, 273.8, 585.2, 8.0, "Day") &&
+         rpdf_text(c, 312.0, 585.2, 8.0, "al");
+    ok = ok && rpdf_text(c, 20.0, 574.6, 8.0, "Kamala D. Harris/Tim") && rpdf_right(c, 210.0, 574.6, 8.0, v[4]) &&
+         rpdf_right(c, 250.0, 574.6, 8.0, "60.00%") && rpdf_right(c, 290.0, 574.6, 8.0, v[5]) &&
+         rpdf_right(c, 330.0, 574.6, 8.0, v[6]) && rpdf_text(c, 20.0, 565.2, 8.0, "Walz");
+    ok = ok && rpdf_text(c, 20.0, 551.6, 8.0, "Donald J. Trump/JD") && rpdf_right(c, 210.0, 551.6, 8.0, v[7]) &&
+         rpdf_right(c, 250.0, 551.6, 8.0, "40.00%") && rpdf_right(c, 290.0, 551.6, 8.0, v[8]) &&
+         rpdf_right(c, 330.0, 551.6, 8.0, v[9]) && rpdf_text(c, 20.0, 542.2, 8.0, "Vance");
+    return ok;
+}
+
+static const EeResultsContest *rpdf_contest(const EeResults *r, const wchar_t *title)
+{
+    uint32_t c;
+    for (c = 0; c < r->ncontests; c++)
+    {
+        if (wcscmp(r->contests[c].title, title) == 0)
+        {
+            return &r->contests[c];
+        }
+    }
+    return NULL;
+}
+
+/* One precinct's votes for a choice in a vote type (EE_RES_UNKNOWN when missing). */
+static int64_t rpdf_cell(const EeResults *r, const EeResultsContest *ct, uint32_t k, const wchar_t *pre,
+                         uint32_t vt)
+{
+    uint32_t p;
+    for (p = 0; ct != NULL && ct->counts != NULL && p < ct->npre; p++)
+    {
+        if (wcscmp(r->precincts[ct->pre[p]].name, pre) == 0)
+        {
+            return ct->counts[((size_t)k * ct->npre + p) * EE_RESULTS_NVT(r) + vt];
+        }
+    }
+    return EE_RES_UNKNOWN;
+}
+
+/* No cross-check difference among the issues. */
+static BOOL rpdf_no_diffs(const EeResults *r)
+{
+    uint32_t i;
+    for (i = 0; i < r->nissues; i++)
+    {
+        if (wcsstr(r->issues[i].text, L"votes here") != NULL || wcsstr(r->issues[i].text, L"missing") != NULL ||
+            wcsstr(r->issues[i].text, L"differs") != NULL)
+        {
+            wprintf(L"respdf: issue %s\n", r->issues[i].text);
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* Results report PDFs: an ES&S Electionware summary report and precinct report of one
+ * election load as one result with no differences (two-line headings, a party code before
+ * the name, write-in rows, two numbers shown as one string, contests met in another order
+ * precinct by precinct), and so do a Hart cumulative report and canvass (turned headings,
+ * a primary's " - Democratic Party" title and "110 - DEM" precincts, a voting instruction
+ * read as Vote For); EeResults_MatchPrecinctName files "110BS3" under precinct 110
+ * (tag: respdf). */
+static int test_results_pdf(void)
+{
+    wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH], p_hcum[MAX_PATH], p_hcan[MAX_PATH], p_new[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf sum = {0}, pre[2] = {{0}, {0}}, hcum = {0}, hcan[2] = {{0}, {0}}, newp[2] = {{0}, {0}};
+    EeResults *res = NULL;
+    uint32_t nres = 0;
+    const wchar_t *paths[2];
+    const EeResultsContest *ct;
+    BOOL ok;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_sum, MAX_PATH, L"%sRPDF_cumulative.pdf", dir);
+    StringCchPrintfW(p_pre, MAX_PATH, L"%sRPDF_precinct.pdf", dir);
+    StringCchPrintfW(p_hcum, MAX_PATH, L"%sRPDF_hart_cumulative.pdf", dir);
+    StringCchPrintfW(p_hcan, MAX_PATH, L"%sRPDF_hart_canvass.pdf", dir);
+    StringCchPrintfW(p_new, MAX_PATH, L"%sRPDF_precinct_new.pdf", dir);
+
+    /* ES&S summary report */
+    ok = ess_page(&sum, "Summary Results Report", NULL) && rpdf_text(&sum, 25.0, 689.1, 10.0, "STATISTICS") &&
+         ess_heads(&sum, 661.1, FALSE) && rpdf_text(&sum, 21.0, 632.3, 8.0, "Registered Voters - Total") &&
+         rpdf_right(&sum, 248.0, 632.3, 8.0, "1,000") && rpdf_text(&sum, 21.0, 613.3, 8.0, "Ballots Cast - Total") &&
+         rpdf_right(&sum, 248.0, 613.3, 8.0, "300") && rpdf_right(&sum, 302.0, 613.3, 8.0, "100") &&
+         rpdf_right(&sum, 357.0, 613.3, 8.0, "200") && rpdf_text(&sum, 21.0, 594.3, 8.0, "Voter Turnout - Total") &&
+         rpdf_right(&sum, 248.0, 594.3, 8.0, "30.00%");
+    ok = ok && ess_contest(&sum, 560.0, "President/Vice President") &&
+         ess_row(&sum, 490.0, 20.0, "REP Alice Smith", "180", "61.02%", "60", "120", NULL) &&
+         ess_row(&sum, 470.0, 20.0, "DEM Bob Jones", "110", "37.29%", "35", "75", NULL) &&
+         ess_row(&sum, 450.0, 20.0, "Write-In Totals", "5", "1.69%", "2", "3", NULL) &&
+         ess_row(&sum, 431.0, 30.0, "Write-In: Carl Doe", "5", "1.69%", "2", "3", NULL) &&
+         ess_row(&sum, 412.0, 20.0, "Total Votes Cast", "295", "100.00%", "97", "198", NULL) &&
+         ess_row(&sum, 393.0, 30.0, "Overvotes", "1", NULL, "0", "1", NULL) &&
+         ess_row(&sum, 374.0, 30.0, "Undervotes", "4", NULL, "3", "1", NULL) &&
+         ess_row(&sum, 355.0, 30.0, "Contest Totals", "300", NULL, "100", "200", NULL);
+    ok = ok && ess_contest(&sum, 320.0, "Council District 1") &&
+         ess_row(&sum, 250.0, 20.0, "Ann Lee", "70", "77.78%", "40", "30", NULL) &&
+         ess_row(&sum, 230.0, 20.0, "Dan Roe", "20", "22.22%", "10", "10", NULL);
+    ok = ok && ess_contest(&sum, 200.0, "Council District 2") &&
+         ess_row(&sum, 130.0, 20.0, "Eve Poe", "150", "75.00%", "40", "110", NULL) &&
+         ess_row(&sum, 110.0, 20.0, "Sam Ray", "50", "25.00%", "10", "40", NULL);
+    /* ES&S precinct report: 101 has Council District 2, 102 has District 1 */
+    ok = ok && ess_page(&pre[0], "Precinct Summary Results Report", "101") &&
+         rpdf_text(&pre[0], 24.0, 670.1, 10.0, "STATISTICS") && ess_heads(&pre[0], 641.1, FALSE) &&
+         rpdf_right(&pre[0], 248.0, 611.0, 8.0, "600") &&
+         rpdf_text(&pre[0], 20.0, 609.0, 8.0, "Registered Voters - Total") &&
+         rpdf_right(&pre[0], 302.0, 594.3, 8.0, "60") && rpdf_right(&pre[0], 357.0, 594.3, 8.0, "140") &&
+         rpdf_right(&pre[0], 248.0, 592.0, 8.0, "200") && rpdf_text(&pre[0], 20.0, 590.0, 8.0, "Ballots Cast - Total");
+    ok = ok && ess_contest(&pre[0], 560.0, "President/Vice President") &&
+         ess_row(&pre[0], 490.0, 20.0, "REP Alice Smith", "120", "60.61%", "40", "80", NULL) &&
+         ess_row(&pre[0], 470.0, 20.0, "DEM Bob Jones", "75", "37.88%", "18", "57", NULL) &&
+         ess_row(&pre[0], 450.0, 20.0, "Write-In Totals", "3", "1.52%", "1", "2", NULL) &&
+         ess_row(&pre[0], 431.0, 30.0, "   Write-In: Carl Doe", "3", "1.52%", "1", "2", NULL) &&
+         ess_row(&pre[0], 412.0, 20.0, "Total Votes Cast", "198", "100.00%", "59", "139", NULL) &&
+         ess_row(&pre[0], 393.0, 30.0, "Overvotes", "1", NULL, "0", "1", NULL) &&
+         ess_row(&pre[0], 374.0, 30.0, "Undervotes", "1", NULL, "1", "0", NULL);
+    ok = ok && ess_contest(&pre[0], 340.0, "Council District 2") &&
+         ess_row(&pre[0], 270.0, 20.0, "Eve Poe", "150", "75.00%", "40", "110", NULL) &&
+         ess_row(&pre[0], 250.0, 20.0, "Sam Ray", "50", "25.00%", "10", "40", NULL);
+    ok = ok && ess_page(&pre[1], "Precinct Summary Results Report", "102") &&
+         rpdf_text(&pre[1], 24.0, 670.1, 10.0, "STATISTICS") && ess_heads(&pre[1], 641.1, FALSE) &&
+         rpdf_right(&pre[1], 248.0, 611.0, 8.0, "400") &&
+         rpdf_text(&pre[1], 20.0, 609.0, 8.0, "Registered Voters - Total") &&
+         rpdf_right(&pre[1], 302.0, 594.3, 8.0, "40") && rpdf_right(&pre[1], 357.0, 594.3, 8.0, "60") &&
+         rpdf_right(&pre[1], 248.0, 592.0, 8.0, "100") && rpdf_text(&pre[1], 20.0, 590.0, 8.0, "Ballots Cast - Total");
+    ok = ok && ess_contest(&pre[1], 560.0, "President/Vice President") &&
+         ess_row(&pre[1], 490.0, 20.0, "REP Alice Smith", "60", "61.86%", "20", "40", NULL) &&
+         ess_row(&pre[1], 470.0, 20.0, "DEM Bob Jones", "35", "36.08%", NULL, NULL, "17 18") &&
+         ess_row(&pre[1], 450.0, 20.0, "Write-In Totals", "2", "2.06%", "1", "1", NULL) &&
+         ess_row(&pre[1], 431.0, 30.0, "  Not Assigned", "2", "2.06%", "1", "1", NULL) &&
+         ess_row(&pre[1], 412.0, 20.0, "Total Votes Cast", "97", "100.00%", "38", "59", NULL) &&
+         ess_row(&pre[1], 393.0, 30.0, "Overvotes", "0", NULL, "0", "0", NULL) &&
+         ess_row(&pre[1], 374.0, 30.0, "Undervotes", "3", NULL, "2", "1", NULL);
+    ok = ok && ess_contest(&pre[1], 340.0, "Council District 1") &&
+         ess_row(&pre[1], 270.0, 20.0, "Ann Lee", "70", "77.78%", "40", "30", NULL) &&
+         ess_row(&pre[1], 250.0, 20.0, "Dan Roe", "20", "22.22%", "10", "10", NULL);
+
+    /* Hart cumulative report */
+    ok = ok && hart_page_head(&hcum, "Cumulative Results Report") &&
+         hart_cum_contest(&hcum, 642.4, "Sheriff (Dem) - Democratic Party") &&
+         hart_cum_row(&hcum, 609.4, "Ann Lee", "DEM", "50", "70", "120") &&
+         hart_cum_row(&hcum, 594.3, "Bob Ray", "DEM", "30", "50", "80") &&
+         hart_cum_row(&hcum, 578.7, "Cast Votes:", NULL, "80", "120", "200") &&
+         hart_cum_row(&hcum, 557.1, "Undervotes:", NULL, "2", "3", "5") &&
+         hart_cum_row(&hcum, 542.0, "Overvotes:", NULL, "0", "1", "1") &&
+         hart_cum_contest(&hcum, 510.0, "City Council - Vote for none, one, or two.") &&
+         hart_cum_row(&hcum, 477.1, "Kim Fox", NULL, "40", "50", "90") &&
+         hart_cum_row(&hcum, 462.0, "Lou Gray", NULL, "30", "40", "70");
+    /* Hart canvass: one contest per page */
+    {
+        static const char *const k_h1[] = {"Ann Lee, DEM", "Bob Ray, DEM", "Cast Votes", "Undervotes", "Overvotes",
+                                           "Early Voting Ballots Cast", "Total Ballots Cast", "Registered Voters"};
+        static const char *const k_r1[] = {"110 - DEM|70|30|100|2|1|60|103|600", "112 - DEM|50|50|100|3|0|20|103|400",
+                                           "Totals|120|80|200|5|1|80|206|1,000"};
+        static const char *const k_h2[] = {"Kim Fox", "Lou Gray", "Cast Votes", "Undervotes", "Overvotes"};
+        static const char *const k_r2[] = {"110 - DEM|50|40|90|0|0", "112 - DEM|40|30|70|0|0", "Totals|90|70|160|0|0"};
+        ok = ok && hart_canvass_page(&hcan[0], "Sheriff (Dem) - Democratic Party", k_h1, 8, k_r1, 3) &&
+             hart_canvass_page(&hcan[1], "City Council - Vote for none, one, or two.", k_h2, 5, k_r2, 3);
+    }
+
+    /* ES&S precinct report in the newer template */
+    {
+        static const char *const k_v1[] = {"600", "200", "150", "50", "120", "100", "20", "80", "50", "30"};
+        static const char *const k_v2[] = {"400", "100", "90", "10", "30", "25", "5", "70", "65", "5"};
+        ok = ok && ess2_page(&newp[0], "Precinct 1", k_v1) && ess2_page(&newp[1], "Precinct 2", k_v2);
+    }
+
+    g_tpdf_producer = "iText 2.1.7 by 1T3XT";
+    ok = ok && tpdf_write(p_sum, &sum, 1, FALSE) && tpdf_write(p_pre, pre, 2, FALSE) &&
+         tpdf_write(p_new, newp, 2, FALSE);
+    g_tpdf_producer = NULL;
+    ok = ok && tpdf_write(p_hcum, &hcum, 1, FALSE) && tpdf_write(p_hcan, hcan, 2, FALSE);
+    if (!ok)
+    {
+        wprintf(L"respdf: fixtures\n");
+        goto done;
+    }
+
+    /* ES&S: summary + precinct report */
+    paths[0] = p_sum;
+    paths[1] = p_pre;
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"respdf: ess load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = res[0].ncontests == 3 ? &res[0].contests[0] : NULL;
+    if (ct == NULL || res[0].nsources != 2 || res[0].sources[0].format != EE_RES_FMT_ESS_PRECINCT ||
+        res[0].sources[1].format != EE_RES_FMT_ESS_SUMMARY || res[0].nprecincts != 2 || res[0].nvt != 2 ||
+        wcscmp(res[0].vote_types[0], L"Election Day") != 0 || wcscmp(res[0].vote_types[1], L"Vote By Mail") != 0 ||
+        wcscmp(ct->title, L"President/Vice President") != 0 ||
+        wcscmp(res[0].contests[1].title, L"Council District 1") != 0 ||
+        wcscmp(res[0].contests[2].title, L"Council District 2") != 0 || ct->nchoices != 3 ||
+        wcscmp(res[0].choices[ct->first_choice].name, L"REP Alice Smith") != 0 ||
+        res[0].choices[ct->first_choice].party == NULL ||
+        wcscmp(res[0].choices[ct->first_choice].party, L"REP") != 0 ||
+        wcscmp(res[0].choices[ct->first_choice + 2].name, L"Write-in") != 0 ||
+        res[0].choices[ct->first_choice].total != 180 || res[0].choices[ct->first_choice + 2].total != 5 ||
+        rpdf_cell(&res[0], ct, 1, L"102", 0) != 17 || rpdf_cell(&res[0], ct, 1, L"102", 1) != 18 ||
+        rpdf_cell(&res[0], ct, 0, L"101", 1) != 80 || ct->over_total != 1 || ct->under_total != 4 ||
+        ct->ballots != 300 || res[0].registered_total != 1000 || res[0].ballots_total != 300 ||
+        res[0].precincts[0].registered != 600 || res[0].prec_ballots_vt == NULL ||
+        res[0].prec_ballots_vt[0] != 60 || !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"respdf: ess result (contests %u, precincts %u, vt %u, issues %u)\n", res[0].ncontests,
+                res[0].nprecincts, res[0].nvt, res[0].nissues);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* Hart: cumulative + canvass */
+    paths[0] = p_hcum;
+    paths[1] = p_hcan;
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"respdf: hart load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = rpdf_contest(&res[0], L"DEM Sheriff (Dem)");
+    if (ct == NULL || res[0].sources[0].format != EE_RES_FMT_HART_PRECINCT ||
+        res[0].sources[1].format != EE_RES_FMT_HART_SUMMARY || res[0].nprecincts != 2 || res[0].nvt != 0 ||
+        wcscmp(res[0].precincts[0].name, L"110") != 0 || ct->nchoices != 2 ||
+        wcscmp(res[0].choices[ct->first_choice].name, L"Ann Lee") != 0 ||
+        res[0].choices[ct->first_choice].party == NULL ||
+        wcscmp(res[0].choices[ct->first_choice].party, L"DEM") != 0 ||
+        res[0].choices[ct->first_choice].total != 120 || rpdf_cell(&res[0], ct, 0, L"110", 0) != 70 ||
+        ct->under_total != 5 || ct->over_total != 1 || rpdf_contest(&res[0], L"City Council") == NULL ||
+        rpdf_contest(&res[0], L"City Council")->vote_for != 2 || res[0].registered_total != 1000 ||
+        res[0].ballots_total != 200 || res[0].precincts[0].registered != 600 || !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"respdf: hart result (contests %u, precincts %u, issues %u)\n", res[0].ncontests,
+                res[0].nprecincts, res[0].nissues);
+        goto done;
+    }
+    {
+        const wchar_t *m1 = EeResults_MatchPrecinctName(&res[0], L"110BS3");
+        const wchar_t *m2 = EeResults_MatchPrecinctName(&res[0], L"110-DEM");
+        const wchar_t *m3 = EeResults_MatchPrecinctName(&res[0], L"1100");
+        if (m1 == NULL || wcscmp(m1, L"110") != 0 || m2 == NULL || wcscmp(m2, L"110") != 0 || m3 != NULL)
+        {
+            wprintf(L"respdf: precinct matching\n");
+            goto done;
+        }
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* ES&S newer template */
+    paths[0] = p_new;
+    if (!res_load(paths, 1, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"respdf: new template load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = rpdf_contest(&res[0], L"President/Vice President");
+    if (ct == NULL || res[0].ncontests != 1 || res[0].nprecincts != 2 || res[0].nvt != 2 ||
+        wcscmp(res[0].precincts[0].name, L"Precinct 1") != 0 || wcscmp(res[0].vote_types[0], L"Election Day") != 0 ||
+        wcscmp(res[0].vote_types[1], L"Provisional") != 0 || ct->nchoices != 2 ||
+        wcscmp(res[0].choices[ct->first_choice].name, L"Kamala D. Harris/Tim Walz") != 0 ||
+        wcscmp(res[0].choices[ct->first_choice + 1].name, L"Donald J. Trump/JD Vance") != 0 ||
+        res[0].choices[ct->first_choice].total != 150 || rpdf_cell(&res[0], ct, 1, L"Precinct 2", 1) != 5 ||
+        rpdf_cell(&res[0], ct, 0, L"Precinct 1", 0) != 100 || res[0].registered_total != 1000 ||
+        res[0].ballots_total != 300 || res[0].prec_ballots_vt == NULL || res[0].prec_ballots_vt[1] != 50)
+    {
+        wprintf(L"respdf: new template result (contests %u, precincts %u, vt %u)\n", res[0].ncontests,
+                res[0].nprecincts, res[0].nvt);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_tpdf_producer = NULL;
+    EeResults_FreeArray(res, nres);
+    free(sum.p);
+    free(pre[0].p);
+    free(pre[1].p);
+    free(hcum.p);
+    free(hcan[0].p);
+    free(hcan[1].p);
+    free(newp[0].p);
+    free(newp[1].p);
+    DeleteFileW(p_new);
+    DeleteFileW(p_sum);
+    DeleteFileW(p_pre);
+    DeleteFileW(p_hcum);
+    DeleteFileW(p_hcan);
+    wprintf(L"respdf: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* Find a compare row by contest (NULL = election-wide), choice, precinct (NULL = total) and
  * vote type (NULL = all). */
 static const EeResultsDiff *rescmp_find(const EeResultsDiff *d, uint32_t n, const wchar_t *contest,
@@ -11231,6 +11747,7 @@ int wmain(void)
     failed |= test_rcv();
     failed |= test_results();
     failed |= test_results_cumulative();
+    failed |= test_results_pdf();
     failed |= test_results_compare();
     failed |= test_results_view();
     return failed == 0 ? 0 : 1;

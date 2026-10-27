@@ -6,6 +6,7 @@
 
 #include "ee_results.h"
 #include "csv_sheet.h"
+#include "ee_results_pdf.h"
 #include "xlsx.h"
 
 #include "third_party/miniz/miniz.h"
@@ -4232,6 +4233,135 @@ typedef struct Parsed
     uint32_t group;
 } Parsed;
 
+/* sniff_format: a PDF, whose report kind (and so its EE_RES_FMT_*) the parser decides */
+#define RES_FMT_PDF 0x80000000u
+
+/* An ES&S Electionware or Hart Verity results report PDF, read by ee_results_pdf.c. Returns
+ * its format (EE_RES_FMT_ESS_* / EE_RES_FMT_HART_*), or 0 after b_fail. */
+static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
+{
+    EeResults *r = b->r;
+    EeRpdfDoc doc;
+    wchar_t err[400] = L"";
+    uint32_t *vtmap = NULL, *pmap = NULL;
+    uint32_t c, k;
+    size_t i;
+    uint32_t fmt = 0;
+
+    if (!EeRpdf_Parse(d, n, &doc, err, ARRAYSIZE(err)))
+    {
+        b_fail(b, err);
+        return 0;
+    }
+    vtmap = (uint32_t *)malloc(((size_t)doc.nvt + 1) * sizeof(uint32_t));
+    pmap = (uint32_t *)malloc(((size_t)doc.nprecincts + 1) * sizeof(uint32_t));
+    if (vtmap == NULL || pmap == NULL)
+    {
+        b->oom = TRUE;
+        goto done;
+    }
+    r->election_name = doc.election_name != NULL ? wdup_norm(doc.election_name) : NULL;
+    r->election_date = doc.election_date != NULL ? wdup(doc.election_date) : NULL;
+    r->region = doc.region != NULL ? wdup(doc.region) : NULL;
+    r->timestamp = doc.timestamp != NULL ? wdup(doc.timestamp) : NULL;
+    for (k = 0; k < doc.nvt; k++)
+    {
+        vtmap[k] = b_vt(b, doc.vote_types[k]);
+    }
+    for (k = 0; k < doc.nprecincts; k++)
+    {
+        pmap[k] = b_pre(b, doc.precincts[k].name);
+        if (!b->oom)
+        {
+            r->precincts[pmap[k]].registered = doc.precincts[k].registered;
+            r->precincts[pmap[k]].ballots = doc.precincts[k].ballots;
+        }
+    }
+    for (c = 0; c < doc.ncontests && !b->oom; c++)
+    {
+        const EeRpdfContest *dc = &doc.contests[c];
+        uint32_t ci = b_contest(b, dc->title, dc->vote_for, -1);
+        EeResultsContest *ct;
+        for (k = 0; k < dc->nchoices; k++)
+        {
+            b_choice(b, dc->choices[k].name, dc->choices[k].party, dc->choices[k].total);
+        }
+        if (b->oom)
+        {
+            break;
+        }
+        ct = &r->contests[ci];
+        ct->ballots = dc->ballots;
+        if (dc->has_over_under)
+        {
+            ct->has_over_under = TRUE;
+            ct->over_total = dc->over == EE_RPDF_UNKNOWN ? 0 : dc->over;
+            ct->under_total = dc->under == EE_RPDF_UNKNOWN ? 0 : dc->under;
+        }
+    }
+    for (i = 0; i < doc.ncounts && !b->oom; i++)
+    {
+        const EeRpdfCount *e = &doc.counts[i];
+        uint32_t choice = e->choice == EE_RPDF_OVER    ? RES_OVER
+                          : e->choice == EE_RPDF_UNDER ? RES_UNDER
+                                                       : e->choice;
+        b_count(b, e->contest, choice, pmap[e->pre], e->vt == EE_RPDF_NO_VT ? 0 : vtmap[e->vt], e->votes);
+    }
+    for (i = 0; i < doc.nturnout && !b->oom; i++)
+    {
+        b_turnout_vt(b, pmap[doc.turnout[i].pre], vtmap[doc.turnout[i].vt], doc.turnout[i].votes);
+    }
+    r->registered_total = doc.registered_total;
+    r->ballots_total = doc.ballots_total;
+    if (doc.ballots_vt_total != NULL && r->nvt > 0 && doc.nprecincts == 0)
+    {
+        /* a summary report's ballots cast by vote type */
+        BOOL all = TRUE;
+        for (k = 0; k < doc.nvt; k++)
+        {
+            all = all && doc.ballots_vt_total[k] != EE_RPDF_UNKNOWN;
+        }
+        if (all)
+        {
+            r->ballots_vt = (int64_t *)calloc(r->nvt, sizeof(int64_t));
+            if (r->ballots_vt == NULL)
+            {
+                b->oom = TRUE;
+                goto done;
+            }
+            for (k = 0; k < doc.nvt; k++)
+            {
+                r->ballots_vt[vtmap[k]] = doc.ballots_vt_total[k];
+            }
+        }
+    }
+    for (k = 0; k < doc.nnotes; k++)
+    {
+        b_issue(b, doc.notes[k]);
+    }
+    switch (doc.kind)
+    {
+        case EE_RPDF_ESS_PRECINCT:
+            fmt = EE_RES_FMT_ESS_PRECINCT;
+            break;
+        case EE_RPDF_HART_SUMMARY:
+            fmt = EE_RES_FMT_HART_SUMMARY;
+            break;
+        case EE_RPDF_HART_PRECINCT:
+            fmt = EE_RES_FMT_HART_PRECINCT;
+            break;
+        default:
+            fmt = EE_RES_FMT_ESS_SUMMARY;
+            break;
+    }
+
+done:
+    free(vtmap);
+    free(pmap);
+    EeRpdf_Free(&doc);
+    return fmt;
+}
+
 static uint32_t sniff_format(const uint8_t *d, size_t n)
 {
     static const uint8_t k_ole[8] = {0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1};
@@ -4243,6 +4373,10 @@ static uint32_t sniff_format(const uint8_t *d, size_t n)
     if (n >= 8 && memcmp(d, k_ole, 8) == 0)
     {
         return EE_RES_FMT_CLARITY_XLS;
+    }
+    if (EeRpdf_LooksLikePdf(d, n))
+    {
+        return RES_FMT_PDF;
     }
     if (n >= 4 && d[0] == 'P' && d[1] == 'K' && d[2] == 3 && d[3] == 4)
     {
@@ -4328,6 +4462,14 @@ static const wchar_t *format_label(uint32_t fmt)
             return L"Election Explorer export";
         case EE_RES_FMT_EE_VIEW:
             return L"Election Explorer export (displayed view)";
+        case EE_RES_FMT_ESS_SUMMARY:
+            return L"ES&S summary report (PDF)";
+        case EE_RES_FMT_ESS_PRECINCT:
+            return L"ES&S precinct report (PDF)";
+        case EE_RES_FMT_HART_SUMMARY:
+            return L"Hart cumulative report (PDF)";
+        case EE_RES_FMT_HART_PRECINCT:
+            return L"Hart canvass report (PDF)";
         default:
             return L"results";
     }
@@ -4362,6 +4504,9 @@ static BOOL parse_buffer(const uint8_t *d,
         case EE_RES_FMT_EE_VIEW:
             parse_ee_view(&b, d, n);
             break;
+        case RES_FMT_PDF:
+            out->format = parse_results_pdf(&b, d, n);
+            break;
         case EE_RES_FMT_CLARITY_TXT:
         {
             size_t wn = 0;
@@ -4380,8 +4525,8 @@ static BOOL parse_buffer(const uint8_t *d,
         default:
             b_fail(&b,
                    L"It is not a recognized election results file (Clarity summary.csv, "
-                   L"detail.txt, detail.xls, detail.xlsx or detail.xml, or an Election "
-                   L"Explorer results export).");
+                   L"detail.txt, detail.xls, detail.xlsx or detail.xml, an ES&S Electionware "
+                   L"or Hart Verity results report PDF, or an Election Explorer results export).");
             break;
     }
     if (!b.bad && !b.oom)
@@ -4519,7 +4664,9 @@ static BOOL load_path(const wchar_t *path, ParsedList *pl, wchar_t *err, size_t 
         }
         {
             mz_uint e, cnt = mz_zip_reader_get_num_files(&z);
-            size_t found = 0;
+            size_t found = 0, first_found = 0;
+            uint32_t skipped = 0;
+            wchar_t skip_first[MAX_PATH + 400] = L"";
             ok = TRUE;
             for (e = 0; e < cnt && ok; e++)
             {
@@ -4566,31 +4713,73 @@ static BOOL load_path(const wchar_t *path, ParsedList *pl, wchar_t *err, size_t 
                 }
                 if (!parse_buffer(ed, elen, wname, pp, perr, ARRAYSIZE(perr)))
                 {
-                    StringCchPrintfW(msg,
-                                     ARRAYSIZE(msg),
-                                     L"%s (%s): %s",
-                                     base_name(path),
-                                     wname,
-                                     perr);
-                    res_set_err(err, errcch, msg);
+                    /* A county's ZIP can hold other files beside the results (Hart puts
+                     * CSV exports next to its PDFs): skip them, with a note. */
+                    if (skipped++ == 0)
+                    {
+                        size_t pl_len = wcslen(perr);
+                        if (pl_len > 0 && perr[pl_len - 1] == L'.')
+                        {
+                            perr[pl_len - 1] = 0; /* the note supplies the full stop */
+                        }
+                        StringCchPrintfW(skip_first, ARRAYSIZE(skip_first), L"%s: %s", wname, perr);
+                    }
                     mz_free(ed);
-                    ok = FALSE;
-                    break;
+                    continue;
                 }
                 mz_free(ed);
                 pp->path = wdup(path);
                 pp->member = wdup(wname);
+                if (found == 0)
+                {
+                    first_found = pl->n;
+                }
                 pl->n++;
                 found++;
             }
             if (ok && found == 0)
             {
-                StringCchPrintfW(msg,
-                                 ARRAYSIZE(msg),
-                                 L"%s holds no election results files.",
-                                 base_name(path));
+                if (skipped > 0)
+                {
+                    StringCchPrintfW(msg, ARRAYSIZE(msg), L"%s (%s)", base_name(path), skip_first);
+                }
+                else
+                {
+                    StringCchPrintfW(msg,
+                                     ARRAYSIZE(msg),
+                                     L"%s holds no election results files.",
+                                     base_name(path));
+                }
                 res_set_err(err, errcch, msg);
                 ok = FALSE;
+            }
+            else if (ok && skipped > 0)
+            {
+                /* the note goes with the first file read from the ZIP */
+                EeResults *r0 = &pl->p[first_found].r;
+                EeResultsIssue *ni =
+                    (EeResultsIssue *)realloc(r0->issues, ((size_t)r0->nissues + 1) * sizeof(EeResultsIssue));
+                if (ni != NULL)
+                {
+                    wchar_t note[MAX_PATH + 600];
+                    r0->issues = ni;
+                    if (skipped == 1)
+                    {
+                        StringCchPrintfW(note, ARRAYSIZE(note), L"1 file in %s was not read (%s).", base_name(path),
+                                         skip_first);
+                    }
+                    else
+                    {
+                        StringCchPrintfW(note, ARRAYSIZE(note), L"%u files in %s were not read; the first: %s.",
+                                         skipped, base_name(path), skip_first);
+                    }
+                    r0->issues[r0->nissues].source = 0;
+                    r0->issues[r0->nissues].text = wdup(note);
+                    if (r0->issues[r0->nissues].text != NULL)
+                    {
+                        r0->nissues++;
+                    }
+                }
             }
         }
         mz_zip_reader_end(&z);
@@ -4629,7 +4818,8 @@ typedef struct FlatRow
     const wchar_t *contest;
     const wchar_t *choice;
     int64_t total;
-    uint32_t ci; /* contest index */
+    uint32_t ci;  /* contest index */
+    uint32_t occ; /* earlier contests with the same title (repeated names in order) */
 } FlatRow;
 
 static FlatRow *flat_rows(const EeResults *r, size_t *out_n)
@@ -4645,12 +4835,22 @@ static FlatRow *flat_rows(const EeResults *r, size_t *out_n)
     for (c = 0; c < r->ncontests; c++)
     {
         const EeResultsContest *ct = &r->contests[c];
+        uint32_t occ = 0, e;
+        for (e = 0; e < c; e++)
+        {
+            if (r->contests[e].title != NULL && ct->title != NULL &&
+                wcscmp(r->contests[e].title, ct->title) == 0)
+            {
+                occ++;
+            }
+        }
         for (k = 0; k < ct->nchoices; k++)
         {
             f[n].contest = ct->title;
             f[n].choice = r->choices[ct->first_choice + k].name;
             f[n].total = r->choices[ct->first_choice + k].total;
             f[n].ci = c;
+            f[n].occ = occ;
             n++;
         }
     }
@@ -4712,6 +4912,42 @@ static size_t align_rows(const FlatRow *a, size_t na, const FlatRow *b, size_t n
             j++;
         }
     }
+    /* Contests in another order (a precinct report knows no order for contests that never
+     * share a ballot): pair what is left by name and repeat number. Skipped when the files
+     * have little in common, so unrelated elections stay quick to tell apart. */
+    if (matched * 10 >= (na < nb ? na : nb) * 3 && matched < na && matched < nb)
+    {
+        uint8_t *used = (uint8_t *)calloc(nb + 1, 1);
+        if (used != NULL)
+        {
+            for (k = 0; k < na; k++)
+            {
+                if (pair[k] != SIZE_MAX)
+                {
+                    used[pair[k]] = 1;
+                }
+            }
+            for (k = 0; k < na; k++)
+            {
+                size_t m;
+                if (pair[k] != SIZE_MAX)
+                {
+                    continue;
+                }
+                for (m = 0; m < nb; m++)
+                {
+                    if (!used[m] && a[k].occ == b[m].occ && rows_match(&a[k], &b[m]))
+                    {
+                        pair[k] = m;
+                        used[m] = 1;
+                        matched++;
+                        break;
+                    }
+                }
+            }
+            free(used);
+        }
+    }
     return matched;
 }
 
@@ -4724,6 +4960,8 @@ static int format_rank(uint32_t fmt)
         case EE_RES_FMT_EE_EXPORT:
             return 4;
         case EE_RES_FMT_CLARITY_XLS:
+        case EE_RES_FMT_ESS_PRECINCT:
+        case EE_RES_FMT_HART_PRECINCT:
             return 3;
         case EE_RES_FMT_CLARITY_TXT:
         case EE_RES_FMT_EE_VIEW:
@@ -5275,6 +5513,42 @@ static void adopt_figures(EeResults *dst, const EeResults *oth)
         }
         free(vmap);
     }
+
+    /* Election-wide figures the shown file does not print (an ES&S precinct report whose
+     * statistics give only turnout; its summary report has them). */
+    if (dst->registered_total == EE_RES_UNKNOWN)
+    {
+        dst->registered_total = oth->registered_total;
+    }
+    if (dst->ballots_total == EE_RES_UNKNOWN)
+    {
+        dst->ballots_total = oth->ballots_total;
+    }
+    if (dst->ballots_vt == NULL && oth->ballots_vt != NULL && dst->nvt == oth->nvt && dst->nvt > 0)
+    {
+        int64_t *bv = (int64_t *)calloc(dst->nvt, sizeof(int64_t));
+        uint32_t v, w, found = 0;
+        for (v = 0; bv != NULL && v < oth->nvt; v++)
+        {
+            for (w = 0; w < dst->nvt; w++)
+            {
+                if (wieq(oth->vote_types[v], dst->vote_types[w]))
+                {
+                    bv[w] = oth->ballots_vt[v];
+                    found++;
+                    break;
+                }
+            }
+        }
+        if (bv != NULL && found == dst->nvt)
+        {
+            dst->ballots_vt = bv;
+        }
+        else
+        {
+            free(bv);
+        }
+    }
 }
 
 static BOOL add_source(EeResults *dst, size_t *cap, const Parsed *p, BOOL primary)
@@ -5815,6 +6089,37 @@ typedef struct TallyContest
     BOOL ou;
     int64_t over, under;
 } TallyContest;
+
+const wchar_t *EeResults_MatchPrecinctName(const EeResults *r, const wchar_t *name)
+{
+    const wchar_t *best = NULL;
+    size_t best_len = 0;
+    uint32_t p;
+    if (r == NULL || name == NULL)
+    {
+        return NULL;
+    }
+    for (p = 0; p < r->nprecincts; p++)
+    {
+        const wchar_t *pn = r->precincts[p].name;
+        size_t len;
+        if (pn == NULL || pn[0] == L'\0')
+        {
+            continue;
+        }
+        if (wcscmp(pn, name) == 0)
+        {
+            return pn;
+        }
+        len = wcslen(pn);
+        if (len > best_len && wcsncmp(name, pn, len) == 0 && !iswdigit(name[len]))
+        {
+            best = pn;
+            best_len = len;
+        }
+    }
+    return best;
+}
 
 BOOL EeResults_FromTally(const EeResultsTallyItem *items,
                          uint32_t n,

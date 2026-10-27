@@ -1,6 +1,6 @@
 # Election results — design (Election Explorer 1.5)
 
-Status: **steps 1–7 done (engine, Clarity loaders, Election Results window, filter, reports, compare, export, all Clarity counties)** (2026-10-26). Decisions D1–D8 are at the end.
+Status: **steps 1–8 done (engine, Clarity loaders, Election Results window, filter, reports, compare, export, all Clarity counties, ES&S and Hart PDFs)** (2026-10-26). Decisions D1–D8 are at the end.
 
 ## Goal
 
@@ -527,6 +527,108 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
     noted once per file.
   - **Tarrant PR22:** ballots cast of 98,052 against a precinct sum of 62,480, in all three files.
 - Smoke suite passes; Release x64 and ARM64 build clean.
+
+### Step 8 — ES&S and Hart results report PDFs (done 2026-10-26, uncommitted)
+
+- **New module `src/ee_results_pdf.{c,h}`** reads a report through `pdf_reader.c`'s positioned
+  text into a plain model (`EeRpdfDoc`); `ee_results.c` (`parse_results_pdf`) turns it into
+  `EeResults`. New formats: `EE_RES_FMT_ESS_SUMMARY` / `_ESS_PRECINCT` / `_HART_SUMMARY` /
+  `_HART_PRECINCT`. A precinct report or canvass is shown ahead of a summary (rank of XLS).
+- **ES&S Electionware** (JasperReports; detected by the "Report generated with Electionware"
+  footer, not by the report title, which counties change freely):
+  - Fonts: 13 pt page heading, 12 pt contest title, 10 pt "Vote For" and column headings, 8 pt
+    rows. A heading can take two lines ("Election" over "Day").
+  - Numbers are right-aligned and the number font has no glyph widths. Each number goes to the
+    column whose right edge (the heading centre plus half the column pitch) is nearest its right
+    edge, measured with Helvetica widths.
+  - **Precinct report:** a fourth 13 pt line, set further below the heading (about 27 pt) than
+    the heading's own lines are apart and alone at the left, names the precinct.
+  - Rows: candidates keep their party code in the name ("REP Donald J. Trump", as the ES&S CVR
+    writes it) and the code is also the party. "Write-In Totals" is the choice "Write-in"; the
+    indented "Write-In: name" and "Not Assigned" rows are left out (a note counts them).
+    "Overvotes", "Undervotes" and "Contest Totals" (summary: the contest's ballots) are read.
+  - Statistics: "Registered Voters - Total" / "Ballots Cast - Total" (or "- Democratic Party" in
+    a primary), ballots cast by vote type.
+  - Quirks:
+    - two cells shown as one string ("263 1,361": the first number keeps its place, the next
+      goes to the next column);
+    - a summary heading with a blank middle line;
+    - percentages under TOTAL (turnout) are ignored.
+  - **Contest order:** a precinct report meets contests precinct by precinct. They are put in
+    the order every precinct agrees with (a topological sort), and contests that never share a
+    ballot go in natural title order (District 10 before District 35).
+  - Also, the cross-check's row alignment now pairs rows left over by the in-order pass by name
+    and repeat number, so a file with contests in another order still groups and checks.
+  - PDFs printed through PScript5 (L22 Cumulative, LR22, PR22 Republican Cumulative) have no text
+    mapping and are refused.
+- **Hart Verity** (Microsoft Reporting Services; detected by the Producer):
+  - Every page starts with the same heading, ending with "Run Date". It also gives "<ballots> of
+    <registered>", the election name (the small left line), the date and the run date.
+  - **Cumulative:** a contest is a title (10 pt) and a "Choice Party <vote types> Total" table.
+    Each vote type has a count and a percentage; the count goes to the column whose heading ends
+    just right of it.
+  - **Canvass:** one contest per page with turned (90°) column headings and a row per precinct,
+    then "Totals". Columns that do not fit go on to a following page under the same title. It
+    has no vote-type split, so it loads with no vote types.
+  - Naming as the rest of the program and the Hart CVR:
+    - "Ken Paxton, REP" is "Ken Paxton" with party REP;
+    - " - Democratic Party" becomes the "DEM " prefix;
+    - "- Vote for none, one, two, or three." becomes Vote For 3;
+    - a primary's "110 - DEM" precinct is 110.
+  - A county ZIP's Hart CSV and XLSX exports are skipped with a note (any ZIP member that is not
+    a readable results file is skipped; the ZIP fails only when none is readable).
+- **Compare with a CVR:** a Hart CVR files ballots under precinct + ballot style ("315BS14",
+  "315-BS14", "110DEM"). New `EeResults_MatchPrecinctName` gives the results precinct a name
+  stands for (exact, else the longest precinct name it starts with when no digit follows), and
+  `Cvr_BuildResults` files the CVR's rows under it when comparing.
+- **Results-wide figures:** `adopt_figures` now also takes registered voters, ballots cast and
+  ballots by vote type from another file when the shown one lacks them (an ES&S precinct report
+  whose statistics give only turnout).
+- **Acceptance:**
+
+  | Test | Result |
+  |---|---|
+  | Travis, 13 ES&S elections (2020–22), summary + precinct report each | one election each; precinct sums equal the summary except G20 below |
+  | Travis G20 PDFs ↔ G20 CVR (612,696 ballots) | 399 figures match, precinct and vote type too; differences below |
+  | Hays G25 / GR25 / L26 / P26 D+R / PR26 D+R, Hart canvass + cumulative | one election each, no differences |
+  | Hays G25 PDFs ↔ G25 CVR | 345 figures match at every level, nothing differs |
+  | Hays PR26 PDFs ↔ PR26 CVR (both parties in one CVR) | each party's contests match at every level |
+  | Hays P26 PDFs ↔ pre-canvass CVRs | all contests and precincts pair; counts a little lower in the CVR, as expected |
+  | Real app: G20 PDFs + CVR, Hays PR26 PDFs + CVR, Compare | as above |
+
+  - **Travis G20, genuine file differences:**
+    - "Directors Precinct 4 Barton Springs/Edwards Aquifer Conservation District" is missing
+      from about 30 precincts of the county's precinct report (it sums to 30,800 where the
+      summary and the CVR say 33,478);
+    - the CVR has a second, smaller pair of "Board of Trustees Place 6/7 Pflugerville ISD"
+      contests that the official reports leave out;
+    - the PDFs print no over/under votes.
+  - **Sweep of every results PDF in `Election_Results/`** (1,941 files, one at a time; no
+    crashes):
+    - **978 load** (975 of 1,914 Texas files):
+      - ES&S summary and precinct reports from Guadalupe, Randall, McLennan, Montgomery, Potter,
+        Liberty, Smith, Tom Green, Brazos, Henderson, Bowie, Travis, Bexar, Orange, Coryell, Ellis,
+        Gregg, Collin, Grayson, Williamson, Lubbock and others;
+      - Hart reports from Hays, Harris, Randall and others.
+    - **Refused:**
+      - 261 scanned PDFs with no text;
+      - 30 encrypted;
+      - 5 unreadable;
+      - 36 Electionware layouts with no contest tables: Collin's "Statement of Votes Cast" (24),
+        and Guadalupe, Ellis, Henderson and Smith extras;
+      - 631 other layouts. The largest are:
+        - an older Hart "Canvass Report — Total Voters — Official" with no PDF Producer
+          (McLennan 200, Montgomery 65, Harris 14);
+        - scans with an OCR text layer (Cameron 131, Ector 34, Grayson 25);
+        - Smith's rotated Electionware "Custom Table Report" canvass (28);
+        - Comal's "Detailed Results by Contest" (19).
+    - Candidates for a later step: the older Hart canvass and the Electionware Statement of Votes
+      Cast / custom canvass grids.
+  - **Bexar G24 summary ↔ precinct report:** one election, 98 contests, candidate totals equal.
+    The county's files differ slightly in write-ins (President 2,916 vs 2,921 over precincts) and
+    ballots cast (763,198 vs 762,285). A Bexar precinct name can come back in a later section with
+    its own statistics; its contests add to the same ones.
+- Smoke test `respdf`; smoke suite passes; Release x64 and ARM64 build clean.
 
 ## Implementation plan (proposed)
 

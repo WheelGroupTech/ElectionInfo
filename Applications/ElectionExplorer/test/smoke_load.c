@@ -9402,6 +9402,219 @@ done:
     return rc;
 }
 
+/* One line of a PDF page drawn as a single TJ (Acrobat Distiller): the non-empty cells of
+ * @p cells start at @p x (6 pt per character), the gaps between them drawn as kerns. */
+static BOOL tj_line(TBuf *b, double y, const double *x, const char *const *cells, int n)
+{
+    double end = 0.0;
+    BOOL first = TRUE;
+    BOOL ok = TRUE;
+    int i;
+    for (i = 0; i < n && ok; i++)
+    {
+        if (cells[i][0] == '\0')
+        {
+            continue;
+        }
+        ok = first ? tb_printf(b, "BT /F1 10 Tf 1 0 0 1 %.2f %.2f Tm [(%s)", x[i], y, cells[i])
+                   : tb_printf(b, "%.0f(%s)", -100.0 * (x[i] - end), cells[i]);
+        end = x[i] + 6.0 * (double)strlen(cells[i]);
+        first = FALSE;
+    }
+    return ok && tb_printf(b, "] TJ ET\n");
+}
+
+/* County PDF rosters posted from October 23, 2026 (tag: county1026; needs src\pdf_reader.c).
+ * Henderson: a "Timestamp" column that holds the voting date ("10/23/2026", also with a
+ * time), and a "Henderson County Voter Turnout" title above the "Voter_ID" header -- not a
+ * "County Voter ID" title. Tom Green's October 25 mail list: no title row (Voter ID, last
+ * name, first name, "10/5/26"), a 9-digit county number, and column titles printed once on
+ * page 2 below some of its rows. Guadalupe's check-in report (Distiller): one TJ per line with
+ * the columns set apart by kerns, the date drawn a little lower, a voter with no Voter ID, a
+ * 7-digit county number and a "TOTAL" line. */
+static int test_county1026(void)
+{
+    static const double k_hcx[4] = {113, 268, 435, 516};
+    static const char *const k_hrows[3][4] = {{"1008704123", "PASSMORE, STEPHAN JAMES", "1", "10/23/2026"},
+                                              {"1008793465", "NEWLAND, LORA BAKER", "1", "10/23/2026 2:41 PM"},
+                                              {"1008809760", "MCDONALD, ARNOLD DERRELL", "2", "10/25/2026"}};
+    static const char *const k_tg[9][4] = {
+        {"1129533079", "Abbott", "Sabre", "10/5/26"},      {"1153446789", "Abernathy", "Frances", "10/22/26"},
+        {"1129488445", "Aboussie", "Marilyn", "10/5/26"},  {"105006290", "Adair", "Pamela", "10/15/26"},
+        {"1129821341", "Adkins", "Horace", "10/13/26"},    {"1184484978", "Aguilar", "Carmen", "10/19/26"},
+        {"1129973024", "Keeney", "Betty", "10/23/26"},     {"1206887251", "Kelly", "Richard", "10/13/26"},
+        {"2167363699", "Zimmerman", "Gary", "10/15/26"}};
+    static const double k_tgx[4] = {57.8, 123.1, 224.1, 311.2};
+    static const double k_gx[5] = {20, 200, 440, 510, 535};
+    static const char *const k_ghead[5] = {"NAME", "ADDRESS", "VUID", "PCT", "DATE"};
+    static const char *const k_grows[4][4] = {
+        {"ABAD, FELIPE", "1017 DUMFRIES DR, SEGUIN, TX   78155", "1038240794", "106"},
+        {"ABAD, OLGA", "302 KOCH, SCHERTZ, TX   78154", "2188929741", "311"},
+        {"DAVIS, LAWRENCE", "136 KRUEGER WAY, SCHERTZ, TX 78108", "1041617", "306"},
+        {"SHARP, KATHERINE ELIZABETH", "2403 PECHORA PIPIT, TX 78130", "", "401"}};
+    static const wchar_t *const k_names[4] = {
+        L"G26_Early Voting Roster October 23, 2026.pdf", L"G26_Early Voting Roster October 25, 2026.pdf",
+        L"G26_102526BallotsByMail.pdf", L"G26_Early Voter Check-ins Report_10-21-2026.pdf"};
+    TBuf h23 = {0}, h25 = {0}, tg[2] = {{0}, {0}}, gu = {0};
+    wchar_t dir[MAX_PATH];
+    wchar_t pbuf[4][MAX_PATH];
+    const wchar_t *paths[4];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    wchar_t got[64];
+    uint32_t r;
+    int i, c;
+    BOOL ok;
+    int rc = 1;
+
+    /* Henderson (Print To PDF from Excel: cells centered under their titles) */
+    ok = proster_text(&h23, 300, 770, "Henderson County Voting Roster") &&
+         proster_text(&h23, 300, 750, "Friday, October 23, 2026") &&
+         proster_text(&h25, 300, 770, "Henderson County Voter Turnout") &&
+         proster_text(&h25, 300, 750, "Sunday, October 25, 2026");
+    for (c = 0; c < 4 && ok; c++)
+    {
+        static const char *const k_title[4] = {"Voter_ID", "Voter_Name", "Voting Precinct", "Timestamp"};
+        ok = proster_text(&h23, k_hcx[c], 720, k_title[c]) &&
+             proster_text(&h25, k_hcx[c], 720, c == 3 ? "Date" : k_title[c]);
+        for (i = 0; i < 3 && ok; i++)
+        {
+            ok = proster_text(i < 2 ? &h23 : &h25, k_hcx[c], 704 - 14 * (i % 2), k_hrows[i][c]);
+        }
+    }
+    /* Tom Green: six rows on page 1, two on page 2 above the titles, one below them */
+    for (i = 0; i < 9 && ok; i++)
+    {
+        double y = (i < 6) ? 768 - 14.5 * i : (i < 8) ? 768 - 14.5 * (i - 6) : 100;
+        for (c = 0; c < 4 && ok; c++)
+        {
+            ok = tb_printf(&tg[i < 6 ? 0 : 1], "BT /F1 10 Tf 1 0 0 1 %.2f %.2f Tm (%s) Tj ET\n", k_tgx[c], y,
+                           k_tg[i][c]);
+        }
+    }
+    ok = ok && tb_printf(&tg[1], "BT /F1 10 Tf 1 0 0 1 52.8 114.4 Tm (VUID) Tj ET"
+                                 " BT /F1 10 Tf 1 0 0 1 123 114.4 Tm (Last) Tj ET"
+                                 " BT /F1 10 Tf 1 0 0 1 224 114.4 Tm (First) Tj ET"
+                                 " BT /F1 10 Tf 1 0 0 1 294.2 114.4 Tm (date) Tj ET\n");
+    /* Guadalupe */
+    ok = ok && proster_text(&gu, 300, 716, "Guadalupe County Voter Roster (per TEC 87.121)") &&
+         proster_text(&gu, 300, 704, "November 3, 2026 General Election") &&
+         proster_text(&gu, 300, 692, "10/21/2026 through 10/21/2026") && tj_line(&gu, 680, k_gx, k_ghead, 5);
+    for (i = 0; i < 4 && ok; i++)
+    {
+        double y = 668 - 12 * i;
+        ok = tj_line(&gu, y, k_gx, k_grows[i], 4) &&
+             tb_printf(&gu, "BT /F1 10 Tf 1 0 0 1 535 %.2f Tm (10/21/2026) Tj ET\n", y - 1.4);
+    }
+    ok = ok && tb_printf(&gu, "BT /F1 10 Tf 1 0 0 1 20 600 Tm [(TOTAL)-30000(4)] TJ ET\n");
+    GetTempPathW(MAX_PATH, dir);
+    for (i = 0; i < 4; i++)
+    {
+        StringCchCopyW(pbuf[i], MAX_PATH, dir);
+        StringCchCatW(pbuf[i], MAX_PATH, k_names[i]);
+        paths[i] = pbuf[i];
+    }
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(pbuf[0], &h23, 1) || !proster_write(pbuf[1], &h25, 1) ||
+        !proster_write(pbuf[2], tg, 2) || !proster_write(pbuf[3], &gu, 1))
+    {
+        wprintf(L"county1026: could not write the files\n");
+        goto done;
+    }
+    if (EeRoster_LoadFiles(paths, 4, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"county1026: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 16 || info.rows_non_voter != 1 || info.rows_no_date != 0 ||
+        info.method_rows[EE_VM_MAIL] != 9 || info.method_rows[EE_VM_EARLY] != 7 || info.files_read != 4)
+    {
+        wprintf(L"county1026: rows %u nonvoter %u nodate %u mail %u early %u files %u\n", t.row_count,
+                info.rows_non_voter, info.rows_no_date, info.method_rows[EE_VM_MAIL], info.method_rows[EE_VM_EARLY],
+                info.files_read);
+        for (r = 0; r < t.row_count; r++)
+        {
+            wchar_t v[32], last[64], dv[32], src[128];
+            rt_cell(&t, r, L"VUID", v, ARRAYSIZE(v));
+            rt_cell(&t, r, L"Last Name", last, ARRAYSIZE(last));
+            rt_cell(&t, r, L"Date Voted", dv, ARRAYSIZE(dv));
+            rt_cell(&t, r, L"Source File", src, ARRAYSIZE(src));
+            wprintf(L"  %s | %s | %s | %s\n", v, last, dv, src);
+        }
+        goto done;
+    }
+    {
+        static const struct
+        {
+            const wchar_t *vuid;
+            const wchar_t *title;
+            const wchar_t *want;
+        } k_want[] = {
+            {L"1008704123", L"Date Voted", L"10/23/2026"},
+            {L"1008704123", L"Voting Method", L"Early Vote In-Person"},
+            {L"1008793465", L"Date Voted", L"10/23/2026"},
+            {L"1008793465", L"Timestamp", L"10/23/2026 2:41 PM"},
+            {L"1008809760", L"Date Voted", L"10/25/2026"},
+            {L"1008809760", L"Precinct", L"2"},
+            {L"1008809760", L"Middle Name", L"DERRELL"},
+            {L"1008809760", L"Voting Method", L"Early Vote In-Person"},
+            {L"1129533079", L"Last Name", L"Abbott"},
+            {L"1129533079", L"First Name", L"Sabre"},
+            {L"1129533079", L"Date Voted", L"10/05/2026"},
+            {L"1129533079", L"Voting Method", L"Mail Ballot"},
+            {L"105006290", L"Last Name", L"Adair"},
+            {L"1206887251", L"Date Voted", L"10/13/2026"},
+            {L"2167363699", L"First Name", L"Gary"},
+            {L"1038240794", L"Last Name", L"ABAD"},
+            {L"1038240794", L"Precinct", L"106"},
+            {L"1038240794", L"ADDRESS", L"1017 DUMFRIES DR, SEGUIN, TX 78155"},
+            {L"1038240794", L"Date Voted", L"10/21/2026"},
+            {L"1038240794", L"Voting Method", L"Early Vote In-Person"},
+            {L"1041617", L"Precinct", L"306"},
+            {L"", L"Last Name", L"SHARP"},
+            {L"", L"Precinct", L"401"},
+            {L"", L"Date Voted", L"10/21/2026"},
+        };
+        for (i = 0; i < (int)ARRAYSIZE(k_want); i++)
+        {
+            r = rt_find_vuid(&t, k_want[i].vuid);
+            if (r == UINT32_MAX)
+            {
+                wprintf(L"county1026: '%s' not loaded\n", k_want[i].vuid);
+                goto done;
+            }
+            rt_cell(&t, r, k_want[i].title, got, ARRAYSIZE(got));
+            if (wcscmp(got, k_want[i].want) != 0)
+            {
+                wprintf(L"county1026: '%s' %s = '%s', want '%s'\n", k_want[i].vuid, k_want[i].title, got,
+                        k_want[i].want);
+                goto done;
+            }
+        }
+    }
+    rc = 0;
+    wprintf(L"county1026 ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    for (i = 0; i < 4; i++)
+    {
+        DeleteFileW(pbuf[i]);
+    }
+    free(h23.p);
+    free(h25.p);
+    free(tg[0].p);
+    free(tg[1].p);
+    free(gu.p);
+    if (rc != 0)
+    {
+        wprintf(L"county1026 test failed\n");
+    }
+    return rc;
+}
+
 /* Texas Secretary of State turnout rosters (tag: sosroster): a loose statewide early voting
  * CSV (COUNTY, MAIL-IN / IN-PERSON, no voting date) and Election Day ZIPs that name their
  * roster "STATEWIDE_VOTER_INFO.csv" for every party (named after the ZIP instead), a
@@ -11698,6 +11911,7 @@ int wmain(void)
     failed |= test_county50();
     failed |= test_county1023();
     failed |= test_pdf_strays();
+    failed |= test_county1026();
     failed |= test_sos_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();

@@ -1485,8 +1485,9 @@ static int vuid_rank(const char *lab)
         strncmp(lab, "voter state v", 13) == 0 || /* Hunt "voter_state_voter_id", cut short in print */
         strcmp(lab, "id voter") == 0 || strcmp(lab, "idvoter") == 0)
         return 1;
-    if (contains_ci(lab, "county voter"))
-        return 3;
+    if (strncmp(lab, "county voter", 12) == 0 || contains_ci(lab, "county voter id"))
+        return 3; /* not a title such as "Henderson County Voter Turnout" or "Guadalupe County
+                   * Voter Roster" */
     if (contains_ci(lab, "voter id") || contains_ci(lab, "voterid") || strcmp(lab, "cert") == 0 ||
         strcmp(lab, "cert #") == 0 || strcmp(lab, "cert#") == 0 || strcmp(lab, "certificatenumber") == 0 ||
         strcmp(lab, "certificate number") == 0)
@@ -1729,9 +1730,11 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                     m->adate = ci; /* may become Date Voted: see use_activity_date */
                 }
                 if (m->tdate < 0 && (strcmp(lab, "time") == 0 || strncmp(lab, "checkin tim", 11) == 0 ||
-                                     strncmp(lab, "check-in tim", 12) == 0 || strncmp(lab, "check in tim", 12) == 0))
+                                     strncmp(lab, "check-in tim", 12) == 0 || strncmp(lab, "check in tim", 12) == 0 ||
+                                     strcmp(lab, "timestamp") == 0 || strcmp(lab, "time stamp") == 0))
                 {
-                    m->tdate = ci; /* Randall "Time", Hunt "checkin_time": "10/19/2026 8:00" */
+                    m->tdate = ci; /* Randall "Time", Hunt "checkin_time": "10/19/2026 8:00";
+                                    * Henderson "Timestamp" (October 23) */
                 }
                 if (m->pct_alt < 0 && strcmp(lab, "newprecinct") == 0)
                 {
@@ -2065,6 +2068,26 @@ static BOOL sheet_gap_comma(const SheetRows *r, uint32_t from, int full_col)
 }
 
 /* Turn one data row into a record (or count why it is skipped). */
+/* A totals line read as a name: "TOTAL" (or "TOTALS") and no other word with a letter. */
+static BOOL total_name(const char *last, const char *first, const char *middle)
+{
+    const char *part[3] = {last, first, middle};
+    BOOL total = FALSE;
+    int i;
+    for (i = 0; i < 3; i++)
+    {
+        if (_stricmp(part[i], "total") == 0 || _stricmp(part[i], "totals") == 0)
+        {
+            total = TRUE;
+        }
+        else if (has_letter(part[i]))
+        {
+            return FALSE;
+        }
+    }
+    return total;
+}
+
 static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const HeaderMap *m,
                      EeVotingMethod sheet_method, uint32_t sheet_date, const char *sheet_party,
                      BOOL calendar_ok)
@@ -2131,6 +2154,11 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
         pct[4] = '\0';
     }
     named = has_letter(last) || has_letter(first);
+    if (named && vuid[0] == '\0' && total_name(last, first, middle))
+    {
+        L->info->rows_non_voter++; /* Guadalupe's "TOTAL - 4875" line, read as a name */
+        return;
+    }
     if (named && vuid[0] != '\0' && strspn(vuid, "0") == strlen(vuid))
     {
         vuid[0] = '\0'; /* a named voter with a "0" placeholder ID (Montgomery): no Voter ID */
@@ -2581,10 +2609,10 @@ static BOOL stacked_header(const SheetRows *r, uint32_t h, StackedHeader *sh)
     return row_is_header(&sh->rows, 0);
 }
 
-/* A check-in "Time" column (Randall, Hunt) becomes Date Voted when the sheet has no Date
- * Voted column and the column holds a date (not just a time of day) in nearly all of the
- * first rows -- not Bexar's mail lists, whose "Check-in Time" is filled in a few rows
- * only; it stays an extra column too, for the time. */
+/* A check-in "Time" column (Randall, Hunt; Henderson's "Timestamp") becomes Date Voted when
+ * the sheet has no Date Voted column and the column holds a date (not just a time of day) in
+ * nearly all of the first rows -- not Bexar's mail lists, whose "Check-in Time" is filled in
+ * a few rows only; it stays an extra column too, for the time. */
 static void use_time_date(HeaderMap *m, const SheetRows *r, uint32_t from)
 {
     uint32_t row;
@@ -3707,6 +3735,154 @@ static BOOL pdf_precinct_like(const char *t)
            strspn(t, "0123456789.-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") == n;
 }
 
+#define PDF_UNTITLED_MAX_COLS 8
+
+/* A table printed with no title row (Tom Green's October 25 mail list: Voter ID, last name,
+ * first name, date returned "10/5/26"): nearly all lines of the page with two or more runs
+ * start with an ID at the left (6 to 11 digits: Tom Green also lists 9-digit county numbers),
+ * and its lines with the usual run count line up in columns. The columns are titled by what
+ * they hold: the first "VUID", a date "Date", a short number "Precinct", and the columns of
+ * words, left to right, "Name" (one: "LAST, FIRST"), "Last Name" / "First Name" (two) or
+ * "Last Name" / "First Name" / "Middle Name" (three). Fills @p titles and the column spans
+ * @p cx0 / @p cx1 (from the left of the leftmost cell to the next column) and returns the
+ * column count, or 0 when the page is not such a table. */
+static int pdf_untitled_columns(const EePdfPageText *pt, const uint32_t *ord, const PdfLine *lines,
+                                uint32_t nlines, char titles[][PDF_TABLE_CELL], float *cx0, float *cx1)
+{
+    static const char *const k_names[3][3] = {
+        {"Name", NULL, NULL}, {"Last Name", "First Name", NULL}, {"Last Name", "First Name", "Middle Name"}};
+    uint32_t count_of[PDF_UNTITLED_MAX_COLS + 1] = {0};
+    uint32_t dates[PDF_UNTITLED_MAX_COLS] = {0};
+    uint32_t pcts[PDF_UNTITLED_MAX_COLS] = {0};
+    uint32_t words[PDF_UNTITLED_MAX_COLS] = {0};
+    uint32_t multi = 0, id_lines = 0, used = 0;
+    uint32_t li, k, ncols = 0;
+    int nword = 0, w = 0;
+    for (li = 0; li < nlines; li++)
+    {
+        const PdfLine *ln = &lines[li];
+        const EePdfTextRun *left = NULL;
+        char t[PDF_TABLE_CELL];
+        if (ln->count < 2)
+        {
+            continue;
+        }
+        multi++;
+        for (k = 0; k < ln->count; k++)
+        {
+            const EePdfTextRun *r = &pt->runs[ord[ln->first + k]];
+            if (left == NULL || r->x < left->x)
+            {
+                left = r;
+            }
+        }
+        pdf_run_text(pt, left, t, sizeof(t));
+        if (strlen(t) >= 6 && strlen(t) <= 11 && strspn(t, "0123456789") == strlen(t))
+        {
+            id_lines++;
+            if (ln->count <= PDF_UNTITLED_MAX_COLS)
+            {
+                count_of[ln->count]++;
+            }
+        }
+    }
+    if (id_lines < 5 || id_lines * 10 < multi * 9)
+    {
+        return 0;
+    }
+    for (k = 3; k <= PDF_UNTITLED_MAX_COLS; k++)
+    {
+        if (count_of[k] > count_of[ncols])
+        {
+            ncols = k;
+        }
+    }
+    if (ncols < 3 || count_of[ncols] < 5)
+    {
+        return 0;
+    }
+    for (k = 0; k < ncols; k++)
+    {
+        cx0[k] = 1e30f;
+        cx1[k] = -1e30f;
+    }
+    for (li = 0; li < nlines; li++)
+    {
+        const PdfLine *ln = &lines[li];
+        uint32_t idx[PDF_UNTITLED_MAX_COLS];
+        char t[PDF_TABLE_CELL];
+        if (ln->count != ncols)
+        {
+            continue;
+        }
+        for (k = 0; k < ncols; k++)
+        {
+            /* the line's runs left to right */
+            uint32_t v = ord[ln->first + k];
+            uint32_t j = k;
+            while (j > 0 && pt->runs[idx[j - 1]].x > pt->runs[v].x)
+            {
+                idx[j] = idx[j - 1];
+                j--;
+            }
+            idx[j] = v;
+        }
+        pdf_run_text(pt, &pt->runs[idx[0]], t, sizeof(t));
+        if (strlen(t) < 6 || strlen(t) > 11 || strspn(t, "0123456789") != strlen(t))
+        {
+            continue;
+        }
+        used++;
+        for (k = 0; k < ncols; k++)
+        {
+            const EePdfTextRun *r = &pt->runs[idx[k]];
+            pdf_run_text(pt, r, t, sizeof(t));
+            cx0[k] = min(cx0[k], r->x);
+            cx1[k] = max(cx1[k], r->x + pdf_run_width(r));
+            dates[k] += (find_date(t) != 0 || slash_yy_cell(t) != 0);
+            pcts[k] += (pdf_precinct_like(t) && !has_letter(t));
+            words[k] += has_letter(t);
+        }
+    }
+    for (k = 1; k < ncols; k++)
+    {
+        if (dates[k] * 10 < used * 9 && pcts[k] * 10 < used * 9)
+        {
+            if (words[k] * 10 < used * 9)
+            {
+                return 0; /* a column that is none of these */
+            }
+            nword++;
+        }
+    }
+    if (nword < 1 || nword > 3)
+    {
+        return 0;
+    }
+    for (k = 0; k < ncols; k++)
+    {
+        const char *title;
+        if (k + 1 < ncols && cx1[k] > cx0[k + 1])
+        {
+            cx1[k] = cx0[k + 1];
+        }
+        if (k > 0 && cx0[k] <= cx0[k - 1])
+        {
+            return 0;
+        }
+        if (k == 0)
+            title = "VUID";
+        else if (dates[k] * 10 >= used * 9)
+            title = "Date";
+        else if (pcts[k] * 10 >= used * 9)
+            title = "Precinct";
+        else
+            title = k_names[nword - 1][w++];
+        StringCchCopyA(titles[k], PDF_TABLE_CELL, title);
+    }
+    return (int)ncols;
+}
+
 /* A line is the header when one of its runs names the Voter ID. */
 static BOOL pdf_line_is_header(const EePdfPageText *pt, const uint32_t *ord, const PdfLine *ln)
 {
@@ -4215,6 +4391,28 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                 hdr_line = li;
             }
         }
+        if (hdr_line == UINT32_MAX && ncols == 0 &&
+            (ncols = pdf_untitled_columns(&pt, ord, lines, nlines, cells, cx0, cx1)) > 0)
+        {
+            /* no title row: the columns follow from the data (see pdf_untitled_columns) */
+            int c;
+            vcol = 0;
+            pcol = -1;
+            for (c = 0; c < ncols; c++)
+            {
+                cellp[c] = cells[c];
+                if (strcmp(cells[c], "Precinct") == 0)
+                {
+                    pcol = c;
+                }
+            }
+            if (!rows_sink(sc, cellp, (uint32_t)ncols))
+            {
+                result = -1;
+                break;
+            }
+            header_emitted = TRUE;
+        }
         if (hdr_line == UINT32_MAX && ncols == 0)
         {
             if (page >= 2 || (pt.nruns == 0 && page + 1 >= npages))
@@ -4335,12 +4533,25 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                 }
                 continue;
             }
-            if (hdr_line != UINT32_MAX && li < hdr_line)
+            if (hdr_line != UINT32_MAX && li < hdr_line && header_emitted && page > 0)
             {
-                if (header_emitted && page > 0)
+                /* A later page's repeated titles -- but not a line with a Voter ID: Tom Green's
+                 * October 25 mail list prints its column titles once, near the foot of page
+                 * 15, below 45 of its rows (read with the columns already known). */
+                BOOL id = FALSE;
+                for (k = 0; k < ln->count && !id; k++)
                 {
-                    continue; /* a later page's repeated titles */
+                    char t[PDF_TABLE_CELL];
+                    pdf_run_text(&pt, &pt.runs[ord[ln->first + k]], t, sizeof(t));
+                    id = vuid_like(t);
                 }
+                if (!id)
+                {
+                    continue;
+                }
+            }
+            else if (hdr_line != UINT32_MAX && li < hdr_line)
+            {
                 /* Title lines above the first header: one cell per run. */
                 for (k = 0; k < ln->count && k < PDF_TABLE_MAX_COLS; k++)
                 {

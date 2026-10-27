@@ -750,6 +750,27 @@ three letters under "VUID" on a line with its Voter ID join the run drawn before
 Voter ID claims its column first in the second pass. Regression: Brazos +1, Gregg +16 (and a middle
 name's last letter no longer read as a suffix), one Angelina middle name now whole. Smoke test `pdfstray`.
 
+**October 23-25 PDF layouts (2026-10-27):** the nightly report patched three counties' loads with
+scripts; the loader now reads them itself. Henderson's October 23 roster titles its date column
+"Timestamp": a "Timestamp" column is now a check-in time column (Date Voted when it holds a date in
+nearly all rows, like Randall's "Time"). Its October 25 file, titled "Henderson County Voter Turnout",
+loaded no rows: a title containing "county voter" ranked as a "County Voter ID" header, so the title line
+became the header. Only a title starting "county voter" or containing "county voter id" ranks so now (441
+rows, 10/25/2026). The same rule had taken Guadalupe's "Guadalupe County Voter Roster (per TEC 87.121)"
+title as the header of its check-in reports (Distiller, one TJ per line, already split at the kerns by
+`split_gaps`): Oct 19-23 now load 4,834 / 4,810 / 4,661 / 4,431 / 4,659 distinct 10-digit VUIDs, the
+counts of the side comparison against the SOS (23,132 in both + 263 county-only). Besides these they hold
+voters with no VUID (20-34 a day) and 7-digit county numbers (up to 11 a day); each file's "TOTAL" line
+(read as the name "TOTAL") is now a non-voter row. Tom Green's October 25 mail list prints no column
+titles: a page whose lines nearly all start with a 6- to 11-digit ID now has its columns named from their
+contents (`pdf_untitled_columns`: VUID, then Date / Precinct / one to three name columns). The same file
+prints its titles once, near the foot of page 15, below 45 rows that were then skipped as repeated
+titles: lines above a later page's header that hold a Voter ID are now data (1,510 mail ballots, 3 with
+9-digit county IDs). Regression (every Travis / Tarrant / Harris / Dallas election, the other counties'
+files, each G26 PDF alone, the SOS CSVs): only Henderson, Tom Green and Guadalupe change, plus Fort
+Bend's `EV-10-19_1.xlsx`, whose 38 "Total" subtotal rows had loaded as voters with no VUID (now non-voter
+rows). Smoke test `county1026`.
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

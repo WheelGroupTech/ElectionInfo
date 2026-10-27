@@ -93,6 +93,11 @@ plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).
 `pdfstray` covers PDF rows that a stray piece of text knocked out of the Voter ID column: a name in two
 touching pieces and a name's separate last letter (Gregg), a middle name's last letter at the left margin
 (Gregg's mail list) and a "FED" precinct between the "Pct" and "VUID" titles (Brazos).
+`county1026` covers the PDF layouts posted from October 23: Henderson's "Timestamp" column read as the
+voting date and a "Henderson County Voter Turnout" title that is not a Voter ID title; Tom Green's mail
+list with no title row (columns named from their contents, a 9-digit county number, titles printed once
+on page 2 below some rows); Guadalupe's check-in report drawn one TJ per line (columns set apart by
+kerns, the date a little lower, a voter with no Voter ID, a "TOTAL" line that is not a voter).
 `filterfile` saves filter rules with `EeFilter_SaveFile` (CSV and tab-delimited, with quoted values: a
 comma, quotes, a trailing space, an empty value) and loads them with `EeFilter_LoadFile` into columns in
 another order, choosing the saved Column Number between two columns with one title, skipping a missing

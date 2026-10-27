@@ -70,6 +70,27 @@
 #define IDM_REPORT_LOAD_SUMMARY 40101
 #define IDM_REPORT_VOTING_TOTALS 40102
 #define IDM_FILTER_DUP_VOTERS_VOTING 40103
+/* Election Results window (1.5). */
+#define IDM_FILE_OPEN_RESULTS   40110
+#define IDM_FILE_CLOSE_RESULTS  40111
+#define IDM_RES_VIEW_TOTALS     40112
+#define IDM_RES_VIEW_PRECINCT   40113
+#define IDM_RES_OPTIONS         40114
+#define IDM_RES_LOAD_SUMMARY    40115
+#define IDM_RES_TURNOUT         40116
+#define IDM_RESCMP_EXPORT       40117
+#define IDM_RESCMP_CLOSE        40118
+#define IDM_RESCMP_DIFFONLY     40119
+#define IDM_FILE_EXPORT_RESULTS 40120
+
+/* Election Results options dialog. */
+#define IDC_RES_ZOOM      41600
+#define IDC_RES_ZOOM_SPIN 41601
+#define IDC_RES_SHOW_VT   41602
+#define IDC_RES_PARTY_REP 41603
+#define IDC_RES_PARTY_DEM 41604
+#define IDC_RES_EXPORT_VIEW   41605
+#define IDC_RES_EXPORT_DETAIL 41606
 
 /* Help / About dialog child controls. */
 #define IDC_HELP_TEXT     41200

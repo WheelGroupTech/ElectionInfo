@@ -9,6 +9,7 @@
 #include "filter.h"
 #include "xlsx.h"
 #include "ee_cvr.h"
+#include "ee_results.h"
 #include "voter_roster.h"
 #include "settings.h"
 
@@ -46,6 +47,9 @@ static const wchar_t k_CvrValueReportClassName[] = L"ElectionExplorerCvrValueRep
 static const wchar_t k_CvrRcvClassName[] = L"ElectionExplorerCvrRcv";
 static const wchar_t k_RosterTotalsClassName[] = L"ElectionExplorerRosterTotals";
 static const wchar_t k_CvrFilterClassName[] = L"ElectionExplorerCvrFilter";
+static const wchar_t k_ResultsClassName[] = L"ElectionExplorerResults";
+static const wchar_t k_ResTurnoutClassName[] = L"ElectionExplorerResultsTurnout";
+static const wchar_t k_ResCompareClassName[] = L"ElectionExplorerResultsCompare";
 
 static const int k_DefaultWidth = 1100;
 static const int k_DefaultHeight = 720;
@@ -301,6 +305,10 @@ static void App_ExportVoters(AppState *app, BOOL selection_only);
 static void App_ExportVoterReport(ReportWindow *rw, BOOL selection_only);
 static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_BeginOpenCvr(AppState *app);
+static void App_BeginOpenResults(AppState *app);
+static void Res_FillCompareMenu(HMENU popup, HWND self, BOOL with_cvr, HWND *targets, int max_targets);
+static void App_RunResultsCompare(HWND from, HWND other);
+static void App_ShowResultsCompareHelp(AppState *app, HWND owner);
 static void App_FreeCvrUi(AppState *ui);
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_StartDuplicateScan(AppState *app, int kind);
@@ -2789,6 +2797,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter List");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter List…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -10747,6 +10756,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_FILE_OPEN_ROSTER:
                     App_BeginOpenRoster(app);
                     return 0;
+                case IDM_FILE_OPEN_RESULTS:
+                    App_BeginOpenResults(app);
+                    return 0;
                 case IDM_REPORT_LOAD_SUMMARY:
                     if (app->roster_info.note != NULL)
                     {
@@ -11331,6 +11343,7 @@ typedef struct CvrWindow
     BOOL vreport_avail[EE_CVRREP_COUNT];
     uint32_t vreport_col[EE_CVRREP_COUNT];
     wchar_t base_name[192]; /* initial CVR file base name (no extension), for exports */
+    HWND cmp_targets[32];   /* Compare menu: results windows by command offset */
 } CvrWindow;
 
 static void App_ShowCvrReport(CvrWindow *cw, BOOL filtered);
@@ -11454,10 +11467,15 @@ static HMENU App_CreateCvrMenu(void)
     HMENU edit_menu = CreatePopupMenu();
     HMENU filter_menu = CreatePopupMenu();
     HMENU reports_menu = CreatePopupMenu();
+    HMENU compare_menu = CreatePopupMenu();
     HMENU help_menu = CreatePopupMenu();
     if (menu == NULL || file_menu == NULL || edit_menu == NULL || filter_menu == NULL ||
-        reports_menu == NULL || help_menu == NULL)
+        reports_menu == NULL || compare_menu == NULL || help_menu == NULL)
     {
+        if (compare_menu != NULL)
+        {
+            DestroyMenu(compare_menu);
+        }
         if (file_menu != NULL)
         {
             DestroyMenu(file_menu);
@@ -11487,6 +11505,7 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_CVR, L"&Close Cast Vote Records");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_CVR, L"&Export Cast Vote Records…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -11522,6 +11541,7 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
@@ -11529,6 +11549,8 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
+    AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(open a results window to compare)");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -12041,6 +12063,12 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                IDM_CVR_TABULATE_RCV_FILTERED,
                                MF_BYCOMMAND |
                                    (cw->rcv_count > 0 && cw->filt_active ? MF_ENABLED : MF_GRAYED));
+                /* Compare (File, Edit, Filter, Reports, Compare, Help): open results windows. */
+                if ((HMENU)wParam == GetSubMenu(GetMenu(hwnd), 4))
+                {
+                    Res_FillCompareMenu((HMENU)wParam, hwnd, FALSE, cw->cmp_targets,
+                                        (int)ARRAYSIZE(cw->cmp_targets));
+                }
             }
             break;
 
@@ -12048,6 +12076,16 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (cw == NULL)
             {
                 break;
+            }
+            if (LOWORD(wParam) >= IDM_COMPARE_WITH_FIRST &&
+                LOWORD(wParam) < IDM_COMPARE_WITH_FIRST + ARRAYSIZE(cw->cmp_targets))
+            {
+                HWND target = cw->cmp_targets[LOWORD(wParam) - IDM_COMPARE_WITH_FIRST];
+                if (target != NULL && IsWindow(target))
+                {
+                    App_RunResultsCompare(hwnd, target);
+                }
+                return 0;
             }
             switch (LOWORD(wParam))
             {
@@ -12103,6 +12141,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 case IDM_FILE_OPEN_ROSTER:
                     App_BeginOpenRoster(cw->app);
                     return 0;
+                case IDM_FILE_OPEN_RESULTS:
+                    App_BeginOpenResults(cw->app);
+                    return 0;
                 case IDM_FILE_CLOSE_CVR:
                     DestroyWindow(hwnd);
                     return 0;
@@ -12127,6 +12168,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_HELP_EXPORT:
                     App_ShowHelpTopicOn(cw->app, hwnd, L"Help — Export", k_CvrHelpExport);
+                    return 0;
+                case IDM_HELP_COMPARE:
+                    App_ShowResultsCompareHelp(cw->app, hwnd);
                     return 0;
                 case IDM_HELP_ABOUT:
                     App_ShowAboutOn(cw->app, hwnd);
@@ -14841,9 +14885,24 @@ static void App_ShowCvrOptions(CvrWindow *cw)
 /* CVR filter dialog ("Election Explorer CVR Filter")                          */
 /* -------------------------------------------------------------------------- */
 
+/* State of an "is / is not" rule filter window. The CVR window and the Election Results
+ * window both host it: the host describes its columns, collects a column's values and
+ * applies the rules. */
 typedef struct CvrFilterState
 {
-    CvrWindow *cw;
+    AppState *app;                /* the host window's resources */
+    HWND owner;                   /* host window (disabled while the filter is open) */
+    EeFilterSet *applied;         /* the host's applied rules */
+    HWND *slot;                   /* the host's "open filter window" field */
+    const wchar_t *const *titles; /* filter column titles, indexed by column */
+    const uint8_t *hidden;        /* ncols flags: column not offered (NULL = all offered) */
+    uint32_t ncols;
+    const wchar_t *base_name; /* suggested base name for Export Filter */
+    const wchar_t *file_noun; /* fallback base name ("Cast Vote Record") */
+    const wchar_t *caption;   /* window caption, also used for its messages */
+    BOOL (*collect)(void *ctx, uint32_t column, wchar_t ***vals, uint32_t *n);
+    void (*apply)(void *ctx);
+    void *ctx;
     EeFilterSet draft;
     int edit_index;
     BOOL refreshing;
@@ -14918,17 +14977,17 @@ static void Combo_AutosizeDropdown(HWND combo, HFONT font, int max_width)
     }
 }
 
-static void CvrFilt_PopulateColumns(HWND combo, const EeCvrTable *t)
+static void CvrFilt_PopulateColumns(HWND combo, const CvrFilterState *st)
 {
     uint32_t i;
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    if (t == NULL)
+    for (i = 0; i < st->ncols; i++)
     {
-        return;
-    }
-    for (i = 0; i < t->ncols; i++)
-    {
-        const wchar_t *title = t->col_titles[i] ? t->col_titles[i] : L"";
+        const wchar_t *title = st->titles[i] ? st->titles[i] : L"";
+        if (st->hidden != NULL && st->hidden[i])
+        {
+            continue;
+        }
         int idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)title);
         if (idx >= 0)
         {
@@ -14990,7 +15049,7 @@ static BOOL CvrFilt_ValueComboEditable(HWND hwnd)
 static HWND CvrFilt_EnsureValueCombo(HWND hwnd, CvrFilterState *st, BOOL editable)
 {
     HWND old = GetDlgItem(hwnd, IDC_FLT_VALUE);
-    AppState *app = st->cw->app;
+    AppState *app = st->app;
     HWND neww;
     RECT r;
     POINT tl;
@@ -15042,7 +15101,7 @@ static void CvrFilt_FillValues(HWND hwnd, CvrFilterState *st, BOOL force)
     BOOL numeric;
     HCURSOR prev;
 
-    if (hwnd == NULL || st == NULL || st->cw == NULL)
+    if (hwnd == NULL || st == NULL || st->collect == NULL)
     {
         return;
     }
@@ -15052,7 +15111,7 @@ static void CvrFilt_FillValues(HWND hwnd, CvrFilterState *st, BOOL force)
         return;
     }
     prev = SetCursor(LoadCursorW(NULL, IDC_WAIT));
-    EeCvr_CollectColumnValues(&st->cw->table, column, EE_FILTER_MAX_DISTINCT, &vals, &n);
+    st->collect(st->ctx, column, &vals, &n);
     numeric = (n > 0);
     for (i = 0; i < n; i++)
     {
@@ -15084,7 +15143,7 @@ static void CvrFilt_FillValues(HWND hwnd, CvrFilterState *st, BOOL force)
     {
         SendMessageW(combo, CB_SETCURSEL, 0, 0);
     }
-    Combo_AutosizeDropdown(combo, st->cw->app->font_ui, Scale(st->cw->app, 900));
+    Combo_AutosizeDropdown(combo, st->app->font_ui, Scale(st->app, 900));
     SetCursor(prev);
     st->values_ready = TRUE;
     st->values_column = column;
@@ -15105,10 +15164,9 @@ static void CvrFilt_RefreshList(HWND list, CvrFilterState *st)
         LVITEMW it;
         const wchar_t *colname = L"?";
         ZeroMemory(&it, sizeof(it));
-        if (st->cw != NULL && r->column < st->cw->table.ncols &&
-            st->cw->table.col_titles[r->column] != NULL)
+        if (r->column < st->ncols && st->titles[r->column] != NULL)
         {
-            colname = st->cw->table.col_titles[r->column];
+            colname = st->titles[r->column];
         }
         it.mask = LVIF_TEXT | LVIF_PARAM;
         it.iItem = (int)i;
@@ -15202,25 +15260,25 @@ static void CvrFilt_SetSelectedEnabled(HWND hwnd, CvrFilterState *st, BOOL enabl
 
 static void CvrFilt_Apply(CvrFilterState *st)
 {
-    if (st == NULL || st->cw == NULL)
+    if (st == NULL || st->applied == NULL)
     {
         return;
     }
-    if (!EeFilter_Copy(&st->cw->filters, &st->draft))
+    if (!EeFilter_Copy(st->applied, &st->draft))
     {
-        MessageBoxW(st->cw->hwnd, L"Could not apply the filter.", k_WindowTitle,
+        MessageBoxW(st->owner, L"Could not apply the filter.", k_WindowTitle,
                     MB_ICONERROR | MB_OK);
         return;
     }
-    Cvr_ApplyFilter(st->cw);
+    st->apply(st->ctx);
 }
 
 static void CvrFilt_Close(HWND hwnd, CvrFilterState *st)
 {
-    if (st != NULL && st->cw != NULL && st->cw->hwnd != NULL)
+    if (st != NULL && st->owner != NULL)
     {
-        EnableWindow(st->cw->hwnd, TRUE);
-        SetForegroundWindow(st->cw->hwnd);
+        EnableWindow(st->owner, TRUE);
+        SetForegroundWindow(st->owner);
     }
     DestroyWindow(hwnd);
 }
@@ -15228,7 +15286,7 @@ static void CvrFilt_Close(HWND hwnd, CvrFilterState *st)
 static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     CvrFilterState *st = (CvrFilterState *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-    AppState *app = (st != NULL && st->cw != NULL) ? st->cw->app : NULL;
+    AppState *app = (st != NULL) ? st->app : NULL;
 
     switch (msg)
     {
@@ -15293,8 +15351,8 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                     {
                         if (r.value[0] == L'\0')
                         {
-                            MessageBoxW(hwnd, L"Choose a value to filter on.",
-                                        L"Election Explorer CVR Filter", MB_ICONINFORMATION | MB_OK);
+                            MessageBoxW(hwnd, L"Choose a value to filter on.", st->caption,
+                                        MB_ICONINFORMATION | MB_OK);
                             return 0;
                         }
                         if (st->edit_index >= 0 && (uint32_t)st->edit_index < st->draft.count)
@@ -15345,7 +15403,7 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 case IDC_FLT_EXPORT:
                 case IDC_FLT_LOAD:
                 {
-                    uint32_t ncols = st->cw->table.ncols;
+                    uint32_t ncols = st->ncols;
                     EeFilterColumnRef *cols =
                         (EeFilterColumnRef *)calloc(ncols ? ncols : 1, sizeof(EeFilterColumnRef));
                     uint32_t c;
@@ -15356,11 +15414,13 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                     for (c = 0; c < ncols; c++)
                     {
                         cols[c].column = c;
-                        cols[c].title = st->cw->table.col_titles[c] ? st->cw->table.col_titles[c] : L"";
+                        cols[c].title = (st->titles[c] != NULL && !(st->hidden != NULL && st->hidden[c]))
+                                            ? st->titles[c]
+                                            : L"";
                     }
                     if (LOWORD(wParam) == IDC_FLT_EXPORT)
                     {
-                        FilterFile_Export(hwnd, &st->draft, cols, ncols, st->cw->base_name, L"Cast Vote Record");
+                        FilterFile_Export(hwnd, &st->draft, cols, ncols, st->base_name, st->file_noun);
                     }
                     else if (FilterFile_Load(hwnd, &st->draft, cols, ncols, EE_FILTER_REL_EQUALITY, NULL))
                     {
@@ -15455,13 +15515,13 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             CvrFilter_Unregister(hwnd);
             if (st != NULL)
             {
-                if (st->cw != NULL)
+                if (st->owner != NULL)
                 {
-                    if (st->cw->hwnd != NULL)
-                    {
-                        EnableWindow(st->cw->hwnd, TRUE);
-                    }
-                    st->cw->hwnd_filter = NULL;
+                    EnableWindow(st->owner, TRUE);
+                }
+                if (st->slot != NULL)
+                {
+                    *st->slot = NULL;
                 }
                 EeFilter_Clear(&st->draft);
                 HeapFree(GetProcessHeap(), 0, st);
@@ -15474,10 +15534,11 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-static BOOL App_ShowCvrFilter(CvrWindow *cw)
+/* Create and show a rule filter window for a host described by @p st (which the window
+ * then owns: it is freed in WM_DESTROY). @p prompt heads the window. */
+static BOOL Filter_ShowRuleWindow(CvrFilterState *st, const wchar_t *prompt)
 {
-    CvrFilterState *st;
-    AppState *app;
+    AppState *app = st->app;
     const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX |
                         WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
     const DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
@@ -15499,8 +15560,7 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
         DWORD extra;
         int id;
     } k_ctrls[] = {
-        {L"STATIC", L"Display ballot records matching these conditions:",
-         SS_LEFT | SS_CENTERIMAGE, IDC_FLT_PROMPT},
+        {L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE, IDC_FLT_PROMPT},
         {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_COLUMN},
         {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_RELATION},
         {L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS, IDC_FLT_VALUE},
@@ -15515,34 +15575,6 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
         {L"BUTTON", L"Cancel", BS_PUSHBUTTON, IDCANCEL},
     };
     int i;
-
-    if (cw == NULL)
-    {
-        return FALSE;
-    }
-    app = cw->app;
-    if (cw->hwnd_filter != NULL)
-    {
-        SetForegroundWindow(cw->hwnd_filter);
-        return TRUE;
-    }
-    if (cw->table.nrows == 0 || cw->table.ncols == 0)
-    {
-        return TRUE;
-    }
-    st = (CvrFilterState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(CvrFilterState));
-    if (st == NULL)
-    {
-        return FALSE;
-    }
-    st->cw = cw;
-    st->edit_index = -1;
-    EeFilter_Init(&st->draft);
-    if (!EeFilter_Copy(&st->draft, &cw->filters))
-    {
-        HeapFree(GetProcessHeap(), 0, st);
-        return FALSE;
-    }
 
     /* Default wider than the voter filter so long contest names fit in the rules
      * list and the wide column drop-down has room. */
@@ -15563,21 +15595,21 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
     }
     outer_w = rc_wnd.right - rc_wnd.left;
     outer_h = rc_wnd.bottom - rc_wnd.top;
-    if (GetWindowRect(cw->hwnd, &owner))
+    if (GetWindowRect(st->owner, &owner))
     {
         x = owner.left + ((owner.right - owner.left) - outer_w) / 2;
         y = owner.top + ((owner.bottom - owner.top) - outer_h) / 2;
     }
 
-    hwnd = CreateWindowExW(ex_style, k_CvrFilterClassName, L"Election Explorer CVR Filter", style, x,
-                           y, outer_w, outer_h, cw->hwnd, NULL, app->instance, st);
+    hwnd = CreateWindowExW(ex_style, k_CvrFilterClassName, st->caption, style, x, y, outer_w,
+                           outer_h, st->owner, NULL, app->instance, st);
     if (hwnd == NULL)
     {
         EeFilter_Clear(&st->draft);
         HeapFree(GetProcessHeap(), 0, st);
         return FALSE;
     }
-    cw->hwnd_filter = hwnd;
+    *st->slot = hwnd;
     CvrFilter_Register(hwnd);
 
     for (i = 0; i < (int)ARRAYSIZE(k_ctrls); i++)
@@ -15587,8 +15619,10 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
         {
             base |= WS_TABSTOP;
         }
-        CreateWindowExW(0, k_ctrls[i].cls, k_ctrls[i].text, base | k_ctrls[i].extra, 0, 0, 0, 0,
-                        hwnd, (HMENU)(INT_PTR)k_ctrls[i].id, app->instance, NULL);
+        CreateWindowExW(0, k_ctrls[i].cls,
+                        k_ctrls[i].id == IDC_FLT_PROMPT ? prompt : k_ctrls[i].text,
+                        base | k_ctrls[i].extra, 0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)k_ctrls[i].id,
+                        app->instance, NULL);
     }
     list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | LVS_REPORT |
@@ -15625,7 +15659,7 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
         ListView_InsertColumn(list, 3, &col);
     }
 
-    CvrFilt_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), &cw->table);
+    CvrFilt_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), st);
     Combo_AutosizeDropdown(GetDlgItem(hwnd, IDC_FLT_COLUMN), app->font_ui, Scale(app, 900));
     CvrFilt_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION));
     FilterDlg_PopulateActions(GetDlgItem(hwnd, IDC_FLT_ACTION));
@@ -15633,10 +15667,77 @@ static BOOL App_ShowCvrFilter(CvrWindow *cw)
     CvrFilt_RefreshList(list, st);
     FilterDlg_Layout(hwnd, app);
 
-    EnableWindow(cw->hwnd, FALSE);
+    EnableWindow(st->owner, FALSE);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
     return TRUE;
+}
+
+/* A new filter state for a host (rules copied from @p applied), or NULL. */
+static CvrFilterState *Filter_NewState(AppState *app, HWND owner, EeFilterSet *applied, HWND *slot)
+{
+    CvrFilterState *st =
+        (CvrFilterState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(CvrFilterState));
+    if (st == NULL)
+    {
+        return NULL;
+    }
+    st->app = app;
+    st->owner = owner;
+    st->applied = applied;
+    st->slot = slot;
+    st->edit_index = -1;
+    EeFilter_Init(&st->draft);
+    if (!EeFilter_Copy(&st->draft, applied))
+    {
+        HeapFree(GetProcessHeap(), 0, st);
+        return NULL;
+    }
+    return st;
+}
+
+static BOOL Cvr_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint32_t *n)
+{
+    return EeCvr_CollectColumnValues(&((CvrWindow *)ctx)->table, column, EE_FILTER_MAX_DISTINCT,
+                                     vals, n);
+}
+
+static void Cvr_FilterApply(void *ctx)
+{
+    Cvr_ApplyFilter((CvrWindow *)ctx);
+}
+
+static BOOL App_ShowCvrFilter(CvrWindow *cw)
+{
+    CvrFilterState *st;
+
+    if (cw == NULL)
+    {
+        return FALSE;
+    }
+    if (cw->hwnd_filter != NULL)
+    {
+        SetForegroundWindow(cw->hwnd_filter);
+        return TRUE;
+    }
+    if (cw->table.nrows == 0 || cw->table.ncols == 0)
+    {
+        return TRUE;
+    }
+    st = Filter_NewState(cw->app, cw->hwnd, &cw->filters, &cw->hwnd_filter);
+    if (st == NULL)
+    {
+        return FALSE;
+    }
+    st->titles = (const wchar_t *const *)cw->table.col_titles;
+    st->ncols = cw->table.ncols;
+    st->base_name = cw->base_name;
+    st->file_noun = L"Cast Vote Record";
+    st->caption = L"Election Explorer CVR Filter";
+    st->collect = Cvr_FilterCollect;
+    st->apply = Cvr_FilterApply;
+    st->ctx = cw;
+    return Filter_ShowRuleWindow(st, L"Display ballot records matching these conditions:");
 }
 
 /* -------------------------------------------------------------------------- */
@@ -16090,6 +16191,4069 @@ static void App_BeginOpenCvr(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Election Results window (1.5)                                              */
+/* -------------------------------------------------------------------------- */
+
+/* Kinds of list column. */
+enum
+{
+    RC_CONTEST = 0,
+    RC_VOTEFOR,
+    RC_CHOICE,
+    RC_PARTY,
+    RC_PRECINCT,
+    RC_VT, /* one vote type (ResultsWindow.col_vt) */
+    RC_TOTAL,
+    RC_PERCENT
+};
+
+/* Kinds of list row. */
+enum
+{
+    RR_CHOICE = 0,
+    RR_OVER,
+    RR_UNDER
+};
+
+#define RES_MAX_COLS 96
+#define RES_ALL_PRECINCTS UINT32_MAX
+
+/* Filter columns (EeFilterRule.column) of the results window. */
+enum
+{
+    RF_PRECINCT = 0,
+    RF_CONTEST,
+    RF_CHOICE,
+    RF_PARTY,
+    RF_VOTETYPE,
+    RF_COUNT
+};
+
+static const wchar_t *const k_ResFilterTitles[RF_COUNT] = {L"Precinct", L"Contest", L"Choice",
+                                                          L"Party", L"Vote Type"};
+
+typedef struct ResRow
+{
+    uint32_t contest;
+    uint32_t choice; /* local choice index (RR_CHOICE) */
+    uint32_t pre;    /* local precinct index in the contest, or RES_ALL_PRECINCTS */
+    uint32_t seq;    /* position in display order, the sort's tie-break */
+    uint8_t kind;    /* RR_* */
+} ResRow;
+
+typedef struct ResTurnoutWindow ResTurnoutWindow;
+static void ResTurnout_Refresh(ResTurnoutWindow *tw);
+
+typedef struct ResultsWindow
+{
+    AppState *app; /* this window's own resource-only AppState */
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    EeResults res;
+    BOOL by_precinct; /* View: By Precinct (else Totals) */
+    BOOL show_vt;     /* one column per vote type */
+    ResRow *rows;
+    uint32_t nrows;
+    int sort_col; /* -1 = display order */
+    BOOL sort_asc;
+    int ncols;
+    uint8_t col_kind[RES_MAX_COLS];
+    uint32_t col_vt[RES_MAX_COLS];
+    const wchar_t *col_title[RES_MAX_COLS]; /* header text (static or a vote type name) */
+    /* Tabulation (all precincts and vote types until the filter arrives). */
+    int64_t *tot;    /* nchoices */
+    int64_t *tot_vt; /* nchoices * nvt */
+    int64_t *ovr;    /* ncontests */
+    int64_t *und;    /* ncontests */
+    int64_t *ctot;   /* ncontests: sum of the known choice totals, for percentages */
+    BOOL tab_exact;  /* FALSE when a filtered total had to use unfiltered figures */
+    /* Filter (step 3): is / is not rules on the RF_* columns. Precinct and vote type rules
+     * choose what is counted; contest, choice and party rules hide rows. */
+    EeFilterSet filters;
+    HWND hwnd_filter;
+    BOOL filt_active;
+    uint8_t *pmask; /* nprecincts: precinct counted (NULL = all) */
+    uint8_t *vmask; /* nvt: vote type counted (NULL = all) */
+    uint32_t pre_included;
+    uint8_t filt_hidden[RF_COUNT]; /* filter columns not offered (no precincts / vote types) */
+    ResTurnoutWindow *turnout;     /* open turnout report, or NULL */
+    HWND cmp_targets[32];          /* Compare menu: windows by command offset */
+    wchar_t base_name[192]; /* first file's base name (no extension), for exports */
+} ResultsWindow;
+
+static void App_ExportResults(ResultsWindow *rw, BOOL selection_only);
+
+static WNDPROC g_old_results_list_proc = NULL;
+
+static const wchar_t k_ResHelpLoading[] =
+    L"File \x2192 Load Election Results\x2026 opens election results files.\r\n\r\n"
+    L"Clarity Elections results: select any of an election's ZIP files \x2014 summary.zip, "
+    L"detailtxt.zip, detailxls.zip (or detailxlsx.zip) and detailxml.zip \x2014 or the files "
+    L"inside them (summary.csv, detail.txt, detail.xls, detail.xlsx, detail.xml). An Election "
+    L"Explorer results export (CSV or TSV) loads too.\r\n\r\n"
+    L"Several files of one election open as one window: the richest file is shown (XML, then "
+    L"XLS, then TXT, then the summary) and every other file is checked against it. Each "
+    L"disagreement is listed in Reports \x2192 Display Load Summary\x2026, which opens by itself "
+    L"when the files disagree. Files from different elections open in separate windows.\r\n\r\n"
+    L"Clarity writes \"protected\" for counts a county withholds; they count as 0 in precinct "
+    L"sums and are noted in the Load Summary.";
+
+static const wchar_t k_ResHelpFilters[] =
+    L"Filter \x2192 Filter\x2026 (Ctrl+L) chooses what the window counts and shows. Each rule "
+    L"is a column, \"is\" or \"is not\", a value, and Include or Exclude:\r\n"
+    L"\x2022 Precinct: only the included precincts are counted, so every total, percentage and "
+    L"Over/Under Votes figure is recomputed from them. Contests with no included precinct are "
+    L"hidden.\r\n"
+    L"\x2022 Vote Type: only the included vote types are counted and shown as columns.\r\n"
+    L"\x2022 Contest, Choice, Party: rows that do not pass are hidden; totals are unchanged.\r\n\r\n"
+    L"Rules on the same column are alternatives (any included value passes); rules on "
+    L"different columns all apply; a matching Exclude always wins. Check boxes turn rules on "
+    L"and off. Export Filter\x2026 saves the rules to a file and Load Filter\x2026 reads them "
+    L"back, also in another results window. Filter \x2192 Reset Filter removes every rule.\r\n\r\n"
+    L"A precinct filter needs precinct detail (detail.txt, detail.xls(x) or detail.xml). For "
+    L"contests that have only summary totals, or precinct counts the county withheld, the "
+    L"status bar notes that some totals cannot be filtered.";
+
+static const wchar_t k_ResHelpReports[] =
+    L"Reports \x2192 Display Turnout Report\x2026 lists each precinct's registered voters, "
+    L"ballots cast (by vote type when the files give it, the XLS turnout sheet for Clarity) "
+    L"and turnout. The status bar totals the precincts shown; without a precinct filter it "
+    L"shows the file's reported county totals. A precinct filter narrows the report. "
+    L"Right-click to copy rows, include or exclude the selected precincts in the filter, or "
+    L"export the rows to CSV / TSV.\r\n\r\n"
+    L"Note: Clarity's precinct registered voters do not always add up to the county total in "
+    L"detail.xml (in Travis County's primaries they add up to about twice it); the Load "
+    L"Summary notes it.\r\n\r\n"
+    L"Reports \x2192 Display Load Summary\x2026 lists the loaded files, the one shown, and every "
+    L"note and difference found when the other files were checked against it.";
+
+static const wchar_t k_ResHelpOptions[] =
+    L"View \x2192 Totals shows one row per contest and choice. View \x2192 By Precinct shows the "
+    L"same rows for each precinct in the contest's district.\r\n\r\n"
+    L"Edit \x2192 Options\x2026:\r\n"
+    L"\x2022 Zoom: the size of the list text.\r\n"
+    L"\x2022 Show a column for each vote type: Ballot by Mail, Early Voting, Election Day, "
+    L"provisional and so on, as the county names them.\r\n"
+    L"\x2022 Party to display first: in a primary, the Republican or the Democratic contests come "
+    L"first (shared with the CVR tabulation).\r\n\r\n"
+    L"Click a column title to sort by it; click again to reverse. Edit \x2192 Copy (Ctrl+C) or "
+    L"right-click copies the selected rows as tab-separated text.";
+
+/* Rank of a contest for the party-first order: 0 = the display-first party, 1 = the other
+ * major party, 2 = everything else (like the CVR tabulation). */
+static int Res_PartyRank(const EeResultsContest *c)
+{
+    BOOL rep = c->party != NULL && _wcsicmp(c->party, L"REP") == 0;
+    BOOL dem = c->party != NULL && _wcsicmp(c->party, L"DEM") == 0;
+    if (!rep && !dem)
+    {
+        return 2;
+    }
+    if (g_settings.cvr_tab_party_first == EE_TAB_PARTY_DEM)
+    {
+        return dem ? 0 : 1;
+    }
+    return rep ? 0 : 1;
+}
+
+static void Res_FreeTab(ResultsWindow *rw)
+{
+    free(rw->tot);
+    free(rw->tot_vt);
+    free(rw->ovr);
+    free(rw->und);
+    free(rw->ctot);
+    rw->tot = rw->tot_vt = rw->ovr = rw->und = rw->ctot = NULL;
+}
+
+/* Tabulate every choice (filters arrive in a later step). */
+static BOOL Res_Tabulate(ResultsWindow *rw)
+{
+    const EeResults *r = &rw->res;
+    uint32_t c, k;
+    Res_FreeTab(rw);
+    rw->tot = (int64_t *)calloc((size_t)r->nchoices + 1, sizeof(int64_t));
+    rw->tot_vt = (int64_t *)calloc((size_t)r->nchoices * EE_RESULTS_NVT(r) + 1, sizeof(int64_t));
+    rw->ovr = (int64_t *)calloc((size_t)r->ncontests + 1, sizeof(int64_t));
+    rw->und = (int64_t *)calloc((size_t)r->ncontests + 1, sizeof(int64_t));
+    rw->ctot = (int64_t *)calloc((size_t)r->ncontests + 1, sizeof(int64_t));
+    if (rw->tot == NULL || rw->tot_vt == NULL || rw->ovr == NULL || rw->und == NULL ||
+        rw->ctot == NULL)
+    {
+        Res_FreeTab(rw);
+        return FALSE;
+    }
+    rw->tab_exact = EeResults_Tabulate(r, rw->pmask, rw->vmask, rw->tot,
+                                       r->nvt > 0 ? rw->tot_vt : NULL, rw->ovr, rw->und);
+    for (c = 0; c < r->ncontests; c++)
+    {
+        const EeResultsContest *ct = &r->contests[c];
+        for (k = 0; k < ct->nchoices; k++)
+        {
+            int64_t v = rw->tot[ct->first_choice + k];
+            if (v != EE_RES_UNKNOWN)
+            {
+                rw->ctot[c] += v;
+            }
+        }
+    }
+    return TRUE;
+}
+
+/* Rows of the current view, in display order (contests ranked by party). */
+/* ProcMon-style test of one column's rules on @p value: an enabled exclude that matches
+ * rejects; when the column has enabled includes, one of them must match. Rules on other
+ * columns are ignored (each results column filters its own dimension). */
+static BOOL Filter_ColumnAccepts(const EeFilterSet *set, uint32_t column, const wchar_t *value)
+{
+    uint32_t i;
+    BOOL any_include = FALSE, included = FALSE;
+    for (i = 0; i < set->count; i++)
+    {
+        const EeFilterRule *r = &set->rules[i];
+        BOOL eq;
+        if (!r->enabled || r->column != column)
+        {
+            continue;
+        }
+        eq = CompareStringOrdinal(value, -1, r->value, -1, TRUE) == CSTR_EQUAL;
+        if (r->relation == EeRel_IsNot)
+        {
+            eq = !eq;
+        }
+        if (r->action == EeFilt_Exclude)
+        {
+            if (eq)
+            {
+                return FALSE;
+            }
+        }
+        else
+        {
+            any_include = TRUE;
+            included = included || eq;
+        }
+    }
+    return !any_include || included;
+}
+
+/* Is a row (contest, choice or Over/Under Votes) shown under the contest / choice / party
+ * rules? */
+static BOOL Res_RowPasses(const ResultsWindow *rw, uint32_t contest, uint8_t kind, uint32_t choice)
+{
+    const EeResultsContest *ct = &rw->res.contests[contest];
+    const wchar_t *name;
+    const wchar_t *party = L"";
+    if (!rw->filt_active)
+    {
+        return TRUE;
+    }
+    if (kind == RR_OVER)
+    {
+        name = L"Over Votes";
+    }
+    else if (kind == RR_UNDER)
+    {
+        name = L"Under Votes";
+    }
+    else
+    {
+        name = rw->res.choices[ct->first_choice + choice].name;
+        if (rw->res.choices[ct->first_choice + choice].party != NULL)
+        {
+            party = rw->res.choices[ct->first_choice + choice].party;
+        }
+    }
+    return Filter_ColumnAccepts(&rw->filters, RF_CONTEST, ct->title) &&
+           Filter_ColumnAccepts(&rw->filters, RF_CHOICE, name) &&
+           Filter_ColumnAccepts(&rw->filters, RF_PARTY, party);
+}
+
+/* Does a contest's district include a counted precinct? (Always, for a contest without
+ * precinct detail.) */
+static BOOL Res_ContestHasPrecinct(const ResultsWindow *rw, const EeResultsContest *ct)
+{
+    uint32_t p;
+    if (rw->pmask == NULL || ct->counts == NULL)
+    {
+        return TRUE;
+    }
+    for (p = 0; p < ct->npre; p++)
+    {
+        if (rw->pmask[ct->pre[p]])
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static BOOL Res_BuildRows(ResultsWindow *rw)
+{
+    const EeResults *r = &rw->res;
+    size_t cap = 0, n = 0;
+    ResRow *rows = NULL;
+    int pass;
+    uint32_t c;
+
+    /* Size first: one pass to count, one to fill. */
+    for (pass = 0; pass < 2; pass++)
+    {
+        int rank;
+        n = 0;
+        for (rank = 0; rank < 3; rank++)
+        {
+            for (c = 0; c < r->ncontests; c++)
+            {
+                const EeResultsContest *ct = &r->contests[c];
+                uint32_t k, p;
+                uint32_t npre = (rw->by_precinct && ct->counts != NULL) ? ct->npre : 1;
+                if (Res_PartyRank(ct) != rank || !Res_ContestHasPrecinct(rw, ct))
+                {
+                    continue;
+                }
+                for (p = 0; p < npre; p++)
+                {
+                    uint32_t pre = (rw->by_precinct && ct->counts != NULL) ? p : RES_ALL_PRECINCTS;
+                    uint32_t extra = 0;
+                    if (pre != RES_ALL_PRECINCTS && rw->pmask != NULL && !rw->pmask[ct->pre[p]])
+                    {
+                        continue; /* a precinct the filter leaves out */
+                    }
+                    if (ct->has_over_under &&
+                        (pre == RES_ALL_PRECINCTS || (ct->over != NULL && ct->under != NULL)))
+                    {
+                        extra = 2;
+                    }
+                    if (pass == 1)
+                    {
+                        for (k = 0; k < ct->nchoices; k++)
+                        {
+                            if (!Res_RowPasses(rw, c, RR_CHOICE, k))
+                            {
+                                continue;
+                            }
+                            rows[n].contest = c;
+                            rows[n].choice = k;
+                            rows[n].pre = pre;
+                            rows[n].kind = RR_CHOICE;
+                            rows[n].seq = (uint32_t)n;
+                            n++;
+                        }
+                        for (k = 0; k < extra; k++)
+                        {
+                            if (!Res_RowPasses(rw, c, (uint8_t)(k == 0 ? RR_OVER : RR_UNDER), 0))
+                            {
+                                continue;
+                            }
+                            rows[n].contest = c;
+                            rows[n].choice = 0;
+                            rows[n].pre = pre;
+                            rows[n].kind = (uint8_t)(k == 0 ? RR_OVER : RR_UNDER);
+                            rows[n].seq = (uint32_t)n;
+                            n++;
+                        }
+                    }
+                    else
+                    {
+                        for (k = 0; k < ct->nchoices; k++)
+                        {
+                            n += Res_RowPasses(rw, c, RR_CHOICE, k) ? 1 : 0;
+                        }
+                        for (k = 0; k < extra; k++)
+                        {
+                            n += Res_RowPasses(rw, c, (uint8_t)(k == 0 ? RR_OVER : RR_UNDER), 0)
+                                     ? 1
+                                     : 0;
+                        }
+                    }
+                }
+            }
+        }
+        if (pass == 0)
+        {
+            cap = n;
+            rows = (ResRow *)malloc((cap + 1) * sizeof(ResRow));
+            if (rows == NULL)
+            {
+                return FALSE;
+            }
+        }
+    }
+    free(rw->rows);
+    rw->rows = rows;
+    rw->nrows = (uint32_t)n;
+    return TRUE;
+}
+
+/* Votes of one row in one vote type (v < nvt), or over all vote types (v == UINT32_MAX).
+ * Returns EE_RES_UNKNOWN for a withheld cell or total. */
+static int64_t Res_RowVotes(const ResultsWindow *rw, const ResRow *row, uint32_t v)
+{
+    const EeResults *r = &rw->res;
+    const EeResultsContest *ct = &r->contests[row->contest];
+    uint32_t nvt = EE_RESULTS_NVT(r);
+    if (row->pre == RES_ALL_PRECINCTS)
+    {
+        if (row->kind == RR_OVER)
+        {
+            return v == UINT32_MAX ? rw->ovr[row->contest] : EE_RES_UNKNOWN;
+        }
+        if (row->kind == RR_UNDER)
+        {
+            return v == UINT32_MAX ? rw->und[row->contest] : EE_RES_UNKNOWN;
+        }
+        if (v == UINT32_MAX)
+        {
+            return rw->tot[ct->first_choice + row->choice];
+        }
+        return (r->nvt > 0 && ct->counts != NULL)
+                   ? rw->tot_vt[(size_t)(ct->first_choice + row->choice) * r->nvt + v]
+                   : EE_RES_UNKNOWN;
+    }
+    if (row->kind == RR_OVER || row->kind == RR_UNDER)
+    {
+        const int32_t *a = row->kind == RR_OVER ? ct->over : ct->under;
+        return (a != NULL && v == UINT32_MAX) ? a[row->pre] : EE_RES_UNKNOWN;
+    }
+    {
+        size_t base = ((size_t)row->choice * ct->npre + row->pre) * nvt;
+        if (v != UINT32_MAX)
+        {
+            if (ct->protected_cells != NULL && ct->protected_cells[base + v])
+            {
+                return EE_RES_UNKNOWN;
+            }
+            return ct->counts[base + v];
+        }
+        {
+            int64_t s = 0;
+            uint32_t q;
+            for (q = 0; q < nvt; q++)
+            {
+                if (r->nvt == 0 || rw->vmask == NULL || rw->vmask[q])
+                {
+                    s += ct->counts[base + q];
+                }
+            }
+            return s;
+        }
+    }
+}
+
+/* All the choices' votes of a row's contest in the row's precinct (for percentages). */
+static int64_t Res_RowBase(const ResultsWindow *rw, const ResRow *row)
+{
+    const EeResults *r = &rw->res;
+    const EeResultsContest *ct = &r->contests[row->contest];
+    uint32_t nvt = EE_RESULTS_NVT(r);
+    int64_t s = 0;
+    uint32_t k, q;
+    if (row->pre == RES_ALL_PRECINCTS)
+    {
+        return rw->ctot[row->contest];
+    }
+    for (k = 0; k < ct->nchoices; k++)
+    {
+        const int32_t *cell = ct->counts + ((size_t)k * ct->npre + row->pre) * nvt;
+        for (q = 0; q < nvt; q++)
+        {
+            if (r->nvt == 0 || rw->vmask == NULL || rw->vmask[q])
+            {
+                s += cell[q];
+            }
+        }
+    }
+    return s;
+}
+
+static const wchar_t *Res_RowChoiceName(const ResultsWindow *rw, const ResRow *row)
+{
+    const EeResultsContest *ct = &rw->res.contests[row->contest];
+    if (row->kind == RR_OVER)
+    {
+        return L"Over Votes";
+    }
+    if (row->kind == RR_UNDER)
+    {
+        return L"Under Votes";
+    }
+    return rw->res.choices[ct->first_choice + row->choice].name;
+}
+
+static const wchar_t *Res_RowPrecinct(const ResultsWindow *rw, const ResRow *row)
+{
+    const EeResultsContest *ct = &rw->res.contests[row->contest];
+    if (row->pre == RES_ALL_PRECINCTS)
+    {
+        return L"";
+    }
+    return rw->res.precincts[ct->pre[row->pre]].name;
+}
+
+/* Text of one cell. */
+static void Res_CellText(const ResultsWindow *rw, uint32_t ri, int col, wchar_t *out, size_t cch)
+{
+    const ResRow *row;
+    const EeResultsContest *ct;
+    int64_t v;
+    if (cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (ri >= rw->nrows || col < 0 || col >= rw->ncols)
+    {
+        return;
+    }
+    row = &rw->rows[ri];
+    ct = &rw->res.contests[row->contest];
+    switch (rw->col_kind[col])
+    {
+    case RC_CONTEST:
+        StringCchCopyW(out, cch, ct->title);
+        break;
+    case RC_VOTEFOR:
+        if (ct->vote_for > 0)
+        {
+            StringCchPrintfW(out, cch, L"%u", ct->vote_for);
+        }
+        break;
+    case RC_CHOICE:
+        StringCchCopyW(out, cch, Res_RowChoiceName(rw, row));
+        break;
+    case RC_PARTY:
+        if (row->kind == RR_CHOICE)
+        {
+            const wchar_t *p = rw->res.choices[ct->first_choice + row->choice].party;
+            StringCchCopyW(out, cch, p != NULL ? p : L"");
+        }
+        break;
+    case RC_PRECINCT:
+        StringCchCopyW(out, cch, row->pre == RES_ALL_PRECINCTS ? L"(all)" : Res_RowPrecinct(rw, row));
+        break;
+    case RC_VT:
+    case RC_TOTAL:
+        v = Res_RowVotes(rw, row, rw->col_kind[col] == RC_VT ? rw->col_vt[col] : UINT32_MAX);
+        if (v != EE_RES_UNKNOWN)
+        {
+            StringCchPrintfW(out, cch, L"%lld", (long long)v);
+        }
+        else if (row->kind == RR_CHOICE && row->pre != RES_ALL_PRECINCTS &&
+                 rw->col_kind[col] == RC_VT)
+        {
+            StringCchCopyW(out, cch, L"protected");
+        }
+        else if (row->kind == RR_CHOICE && rw->col_kind[col] == RC_TOTAL)
+        {
+            StringCchCopyW(out, cch, L"withheld");
+        }
+        break;
+    case RC_PERCENT:
+        if (row->kind == RR_CHOICE)
+        {
+            int64_t base = Res_RowBase(rw, row);
+            v = Res_RowVotes(rw, row, UINT32_MAX);
+            if (base > 0 && v != EE_RES_UNKNOWN)
+            {
+                StringCchPrintfW(out, cch, L"%.2f%%", (double)v * 100.0 / (double)base);
+            }
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* Numeric value of a numeric column's cell, for sorting (-1 when blank). */
+static double Res_CellNumber(const ResultsWindow *rw, const ResRow *row, int col)
+{
+    int64_t v;
+    switch (rw->col_kind[col])
+    {
+    case RC_VOTEFOR:
+        return (double)rw->res.contests[row->contest].vote_for;
+    case RC_VT:
+    case RC_TOTAL:
+        v = Res_RowVotes(rw, row, rw->col_kind[col] == RC_VT ? rw->col_vt[col] : UINT32_MAX);
+        return v == EE_RES_UNKNOWN ? -1.0 : (double)v;
+    case RC_PERCENT:
+        if (row->kind == RR_CHOICE)
+        {
+            int64_t base = Res_RowBase(rw, row);
+            v = Res_RowVotes(rw, row, UINT32_MAX);
+            if (base > 0 && v != EE_RES_UNKNOWN)
+            {
+                return (double)v * 100.0 / (double)base;
+            }
+        }
+        return -1.0;
+    default:
+        return 0.0;
+    }
+}
+
+static const wchar_t *Res_CellString(const ResultsWindow *rw, const ResRow *row, int col)
+{
+    const EeResultsContest *ct = &rw->res.contests[row->contest];
+    switch (rw->col_kind[col])
+    {
+    case RC_CONTEST:
+        return ct->title;
+    case RC_CHOICE:
+        return Res_RowChoiceName(rw, row);
+    case RC_PARTY:
+        if (row->kind == RR_CHOICE)
+        {
+            const wchar_t *p = rw->res.choices[ct->first_choice + row->choice].party;
+            return p != NULL ? p : L"";
+        }
+        return L"";
+    case RC_PRECINCT:
+        return Res_RowPrecinct(rw, row);
+    default:
+        return L"";
+    }
+}
+
+/* Compare two texts, numerically when both are whole numbers (precincts 99 < 100). */
+static int Res_CompareText(const wchar_t *a, const wchar_t *b)
+{
+    wchar_t *ea, *eb;
+    unsigned long long na, nb;
+    if (*a != L'\0' && *b != L'\0' && iswdigit(*a) && iswdigit(*b))
+    {
+        na = wcstoull(a, &ea, 10);
+        nb = wcstoull(b, &eb, 10);
+        if (*ea == L'\0' && *eb == L'\0')
+        {
+            return na < nb ? -1 : (na > nb ? 1 : 0);
+        }
+    }
+    return _wcsicmp(a, b);
+}
+
+typedef struct ResSortCtx
+{
+    const ResultsWindow *rw;
+    int col;
+    BOOL asc;
+} ResSortCtx;
+
+static int __cdecl Res_SortCmp(void *ctx, const void *pa, const void *pb)
+{
+    const ResSortCtx *sc = (const ResSortCtx *)ctx;
+    const ResRow *a = (const ResRow *)pa;
+    const ResRow *b = (const ResRow *)pb;
+    int r = 0;
+    uint8_t kind = sc->rw->col_kind[sc->col];
+    if (kind == RC_VOTEFOR || kind == RC_VT || kind == RC_TOTAL || kind == RC_PERCENT)
+    {
+        double x = Res_CellNumber(sc->rw, a, sc->col);
+        double y = Res_CellNumber(sc->rw, b, sc->col);
+        r = x < y ? -1 : (x > y ? 1 : 0);
+    }
+    else
+    {
+        r = Res_CompareText(Res_CellString(sc->rw, a, sc->col), Res_CellString(sc->rw, b, sc->col));
+    }
+    if (!sc->asc)
+    {
+        r = -r;
+    }
+    if (r == 0)
+    {
+        r = a->seq < b->seq ? -1 : (a->seq > b->seq ? 1 : 0);
+    }
+    return r;
+}
+
+/* Put the rows in display order (seq), then apply the column sort. */
+static int __cdecl Res_SeqCmp(const void *pa, const void *pb)
+{
+    const ResRow *a = (const ResRow *)pa;
+    const ResRow *b = (const ResRow *)pb;
+    return a->seq < b->seq ? -1 : (a->seq > b->seq ? 1 : 0);
+}
+
+static void Res_Sort(ResultsWindow *rw)
+{
+    if (rw->nrows < 2)
+    {
+        return;
+    }
+    if (rw->sort_col < 0 || rw->sort_col >= rw->ncols)
+    {
+        qsort(rw->rows, rw->nrows, sizeof(ResRow), Res_SeqCmp);
+    }
+    else
+    {
+        ResSortCtx sc;
+        sc.rw = rw;
+        sc.col = rw->sort_col;
+        sc.asc = rw->sort_asc;
+        qsort_s(rw->rows, rw->nrows, sizeof(ResRow), Res_SortCmp, &sc);
+    }
+}
+
+/* (Re)create the list columns for the view and options. */
+static void Res_BuildColumns(ResultsWindow *rw)
+{
+    const EeResults *r = &rw->res;
+    struct
+    {
+        uint8_t kind;
+        uint32_t vt;
+        const wchar_t *title;
+        int width;
+        int fmt;
+    } cols[RES_MAX_COLS];
+    int n = 0, i;
+    uint32_t v;
+    HWND header;
+
+    if (rw->list == NULL)
+    {
+        return;
+    }
+    header = ListView_GetHeader(rw->list);
+    while (header != NULL && Header_GetItemCount(header) > 0)
+    {
+        ListView_DeleteColumn(rw->list, 0);
+    }
+#define RES_ADD_COL(k, t, w, f, vv)                                                                \
+    do                                                                                             \
+    {                                                                                              \
+        if (n < RES_MAX_COLS)                                                                      \
+        {                                                                                          \
+            cols[n].kind = (uint8_t)(k);                                                           \
+            cols[n].title = (t);                                                                   \
+            cols[n].width = (w);                                                                   \
+            cols[n].fmt = (f);                                                                     \
+            cols[n].vt = (vv);                                                                     \
+            n++;                                                                                   \
+        }                                                                                          \
+    } while (0)
+    RES_ADD_COL(RC_CONTEST, L"Contest", 320, LVCFMT_LEFT, 0);
+    RES_ADD_COL(RC_VOTEFOR, L"Vote For", 64, LVCFMT_RIGHT, 0);
+    RES_ADD_COL(RC_CHOICE, L"Choice", 240, LVCFMT_LEFT, 0);
+    RES_ADD_COL(RC_PARTY, L"Party", 60, LVCFMT_LEFT, 0);
+    if (rw->by_precinct)
+    {
+        RES_ADD_COL(RC_PRECINCT, L"Precinct", 120, LVCFMT_LEFT, 0);
+    }
+    if (rw->show_vt)
+    {
+        for (v = 0; v < r->nvt; v++)
+        {
+            if (rw->vmask == NULL || rw->vmask[v])
+            {
+                RES_ADD_COL(RC_VT, r->vote_types[v], 100, LVCFMT_RIGHT, v);
+            }
+        }
+    }
+    RES_ADD_COL(RC_TOTAL, L"Total Votes", 96, LVCFMT_RIGHT, 0);
+    RES_ADD_COL(RC_PERCENT, L"Percent", 72, LVCFMT_RIGHT, 0);
+#undef RES_ADD_COL
+    rw->ncols = n;
+    for (i = 0; i < n; i++)
+    {
+        LVCOLUMNW col;
+        rw->col_kind[i] = cols[i].kind;
+        rw->col_vt[i] = cols[i].vt;
+        rw->col_title[i] = cols[i].title;
+        ZeroMemory(&col, sizeof(col));
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+        col.fmt = i == 0 ? LVCFMT_LEFT : cols[i].fmt; /* column 0 is always left-aligned */
+        col.pszText = (wchar_t *)cols[i].title;
+        col.cx = ScaleDisplay(rw->app, cols[i].width);
+        ListView_InsertColumn(rw->list, i, &col);
+    }
+}
+
+static void Res_UpdateStatus(ResultsWindow *rw)
+{
+    const EeResults *r = &rw->res;
+    wchar_t buf[600];
+    wchar_t num[32];
+    uint32_t i, nsrc_issues = 0;
+    if (rw->status == NULL)
+    {
+        return;
+    }
+    buf[0] = L'\0';
+    if (r->election_name != NULL)
+    {
+        StringCchCatW(buf, ARRAYSIZE(buf), r->election_name);
+        if (r->election_date != NULL)
+        {
+            StringCchCatW(buf, ARRAYSIZE(buf), L" (");
+            StringCchCatW(buf, ARRAYSIZE(buf), r->election_date);
+            StringCchCatW(buf, ARRAYSIZE(buf), L")");
+        }
+        StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  ");
+    }
+    StringCchPrintfW(num, ARRAYSIZE(num), L"%u contests", r->ncontests);
+    StringCchCatW(buf, ARRAYSIZE(buf), num);
+    if (r->nprecincts > 0)
+    {
+        StringCchPrintfW(num, ARRAYSIZE(num), L"  \x2022  %u precincts", r->nprecincts);
+        StringCchCatW(buf, ARRAYSIZE(buf), num);
+    }
+    if (rw->by_precinct || rw->filt_active)
+    {
+        StringCchPrintfW(num, ARRAYSIZE(num), L"  \x2022  %u rows", rw->nrows);
+        StringCchCatW(buf, ARRAYSIZE(buf), num);
+    }
+    if (rw->filt_active)
+    {
+        wchar_t f[160];
+        if (rw->pmask != NULL)
+        {
+            StringCchPrintfW(f, ARRAYSIZE(f), L"  \x2022  filtered: %u of %u precincts",
+                             rw->pre_included, r->nprecincts);
+        }
+        else
+        {
+            StringCchCopyW(f, ARRAYSIZE(f), L"  \x2022  filtered");
+        }
+        StringCchCatW(buf, ARRAYSIZE(buf), f);
+        if (!rw->tab_exact)
+        {
+            StringCchCatW(buf, ARRAYSIZE(buf), L" (some totals cannot be filtered)");
+        }
+    }
+    StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  ");
+    for (i = 0; i < r->nsources; i++)
+    {
+        if (i > 0)
+        {
+            StringCchCatW(buf, ARRAYSIZE(buf), L", ");
+        }
+        StringCchCatW(buf, ARRAYSIZE(buf), EeResults_FormatLabel(r->sources[i].format));
+    }
+    if (r->timestamp != NULL)
+    {
+        StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  as of ");
+        StringCchCatW(buf, ARRAYSIZE(buf), r->timestamp);
+    }
+    for (i = 0; i < r->nissues; i++)
+    {
+        if (r->issues[i].source != 0)
+        {
+            nsrc_issues++;
+        }
+    }
+    if (nsrc_issues > 0)
+    {
+        StringCchPrintfW(num, ARRAYSIZE(num), L"  \x2022  %u differences", nsrc_issues);
+        StringCchCatW(buf, ARRAYSIZE(buf), num);
+    }
+    else if (r->nissues > 0)
+    {
+        StringCchPrintfW(num, ARRAYSIZE(num), L"  \x2022  %u notes", r->nissues);
+        StringCchCatW(buf, ARRAYSIZE(buf), num);
+    }
+    SendMessageW(rw->status, SB_SETTEXTW, 0, (LPARAM)buf);
+}
+
+/* Rebuild rows and columns after a view or option change, keeping the sort if its column
+ * still exists. */
+static void Res_Rebuild(ResultsWindow *rw)
+{
+    uint8_t sort_kind = (rw->sort_col >= 0 && rw->sort_col < rw->ncols)
+                            ? rw->col_kind[rw->sort_col]
+                            : 0xFF;
+    uint32_t sort_vt = (rw->sort_col >= 0 && rw->sort_col < rw->ncols) ? rw->col_vt[rw->sort_col]
+                                                                       : 0;
+    int i;
+    if (!Res_BuildRows(rw))
+    {
+        MessageBoxW(rw->hwnd, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        rw->nrows = 0;
+    }
+    SendMessageW(rw->list, WM_SETREDRAW, FALSE, 0);
+    Res_BuildColumns(rw);
+    rw->sort_col = -1;
+    for (i = 0; i < rw->ncols && sort_kind != 0xFF; i++)
+    {
+        if (rw->col_kind[i] == sort_kind && (sort_kind != RC_VT || rw->col_vt[i] == sort_vt))
+        {
+            rw->sort_col = i;
+            break;
+        }
+    }
+    Res_Sort(rw);
+    ListView_SetItemCountEx(rw->list, (int)rw->nrows, 0);
+    SendMessageW(rw->list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(rw->list, NULL, TRUE);
+    Res_UpdateStatus(rw);
+    if (rw->turnout != NULL)
+    {
+        ResTurnout_Refresh(rw->turnout);
+    }
+}
+
+static void Res_Layout(ResultsWindow *rw, int width, int height)
+{
+    int sb_h = 0;
+    if (rw->status != NULL)
+    {
+        RECT sb;
+        SendMessageW(rw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(rw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (rw->list != NULL)
+    {
+        MoveWindow(rw->list, 0, 0, width, height > sb_h ? height - sb_h : 0, TRUE);
+    }
+}
+
+/* Copy the selected rows as tab-separated UTF-8, every column, CR/LF between rows. */
+static void Res_CopySelected(ResultsWindow *rw)
+{
+    wchar_t *buf = NULL;
+    size_t cap = 0, len = 0;
+    wchar_t cell[1024];
+    int i;
+    if (rw == NULL || rw->list == NULL)
+    {
+        return;
+    }
+    for (i = ListView_GetNextItem(rw->list, -1, LVNI_SELECTED); i >= 0;
+         i = ListView_GetNextItem(rw->list, i, LVNI_SELECTED))
+    {
+        int c;
+        for (c = 0; c < rw->ncols; c++)
+        {
+            size_t n;
+            Res_CellText(rw, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            n = wcslen(cell);
+            if (!cvr_wbuf_reserve(&buf, &cap, len + n + 3))
+            {
+                free(buf);
+                return;
+            }
+            memcpy(buf + len, cell, n * sizeof(wchar_t));
+            len += n;
+            if (c + 1 < rw->ncols)
+            {
+                buf[len++] = L'\t';
+            }
+            else
+            {
+                buf[len++] = L'\r';
+                buf[len++] = L'\n';
+            }
+        }
+    }
+    if (buf != NULL && len > 0)
+    {
+        int u8len;
+        buf[len] = L'\0';
+        u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+        if (u8len > 0)
+        {
+            char *utf8 = (char *)malloc((size_t)u8len);
+            if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+            {
+                App_SetClipboardUtf8(rw->hwnd, utf8);
+            }
+            free(utf8);
+        }
+    }
+    free(buf);
+}
+
+static void Res_OnContextMenu(ResultsWindow *rw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+    if (item >= 0 && !(ListView_GetItemState(rw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(rw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(rw->list, item, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    cmd = (UINT)TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, rw->hwnd,
+                               NULL);
+    DestroyMenu(m);
+    if (cmd == IDM_EDIT_COPY)
+    {
+        Res_CopySelected(rw);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED)
+    {
+        App_ExportResults(rw, TRUE);
+    }
+}
+
+/* Load Summary: the files, which one is shown, and every note and difference. */
+static void App_ShowResultsLoadSummary(ResultsWindow *rw)
+{
+    const EeResults *r = &rw->res;
+    wchar_t *text = NULL;
+    size_t cap = 0, len = 0;
+    uint32_t i, s;
+#define RES_APPEND(str)                                                                            \
+    do                                                                                             \
+    {                                                                                              \
+        const wchar_t *str_ = (str);                                                               \
+        size_t n_ = wcslen(str_);                                                                  \
+        if (cvr_wbuf_reserve(&text, &cap, len + n_ + 1))                                           \
+        {                                                                                          \
+            memcpy(text + len, str_, n_ * sizeof(wchar_t));                                        \
+            len += n_;                                                                             \
+            text[len] = L'\0';                                                                     \
+        }                                                                                          \
+    } while (0)
+    RES_APPEND(L"Files:\r\n");
+    for (s = 0; s < r->nsources; s++)
+    {
+        const EeResultsSource *src = &r->sources[s];
+        wchar_t line[MAX_PATH + 300];
+        StringCchPrintfW(line, ARRAYSIZE(line), L"%u. %s%s%s%s \x2014 %s: %u contests, %u choices, "
+                                                L"%u precincts%s\r\n",
+                         s + 1, App_PathBaseName(src->path), src->member != NULL ? L" (" : L"",
+                         src->member != NULL ? src->member : L"", src->member != NULL ? L")" : L"",
+                         EeResults_FormatLabel(src->format), src->ncontests, src->nchoices,
+                         src->nprecincts, src->primary ? L" \x2014 shown" : L"");
+        RES_APPEND(line);
+    }
+    for (s = 0; s < r->nsources; s++)
+    {
+        BOOL header = FALSE;
+        for (i = 0; i < r->nissues; i++)
+        {
+            if (r->issues[i].source != s)
+            {
+                continue;
+            }
+            if (!header)
+            {
+                wchar_t line[MAX_PATH + 64];
+                StringCchPrintfW(line, ARRAYSIZE(line),
+                                 s == 0 ? L"\r\nNotes on file 1 (shown):\r\n"
+                                        : L"\r\nFile %u compared with file 1:\r\n",
+                                 s + 1);
+                RES_APPEND(line);
+                header = TRUE;
+            }
+            RES_APPEND(L"\x2022 ");
+            RES_APPEND(r->issues[i].text);
+            RES_APPEND(L"\r\n");
+        }
+        if (!header && s > 0)
+        {
+            wchar_t line[96];
+            StringCchPrintfW(line, ARRAYSIZE(line),
+                             L"\r\nFile %u agrees with file 1.\r\n", s + 1);
+            RES_APPEND(line);
+        }
+    }
+#undef RES_APPEND
+    if (text != NULL)
+    {
+        App_ShowHelpTopicOn(rw->app, rw->hwnd, L"Election Results Load Summary", text);
+    }
+    free(text);
+}
+
+/* --- Filter --------------------------------------------------------------- */
+
+static int __cdecl Res_ValueCmp(const void *pa, const void *pb)
+{
+    return Res_CompareText(*(const wchar_t *const *)pa, *(const wchar_t *const *)pb);
+}
+
+/* Add @p v to a value list unless present (case-insensitive). */
+static BOOL Res_AddValue(wchar_t ***vals, uint32_t *n, size_t *cap, const wchar_t *v)
+{
+    uint32_t i;
+    if (v == NULL || v[0] == L'\0' || *n >= EE_FILTER_MAX_DISTINCT)
+    {
+        return TRUE;
+    }
+    for (i = 0; i < *n; i++)
+    {
+        if (CompareStringOrdinal((*vals)[i], -1, v, -1, TRUE) == CSTR_EQUAL)
+        {
+            return TRUE;
+        }
+    }
+    if (*n + 1 > *cap)
+    {
+        size_t nc = *cap ? *cap * 2 : 64;
+        wchar_t **nv = (wchar_t **)realloc(*vals, nc * sizeof(wchar_t *));
+        if (nv == NULL)
+        {
+            return FALSE;
+        }
+        *vals = nv;
+        *cap = nc;
+    }
+    (*vals)[*n] = _wcsdup(v);
+    if ((*vals)[*n] == NULL)
+    {
+        return FALSE;
+    }
+    (*n)++;
+    return TRUE;
+}
+
+/* The distinct values of a results filter column, sorted (precincts numerically). */
+static BOOL Res_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint32_t *n)
+{
+    ResultsWindow *rw = (ResultsWindow *)ctx;
+    const EeResults *r = &rw->res;
+    size_t cap = 0;
+    uint32_t i;
+    BOOL ok = TRUE;
+    *vals = NULL;
+    *n = 0;
+    switch (column)
+    {
+    case RF_PRECINCT:
+        for (i = 0; i < r->nprecincts && ok; i++)
+        {
+            ok = Res_AddValue(vals, n, &cap, r->precincts[i].name);
+        }
+        break;
+    case RF_CONTEST:
+        for (i = 0; i < r->ncontests && ok; i++)
+        {
+            ok = Res_AddValue(vals, n, &cap, r->contests[i].title);
+        }
+        break;
+    case RF_CHOICE:
+        for (i = 0; i < r->nchoices && ok; i++)
+        {
+            ok = Res_AddValue(vals, n, &cap, r->choices[i].name);
+        }
+        for (i = 0; i < r->ncontests && ok; i++)
+        {
+            if (r->contests[i].has_over_under)
+            {
+                ok = Res_AddValue(vals, n, &cap, L"Over Votes") &&
+                     Res_AddValue(vals, n, &cap, L"Under Votes");
+                break;
+            }
+        }
+        break;
+    case RF_PARTY:
+        for (i = 0; i < r->nchoices && ok; i++)
+        {
+            ok = Res_AddValue(vals, n, &cap, r->choices[i].party);
+        }
+        break;
+    case RF_VOTETYPE:
+        for (i = 0; i < r->nvt && ok; i++)
+        {
+            ok = Res_AddValue(vals, n, &cap, r->vote_types[i]);
+        }
+        break;
+    default:
+        break;
+    }
+    if (*n > 1 && column != RF_VOTETYPE)
+    {
+        qsort(*vals, *n, sizeof(wchar_t *), Res_ValueCmp);
+    }
+    return ok;
+}
+
+/* Apply rw->filters: precinct / vote type masks, re-tabulation, rows. */
+static void Res_ApplyFilter(ResultsWindow *rw)
+{
+    const EeResults *r = &rw->res;
+    uint32_t i, j;
+    BOOL has_pre = FALSE, has_vt = FALSE;
+    free(rw->pmask);
+    free(rw->vmask);
+    rw->pmask = NULL;
+    rw->vmask = NULL;
+    rw->pre_included = r->nprecincts;
+    rw->filt_active = EeFilter_HasEnabled(&rw->filters);
+    for (i = 0; i < rw->filters.count; i++)
+    {
+        if (rw->filters.rules[i].enabled)
+        {
+            has_pre = has_pre || rw->filters.rules[i].column == RF_PRECINCT;
+            has_vt = has_vt || rw->filters.rules[i].column == RF_VOTETYPE;
+        }
+    }
+    if (has_pre && r->nprecincts > 0)
+    {
+        rw->pmask = (uint8_t *)malloc(r->nprecincts);
+        if (rw->pmask != NULL)
+        {
+            rw->pre_included = 0;
+            for (j = 0; j < r->nprecincts; j++)
+            {
+                rw->pmask[j] =
+                    (uint8_t)Filter_ColumnAccepts(&rw->filters, RF_PRECINCT, r->precincts[j].name);
+                rw->pre_included += rw->pmask[j];
+            }
+        }
+    }
+    if (has_vt && r->nvt > 0)
+    {
+        rw->vmask = (uint8_t *)malloc(r->nvt);
+        if (rw->vmask != NULL)
+        {
+            for (j = 0; j < r->nvt; j++)
+            {
+                rw->vmask[j] =
+                    (uint8_t)Filter_ColumnAccepts(&rw->filters, RF_VOTETYPE, r->vote_types[j]);
+            }
+        }
+    }
+    if (!Res_Tabulate(rw))
+    {
+        MessageBoxW(rw->hwnd, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    Res_Rebuild(rw);
+}
+
+static void Res_FilterApplyCb(void *ctx)
+{
+    Res_ApplyFilter((ResultsWindow *)ctx);
+}
+
+static void Res_ResetFilter(ResultsWindow *rw)
+{
+    EeFilter_Clear(&rw->filters);
+    Res_ApplyFilter(rw);
+}
+
+static BOOL App_ShowResultsFilter(ResultsWindow *rw)
+{
+    CvrFilterState *st;
+    if (rw->hwnd_filter != NULL)
+    {
+        SetForegroundWindow(rw->hwnd_filter);
+        return TRUE;
+    }
+    st = Filter_NewState(rw->app, rw->hwnd, &rw->filters, &rw->hwnd_filter);
+    if (st == NULL)
+    {
+        return FALSE;
+    }
+    st->titles = k_ResFilterTitles;
+    st->hidden = rw->filt_hidden;
+    st->ncols = RF_COUNT;
+    st->base_name = rw->base_name;
+    st->file_noun = L"Election Results";
+    st->caption = L"Election Explorer Results Filter";
+    st->collect = Res_FilterCollect;
+    st->apply = Res_FilterApplyCb;
+    st->ctx = rw;
+    return Filter_ShowRuleWindow(st, L"Count and display results matching these conditions:");
+}
+
+/* --- Turnout report ---------------------------------------------------------- */
+
+/* Kinds of turnout report column. */
+enum
+{
+    TC_PRECINCT = 0,
+    TC_REGISTERED,
+    TC_BALLOTS_VT, /* one vote type (ResTurnoutWindow.col_vt) */
+    TC_BALLOTS,
+    TC_TURNOUT
+};
+
+struct ResTurnoutWindow
+{
+    ResultsWindow *owner; /* the results window (owns the data and the filter) */
+    AppState *app;
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    uint32_t *rows; /* precinct indexes in display order */
+    uint32_t nrows;
+    int sort_col; /* -1 = file order */
+    BOOL sort_asc;
+    int ncols;
+    uint8_t col_kind[RES_MAX_COLS];
+    uint32_t col_vt[RES_MAX_COLS];
+};
+
+static WNDPROC g_old_res_turnout_list_proc = NULL;
+
+/* 1234567 -> "1,234,567". */
+static void fmt_count_w(int64_t v, wchar_t *out, size_t cch)
+{
+    wchar_t digits[32];
+    wchar_t tmp[48];
+    size_t n, i, k = 0;
+    BOOL neg = v < 0;
+    StringCchPrintfW(digits, ARRAYSIZE(digits), L"%lld", (long long)(neg ? -v : v));
+    n = wcslen(digits);
+    if (neg)
+    {
+        tmp[k++] = L'-';
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (i > 0 && (n - i) % 3 == 0)
+        {
+            tmp[k++] = L',';
+        }
+        tmp[k++] = digits[i];
+    }
+    tmp[k] = L'\0';
+    StringCchCopyW(out, cch, tmp);
+}
+
+static int64_t ResTurnout_Number(const ResTurnoutWindow *tw, uint32_t pi, int col)
+{
+    const EeResults *r = &tw->owner->res;
+    const EeResultsPrecinct *p = &r->precincts[pi];
+    switch (tw->col_kind[col])
+    {
+    case TC_REGISTERED:
+        return p->registered;
+    case TC_BALLOTS:
+        return p->ballots;
+    case TC_BALLOTS_VT:
+        return r->prec_ballots_vt != NULL ? r->prec_ballots_vt[(size_t)pi * r->nvt + tw->col_vt[col]]
+                                          : EE_RES_UNKNOWN;
+    default:
+        return EE_RES_UNKNOWN;
+    }
+}
+
+/* Turnout of a precinct in basis points x 100 (percent * 100), or -1. */
+static double ResTurnout_Pct(const EeResultsPrecinct *p)
+{
+    if (p->registered == EE_RES_UNKNOWN || p->ballots == EE_RES_UNKNOWN || p->registered <= 0)
+    {
+        return -1.0;
+    }
+    return (double)p->ballots * 100.0 / (double)p->registered;
+}
+
+static void ResTurnout_CellText(const ResTurnoutWindow *tw, uint32_t ri, int col, wchar_t *out,
+                                size_t cch)
+{
+    uint32_t pi;
+    if (cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (ri >= tw->nrows || col < 0 || col >= tw->ncols)
+    {
+        return;
+    }
+    pi = tw->rows[ri];
+    if (tw->col_kind[col] == TC_PRECINCT)
+    {
+        StringCchCopyW(out, cch, tw->owner->res.precincts[pi].name);
+    }
+    else if (tw->col_kind[col] == TC_TURNOUT)
+    {
+        double t = ResTurnout_Pct(&tw->owner->res.precincts[pi]);
+        if (t >= 0.0)
+        {
+            StringCchPrintfW(out, cch, L"%.2f%%", t);
+        }
+    }
+    else
+    {
+        int64_t v = ResTurnout_Number(tw, pi, col);
+        if (v != EE_RES_UNKNOWN)
+        {
+            StringCchPrintfW(out, cch, L"%lld", (long long)v);
+        }
+    }
+}
+
+typedef struct ResTurnoutSortCtx
+{
+    const ResTurnoutWindow *tw;
+    int col;
+    BOOL asc;
+} ResTurnoutSortCtx;
+
+static int __cdecl ResTurnout_SortCmp(void *ctx, const void *pa, const void *pb)
+{
+    const ResTurnoutSortCtx *sc = (const ResTurnoutSortCtx *)ctx;
+    uint32_t a = *(const uint32_t *)pa, b = *(const uint32_t *)pb;
+    const EeResults *r = &sc->tw->owner->res;
+    int c = 0;
+    switch (sc->tw->col_kind[sc->col])
+    {
+    case TC_PRECINCT:
+        c = Res_CompareText(r->precincts[a].name, r->precincts[b].name);
+        break;
+    case TC_TURNOUT:
+    {
+        double x = ResTurnout_Pct(&r->precincts[a]), y = ResTurnout_Pct(&r->precincts[b]);
+        c = x < y ? -1 : (x > y ? 1 : 0);
+        break;
+    }
+    default:
+    {
+        int64_t x = ResTurnout_Number(sc->tw, a, sc->col), y = ResTurnout_Number(sc->tw, b, sc->col);
+        c = x < y ? -1 : (x > y ? 1 : 0);
+        break;
+    }
+    }
+    if (!sc->asc)
+    {
+        c = -c;
+    }
+    return c != 0 ? c : (a < b ? -1 : (a > b ? 1 : 0));
+}
+
+static int __cdecl ResTurnout_IndexCmp(const void *pa, const void *pb)
+{
+    uint32_t a = *(const uint32_t *)pa, b = *(const uint32_t *)pb;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static void ResTurnout_Sort(ResTurnoutWindow *tw)
+{
+    if (tw->nrows < 2)
+    {
+        return;
+    }
+    if (tw->sort_col < 0 || tw->sort_col >= tw->ncols)
+    {
+        qsort(tw->rows, tw->nrows, sizeof(uint32_t), ResTurnout_IndexCmp);
+    }
+    else
+    {
+        ResTurnoutSortCtx sc;
+        sc.tw = tw;
+        sc.col = tw->sort_col;
+        sc.asc = tw->sort_asc;
+        qsort_s(tw->rows, tw->nrows, sizeof(uint32_t), ResTurnout_SortCmp, &sc);
+    }
+}
+
+/* Status: precincts, registered voters, ballots cast and turnout of the rows shown. The
+ * unfiltered totals are the file's reported ones (a Clarity primary's registered total is
+ * not the precinct sum). */
+static void ResTurnout_UpdateStatus(ResTurnoutWindow *tw)
+{
+    const ResultsWindow *rw = tw->owner;
+    const EeResults *r = &rw->res;
+    int64_t reg = 0, bal = 0;
+    BOOL have_reg = TRUE, have_bal = TRUE;
+    wchar_t buf[400], a[32], b[32];
+    uint32_t i;
+    for (i = 0; i < tw->nrows; i++)
+    {
+        const EeResultsPrecinct *p = &r->precincts[tw->rows[i]];
+        if (p->registered == EE_RES_UNKNOWN)
+        {
+            have_reg = FALSE;
+        }
+        else
+        {
+            reg += p->registered;
+        }
+        if (p->ballots == EE_RES_UNKNOWN)
+        {
+            have_bal = FALSE;
+        }
+        else
+        {
+            bal += p->ballots;
+        }
+    }
+    if (rw->pmask == NULL)
+    {
+        reg = r->registered_total;
+        bal = r->ballots_total;
+        have_reg = reg != EE_RES_UNKNOWN;
+        have_bal = bal != EE_RES_UNKNOWN;
+    }
+    StringCchPrintfW(buf, ARRAYSIZE(buf), L"%u precincts%s", tw->nrows,
+                     rw->pmask != NULL ? L" (filtered)" : L"");
+    if (have_reg)
+    {
+        wchar_t part[64];
+        fmt_count_w(reg, a, ARRAYSIZE(a));
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %s registered", a);
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    if (have_bal)
+    {
+        wchar_t part[64];
+        fmt_count_w(bal, b, ARRAYSIZE(b));
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %s ballots cast", b);
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    if (have_reg && have_bal && reg > 0)
+    {
+        wchar_t part[64];
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %.2f%% turnout",
+                         (double)bal * 100.0 / (double)reg);
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  right-click to Copy, Include/Exclude or Export");
+    SendMessageW(tw->status, SB_SETTEXTW, 0, (LPARAM)buf);
+}
+
+/* Rebuild columns and rows from the owner (after a load, filter or option change). */
+static void ResTurnout_Refresh(ResTurnoutWindow *tw)
+{
+    const ResultsWindow *rw;
+    const EeResults *r;
+    HWND header;
+    uint32_t i, v, n = 0;
+    if (tw == NULL || tw->list == NULL)
+    {
+        return;
+    }
+    rw = tw->owner;
+    r = &rw->res;
+    free(tw->rows);
+    tw->rows = (uint32_t *)malloc(((size_t)r->nprecincts + 1) * sizeof(uint32_t));
+    tw->nrows = 0;
+    if (tw->rows != NULL)
+    {
+        for (i = 0; i < r->nprecincts; i++)
+        {
+            if (rw->pmask == NULL || rw->pmask[i])
+            {
+                tw->rows[n++] = i;
+            }
+        }
+        tw->nrows = n;
+    }
+    SendMessageW(tw->list, WM_SETREDRAW, FALSE, 0);
+    if (tw->app->font_grid != NULL)
+    {
+        SendMessageW(tw->list, WM_SETFONT, (WPARAM)tw->app->font_grid, FALSE); /* zoom */
+    }
+    header = ListView_GetHeader(tw->list);
+    while (header != NULL && Header_GetItemCount(header) > 0)
+    {
+        ListView_DeleteColumn(tw->list, 0);
+    }
+    tw->ncols = 0;
+#define TURN_ADD_COL(k, t, w, f, vv)                                                               \
+    do                                                                                             \
+    {                                                                                              \
+        if (tw->ncols < RES_MAX_COLS)                                                              \
+        {                                                                                          \
+            LVCOLUMNW col_;                                                                        \
+            ZeroMemory(&col_, sizeof(col_));                                                       \
+            col_.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;                                         \
+            col_.fmt = tw->ncols == 0 ? LVCFMT_LEFT : (f);                                         \
+            col_.pszText = (wchar_t *)(t);                                                         \
+            col_.cx = ScaleDisplay(tw->app, (w));                                                  \
+            tw->col_kind[tw->ncols] = (uint8_t)(k);                                                \
+            tw->col_vt[tw->ncols] = (vv);                                                          \
+            ListView_InsertColumn(tw->list, tw->ncols, &col_);                                     \
+            tw->ncols++;                                                                           \
+        }                                                                                          \
+    } while (0)
+    TURN_ADD_COL(TC_PRECINCT, L"Precinct", 160, LVCFMT_LEFT, 0);
+    TURN_ADD_COL(TC_REGISTERED, L"Registered Voters", 120, LVCFMT_RIGHT, 0);
+    if (r->prec_ballots_vt != NULL && rw->show_vt)
+    {
+        for (v = 0; v < r->nvt; v++)
+        {
+            if (rw->vmask == NULL || rw->vmask[v])
+            {
+                TURN_ADD_COL(TC_BALLOTS_VT, r->vote_types[v], 110, LVCFMT_RIGHT, v);
+            }
+        }
+    }
+    TURN_ADD_COL(TC_BALLOTS, L"Ballots Cast", 100, LVCFMT_RIGHT, 0);
+    TURN_ADD_COL(TC_TURNOUT, L"Turnout", 80, LVCFMT_RIGHT, 0);
+#undef TURN_ADD_COL
+    if (tw->sort_col >= tw->ncols)
+    {
+        tw->sort_col = -1;
+    }
+    ResTurnout_Sort(tw);
+    ListView_SetItemCountEx(tw->list, (int)tw->nrows, 0);
+    SendMessageW(tw->list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(tw->list, NULL, TRUE);
+    ResTurnout_UpdateStatus(tw);
+}
+
+static void ResTurnout_CopySelected(ResTurnoutWindow *tw)
+{
+    wchar_t *buf = NULL;
+    size_t cap = 0, len = 0;
+    wchar_t cell[512];
+    int i;
+    for (i = ListView_GetNextItem(tw->list, -1, LVNI_SELECTED); i >= 0;
+         i = ListView_GetNextItem(tw->list, i, LVNI_SELECTED))
+    {
+        int c;
+        for (c = 0; c < tw->ncols; c++)
+        {
+            size_t n;
+            ResTurnout_CellText(tw, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            n = wcslen(cell);
+            if (!cvr_wbuf_reserve(&buf, &cap, len + n + 3))
+            {
+                free(buf);
+                return;
+            }
+            memcpy(buf + len, cell, n * sizeof(wchar_t));
+            len += n;
+            if (c + 1 < tw->ncols)
+            {
+                buf[len++] = L'\t';
+            }
+            else
+            {
+                buf[len++] = L'\r';
+                buf[len++] = L'\n';
+            }
+        }
+    }
+    if (buf != NULL && len > 0)
+    {
+        int u8len;
+        buf[len] = L'\0';
+        u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+        if (u8len > 0)
+        {
+            char *utf8 = (char *)malloc((size_t)u8len);
+            if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+            {
+                App_SetClipboardUtf8(tw->hwnd, utf8);
+            }
+            free(utf8);
+        }
+    }
+    free(buf);
+}
+
+typedef struct ResTurnoutExportCtx
+{
+    const ResTurnoutWindow *tw;
+    const uint32_t *idx; /* selected display rows, or NULL for all */
+} ResTurnoutExportCtx;
+
+static void ResTurnout_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    const ResTurnoutExportCtx *x = (const ResTurnoutExportCtx *)user;
+    ResTurnout_CellText(x->tw, x->idx != NULL ? x->idx[row] : row, (int)col, buf, cch);
+}
+
+static void App_ExportResTurnout(ResTurnoutWindow *tw, BOOL selection_only)
+{
+    const wchar_t *headers[RES_MAX_COLS];
+    wchar_t titles[RES_MAX_COLS][96];
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    int c;
+    ResTurnoutExportCtx ctx;
+    wchar_t suggested[256];
+    HWND header = ListView_GetHeader(tw->list);
+    for (c = 0; c < tw->ncols; c++)
+    {
+        HDITEMW hi;
+        ZeroMemory(&hi, sizeof(hi));
+        hi.mask = HDI_TEXT;
+        hi.pszText = titles[c];
+        hi.cchTextMax = ARRAYSIZE(titles[c]);
+        titles[c][0] = L'\0';
+        Header_GetItem(header, c, &hi);
+        headers[c] = titles[c];
+    }
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(tw->list, tw->nrows, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else
+    {
+        n = tw->nrows;
+    }
+    ctx.tw = tw;
+    ctx.idx = idx;
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%s_Turnout", tw->owner->base_name,
+                     selection_only ? L"Selected" : L"All");
+    App_ExportReportModel(tw->hwnd, suggested, (uint32_t)tw->ncols, headers, n,
+                          ResTurnout_ExportCell, &ctx);
+    free(idx);
+}
+
+/* Add "Precinct is <selected>" rules (include or exclude) to the results filter. */
+static void ResTurnout_FilterSelected(ResTurnoutWindow *tw, EeFilterAction action)
+{
+    ResultsWindow *rw = tw->owner;
+    BOOL any = FALSE;
+    int i;
+    for (i = ListView_GetNextItem(tw->list, -1, LVNI_SELECTED); i >= 0;
+         i = ListView_GetNextItem(tw->list, i, LVNI_SELECTED))
+    {
+        EeFilterRule r;
+        if ((uint32_t)i >= tw->nrows)
+        {
+            continue;
+        }
+        ZeroMemory(&r, sizeof(r));
+        r.column = RF_PRECINCT;
+        r.relation = EeRel_Is;
+        r.action = action;
+        r.enabled = TRUE;
+        StringCchCopyW(r.value, ARRAYSIZE(r.value), rw->res.precincts[tw->rows[i]].name);
+        any = EeFilter_Add(&rw->filters, &r) || any;
+    }
+    if (any)
+    {
+        Res_ApplyFilter(rw); /* also refreshes this report */
+    }
+}
+
+static void ResTurnout_OnContextMenu(ResTurnoutWindow *tw, int item, POINT screen)
+{
+    HMENU m;
+    UINT cmd;
+    if (item < 0 || (uint32_t)item >= tw->nrows)
+    {
+        return;
+    }
+    if (!(ListView_GetItemState(tw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(tw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(tw->list, item, LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    {
+        wchar_t inc[96], exc[96];
+        const wchar_t *name = tw->owner->res.precincts[tw->rows[item]].name;
+        BOOL multi = ListView_GetSelectedCount(tw->list) > 1;
+        if (multi)
+        {
+            StringCchCopyW(inc, ARRAYSIZE(inc), L"&Include the Selected Precincts");
+            StringCchCopyW(exc, ARRAYSIZE(exc), L"&Exclude the Selected Precincts");
+        }
+        else
+        {
+            StringCchPrintfW(inc, ARRAYSIZE(inc), L"&Include Precinct \"%.40s\"", name);
+            StringCchPrintfW(exc, ARRAYSIZE(exc), L"&Exclude Precinct \"%.40s\"", name);
+        }
+        AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, IDM_FILTER_INCLUDE, inc);
+        AppendMenuW(m, MF_STRING, IDM_FILTER_EXCLUDE, exc);
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+        AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
+    }
+    cmd = (UINT)TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, tw->hwnd,
+                               NULL);
+    DestroyMenu(m);
+    switch (cmd)
+    {
+    case IDM_EDIT_COPY:
+        ResTurnout_CopySelected(tw);
+        break;
+    case IDM_FILTER_INCLUDE:
+        ResTurnout_FilterSelected(tw, EeFilt_Include);
+        break;
+    case IDM_FILTER_EXCLUDE:
+        ResTurnout_FilterSelected(tw, EeFilt_Exclude);
+        break;
+    case IDM_EXPORT_SELECTED:
+        App_ExportResTurnout(tw, TRUE);
+        break;
+    case IDM_EXPORT_ALL:
+        App_ExportResTurnout(tw, FALSE);
+        break;
+    default:
+        break;
+    }
+}
+
+static LRESULT CALLBACK ResTurnoutListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        ResTurnoutWindow *tw = (ResTurnoutWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (tw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(tw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_res_turnout_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static LRESULT CALLBACK ResTurnoutWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ResTurnoutWindow *tw = (ResTurnoutWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+        RECT rc;
+        tw = (ResTurnoutWindow *)cs->lpCreateParams;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)tw);
+        tw->hwnd = hwnd;
+        GetClientRect(hwnd, &rc);
+        tw->list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                   WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                       LVS_SHOWSELALWAYS,
+                                   0, 0, rc.right, rc.bottom, hwnd, NULL, tw->app->instance, NULL);
+        if (tw->list == NULL)
+        {
+            return -1;
+        }
+        {
+            WNDPROC old = (WNDPROC)SetWindowLongPtrW(tw->list, GWLP_WNDPROC,
+                                                     (LONG_PTR)ResTurnoutListSubclass);
+            if (g_old_res_turnout_list_proc == NULL)
+            {
+                g_old_res_turnout_list_proc = old;
+            }
+        }
+        ListView_SetExtendedListViewStyle(tw->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                        LVS_EX_GRIDLINES);
+        if (tw->app->font_grid != NULL)
+        {
+            SendMessageW(tw->list, WM_SETFONT, (WPARAM)tw->app->font_grid, TRUE);
+        }
+        tw->status = CreateWindowExW(0, STATUSCLASSNAMEW, NULL,
+                                     WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, hwnd, NULL,
+                                     tw->app->instance, NULL);
+        if (tw->status != NULL && tw->app->font_ui != NULL)
+        {
+            SendMessageW(tw->status, WM_SETFONT, (WPARAM)tw->app->font_ui, TRUE);
+        }
+        ResTurnout_Refresh(tw);
+        {
+            int sb_h = 0;
+            RECT sb;
+            SendMessageW(tw->status, WM_SIZE, 0, 0);
+            if (GetWindowRect(tw->status, &sb))
+            {
+                sb_h = sb.bottom - sb.top;
+            }
+            MoveWindow(tw->list, 0, 0, rc.right, rc.bottom > sb_h ? rc.bottom - sb_h : 0, TRUE);
+        }
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (tw != NULL)
+        {
+            int sb_h = 0;
+            RECT sb;
+            SendMessageW(tw->status, WM_SIZE, 0, 0);
+            if (GetWindowRect(tw->status, &sb))
+            {
+                sb_h = sb.bottom - sb.top;
+            }
+            MoveWindow(tw->list, 0, 0, LOWORD(lParam),
+                       HIWORD(lParam) > sb_h ? HIWORD(lParam) - sb_h : 0, TRUE);
+        }
+        return 0;
+
+    case WM_SETFOCUS:
+        if (tw != NULL && tw->list != NULL)
+        {
+            SetFocus(tw->list);
+        }
+        return 0;
+
+    case WM_COMMAND:
+        if (tw != NULL && LOWORD(wParam) == IDM_EDIT_COPY) /* Ctrl+C */
+        {
+            ResTurnout_CopySelected(tw);
+            return 0;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        NMHDR *hdr = (NMHDR *)lParam;
+        if (tw == NULL || hdr->hwndFrom != tw->list)
+        {
+            break;
+        }
+        if (hdr->code == LVN_GETDISPINFOW)
+        {
+            NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+            if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0 && di->item.cchTextMax > 0)
+            {
+                ResTurnout_CellText(tw, (uint32_t)di->item.iItem, di->item.iSubItem,
+                                    di->item.pszText, (size_t)di->item.cchTextMax);
+            }
+            return 0;
+        }
+        if (hdr->code == LVN_COLUMNCLICK)
+        {
+            NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+            if (nlv->iSubItem == tw->sort_col)
+            {
+                tw->sort_asc = !tw->sort_asc;
+            }
+            else
+            {
+                tw->sort_col = nlv->iSubItem;
+                tw->sort_asc = tw->col_kind[tw->sort_col] == TC_PRECINCT;
+            }
+            ResTurnout_Sort(tw);
+            InvalidateRect(tw->list, NULL, FALSE);
+            return 0;
+        }
+        if (hdr->code == NM_RCLICK)
+        {
+            LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+            POINT screen = ia->ptAction;
+            ClientToScreen(tw->list, &screen);
+            ResTurnout_OnContextMenu(tw, ia->iItem, screen);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (tw != NULL)
+        {
+            if (tw->owner != NULL && tw->owner->turnout == tw)
+            {
+                tw->owner->turnout = NULL;
+            }
+            free(tw->rows);
+            free(tw);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        }
+        return 0;
+
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Open (or re-focus) the turnout report of a results window. */
+static void App_ShowResultsTurnout(ResultsWindow *rw)
+{
+    ResTurnoutWindow *tw;
+    wchar_t title[400];
+    RECT pr;
+    int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
+    int width;
+    if (rw->turnout != NULL)
+    {
+        SetForegroundWindow(rw->turnout->hwnd);
+        return;
+    }
+    if (rw->res.nprecincts == 0)
+    {
+        MessageBoxW(rw->hwnd, L"These results have no precinct turnout.", L"Report",
+                    MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    tw = (ResTurnoutWindow *)calloc(1, sizeof(ResTurnoutWindow));
+    if (tw == NULL)
+    {
+        return;
+    }
+    tw->owner = rw;
+    tw->app = rw->app;
+    tw->sort_col = -1;
+    tw->sort_asc = TRUE;
+    StringCchPrintfW(title, ARRAYSIZE(title), L"Turnout Report - %s",
+                     rw->res.election_name != NULL ? rw->res.election_name : rw->base_name);
+    if (GetWindowRect(rw->hwnd, &pr))
+    {
+        x = pr.left + Scale(rw->app, 40);
+        y = pr.top + Scale(rw->app, 40);
+    }
+    /* Wide enough for every column: precinct, registered, one per vote type, ballots, turnout. */
+    width = 160 + 120 + 100 + 80 + 48;
+    if (rw->res.prec_ballots_vt != NULL && rw->show_vt)
+    {
+        width += 110 * (int)rw->res.nvt;
+    }
+    if (width < 600)
+    {
+        width = 600;
+    }
+    if (CreateWindowExW(0, k_ResTurnoutClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y,
+                        ScaleDisplay(rw->app, width), Scale(rw->app, 560), NULL, NULL,
+                        rw->app->instance, tw) == NULL)
+    {
+        free(tw);
+        return;
+    }
+    rw->turnout = tw;
+    ShowWindow(tw->hwnd, SW_SHOWNORMAL);
+    UpdateWindow(tw->hwnd);
+}
+
+/* --- Compare ----------------------------------------------------------------- */
+
+/* Kinds of compare window column. */
+enum
+{
+    CC_CONTEST = 0,
+    CC_CHOICE,
+    CC_PRECINCT,
+    CC_VOTETYPE,
+    CC_A,
+    CC_B,
+    CC_DIFF,
+    CC_STATUS,
+    CC_COUNT
+};
+
+typedef struct ResCompareWindow
+{
+    AppState *app; /* this window's own resource-only AppState */
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    EeResultsDiff *d;
+    uint32_t nd;
+    uint32_t *rows; /* shown diff indexes */
+    uint32_t nrows;
+    BOOL diff_only;
+    wchar_t label_a[160];
+    wchar_t label_b[160];
+    wchar_t note[256]; /* e.g. "filtered CVR ballots" */
+    wchar_t base_name[192];
+} ResCompareWindow;
+
+static WNDPROC g_old_rescmp_list_proc = NULL;
+
+static const wchar_t *ResCmp_StatusText(uint8_t st)
+{
+    switch (st)
+    {
+    case EE_DIFF_MATCH:
+        return L"Match";
+    case EE_DIFF_DIFFERS:
+        return L"Differs";
+    case EE_DIFF_ONLY_A:
+        return L"Only in this window";
+    case EE_DIFF_ONLY_B:
+        return L"Only in the other window";
+    default:
+        return L"Not reported by one side";
+    }
+}
+
+static void ResCmp_CellText(const ResCompareWindow *cw, uint32_t ri, int col, wchar_t *out,
+                            size_t cch)
+{
+    const EeResultsDiff *d;
+    if (cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (ri >= cw->nrows)
+    {
+        return;
+    }
+    d = &cw->d[cw->rows[ri]];
+    switch (col)
+    {
+    case CC_CONTEST:
+        StringCchCopyW(out, cch, d->contest != NULL ? d->contest : L"(election)");
+        break;
+    case CC_CHOICE:
+        StringCchCopyW(out, cch, d->choice != NULL ? d->choice : L"");
+        break;
+    case CC_PRECINCT:
+        StringCchCopyW(out, cch, d->precinct != NULL ? d->precinct : L"");
+        break;
+    case CC_VOTETYPE:
+        StringCchCopyW(out, cch, d->vote_type != NULL ? d->vote_type : L"");
+        break;
+    case CC_A:
+        if (d->a != EE_RES_UNKNOWN)
+        {
+            StringCchPrintfW(out, cch, L"%lld", (long long)d->a);
+        }
+        break;
+    case CC_B:
+        if (d->b != EE_RES_UNKNOWN)
+        {
+            StringCchPrintfW(out, cch, L"%lld", (long long)d->b);
+        }
+        break;
+    case CC_DIFF:
+        if (d->a != EE_RES_UNKNOWN && d->b != EE_RES_UNKNOWN && d->a != d->b)
+        {
+            StringCchPrintfW(out, cch, L"%+lld", (long long)(d->b - d->a));
+        }
+        break;
+    case CC_STATUS:
+        StringCchCopyW(out, cch, ResCmp_StatusText(d->status));
+        break;
+    default:
+        break;
+    }
+}
+
+static void ResCmp_Rebuild(ResCompareWindow *cw)
+{
+    uint32_t i, n = 0;
+    uint32_t cnt[5] = {0, 0, 0, 0, 0};
+    uint32_t pre_diff = 0;
+    wchar_t buf[512];
+    free(cw->rows);
+    cw->rows = (uint32_t *)malloc(((size_t)cw->nd + 1) * sizeof(uint32_t));
+    if (cw->rows == NULL)
+    {
+        cw->nrows = 0;
+        return;
+    }
+    for (i = 0; i < cw->nd; i++)
+    {
+        const EeResultsDiff *d = &cw->d[i];
+        if (d->status < 5)
+        {
+            cnt[d->status]++;
+        }
+        if (d->precinct != NULL && d->status != EE_DIFF_MATCH)
+        {
+            pre_diff++;
+        }
+        if (!cw->diff_only || d->status != EE_DIFF_MATCH)
+        {
+            cw->rows[n++] = i;
+        }
+    }
+    cw->nrows = n;
+    ListView_SetItemCountEx(cw->list, (int)n, 0);
+    InvalidateRect(cw->list, NULL, TRUE);
+    if (cnt[EE_DIFF_DIFFERS] + cnt[EE_DIFF_ONLY_A] + cnt[EE_DIFF_ONLY_B] == 0)
+    {
+        StringCchPrintfW(buf, ARRAYSIZE(buf), L"Identical: %u figures match", cnt[EE_DIFF_MATCH]);
+    }
+    else
+    {
+        StringCchPrintfW(buf, ARRAYSIZE(buf),
+                         L"%u match  \x2022  %u differ  \x2022  %u only in this window  \x2022  %u only "
+                         L"in the other",
+                         cnt[EE_DIFF_MATCH], cnt[EE_DIFF_DIFFERS], cnt[EE_DIFF_ONLY_A],
+                         cnt[EE_DIFF_ONLY_B]);
+    }
+    if (cnt[EE_DIFF_NOT_REPORTED] > 0)
+    {
+        wchar_t part[96];
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %u not reported by one side",
+                         cnt[EE_DIFF_NOT_REPORTED]);
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    if (pre_diff > 0)
+    {
+        wchar_t part[96];
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %u precinct / vote type rows differ",
+                         pre_diff);
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    if (cw->note[0] != L'\0')
+    {
+        StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  ");
+        StringCchCatW(buf, ARRAYSIZE(buf), cw->note);
+    }
+    SendMessageW(cw->status, SB_SETTEXTW, 0, (LPARAM)buf);
+}
+
+static void ResCmp_CopySelected(ResCompareWindow *cw)
+{
+    wchar_t *buf = NULL;
+    size_t cap = 0, len = 0;
+    wchar_t cell[1024];
+    int i;
+    for (i = ListView_GetNextItem(cw->list, -1, LVNI_SELECTED); i >= 0;
+         i = ListView_GetNextItem(cw->list, i, LVNI_SELECTED))
+    {
+        int c;
+        for (c = 0; c < CC_COUNT; c++)
+        {
+            size_t n;
+            ResCmp_CellText(cw, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            n = wcslen(cell);
+            if (!cvr_wbuf_reserve(&buf, &cap, len + n + 3))
+            {
+                free(buf);
+                return;
+            }
+            memcpy(buf + len, cell, n * sizeof(wchar_t));
+            len += n;
+            if (c + 1 < CC_COUNT)
+            {
+                buf[len++] = L'\t';
+            }
+            else
+            {
+                buf[len++] = L'\r';
+                buf[len++] = L'\n';
+            }
+        }
+    }
+    if (buf != NULL && len > 0)
+    {
+        int u8len;
+        buf[len] = L'\0';
+        u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+        if (u8len > 0)
+        {
+            char *utf8 = (char *)malloc((size_t)u8len);
+            if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+            {
+                App_SetClipboardUtf8(cw->hwnd, utf8);
+            }
+            free(utf8);
+        }
+    }
+    free(buf);
+}
+
+typedef struct ResCmpExportCtx
+{
+    const ResCompareWindow *cw;
+} ResCmpExportCtx;
+
+static void ResCmp_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    ResCmp_CellText(((const ResCmpExportCtx *)user)->cw, row, (int)col, buf, cch);
+}
+
+/* Export the shown rows (all, or the differences only). */
+static void App_ExportResCompare(ResCompareWindow *cw)
+{
+    const wchar_t *headers[CC_COUNT];
+    ResCmpExportCtx ctx;
+    wchar_t suggested[256];
+    headers[CC_CONTEST] = L"Contest";
+    headers[CC_CHOICE] = L"Choice";
+    headers[CC_PRECINCT] = L"Precinct";
+    headers[CC_VOTETYPE] = L"Vote Type";
+    headers[CC_A] = cw->label_a;
+    headers[CC_B] = cw->label_b;
+    headers[CC_DIFF] = L"Difference";
+    headers[CC_STATUS] = L"Status";
+    ctx.cw = cw;
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%s", cw->base_name,
+                     cw->diff_only ? L"Compare_Differences" : L"Compare");
+    App_ExportReportModel(cw->hwnd, suggested, CC_COUNT, headers, cw->nrows, ResCmp_ExportCell,
+                          &ctx);
+}
+
+static LRESULT ResCmp_CustomDraw(ResCompareWindow *cw, NMLVCUSTOMDRAW *cd)
+{
+    switch (cd->nmcd.dwDrawStage)
+    {
+    case CDDS_PREPAINT:
+        return CDRF_NOTIFYITEMDRAW;
+    case CDDS_ITEMPREPAINT:
+    {
+        uint32_t ri = (uint32_t)cd->nmcd.dwItemSpec;
+        if (ri < cw->nrows)
+        {
+            switch (cw->d[cw->rows[ri]].status)
+            {
+            case EE_DIFF_DIFFERS:
+                cd->clrTextBk = RGB(255, 222, 222);
+                break;
+            case EE_DIFF_ONLY_A:
+            case EE_DIFF_ONLY_B:
+                cd->clrTextBk = RGB(255, 243, 196);
+                break;
+            case EE_DIFF_NOT_REPORTED:
+                cd->clrTextBk = RGB(236, 236, 236);
+                break;
+            default:
+                break;
+            }
+        }
+        return CDRF_DODEFAULT;
+    }
+    default:
+        return CDRF_DODEFAULT;
+    }
+}
+
+static LRESULT CALLBACK ResCmpListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        ResCompareWindow *cw = (ResCompareWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (cw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(cw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_rescmp_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static HMENU App_CreateResCompareMenu(void)
+{
+    HMENU menu = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
+    HMENU view_menu = CreatePopupMenu();
+    if (menu == NULL || file_menu == NULL || edit_menu == NULL || view_menu == NULL)
+    {
+        if (file_menu != NULL)
+            DestroyMenu(file_menu);
+        if (edit_menu != NULL)
+            DestroyMenu(edit_menu);
+        if (view_menu != NULL)
+            DestroyMenu(view_menu);
+        if (menu != NULL)
+            DestroyMenu(menu);
+        return NULL;
+    }
+    AppendMenuW(file_menu, MF_STRING, IDM_RESCMP_EXPORT, L"&Export Compare…");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(file_menu, MF_STRING, IDM_RESCMP_CLOSE, L"&Close Compare");
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(view_menu, MF_STRING, IDM_RESCMP_DIFFONLY, L"Show &Differences Only");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"&View");
+    return menu;
+}
+
+static LRESULT CALLBACK ResCompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ResCompareWindow *cw = (ResCompareWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+        RECT rc;
+        int c;
+        static const struct
+        {
+            const wchar_t *title;
+            int width;
+            int fmt;
+        } k_cols[CC_COUNT] = {{L"Contest", 260, LVCFMT_LEFT},  {L"Choice", 200, LVCFMT_LEFT},
+                              {L"Precinct", 80, LVCFMT_LEFT},  {L"Vote Type", 90, LVCFMT_LEFT},
+                              {L"", 130, LVCFMT_RIGHT},        {L"", 130, LVCFMT_RIGHT},
+                              {L"Difference", 80, LVCFMT_RIGHT}, {L"Status", 160, LVCFMT_LEFT}};
+        cw = (ResCompareWindow *)cs->lpCreateParams;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)cw);
+        cw->hwnd = hwnd;
+        GetClientRect(hwnd, &rc);
+        cw->list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                   WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                       LVS_SHOWSELALWAYS,
+                                   0, 0, rc.right, rc.bottom, hwnd, NULL, cw->app->instance, NULL);
+        if (cw->list == NULL)
+        {
+            return -1;
+        }
+        {
+            WNDPROC old =
+                (WNDPROC)SetWindowLongPtrW(cw->list, GWLP_WNDPROC, (LONG_PTR)ResCmpListSubclass);
+            if (g_old_rescmp_list_proc == NULL)
+            {
+                g_old_rescmp_list_proc = old;
+            }
+        }
+        ListView_SetExtendedListViewStyle(cw->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                        LVS_EX_GRIDLINES);
+        if (cw->app->font_grid != NULL)
+        {
+            SendMessageW(cw->list, WM_SETFONT, (WPARAM)cw->app->font_grid, TRUE);
+        }
+        for (c = 0; c < CC_COUNT; c++)
+        {
+            LVCOLUMNW col;
+            ZeroMemory(&col, sizeof(col));
+            col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+            col.fmt = k_cols[c].fmt;
+            col.pszText = (wchar_t *)(c == CC_A ? cw->label_a : c == CC_B ? cw->label_b : k_cols[c].title);
+            col.cx = ScaleDisplay(cw->app, k_cols[c].width);
+            ListView_InsertColumn(cw->list, c, &col);
+        }
+        cw->status = CreateWindowExW(0, STATUSCLASSNAMEW, NULL,
+                                     WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, hwnd, NULL,
+                                     cw->app->instance, NULL);
+        if (cw->status != NULL && cw->app->font_ui != NULL)
+        {
+            SendMessageW(cw->status, WM_SETFONT, (WPARAM)cw->app->font_ui, TRUE);
+        }
+        ResCmp_Rebuild(cw);
+        SendMessageW(hwnd, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (cw != NULL)
+        {
+            int sb_h = 0;
+            RECT sb, rc;
+            GetClientRect(hwnd, &rc);
+            SendMessageW(cw->status, WM_SIZE, 0, 0);
+            if (GetWindowRect(cw->status, &sb))
+            {
+                sb_h = sb.bottom - sb.top;
+            }
+            MoveWindow(cw->list, 0, 0, rc.right, rc.bottom > sb_h ? rc.bottom - sb_h : 0, TRUE);
+        }
+        return 0;
+
+    case WM_SETFOCUS:
+        if (cw != NULL && cw->list != NULL)
+        {
+            SetFocus(cw->list);
+        }
+        return 0;
+
+    case WM_INITMENUPOPUP:
+        if (cw != NULL)
+        {
+            CheckMenuItem((HMENU)wParam, IDM_RESCMP_DIFFONLY,
+                          MF_BYCOMMAND | (cw->diff_only ? MF_CHECKED : MF_UNCHECKED));
+        }
+        break;
+
+    case WM_COMMAND:
+        if (cw == NULL)
+        {
+            break;
+        }
+        switch (LOWORD(wParam))
+        {
+        case IDM_EDIT_COPY:
+            ResCmp_CopySelected(cw);
+            return 0;
+        case IDM_RESCMP_DIFFONLY:
+            cw->diff_only = !cw->diff_only;
+            ResCmp_Rebuild(cw);
+            return 0;
+        case IDM_RESCMP_EXPORT:
+            App_ExportResCompare(cw);
+            return 0;
+        case IDM_RESCMP_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            break;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        NMHDR *hdr = (NMHDR *)lParam;
+        if (cw == NULL || hdr->hwndFrom != cw->list)
+        {
+            break;
+        }
+        if (hdr->code == LVN_GETDISPINFOW)
+        {
+            NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+            if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0 && di->item.cchTextMax > 0)
+            {
+                ResCmp_CellText(cw, (uint32_t)di->item.iItem, di->item.iSubItem, di->item.pszText,
+                                (size_t)di->item.cchTextMax);
+            }
+            return 0;
+        }
+        if (hdr->code == NM_CUSTOMDRAW)
+        {
+            return ResCmp_CustomDraw(cw, (NMLVCUSTOMDRAW *)lParam);
+        }
+        if (hdr->code == NM_RCLICK)
+        {
+            HMENU m = CreatePopupMenu();
+            if (m != NULL)
+            {
+                POINT pt;
+                UINT cmd;
+                GetCursorPos(&pt);
+                AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+                AppendMenuW(m, MF_STRING, IDM_RESCMP_EXPORT, L"&Export Compare…");
+                cmd = (UINT)TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, pt.x, pt.y, 0, hwnd,
+                                           NULL);
+                DestroyMenu(m);
+                if (cmd != 0)
+                {
+                    SendMessageW(hwnd, WM_COMMAND, cmd, 0);
+                }
+            }
+            return 0;
+        }
+        break;
+    }
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (cw != NULL)
+        {
+            EeResults_FreeDiff(cw->d, cw->nd);
+            free(cw->rows);
+            App_FreeCvrUi(cw->app);
+            free(cw);
+            CvrWindow_Unregister(hwnd);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            App_MaybeQuit();
+        }
+        return 0;
+
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Show a compare (takes ownership of @p d). */
+static void App_CreateResCompareWindow(AppState *app, EeResultsDiff *d, uint32_t nd,
+                                       const wchar_t *label_a, const wchar_t *label_b,
+                                       const wchar_t *note, const wchar_t *base_name)
+{
+    ResCompareWindow *cw = (ResCompareWindow *)calloc(1, sizeof(ResCompareWindow));
+    AppState *ui = NULL;
+    wchar_t title[400];
+    HMENU menu;
+    HWND h;
+    if (cw == NULL ||
+        (ui = (AppState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AppState))) == NULL)
+    {
+        free(cw);
+        EeResults_FreeDiff(d, nd);
+        return;
+    }
+    App_InitViewerState(ui, app->instance, app);
+    ui->is_cvr_ui = TRUE;
+    App_UpdateDpiMetrics(ui, app->dpi ? app->dpi : 96u);
+    cw->app = ui;
+    cw->d = d;
+    cw->nd = nd;
+    StringCchCopyW(cw->label_a, ARRAYSIZE(cw->label_a), label_a);
+    StringCchCopyW(cw->label_b, ARRAYSIZE(cw->label_b), label_b);
+    StringCchCopyW(cw->note, ARRAYSIZE(cw->note), note != NULL ? note : L"");
+    StringCchCopyW(cw->base_name, ARRAYSIZE(cw->base_name), base_name);
+    StringCchPrintfW(title, ARRAYSIZE(title), L"Compare: %s \x2194 %s", label_a, label_b);
+    menu = App_CreateResCompareMenu();
+    h = CreateWindowExW(0, k_ResCompareClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                        CW_USEDEFAULT, CW_USEDEFAULT, Scale(ui, 1200), Scale(ui, 600), NULL, menu,
+                        ui->instance, cw);
+    if (h == NULL)
+    {
+        if (menu != NULL)
+        {
+            DestroyMenu(menu);
+        }
+        EeResults_FreeDiff(d, nd);
+        App_FreeCvrUi(ui);
+        free(cw);
+        return;
+    }
+    ui->hwnd_main = h;
+    CvrWindow_Register(h);
+    ShowWindow(h, SW_SHOWNORMAL);
+    UpdateWindow(h);
+}
+
+/* A short label for a window: its title without the " — Election Results" / " — Cast Vote
+ * Records" suffix. */
+static void ResCmp_WindowLabel(HWND h, const wchar_t *kind, wchar_t *out, size_t cch)
+{
+    wchar_t t[300];
+    wchar_t *dash;
+    t[0] = L'\0';
+    GetWindowTextW(h, t, ARRAYSIZE(t));
+    dash = wcsstr(t, L" \x2014 ");
+    if (dash != NULL)
+    {
+        *dash = L'\0';
+    }
+    StringCchPrintfW(out, cch, L"%s (%s)", t, kind);
+}
+
+/* Grow a tally item array. */
+static BOOL res_grow_items(EeResultsTallyItem **items, size_t *cap, size_t need)
+{
+    if (need > *cap)
+    {
+        size_t nc = *cap ? *cap * 2 : 1024;
+        EeResultsTallyItem *ni;
+        while (nc < need)
+        {
+            nc *= 2;
+        }
+        ni = (EeResultsTallyItem *)realloc(*items, nc * sizeof(EeResultsTallyItem));
+        if (ni == NULL)
+        {
+            return FALSE;
+        }
+        *items = ni;
+        *cap = nc;
+    }
+    return TRUE;
+}
+
+/* Per-precinct row groups of a CVR: every distinct Precinct value, with its rows. */
+typedef struct CvrPrecinctGroup
+{
+    wchar_t *name;
+    uint32_t *rows;
+    uint32_t n, cap;
+} CvrPrecinctGroup;
+
+/* Results from a CVR window's tabulation (all ballots, or the filtered ones): per precinct
+ * when the CVR has a real Precinct column, else totals. */
+static BOOL Cvr_BuildResults(CvrWindow *cw, BOOL filtered, EeResults *out)
+{
+    const EeCvrTable *t = &cw->table;
+    const uint32_t *rows = filtered ? cw->disp : NULL;
+    uint32_t nrows = filtered ? cw->disp_count : t->nrows;
+    int64_t ballots = cw->multi_card ? EE_RES_UNKNOWN : (int64_t)nrows;
+    EeResultsTallyItem *items = NULL;
+    size_t nitems = 0, cap = 0;
+    BOOL ok = TRUE;
+    EeCvrTally *tal = NULL;
+    uint32_t ntal = 0, i;
+
+    if (!cw->vreport_avail[EE_CVRREP_PRECINCT])
+    {
+        ok = filtered ? EeCvr_TabulateRows(t, rows, nrows, g_settings.cvr_merge_writeins, &tal, &ntal)
+                      : EeCvr_Tabulate(t, g_settings.cvr_merge_writeins, &tal, &ntal);
+        if (!ok)
+        {
+            return FALSE;
+        }
+        items = (EeResultsTallyItem *)calloc((size_t)ntal + 1, sizeof(EeResultsTallyItem));
+        if (items == NULL)
+        {
+            EeCvr_FreeTally(tal, ntal);
+            return FALSE;
+        }
+        for (i = 0; i < ntal; i++)
+        {
+            items[i].contest_key = tal[i].group;
+            items[i].contest = tal[i].contest;
+            items[i].choice = tal[i].selection;
+            items[i].votes = tal[i].count;
+        }
+        ok = EeResults_FromTally(items, ntal, ballots, out);
+        free(items);
+        EeCvr_FreeTally(tal, ntal);
+        return ok;
+    }
+
+    /* Group the rows by precinct, then tabulate each group. */
+    {
+        uint32_t pcol = cw->vreport_col[EE_CVRREP_PRECINCT];
+        CvrPrecinctGroup *groups = NULL;
+        size_t ngroups = 0, gcap = 0;
+        uint32_t r, g;
+        uint32_t *slots = NULL; /* open-addressing hash: name -> group + 1 */
+        uint32_t nslots = 0;
+        wchar_t cell[128];
+        for (r = 0; r < nrows && ok; r++)
+        {
+            uint32_t phys = rows != NULL ? rows[r] : r;
+            uint32_t h = 2166136261u, s0;
+            const wchar_t *q;
+            cell[0] = L'\0';
+            EeCvr_GetCellW(t, phys, pcol, cell, ARRAYSIZE(cell));
+            if ((ngroups + 1) * 2 > nslots)
+            {
+                /* (re)build the hash at twice the size */
+                uint32_t ns = nslots ? nslots * 2 : 4096, k;
+                uint32_t *nt = (uint32_t *)calloc(ns, sizeof(uint32_t));
+                if (nt == NULL)
+                {
+                    ok = FALSE;
+                    break;
+                }
+                for (k = 0; k < ngroups; k++)
+                {
+                    uint32_t hh = 2166136261u, ss;
+                    for (q = groups[k].name; *q != L'\0'; q++)
+                    {
+                        hh = (hh ^ (uint32_t)*q) * 16777619u;
+                    }
+                    for (ss = hh & (ns - 1); nt[ss] != 0; ss = (ss + 1) & (ns - 1))
+                    {
+                    }
+                    nt[ss] = k + 1;
+                }
+                free(slots);
+                slots = nt;
+                nslots = ns;
+            }
+            for (q = cell; *q != L'\0'; q++)
+            {
+                h = (h ^ (uint32_t)*q) * 16777619u;
+            }
+            for (s0 = h & (nslots - 1); slots[s0] != 0; s0 = (s0 + 1) & (nslots - 1))
+            {
+                if (wcscmp(groups[slots[s0] - 1].name, cell) == 0)
+                {
+                    break;
+                }
+            }
+            g = slots[s0] != 0 ? slots[s0] - 1 : (uint32_t)ngroups;
+            if (g == ngroups)
+            {
+                if (ngroups + 1 > gcap)
+                {
+                    size_t nc = gcap ? gcap * 2 : 256;
+                    CvrPrecinctGroup *ng =
+                        (CvrPrecinctGroup *)realloc(groups, nc * sizeof(CvrPrecinctGroup));
+                    if (ng == NULL)
+                    {
+                        ok = FALSE;
+                        break;
+                    }
+                    groups = ng;
+                    gcap = nc;
+                }
+                ZeroMemory(&groups[ngroups], sizeof(CvrPrecinctGroup));
+                groups[ngroups].name = _wcsdup(cell);
+                if (groups[ngroups].name == NULL)
+                {
+                    ok = FALSE;
+                    break;
+                }
+                slots[s0] = (uint32_t)ngroups + 1;
+                ngroups++;
+            }
+            if (groups[g].n + 1 > groups[g].cap)
+            {
+                uint32_t nc = groups[g].cap ? groups[g].cap * 2 : 64;
+                uint32_t *nr = (uint32_t *)realloc(groups[g].rows, (size_t)nc * sizeof(uint32_t));
+                if (nr == NULL)
+                {
+                    ok = FALSE;
+                    break;
+                }
+                groups[g].rows = nr;
+                groups[g].cap = nc;
+            }
+            groups[g].rows[groups[g].n++] = phys;
+        }
+        /* Tabulate each precinct; the tallies stay alive until the results are built. */
+        {
+            EeCvrTally **tals = (EeCvrTally **)calloc(ngroups + 1, sizeof(EeCvrTally *));
+            uint32_t *ntals = (uint32_t *)calloc(ngroups + 1, sizeof(uint32_t));
+            ok = ok && tals != NULL && ntals != NULL;
+            for (g = 0; g < ngroups && ok; g++)
+            {
+                uint32_t k;
+                ok = EeCvr_TabulateRows(t, groups[g].rows, groups[g].n, g_settings.cvr_merge_writeins,
+                                        &tals[g], &ntals[g]);
+                for (k = 0; ok && k < ntals[g]; k++)
+                {
+                    if (!res_grow_items(&items, &cap, nitems + 1))
+                    {
+                        ok = FALSE;
+                        break;
+                    }
+                    items[nitems].contest_key = tals[g][k].group;
+                    items[nitems].contest = tals[g][k].contest;
+                    items[nitems].choice = tals[g][k].selection;
+                    /* a blank precinct cell still counts, under "(blank)" */
+                    items[nitems].precinct = groups[g].name[0] != L'\0' ? groups[g].name : L"(blank)";
+                    items[nitems].votes = tals[g][k].count;
+                    nitems++;
+                }
+            }
+            if (ok)
+            {
+                ok = EeResults_FromTally(items, (uint32_t)nitems, ballots, out);
+            }
+            for (g = 0; g < ngroups; g++)
+            {
+                if (tals != NULL)
+                {
+                    EeCvr_FreeTally(tals[g], ntals != NULL ? ntals[g] : 0);
+                }
+            }
+            free(tals);
+            free(ntals);
+        }
+        for (g = 0; g < ngroups; g++)
+        {
+            free(groups[g].name);
+            free(groups[g].rows);
+        }
+        free(groups);
+        free(slots);
+    }
+    free(items);
+    return ok;
+}
+
+static BOOL Res_IsResultsWindow(HWND h)
+{
+    wchar_t cls[64];
+    return h != NULL && GetClassNameW(h, cls, ARRAYSIZE(cls)) > 0 &&
+           wcscmp(cls, k_ResultsClassName) == 0;
+}
+
+static BOOL Res_IsCvrWindow(HWND h)
+{
+    wchar_t cls[64];
+    return h != NULL && GetClassNameW(h, cls, ARRAYSIZE(cls)) > 0 && wcscmp(cls, k_CvrClassName) == 0;
+}
+
+/* Compare window @p from (a results or CVR window: "this window") with @p other. */
+static void App_RunResultsCompare(HWND from, HWND other)
+{
+    ResultsWindow *ra = Res_IsResultsWindow(from) ? (ResultsWindow *)GetWindowLongPtrW(from, GWLP_USERDATA) : NULL;
+    ResultsWindow *rb = Res_IsResultsWindow(other) ? (ResultsWindow *)GetWindowLongPtrW(other, GWLP_USERDATA) : NULL;
+    CvrWindow *ca = Res_IsCvrWindow(from) ? (CvrWindow *)GetWindowLongPtrW(from, GWLP_USERDATA) : NULL;
+    CvrWindow *cb = Res_IsCvrWindow(other) ? (CvrWindow *)GetWindowLongPtrW(other, GWLP_USERDATA) : NULL;
+    CvrWindow *cvr = ca != NULL ? ca : cb;
+    AppState *app = ra != NULL ? ra->app : (ca != NULL ? ca->app : NULL);
+    EeResults cvr_res;
+    const EeResults *a, *b;
+    const uint8_t *apm = NULL, *avm = NULL, *bpm = NULL, *bvm = NULL;
+    EeResultsDiff *d = NULL;
+    uint32_t nd = 0;
+    wchar_t la[160], lb[160], note[256];
+    BOOL filtered = FALSE;
+    HCURSOR old;
+
+    if (app == NULL || (ra == NULL && ca == NULL) || (rb == NULL && cb == NULL) || (ca != NULL && cb != NULL))
+    {
+        return;
+    }
+    note[0] = L'\0';
+    EeResults_Init(&cvr_res);
+    if (cvr != NULL && cvr->filt_active)
+    {
+        wchar_t q[300];
+        int ans;
+        StringCchPrintfW(q, ARRAYSIZE(q),
+                         L"The Cast Vote Records window is filtered (%u of %u ballot records).\n\n"
+                         L"Compare the results with only the filtered ballots?\n\n"
+                         L"Yes: the filtered ballots.   No: all ballots.",
+                         cvr->disp_count, cvr->table.nrows);
+        ans = MessageBoxW(from, q, L"Compare", MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (ans == IDCANCEL)
+        {
+            return;
+        }
+        filtered = ans == IDYES;
+    }
+    old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (cvr != NULL && !Cvr_BuildResults(cvr, filtered, &cvr_res))
+    {
+        SetCursor(old);
+        MessageBoxW(from, L"Out of memory while tabulating the Cast Vote Records.", L"Compare",
+                    MB_ICONERROR | MB_OK);
+        return;
+    }
+    if (ra != NULL)
+    {
+        a = &ra->res;
+        apm = ra->pmask;
+        avm = ra->vmask;
+        ResCmp_WindowLabel(from, L"results", la, ARRAYSIZE(la));
+    }
+    else
+    {
+        a = &cvr_res;
+        ResCmp_WindowLabel(from, filtered ? L"filtered CVR" : L"CVR", la, ARRAYSIZE(la));
+    }
+    if (rb != NULL)
+    {
+        b = &rb->res;
+        bpm = rb->pmask;
+        bvm = rb->vmask;
+        ResCmp_WindowLabel(other, L"results", lb, ARRAYSIZE(lb));
+    }
+    else
+    {
+        b = &cvr_res;
+        ResCmp_WindowLabel(other, filtered ? L"filtered CVR" : L"CVR", lb, ARRAYSIZE(lb));
+    }
+    if ((ra != NULL && ra->filt_active) || (rb != NULL && rb->filt_active))
+    {
+        StringCchCopyW(note, ARRAYSIZE(note), L"results filter applied");
+    }
+    if (cvr != NULL && !g_settings.cvr_merge_writeins)
+    {
+        StringCchCatW(note, ARRAYSIZE(note),
+                      note[0] != L'\0' ? L"; CVR write-ins not merged" : L"CVR write-ins not merged");
+    }
+    if (cvr != NULL && cvr->multi_card)
+    {
+        StringCchCatW(note, ARRAYSIZE(note),
+                      note[0] != L'\0' ? L"; multi-card CVR: ballots not compared"
+                                       : L"multi-card CVR: ballots not compared");
+    }
+    if (!EeResults_Compare(a, apm, avm, b, bpm, bvm, &d, &nd))
+    {
+        SetCursor(old);
+        EeResults_Clear(&cvr_res);
+        MessageBoxW(from, L"Out of memory while comparing.", L"Compare", MB_ICONERROR | MB_OK);
+        return;
+    }
+    SetCursor(old);
+    App_CreateResCompareWindow(app, d, nd, la, lb, note,
+                               ra != NULL ? ra->base_name : (rb != NULL ? rb->base_name : L"Compare"));
+    EeResults_Clear(&cvr_res);
+}
+
+/* Fill a Compare popup with the windows @p self can be compared with: results windows,
+ * and CVR windows when @p with_cvr. targets[] receives their handles (by command offset). */
+static void Res_FillCompareMenu(HMENU popup, HWND self, BOOL with_cvr, HWND *targets, int max_targets)
+{
+    int i, n = 0;
+    while (GetMenuItemCount(popup) > 0)
+    {
+        DeleteMenu(popup, 0, MF_BYPOSITION);
+    }
+    for (i = 0; i < g_cvr_window_count && n < max_targets &&
+                n <= IDM_COMPARE_WITH_LAST - IDM_COMPARE_WITH_FIRST;
+         i++)
+    {
+        HWND h = g_cvr_windows[i];
+        wchar_t t[300], item[340];
+        if (h == self || !(Res_IsResultsWindow(h) || (with_cvr && Res_IsCvrWindow(h))))
+        {
+            continue;
+        }
+        t[0] = L'\0';
+        GetWindowTextW(h, t, ARRAYSIZE(t));
+        StringCchPrintfW(item, ARRAYSIZE(item), L"Compare with %.200s", t);
+        targets[n] = h;
+        AppendMenuW(popup, MF_STRING, (UINT_PTR)(IDM_COMPARE_WITH_FIRST + n), item);
+        n++;
+    }
+    if (n == 0)
+    {
+        AppendMenuW(popup, MF_STRING | MF_GRAYED, 0,
+                    with_cvr ? L"(open another results window or a CVR window to compare)"
+                             : L"(open a results window to compare)");
+    }
+}
+
+static const wchar_t k_ResHelpCompare[] =
+    L"Compare \x2192 Compare with\x2026 compares this window with another open window:\r\n"
+    L"\x2022 another Election Results window, for example the same election loaded from its "
+    L"export, or an earlier (unofficial) snapshot;\r\n"
+    L"\x2022 a Cast Vote Records window, using its tabulation. If the CVR window is filtered you "
+    L"choose its filtered ballots or all ballots. The CVR window's Compare menu does the same "
+    L"from its side.\r\n\r\n"
+    L"Contests are matched by name (repeated names in order) and choices by name, ignoring case "
+    L"and extra spaces; a CVR's contest and choice ids (\"(45918)\", \"(EC12)\") are dropped. "
+    L"Each choice's total is compared, then Over/Under Votes and Ballots Cast. When both sides "
+    L"have precinct detail, every precinct is compared too (and every vote type when both have "
+    L"the same ones); only the precincts that differ are listed. A results window's filter "
+    L"applies to its side.\r\n\r\n"
+    L"Rows are colored: red differs, yellow only one side has it, grey one side does not report "
+    L"the figure (Travis County's results do not report over/under votes). View \x2192 Show "
+    L"Differences Only hides the matches; File \x2192 Export Compare\x2026 saves the rows. For a "
+    L"CVR, turn on the CVR window's \"Merge image and text write-ins\" option so its write-ins "
+    L"add up like the results' single Write-in total.";
+
+static void App_ShowResultsCompareHelp(AppState *app, HWND owner)
+{
+    App_ShowHelpTopicOn(app, owner, L"Help — Compare", k_ResHelpCompare);
+}
+
+/* --- Export -------------------------------------------------------------------- */
+
+typedef struct ResExportCtx
+{
+    const ResultsWindow *rw;
+    const uint32_t *idx; /* selected display rows, or NULL for all */
+} ResExportCtx;
+
+static void Res_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    const ResExportCtx *x = (const ResExportCtx *)user;
+    Res_CellText(x->rw, x->idx != NULL ? x->idx[row] : row, (int)col, buf, cch);
+}
+
+typedef struct ResExportOpt
+{
+    AppState *app;
+    BOOL detail; /* TRUE = All detail (reloadable) */
+} ResExportOpt;
+
+static INT_PTR CALLBACK ResExportDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ResExportOpt *d = (ResExportOpt *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        AppState *app;
+        RECT rc;
+        int margin, btn_w, btn_h, gap, i, n = 0;
+        HWND ctl[6];
+        d = (ResExportOpt *)lParam;
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+        app = d->app;
+        App_CenterModalClient(dlg, app, Scale(app, 420), Scale(app, 170));
+        GetClientRect(dlg, &rc);
+        margin = Scale(app, 14);
+        btn_w = Scale(app, 84);
+        btn_h = Scale(app, 26);
+        gap = Scale(app, 8);
+        ctl[n++] = CreateWindowExW(0, L"STATIC", L"Export the election results as:",
+                                   WS_CHILD | WS_VISIBLE, margin, margin, rc.right - 2 * margin,
+                                   Scale(app, 18), dlg, NULL, app->instance, NULL);
+        ctl[n++] = CreateWindowExW(0, L"BUTTON",
+                                   L"Displayed view: the rows and columns shown (filter, view, sort)",
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
+                                   margin + Scale(app, 8), margin + Scale(app, 26),
+                                   rc.right - 2 * margin, Scale(app, 22), dlg,
+                                   (HMENU)(INT_PTR)IDC_RES_EXPORT_VIEW, app->instance, NULL);
+        ctl[n++] = CreateWindowExW(0, L"BUTTON",
+                                   L"All detail (reloadable): every precinct and vote type",
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                                   margin + Scale(app, 8), margin + Scale(app, 52),
+                                   rc.right - 2 * margin, Scale(app, 22), dlg,
+                                   (HMENU)(INT_PTR)IDC_RES_EXPORT_DETAIL, app->instance, NULL);
+        SendMessageW(ctl[d->detail ? 2 : 1], BM_SETCHECK, BST_CHECKED, 0);
+        ctl[n++] = CreateWindowExW(0, L"BUTTON", L"OK",
+                                   WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_DEFPUSHBUTTON,
+                                   rc.right - margin - 2 * btn_w - gap, rc.bottom - margin - btn_h,
+                                   btn_w, btn_h, dlg, (HMENU)(INT_PTR)IDOK, app->instance, NULL);
+        ctl[n++] = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                   rc.right - margin - btn_w, rc.bottom - margin - btn_h, btn_w,
+                                   btn_h, dlg, (HMENU)(INT_PTR)IDCANCEL, app->instance, NULL);
+        for (i = 0; i < n; i++)
+        {
+            if (ctl[i] != NULL && app->font_ui != NULL)
+            {
+                SendMessageW(ctl[i], WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+        }
+        SetFocus(ctl[d->detail ? 2 : 1]);
+        return (INT_PTR)FALSE;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK && d != NULL)
+        {
+            d->detail =
+                SendMessageW(GetDlgItem(dlg, IDC_RES_EXPORT_DETAIL), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            EndDialog(dlg, 1);
+            return (INT_PTR)TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+        }
+        break;
+    case WM_CLOSE:
+        EndDialog(dlg, 0);
+        return (INT_PTR)TRUE;
+    default:
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+/* Export the results: the selected rows (displayed view), or everything after asking for
+ * the layout. */
+static void App_ExportResults(ResultsWindow *rw, BOOL selection_only)
+{
+    static BOOL s_detail = FALSE; /* the last layout chosen in this session */
+    wchar_t suggested[300];
+    const wchar_t *headers[RES_MAX_COLS];
+    ResExportCtx ctx;
+    uint32_t *idx = NULL;
+    uint32_t n = 0;
+    int c;
+
+    if (!selection_only)
+    {
+        ResExportOpt opt;
+        opt.app = rw->app;
+        opt.detail = s_detail;
+        if (App_RunModalDialogOwned(rw->app, rw->hwnd, L"Export Election Results", ResExportDlgProc,
+                                    (LPARAM)&opt) != 1)
+        {
+            return;
+        }
+        s_detail = opt.detail;
+        if (opt.detail)
+        {
+            wchar_t path[MAX_PATH];
+            char delim = ',';
+            char *buf = NULL;
+            size_t len = 0;
+            uint8_t *cmask = NULL;
+            uint32_t ci;
+            StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%s", rw->base_name,
+                             rw->filt_active ? L"Filtered_Detail" : L"All_Detail");
+            if (!App_PromptExportPath(rw->hwnd, suggested, path, ARRAYSIZE(path), &delim))
+            {
+                return;
+            }
+            if (rw->filt_active)
+            {
+                /* the contests with a row the filter shows */
+                cmask = (uint8_t *)calloc((size_t)rw->res.ncontests + 1, 1);
+                for (ci = 0; cmask != NULL && ci < rw->res.ncontests; ci++)
+                {
+                    const EeResultsContest *ct = &rw->res.contests[ci];
+                    uint32_t k;
+                    if (!Res_ContestHasPrecinct(rw, ct))
+                    {
+                        continue;
+                    }
+                    for (k = 0; k < ct->nchoices && !cmask[ci]; k++)
+                    {
+                        cmask[ci] = (uint8_t)Res_RowPasses(rw, ci, RR_CHOICE, k);
+                    }
+                    if (ct->has_over_under && !cmask[ci])
+                    {
+                        cmask[ci] = (uint8_t)(Res_RowPasses(rw, ci, RR_OVER, 0) ||
+                                              Res_RowPasses(rw, ci, RR_UNDER, 0));
+                    }
+                }
+            }
+            {
+                HCURSOR old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+                BOOL ok = EeResults_FormatDetailUtf8(&rw->res, delim, rw->pmask, rw->vmask, cmask,
+                                                     &buf, &len);
+                SetCursor(old);
+                if (!ok)
+                {
+                    MessageBoxW(rw->hwnd, L"Out of memory building the export.", L"Export",
+                                MB_ICONERROR | MB_OK);
+                }
+                else
+                {
+                    App_WriteExportUtf8(rw->hwnd, path, buf, len);
+                }
+            }
+            free(buf);
+            free(cmask);
+            return;
+        }
+    }
+    else
+    {
+        idx = App_CollectSelectedIndices(rw->list, rw->nrows, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    if (!selection_only)
+    {
+        n = rw->nrows;
+    }
+    for (c = 0; c < rw->ncols; c++)
+    {
+        headers[c] = rw->col_title[c];
+    }
+    ctx.rw = rw;
+    ctx.idx = idx;
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%s%s", rw->base_name,
+                     selection_only ? L"Selected_Results"
+                                    : (rw->filt_active ? L"Filtered_Results" : L"Results"),
+                     rw->by_precinct ? L"_By_Precinct" : L"");
+    App_ExportReportModel(rw->hwnd, suggested, (uint32_t)rw->ncols, headers, n, Res_ExportCell, &ctx);
+    free(idx);
+}
+
+static const wchar_t k_ResHelpExport[] =
+    L"File \x2192 Export Election Results\x2026 saves the results as UTF-8 CSV (or TSV, chosen in "
+    L"the Save dialog). Choose the layout:\r\n"
+    L"\x2022 Displayed view: exactly the columns and rows shown \x2014 Totals or By Precinct, the "
+    L"filter, the vote type columns and the sort. Easy to read in a spreadsheet.\r\n"
+    L"\x2022 All detail (reloadable): every precinct, vote type and turnout figure, one record per "
+    L"line, with the election name, timestamp and each contest's order. Loading it back gives "
+    L"exactly the same results (compare the two windows to see). A filter limits it to the "
+    L"counted precincts and vote types and the contests with a row shown.\r\n\r\n"
+    L"Both layouts load back with File \x2192 Load Election Results\x2026. A Displayed-view file "
+    L"keeps only what it shows (a Totals file has no precinct detail), and two contests with the "
+    L"same name are told apart only while the file is in the window's own order; use All detail "
+    L"to reload exactly.\r\n\r\n"
+    L"Right-click \x2192 Export Selected\x2026 saves the selected rows in the displayed view.";
+
+/* --- Options --------------------------------------------------------------- */
+
+typedef struct ResOptData
+{
+    AppState *app;
+    HWND owner;
+    int zoom;
+    BOOL show_vt;
+    int party_first;
+} ResOptData;
+
+static INT_PTR CALLBACK ResOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ResOptData *d = (ResOptData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        AppState *app;
+        RECT rc;
+        int margin, btn_w, btn_h, gap, y;
+        HWND ctl[9];
+        int nctl = 0, i;
+        wchar_t ztxt[16];
+        d = (ResOptData *)lParam;
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+        app = d->app;
+        App_CenterModalClient(dlg, app, Scale(app, 360), Scale(app, 200));
+        GetClientRect(dlg, &rc);
+        margin = Scale(app, 14);
+        btn_w = Scale(app, 84);
+        btn_h = Scale(app, 26);
+        gap = Scale(app, 8);
+        y = margin;
+        ctl[nctl++] = CreateWindowExW(0, L"STATIC", L"Zoom (%):", WS_CHILD | WS_VISIBLE, margin,
+                                      y + Scale(app, 3), Scale(app, 80), Scale(app, 18), dlg, NULL,
+                                      app->instance, NULL);
+        StringCchPrintfW(ztxt, ARRAYSIZE(ztxt), L"%d", d->zoom);
+        ctl[nctl++] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", ztxt,
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+                                      margin + Scale(app, 84), y, Scale(app, 64), Scale(app, 22),
+                                      dlg, (HMENU)(INT_PTR)IDC_RES_ZOOM, app->instance, NULL);
+        ctl[nctl++] = CreateWindowExW(0, UPDOWN_CLASSW, NULL,
+                                      WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT |
+                                          UDS_ARROWKEYS | UDS_NOTHOUSANDS,
+                                      0, 0, 0, 0, dlg, (HMENU)(INT_PTR)IDC_RES_ZOOM_SPIN,
+                                      app->instance, NULL);
+        SendMessageW(ctl[nctl - 1], UDM_SETBUDDY, (WPARAM)ctl[nctl - 2], 0);
+        SendMessageW(ctl[nctl - 1], UDM_SETRANGE32, (WPARAM)k_ZoomMin, (LPARAM)k_ZoomMax);
+        SendMessageW(ctl[nctl - 1], UDM_SETPOS32, 0, (LPARAM)d->zoom);
+        y += Scale(app, 34);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"Show a column for each vote type",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, margin,
+                                      y, rc.right - 2 * margin, Scale(app, 22), dlg,
+                                      (HMENU)(INT_PTR)IDC_RES_SHOW_VT, app->instance, NULL);
+        SendMessageW(ctl[nctl - 1], BM_SETCHECK, d->show_vt ? BST_CHECKED : BST_UNCHECKED, 0);
+        y += Scale(app, 32);
+        ctl[nctl++] = CreateWindowExW(0, L"STATIC", L"Party to display first in a primary:",
+                                      WS_CHILD | WS_VISIBLE, margin, y, rc.right - 2 * margin,
+                                      Scale(app, 18), dlg, NULL, app->instance, NULL);
+        y += Scale(app, 22);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"Republican",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
+                                          BS_AUTORADIOBUTTON,
+                                      margin + Scale(app, 10), y, Scale(app, 130), Scale(app, 22),
+                                      dlg, (HMENU)(INT_PTR)IDC_RES_PARTY_REP, app->instance, NULL);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"Democratic",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                                      margin + Scale(app, 150), y, Scale(app, 130), Scale(app, 22),
+                                      dlg, (HMENU)(INT_PTR)IDC_RES_PARTY_DEM, app->instance, NULL);
+        SendMessageW(d->party_first == EE_TAB_PARTY_DEM ? ctl[nctl - 1] : ctl[nctl - 2],
+                     BM_SETCHECK, BST_CHECKED, 0);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"OK",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP |
+                                          BS_DEFPUSHBUTTON,
+                                      rc.right - margin - 2 * btn_w - gap,
+                                      rc.bottom - margin - btn_h, btn_w, btn_h, dlg,
+                                      (HMENU)(INT_PTR)IDOK, app->instance, NULL);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                      rc.right - margin - btn_w, rc.bottom - margin - btn_h, btn_w,
+                                      btn_h, dlg, (HMENU)(INT_PTR)IDCANCEL, app->instance, NULL);
+        for (i = 0; i < nctl; i++)
+        {
+            if (ctl[i] != NULL && app->font_ui != NULL)
+            {
+                SendMessageW(ctl[i], WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+        }
+        SetFocus(GetDlgItem(dlg, IDC_RES_ZOOM));
+        SendMessageW(GetDlgItem(dlg, IDC_RES_ZOOM), EM_SETSEL, 0, -1);
+        return (INT_PTR)FALSE;
+    }
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK && d != NULL)
+        {
+            BOOL parsed = FALSE;
+            UINT z = GetDlgItemInt(dlg, IDC_RES_ZOOM, &parsed, FALSE);
+            if (!parsed || (int)z < k_ZoomMin || (int)z > k_ZoomMax)
+            {
+                wchar_t msg_text[96];
+                StringCchPrintfW(msg_text, ARRAYSIZE(msg_text),
+                                 L"Zoom must be a number from %d to %d.", k_ZoomMin, k_ZoomMax);
+                MessageBoxW(dlg, msg_text, k_WindowTitle, MB_ICONWARNING | MB_OK);
+                SetFocus(GetDlgItem(dlg, IDC_RES_ZOOM));
+                return (INT_PTR)TRUE;
+            }
+            d->zoom = (int)z;
+            d->show_vt =
+                SendMessageW(GetDlgItem(dlg, IDC_RES_SHOW_VT), BM_GETCHECK, 0, 0) == BST_CHECKED;
+            d->party_first =
+                SendMessageW(GetDlgItem(dlg, IDC_RES_PARTY_DEM), BM_GETCHECK, 0, 0) == BST_CHECKED
+                    ? EE_TAB_PARTY_DEM
+                    : EE_TAB_PARTY_REP;
+            EndDialog(dlg, 1);
+            return (INT_PTR)TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        EndDialog(dlg, 0);
+        return (INT_PTR)TRUE;
+
+    default:
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static void App_ShowResultsOptions(ResultsWindow *rw)
+{
+    ResOptData d;
+    BOOL rebuild;
+    d.app = rw->app;
+    d.owner = rw->hwnd;
+    d.zoom = rw->app->zoom_percent > 0 ? rw->app->zoom_percent : k_ZoomDefault;
+    d.show_vt = rw->show_vt;
+    d.party_first = g_settings.cvr_tab_party_first;
+    if (App_RunModalDialogOwned(rw->app, rw->hwnd, L"Election Results Options", ResOptionsDlgProc,
+                                (LPARAM)&d) != 1)
+    {
+        return;
+    }
+    rebuild = d.show_vt != rw->show_vt || d.party_first != g_settings.cvr_tab_party_first;
+    if (d.zoom != rw->app->zoom_percent)
+    {
+        rw->app->zoom_percent = App_ClampZoom(d.zoom);
+        App_UpdateDpiMetrics(rw->app, rw->app->dpi); /* rebuilds the zoomed grid font */
+        if (rw->app->font_grid != NULL)
+        {
+            SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_grid, TRUE);
+        }
+        g_settings.zoom_percent = rw->app->zoom_percent;
+        rebuild = TRUE; /* column widths follow the zoom */
+    }
+    rw->show_vt = d.show_vt;
+    g_settings.results_show_vote_types = d.show_vt;
+    g_settings.cvr_tab_party_first = d.party_first;
+    EeSettings_Save(&g_settings);
+    if (rebuild)
+    {
+        Res_Rebuild(rw);
+    }
+}
+
+/* --- Window ---------------------------------------------------------------- */
+
+static HMENU App_CreateResultsMenu(void)
+{
+    HMENU menu = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
+    HMENU view_menu = CreatePopupMenu();
+    HMENU filter_menu = CreatePopupMenu();
+    HMENU reports_menu = CreatePopupMenu();
+    HMENU compare_menu = CreatePopupMenu();
+    HMENU help_menu = CreatePopupMenu();
+    if (menu == NULL || file_menu == NULL || edit_menu == NULL || view_menu == NULL ||
+        filter_menu == NULL || reports_menu == NULL || compare_menu == NULL || help_menu == NULL)
+    {
+        HMENU all[8];
+        int i;
+        all[0] = file_menu;
+        all[1] = edit_menu;
+        all[2] = view_menu;
+        all[3] = filter_menu;
+        all[4] = reports_menu;
+        all[5] = compare_menu;
+        all[6] = help_menu;
+        all[7] = menu;
+        for (i = 0; i < 8; i++)
+        {
+            if (all[i] != NULL)
+            {
+                DestroyMenu(all[i]);
+            }
+        }
+        return NULL;
+    }
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_RESULTS, L"&Close Election Results");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_RESULTS, L"&Export Election Results…");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(edit_menu, MF_STRING, IDM_RES_OPTIONS, L"&Options…");
+    AppendMenuW(view_menu, MF_STRING, IDM_RES_VIEW_TOTALS, L"&Totals");
+    AppendMenuW(view_menu, MF_STRING, IDM_RES_VIEW_PRECINCT, L"By &Precinct");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…\tCtrl+L");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
+    AppendMenuW(reports_menu, MF_STRING, IDM_RES_TURNOUT, L"Display &Turnout Report…");
+    AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(reports_menu, MF_STRING, IDM_RES_LOAD_SUMMARY, L"Display &Load Summary…");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Election Results");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Views and Options");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
+    AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
+    AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(no other window to compare)");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"&View");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
+    return menu;
+}
+
+/* Subclass so the list draws its header bold on the grey band, like the voter list. */
+static LRESULT CALLBACK ResultsListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        ResultsWindow *rw = (ResultsWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (rw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header &&
+            nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(rw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_results_list_proc, hwnd, msg, wParam, lParam);
+}
+
+/* TRUE when a file other than the shown one disagrees with it. */
+static BOOL Res_HasDifferences(const EeResults *r)
+{
+    uint32_t i;
+    for (i = 0; i < r->nissues; i++)
+    {
+        if (r->issues[i].source != 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ResultsWindow *rw = (ResultsWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+        RECT rc;
+        rw = (ResultsWindow *)cs->lpCreateParams;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)rw);
+        rw->hwnd = hwnd;
+        GetClientRect(hwnd, &rc);
+        rw->list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                   WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA |
+                                       LVS_SHOWSELALWAYS,
+                                   0, 0, rc.right, rc.bottom, hwnd, NULL, rw->app->instance, NULL);
+        if (rw->list == NULL)
+        {
+            return -1;
+        }
+        {
+            WNDPROC old =
+                (WNDPROC)SetWindowLongPtrW(rw->list, GWLP_WNDPROC, (LONG_PTR)ResultsListSubclass);
+            if (g_old_results_list_proc == NULL)
+            {
+                g_old_results_list_proc = old;
+            }
+        }
+        ListView_SetExtendedListViewStyle(rw->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                        LVS_EX_GRIDLINES);
+        if (rw->app->font_grid != NULL)
+        {
+            SendMessageW(rw->list, WM_SETFONT, (WPARAM)rw->app->font_grid, TRUE);
+        }
+        rw->status = CreateWindowExW(0, STATUSCLASSNAMEW, NULL,
+                                     WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0, hwnd, NULL,
+                                     rw->app->instance, NULL);
+        if (rw->status != NULL && rw->app->font_ui != NULL)
+        {
+            SendMessageW(rw->status, WM_SETFONT, (WPARAM)rw->app->font_ui, TRUE);
+        }
+        Res_Rebuild(rw);
+        Res_Layout(rw, rc.right, rc.bottom);
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (rw != NULL)
+        {
+            Res_Layout(rw, LOWORD(lParam), HIWORD(lParam));
+        }
+        return 0;
+
+    case WM_SETFOCUS:
+        if (rw != NULL && rw->list != NULL)
+        {
+            SetFocus(rw->list);
+        }
+        return 0;
+
+    case WM_INITMENUPOPUP:
+        if (rw != NULL)
+        {
+            HMENU m = (HMENU)wParam;
+            BOOL detail = EeResults_HasPrecinctDetail(&rw->res);
+            CheckMenuItem(m, IDM_RES_VIEW_TOTALS,
+                          MF_BYCOMMAND | (rw->by_precinct ? MF_UNCHECKED : MF_CHECKED));
+            CheckMenuItem(m, IDM_RES_VIEW_PRECINCT,
+                          MF_BYCOMMAND | (rw->by_precinct ? MF_CHECKED : MF_UNCHECKED));
+            EnableMenuItem(m, IDM_RES_VIEW_PRECINCT, MF_BYCOMMAND | (detail ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(m, IDM_FILTER_RESET,
+                           MF_BYCOMMAND | (rw->filters.count > 0 ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(m, IDM_RES_TURNOUT,
+                           MF_BYCOMMAND | (rw->res.nprecincts > 0 ? MF_ENABLED : MF_GRAYED));
+            /* Compare (File, Edit, View, Filter, Reports, Compare, Help). */
+            if (m == GetSubMenu(GetMenu(hwnd), 5))
+            {
+                Res_FillCompareMenu(m, hwnd, TRUE, rw->cmp_targets, (int)ARRAYSIZE(rw->cmp_targets));
+            }
+        }
+        break;
+
+    case WM_COMMAND:
+        if (rw == NULL)
+        {
+            break;
+        }
+        if (LOWORD(wParam) >= IDM_COMPARE_WITH_FIRST &&
+            LOWORD(wParam) < IDM_COMPARE_WITH_FIRST + ARRAYSIZE(rw->cmp_targets))
+        {
+            HWND target = rw->cmp_targets[LOWORD(wParam) - IDM_COMPARE_WITH_FIRST];
+            if (target != NULL && IsWindow(target))
+            {
+                App_RunResultsCompare(hwnd, target);
+            }
+            return 0;
+        }
+        switch (LOWORD(wParam))
+        {
+        case IDM_EDIT_COPY: /* also Ctrl+C */
+            Res_CopySelected(rw);
+            return 0;
+        case IDM_RES_OPTIONS:
+            App_ShowResultsOptions(rw);
+            return 0;
+        case IDM_RES_VIEW_TOTALS:
+        case IDM_RES_VIEW_PRECINCT:
+        {
+            BOOL want = LOWORD(wParam) == IDM_RES_VIEW_PRECINCT;
+            if (want && !EeResults_HasPrecinctDetail(&rw->res))
+            {
+                return 0;
+            }
+            if (want != rw->by_precinct)
+            {
+                rw->by_precinct = want;
+                Res_Rebuild(rw);
+            }
+            return 0;
+        }
+        case IDM_RES_LOAD_SUMMARY:
+            App_ShowResultsLoadSummary(rw);
+            return 0;
+        case IDM_RES_TURNOUT:
+            App_ShowResultsTurnout(rw);
+            return 0;
+        case IDM_FILTER_EDIT: /* also Ctrl+L */
+            App_ShowResultsFilter(rw);
+            return 0;
+        case IDM_FILTER_RESET:
+            Res_ResetFilter(rw);
+            return 0;
+        case IDM_HELP_FILTERS:
+            App_ShowHelpTopicOn(rw->app, hwnd, L"Help — Filters", k_ResHelpFilters);
+            return 0;
+        case IDM_HELP_REPORTS:
+            App_ShowHelpTopicOn(rw->app, hwnd, L"Help — Reports", k_ResHelpReports);
+            return 0;
+        case IDM_HELP_COMPARE:
+            App_ShowResultsCompareHelp(rw->app, hwnd);
+            return 0;
+        case IDM_FILE_OPEN_VOTER_LIST:
+            App_BeginOpenVoterList(rw->app);
+            return 0;
+        case IDM_FILE_OPEN_CVR:
+            App_BeginOpenCvr(rw->app);
+            return 0;
+        case IDM_FILE_OPEN_ROSTER:
+            App_BeginOpenRoster(rw->app);
+            return 0;
+        case IDM_FILE_OPEN_RESULTS:
+            App_BeginOpenResults(rw->app);
+            return 0;
+        case IDM_FILE_CLOSE_RESULTS:
+            DestroyWindow(hwnd);
+            return 0;
+        case IDM_FILE_EXPORT_RESULTS:
+            App_ExportResults(rw, FALSE);
+            return 0;
+        case IDM_HELP_EXPORT:
+            App_ShowHelpTopicOn(rw->app, hwnd, L"Help — Export", k_ResHelpExport);
+            return 0;
+        case IDM_FILE_EXIT:
+            App_ExitAll();
+            return 0;
+        case IDM_HELP_LOADING:
+            App_ShowHelpTopicOn(rw->app, hwnd, L"Help — Loading Election Results",
+                                k_ResHelpLoading);
+            return 0;
+        case IDM_HELP_OPTIONS:
+            App_ShowHelpTopicOn(rw->app, hwnd, L"Help — Views and Options", k_ResHelpOptions);
+            return 0;
+        case IDM_HELP_ABOUT:
+            App_ShowAboutOn(rw->app, hwnd);
+            return 0;
+        default:
+            break;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        NMHDR *hdr = (NMHDR *)lParam;
+        if (rw == NULL || hdr->hwndFrom != rw->list)
+        {
+            break;
+        }
+        if (hdr->code == LVN_GETDISPINFOW)
+        {
+            NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+            if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0 && di->item.cchTextMax > 0)
+            {
+                Res_CellText(rw, (uint32_t)di->item.iItem, di->item.iSubItem, di->item.pszText,
+                             (size_t)di->item.cchTextMax);
+            }
+            return 0;
+        }
+        if (hdr->code == LVN_COLUMNCLICK)
+        {
+            NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+            if (nlv->iSubItem == rw->sort_col)
+            {
+                rw->sort_asc = !rw->sort_asc;
+            }
+            else
+            {
+                rw->sort_col = nlv->iSubItem;
+                /* counts and percentages sort largest first */
+                rw->sort_asc = !(rw->col_kind[rw->sort_col] == RC_VT ||
+                                 rw->col_kind[rw->sort_col] == RC_TOTAL ||
+                                 rw->col_kind[rw->sort_col] == RC_PERCENT);
+            }
+            Res_Sort(rw);
+            InvalidateRect(rw->list, NULL, FALSE);
+            return 0;
+        }
+        if (hdr->code == NM_RCLICK)
+        {
+            LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+            POINT screen = ia->ptAction;
+            ClientToScreen(rw->list, &screen);
+            Res_OnContextMenu(rw, ia->iItem, screen);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (rw != NULL)
+        {
+            if (rw->hwnd_filter != NULL)
+            {
+                DestroyWindow(rw->hwnd_filter); /* clears rw->hwnd_filter */
+            }
+            if (rw->turnout != NULL)
+            {
+                DestroyWindow(rw->turnout->hwnd); /* clears rw->turnout */
+            }
+            EeFilter_Clear(&rw->filters);
+            free(rw->pmask);
+            free(rw->vmask);
+            Res_FreeTab(rw);
+            free(rw->rows);
+            EeResults_Clear(&rw->res);
+            App_FreeCvrUi(rw->app);
+            free(rw);
+            CvrWindow_Unregister(hwnd);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            App_MaybeQuit();
+        }
+        return 0;
+
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Create a results window, taking ownership of @p res (moved; the source is reset). Like
+ * a CVR window it is a first-class top-level window with its own resource-only AppState,
+ * so it outlives the window that loaded it. */
+static void App_CreateResultsWindow(AppState *app, EeResults *res, const wchar_t *first_path)
+{
+    ResultsWindow *rw = (ResultsWindow *)calloc(1, sizeof(ResultsWindow));
+    AppState *ui;
+    HWND h = NULL;
+    wchar_t title[320];
+    if (rw == NULL ||
+        (ui = (AppState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AppState))) == NULL)
+    {
+        free(rw);
+        EeResults_Clear(res);
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    App_InitViewerState(ui, app->instance, app); /* seed zoom from the launcher */
+    ui->is_cvr_ui = TRUE;                        /* resource-only, like a CVR window's */
+    App_UpdateDpiMetrics(ui, app->dpi ? app->dpi : 96u);
+    rw->app = ui;
+    rw->res = *res; /* move */
+    EeResults_Init(res);
+    rw->sort_col = -1;
+    rw->sort_asc = TRUE;
+    rw->show_vt = g_settings.results_show_vote_types;
+    EeFilter_Init(&rw->filters);
+    rw->filt_hidden[RF_PRECINCT] = (uint8_t)!EeResults_HasPrecinctDetail(&rw->res);
+    rw->filt_hidden[RF_VOTETYPE] = (uint8_t)(rw->res.nvt == 0);
+    App_BaseNameNoExt(first_path, rw->base_name, ARRAYSIZE(rw->base_name));
+    if (!Res_Tabulate(rw))
+    {
+        EeResults_Clear(&rw->res);
+        App_FreeCvrUi(ui);
+        free(rw);
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    StringCchPrintfW(title, ARRAYSIZE(title), L"%s \x2014 Election Results",
+                     rw->res.election_name != NULL ? rw->res.election_name
+                                                   : App_PathBaseName(first_path));
+    {
+        HMENU menu = App_CreateResultsMenu();
+        h = CreateWindowExW(0, k_ResultsClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                            CW_USEDEFAULT, CW_USEDEFAULT, Scale(ui, 1000), Scale(ui, 600), NULL,
+                            menu, ui->instance, rw);
+        if (h == NULL && menu != NULL)
+        {
+            DestroyMenu(menu);
+        }
+    }
+    if (h == NULL)
+    {
+        Res_FreeTab(rw);
+        free(rw->rows);
+        EeResults_Clear(&rw->res);
+        App_FreeCvrUi(ui);
+        free(rw);
+        MessageBoxW(app->hwnd_main, L"Could not create the Election Results window.",
+                    k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    ui->hwnd_main = h;
+    CvrWindow_Register(h); /* counts toward App_MaybeQuit and closes on Exit */
+    ShowWindow(h, SW_SHOWNORMAL);
+    UpdateWindow(h);
+    if (Res_HasDifferences(&rw->res))
+    {
+        App_ShowResultsLoadSummary(rw);
+    }
+}
+
+/* --- Loading (worker thread behind a modal progress dialog) --------------- */
+
+#define EEM_RES_LOAD_DONE     (WM_APP + 15)
+#define EEM_RES_LOAD_PROGRESS (WM_APP + 16)
+
+typedef struct ResLoadJob
+{
+    AppState *app;
+    const wchar_t *const *paths;
+    int count;
+    EeResults *results; /* out: one per election */
+    uint32_t nresults;
+    volatile LONG cancel;
+    EeLoadStatus status;
+    wchar_t err[512];
+    HWND dlg;
+    HWND bar;
+    HANDLE thread;
+} ResLoadJob;
+
+static BOOL ResLoadProgressCb(const EeLoadProgress *pr, void *user)
+{
+    ResLoadJob *j = (ResLoadJob *)user;
+    if (j != NULL && j->dlg != NULL)
+    {
+        PostMessageW(j->dlg, EEM_RES_LOAD_PROGRESS, (WPARAM)(pr->percent > 100u ? 100u : pr->percent),
+                     0);
+    }
+    return j == NULL || j->cancel == 0;
+}
+
+static DWORD WINAPI ResLoadThreadProc(void *param)
+{
+    ResLoadJob *j = (ResLoadJob *)param;
+    j->status = EeResults_LoadFiles(j->paths, (uint32_t)j->count, &j->results, &j->nresults,
+                                    &j->cancel, ResLoadProgressCb, j, j->err, ARRAYSIZE(j->err));
+    PostMessageW(j->dlg, EEM_RES_LOAD_DONE, 0, 0);
+    return 0;
+}
+
+static INT_PTR CALLBACK ResLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    ResLoadJob *j = (ResLoadJob *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        AppState *app;
+        RECT rc;
+        int margin;
+        HWND label, cancel;
+        j = (ResLoadJob *)lParam;
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)j);
+        j->dlg = dlg;
+        app = j->app;
+        App_CenterModalClient(dlg, app, Scale(app, 340), Scale(app, 120));
+        GetClientRect(dlg, &rc);
+        margin = Scale(app, 14);
+        label = CreateWindowExW(0, L"STATIC", L"Loading election results…", WS_CHILD | WS_VISIBLE,
+                                margin, margin, rc.right - 2 * margin, Scale(app, 20), dlg, NULL,
+                                app->instance, NULL);
+        j->bar = CreateWindowExW(0, PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, margin,
+                                 margin + Scale(app, 26), rc.right - 2 * margin, Scale(app, 16), dlg,
+                                 NULL, app->instance, NULL);
+        cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 rc.right - margin - Scale(app, 84),
+                                 rc.bottom - margin - Scale(app, 26), Scale(app, 84),
+                                 Scale(app, 26), dlg, (HMENU)(INT_PTR)IDCANCEL, app->instance,
+                                 NULL);
+        if (app->font_ui != NULL)
+        {
+            SendMessageW(label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        }
+        if (j->bar != NULL)
+        {
+            SendMessageW(j->bar, PBM_SETRANGE32, 0, 100);
+        }
+        j->thread = CreateThread(NULL, 0, ResLoadThreadProc, j, 0, NULL);
+        if (j->thread == NULL)
+        {
+            j->status = EeLoadStatus_Error;
+            StringCchCopyW(j->err, ARRAYSIZE(j->err), L"Could not start loading.");
+            EndDialog(dlg, 0);
+        }
+        return (INT_PTR)TRUE;
+    }
+
+    case EEM_RES_LOAD_PROGRESS:
+        if (j != NULL && j->bar != NULL)
+        {
+            SendMessageW(j->bar, PBM_SETPOS, wParam, 0);
+        }
+        return (INT_PTR)TRUE;
+
+    case EEM_RES_LOAD_DONE:
+        if (j != NULL && j->thread != NULL)
+        {
+            WaitForSingleObject(j->thread, INFINITE);
+            CloseHandle(j->thread);
+            j->thread = NULL;
+        }
+        EndDialog(dlg, 1);
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        if (j != NULL && LOWORD(wParam) == IDCANCEL)
+        {
+            InterlockedExchange(&j->cancel, 1);
+            EnableWindow(GetDlgItem(dlg, IDCANCEL), FALSE);
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        if (j != NULL)
+        {
+            InterlockedExchange(&j->cancel, 1);
+        }
+        return (INT_PTR)TRUE;
+
+    default:
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static void App_BeginOpenResults(AppState *app)
+{
+    OPENFILENAMEW ofn;
+    wchar_t *files;
+    wchar_t *paths[64];
+    int count = 0;
+    int i;
+    ResLoadJob job;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    files = (wchar_t *)malloc(32768 * sizeof(wchar_t));
+    if (files == NULL)
+    {
+        return;
+    }
+    files[0] = L'\0';
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = app->hwnd_main;
+    ofn.lpstrFilter = L"Election Results (*.zip;*.csv;*.tsv;*.txt;*.xml;*.xls;*.xlsx)\0"
+                      L"*.zip;*.csv;*.tsv;*.txt;*.xml;*.xls;*.xlsx\0"
+                      L"Clarity ZIP files (*.zip)\0*.zip\0"
+                      L"All files (*.*)\0*.*\0";
+    ofn.lpstrFile = files;
+    ofn.nMaxFile = 32768;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+    ofn.lpstrTitle = L"Load Election Results";
+    if (!GetOpenFileNameW(&ofn))
+    {
+        free(files);
+        return;
+    }
+    /* A single full path, or a directory followed by NUL-separated names. */
+    {
+        const wchar_t *dir = files;
+        size_t dlen = wcslen(dir);
+        const wchar_t *p = files + dlen + 1;
+        if (*p == L'\0')
+        {
+            paths[count++] = _wcsdup(files);
+        }
+        else
+        {
+            BOOL need_sep = (dlen > 0 && dir[dlen - 1] != L'\\');
+            while (*p != L'\0' && count < (int)ARRAYSIZE(paths))
+            {
+                size_t need = dlen + 1 + wcslen(p) + 1;
+                wchar_t *full = (wchar_t *)malloc(need * sizeof(wchar_t));
+                if (full == NULL)
+                {
+                    break;
+                }
+                StringCchCopyW(full, need, dir);
+                if (need_sep)
+                {
+                    StringCchCatW(full, need, L"\\");
+                }
+                StringCchCatW(full, need, p);
+                paths[count++] = full;
+                p += wcslen(p) + 1;
+            }
+        }
+    }
+    free(files);
+    if (count == 0 || paths[0] == NULL)
+    {
+        return;
+    }
+
+    ZeroMemory(&job, sizeof(job));
+    job.app = app;
+    job.paths = (const wchar_t *const *)paths;
+    job.count = count;
+    job.status = EeLoadStatus_Error;
+    App_RunModalDialog(app, L"Loading Election Results", ResLoadDlgProc, (LPARAM)&job);
+    if (job.status == EeLoadStatus_Ok)
+    {
+        uint32_t g;
+        for (g = 0; g < job.nresults; g++)
+        {
+            const wchar_t *first = paths[0];
+            if (job.results[g].nsources > 0 && job.results[g].sources[0].path != NULL)
+            {
+                first = job.results[g].sources[0].path;
+            }
+            {
+                wchar_t first_copy[MAX_PATH * 2];
+                StringCchCopyW(first_copy, ARRAYSIZE(first_copy), first);
+                App_CreateResultsWindow(app, &job.results[g], first_copy);
+            }
+        }
+        EeResults_FreeArray(job.results, job.nresults);
+    }
+    else if (job.status == EeLoadStatus_Error)
+    {
+        MessageBoxW(app->hwnd_main, job.err[0] != L'\0' ? job.err : L"Could not load the results.",
+                    k_WindowTitle, MB_ICONERROR | MB_OK);
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(paths[i]);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Voter Roster loading (worker thread behind a modal progress dialog)        */
 /* -------------------------------------------------------------------------- */
 
@@ -16424,6 +20588,7 @@ static HMENU App_CreateRosterMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…	Ctrl+O");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter Roster");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter Roster…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -17648,6 +21813,57 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         cfc.hIcon = wc.hIcon;
         cfc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&cfc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW rcc;
+        ZeroMemory(&rcc, sizeof(rcc));
+        rcc.cbSize = sizeof(rcc);
+        rcc.lpfnWndProc = ResCompareWndProc;
+        rcc.hInstance = hInstance;
+        rcc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        rcc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        rcc.lpszClassName = k_ResCompareClassName;
+        rcc.hIcon = wc.hIcon;
+        rcc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&rcc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW rtc;
+        ZeroMemory(&rtc, sizeof(rtc));
+        rtc.cbSize = sizeof(rtc);
+        rtc.lpfnWndProc = ResTurnoutWndProc;
+        rtc.hInstance = hInstance;
+        rtc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        rtc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        rtc.lpszClassName = k_ResTurnoutClassName;
+        rtc.hIcon = wc.hIcon;
+        rtc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&rtc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW rsc;
+        ZeroMemory(&rsc, sizeof(rsc));
+        rsc.cbSize = sizeof(rsc);
+        rsc.lpfnWndProc = ResultsWndProc;
+        rsc.hInstance = hInstance;
+        rsc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        rsc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        rsc.lpszClassName = k_ResultsClassName;
+        rsc.hIcon = wc.hIcon;
+        rsc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&rsc) == 0)
         {
             return 1;
         }

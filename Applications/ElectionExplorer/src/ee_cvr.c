@@ -1839,6 +1839,7 @@ static BOOL cvr_tabulate_core(const EeCvrTable *t,
         items[out_n].selection =
             (merge_writeins && is_wi) ? wcs_dup(k_writein_label) : utf8_to_wide_alloc(val);
         items[out_n].count = m.ents[i].count;
+        items[out_n].group = cc;
         if (items[out_n].contest == NULL || items[out_n].selection == NULL)
         {
             EeCvr_FreeTally(items, out_n + 1);

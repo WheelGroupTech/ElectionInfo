@@ -18,6 +18,7 @@ static const wchar_t k_ValCopyPrepend[] = L"CopyPrependNormalized";
 static const wchar_t k_ValNameSurnameFirst[] = L"NameSurnameFirst";
 static const wchar_t k_ValCvrMergeWriteins[] = L"CvrMergeWriteins";
 static const wchar_t k_ValCvrTabPartyFirst[] = L"CvrTabPartyFirst";
+static const wchar_t k_ValResultsShowVoteTypes[] = L"ResultsShowVoteTypes";
 
 void EeSettings_Defaults(EeSettings *out)
 {
@@ -31,6 +32,7 @@ void EeSettings_Defaults(EeSettings *out)
     out->name_surname_first = TRUE;
     out->cvr_merge_writeins = TRUE;
     out->cvr_tab_party_first = EE_TAB_PARTY_REP;
+    out->results_show_vote_types = TRUE;
 }
 
 /* Read one REG_DWORD into *value; leave it unchanged if the value is absent or
@@ -63,6 +65,7 @@ BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
     int prepend;
     int surname;
     int merge_wi;
+    int show_vt;
 
     if (subkey == NULL || out == NULL)
     {
@@ -89,6 +92,9 @@ BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
     {
         out->cvr_tab_party_first = EE_TAB_PARTY_REP;
     }
+    show_vt = out->results_show_vote_types ? 1 : 0;
+    read_dword(key, k_ValResultsShowVoteTypes, &show_vt);
+    out->results_show_vote_types = (show_vt != 0);
     RegCloseKey(key);
     return TRUE;
 }
@@ -120,6 +126,7 @@ BOOL EeSettings_SaveTo(const wchar_t *subkey, const EeSettings *in)
     ok &= write_dword(key, k_ValNameSurnameFirst, in->name_surname_first ? 1 : 0);
     ok &= write_dword(key, k_ValCvrMergeWriteins, in->cvr_merge_writeins ? 1 : 0);
     ok &= write_dword(key, k_ValCvrTabPartyFirst, in->cvr_tab_party_first);
+    ok &= write_dword(key, k_ValResultsShowVoteTypes, in->results_show_vote_types ? 1 : 0);
     RegCloseKey(key);
     return ok;
 }

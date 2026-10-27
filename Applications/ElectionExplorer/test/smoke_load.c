@@ -2848,9 +2848,9 @@ static int test_settings_roundtrip(void)
         wprintf(L"settings: absent key did not yield defaults\n");
         rc = 1;
     }
-    if (!a.cvr_merge_writeins)
+    if (!a.cvr_merge_writeins || !a.results_show_vote_types || !b.results_show_vote_types)
     {
-        wprintf(L"settings: cvr_merge_writeins default should be TRUE\n");
+        wprintf(L"settings: cvr_merge_writeins / results_show_vote_types default should be TRUE\n");
         rc = 1;
     }
 
@@ -2860,6 +2860,7 @@ static int test_settings_roundtrip(void)
     a.copy_prepend_normalized = FALSE;
     a.name_surname_first = FALSE;
     a.cvr_merge_writeins = FALSE;
+    a.results_show_vote_types = FALSE;
     if (!EeSettings_SaveTo(k_TestKey, &a))
     {
         wprintf(L"settings: SaveTo failed\n");
@@ -2872,7 +2873,7 @@ static int test_settings_roundtrip(void)
         rc = 1;
     }
     if (b.zoom_percent != 175 || b.map_engine != 3 || b.copy_prepend_normalized ||
-        b.name_surname_first || b.cvr_merge_writeins)
+        b.name_surname_first || b.cvr_merge_writeins || b.results_show_vote_types)
     {
         wprintf(L"settings: round-trip mismatch (zoom=%d map=%d pre=%d sur=%d mrg=%d)\n",
                 b.zoom_percent,
@@ -10231,7 +10232,7 @@ static const char *const k_res_mayor[] = {
 static const char *const k_res_carol[] = {"City of X, Council ( 1)", "||Carol",
                                           "Precinct|Registered Voters|Mail|Early|Total Votes|Total",
                                           "101|100|1|2|3|3", "102|80|2|3|5|5", "Total:|180|3|5|8|8"};
-static const char *const k_res_dan[] = {"City of X, Council ( 1)", "||Dan",
+static const char *const k_res_dan[] = {"City of X, Council ( 1)", "||Dan Smith",
                                         "Precinct|Registered Voters|Mail|Early|Total Votes|Total",
                                         "101|100|0|4|4|4", "102|80|1|1|2|2", "Total:|180|1|5|6|6"};
 
@@ -10262,7 +10263,7 @@ static const char k_res_xml[] =
     "<VoteType name=\"Undervotes\" votes=\"3\"><Precinct name=\"101\" votes=\"2\" /><Precinct name=\"102\" "
     "votes=\"1\" /></VoteType><VoteType name=\"Overvotes\" votes=\"1\"><Precinct name=\"101\" votes=\"0\" />"
     "<Precinct name=\"102\" votes=\"1\" /></VoteType>"
-    "<Choice key=\"1\" text=\"Dan\" party=\"NON\" totalVotes=\"6\">"
+    "<Choice key=\"1\" text=\"Dan   Smith\" party=\"NON\" totalVotes=\"6\">"
     "<VoteType name=\"Mail\" votes=\"1\"><Precinct name=\"101\" votes=\"0\" /><Precinct name=\"102\" "
     "votes=\"1\" /></VoteType><VoteType name=\"Early\" votes=\"5\"><Precinct name=\"101\" votes=\"4\" />"
     "<Precinct name=\"102\" votes=\"1\" /></VoteType></Choice></Contest></ElectionResult>\r\n";
@@ -10275,7 +10276,7 @@ static const char k_res_summary[] =
     "1,\"City of X, Mayor (Vote For 1)\",\"Alice\",\"NON\",20,64.52,180,37,2,2,\"0\",\"0\"\r\n"
     "2,\"City of X, Mayor (Vote For 1)\",\"Bob Nguy?n\",\"NON\",11,35.48,180,37,2,2,\"0\",\"0\"\r\n"
     "3,\"City of X, Council (Vote For 1)\",\"Carol\",\"NON\",8,100.00,180,37,2,2,\"0\",\"0\"\r\n"
-    "4,\"City of X, Council (Vote For 1)\",\"Dan\",\"NON\",6,100.00,180,37,2,2,\"0\",\"0\"\r\n";
+    "4,\"City of X, Council (Vote For 1)\",\"Dan Smith\",\"NON\",6,100.00,180,37,2,2,\"0\",\"0\"\r\n";
 
 static int res_counts_equal(const EeResults *a, const EeResults *b)
 {
@@ -10474,7 +10475,9 @@ static int test_results(void)
     /* Names: case, spaces and the Windows-1252 '?' (also for a surrogate pair). */
     if (!EeResults_NamesMatch(L"Bob Nguy?n", L"Bob Nguy\x1EC5n") ||
         !EeResults_NamesMatch(L" bob  NGUYEN", L"Bob Nguyen") || EeResults_NamesMatch(L"Bob", L"Bobby") ||
-        !EeResults_NamesMatch(L"A?B", L"A\xD83D\xDE00" L"B") || EeResults_NamesMatch(L"AB", L"A B"))
+        !EeResults_NamesMatch(L"A?B", L"A\xD83D\xDE00" L"B") || EeResults_NamesMatch(L"AB", L"A B") ||
+        !EeResults_NamesMatch(L"Jos\xE9 'Chito' Vela", L"Jos\xE9 \"Chito\" Vela") ||
+        !EeResults_NamesMatch(L"\x201CLulu\x201D", L"'Lulu'") || EeResults_NamesMatch(L"Lulu'", L"Lulus"))
     {
         wprintf(L"results: name matching\n");
         goto done;
@@ -10513,7 +10516,8 @@ static int test_results(void)
         all->ballots_vt[1] != 31 || !all->contests[2].has_over_under || all->contests[2].under_total != 3 ||
         all->contests[2].over == NULL || all->contests[2].over[1] != 1 || all->contests[1].has_over_under ||
         wcscmp(all->contests[1].title, L"City of X, Council") != 0 ||
-        wcscmp(all->contests[2].title, L"City of X, Council") != 0)
+        wcscmp(all->contests[2].title, L"City of X, Council") != 0 ||
+        wcscmp(all->choices[3].name, L"Dan Smith") != 0)
     {
         wprintf(L"results: all: election '%s', contest figures or adopted ballots by vote type\n",
                 all->election_name ? all->election_name : L"(none)");
@@ -10743,6 +10747,416 @@ done:
     return rc;
 }
 
+/* Cumulative voting (Dallas CFBISD): detail.txt gives each candidate one column group per
+ * ballot oval and a "Total Cumulative <name>" column; a label longer than 30 characters
+ * pushes the rest of the header right, and a line of spaces sits between the choice names
+ * and the header. An older detail.xls puts the sums in the candidate's own group, followed
+ * by bare "Ballot Oval Selection N" groups. Both give each candidate the sum of its ovals
+ * and agree with no notes (tag: rescum). */
+static int test_results_cumulative(void)
+{
+    static const char *const k_hdr =
+        "Precinct|Registered Voters|EV|ED|Choice Total|EV|ED|Choice Total|"
+        "Total Cumulative Bob Christopherson-Smith|EV|ED|Choice Total|EV|ED|Choice Total|"
+        "Total Cumulative Ann Lee|Total";
+    static const char *const k_rows[] = {"101|100|3|2|5|1|1|2|7|4|0|4|2|1|3|7|14",
+                                         "102|80|1|1|2|0|2|2|4|1|1|2|0|0|0|2|6",
+                                         "Totals:|180|4|3|7|1|3|4|11|5|1|6|2|1|3|9|20"};
+    /* names at their group's first column: Bob's ovals at 2 and 5, Ann's at 9 and 12 */
+    static const struct
+    {
+        int col;
+        const char *name;
+    } k_names[] = {{2, "Bob Christopherson-Smith - Ballot Oval Selection 1"},
+                   {5, "Bob Christopherson-Smith - Ballot Oval Selection 2"},
+                   {9, "Ann Lee - Ballot Oval Selection 1"},
+                   {12, "Ann Lee - Ballot Oval Selection 2"}};
+    static const char *const k_xls[] = {
+        "CFBISD Trustees (Vote for 2)",
+        "||Bob Christopherson-Smith|||Ballot Oval Selection 1|||Ballot Oval Selection 2|||Ann Lee|||"
+        "Ballot Oval Selection 1|||Ballot Oval Selection 2",
+        "Precinct|Registered Voters|EV|ED|Total Cumulative Votes|EV|ED|Total Votes|EV|ED|Total Votes|"
+        "EV|ED|Total Cumulative Votes|EV|ED|Total Votes|EV|ED|Total Votes|Total",
+        "101|100|4|3|7|3|2|5|1|1|2|6|1|7|4|0|4|2|1|3|14",
+        "102|80|1|3|4|1|1|2|0|2|2|1|1|2|1|1|2|0|0|0|6",
+        "Total:|180|5|6|11|4|3|7|1|3|4|7|2|9|5|1|6|2|1|3|20"};
+    wchar_t dir[MAX_PATH], p_txt[MAX_PATH], p_xls[MAX_PATH], err[512] = L"";
+    RtBuf txt = {0}, sml = {0}, nl = {0};
+    EeResults *res = NULL;
+    uint32_t nres = 0;
+    const wchar_t *paths[2];
+    int pass, i, rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_txt, MAX_PATH, L"%sCUM_detail.txt", dir);
+    StringCchPrintfW(p_xls, MAX_PATH, L"%sCUM_detail.xls", dir);
+
+    rt_cats(&txt, "\r\n                                        CFBISD Trustees (Vote For 2)\r\n");
+    for (i = 0; i < (int)ARRAYSIZE(k_names); i++)
+    {
+        while ((int)nl.len < k_names[i].col * 30)
+        {
+            rt_cat(&nl, " ", 1);
+        }
+        rt_cats(&nl, k_names[i].name);
+    }
+    rt_cat(&txt, nl.p, nl.len);
+    rt_cats(&txt, "\r\n                              \r\n");
+    res_txt_line(&txt, k_hdr);
+    for (i = 0; i < (int)ARRAYSIZE(k_rows); i++)
+    {
+        res_txt_line(&txt, k_rows[i]);
+    }
+    rt_cats(&txt, "\r\n");
+
+    rt_cats(&sml, "\xEF\xBB\xBF<?xml version='1.0'?>\r\n<?mso-application progid='Excel.Sheet'?>\r\n"
+                  "<ss:Workbook xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\">\r\n");
+    res_sml_sheet(&sml, "2", k_xls, ARRAYSIZE(k_xls));
+    rt_cats(&sml, "</ss:Workbook>\r\n");
+
+    if (txt.p == NULL || sml.p == NULL || !cvr_write_bytes(p_txt, txt.p, txt.len) ||
+        !cvr_write_bytes(p_xls, sml.p, sml.len))
+    {
+        wprintf(L"rescum: fixtures\n");
+        goto done;
+    }
+    /* pass 0: the TXT alone, 1: the XLS alone, 2: both */
+    for (pass = 0; pass < 3; pass++)
+    {
+        const EeResultsContest *ct;
+        const EeResults *r;
+        uint32_t nvt;
+        paths[0] = pass == 1 ? p_xls : p_txt;
+        paths[1] = p_xls;
+        if (!res_load(paths, pass == 2 ? 2 : 1, &res, &nres, err) || nres != 1)
+        {
+            wprintf(L"rescum: pass %d load %s\n", pass, err);
+            goto done;
+        }
+        r = &res[0];
+        ct = r->ncontests == 1 ? &r->contests[0] : NULL;
+        nvt = EE_RESULTS_NVT(r);
+        /* counts[choice][precinct][vt]: Bob 101 EV 3+1, Ann 101 EV 4+2, Ann 102 ED 1+0 */
+        if (ct == NULL || ct->nchoices != 2 || ct->npre != 2 || ct->counts == NULL || r->nvt != 2 ||
+            wcscmp(r->choices[ct->first_choice].name, L"Bob Christopherson-Smith") != 0 ||
+            wcscmp(r->choices[ct->first_choice + 1].name, L"Ann Lee") != 0 ||
+            r->choices[ct->first_choice].total != 11 || r->choices[ct->first_choice + 1].total != 9 ||
+            ct->counts[(0 * 2 + 0) * nvt + 0] != 4 || ct->counts[(1 * 2 + 0) * nvt + 0] != 6 ||
+            ct->counts[(1 * 2 + 1) * nvt + 1] != 1 || r->nissues != 0)
+        {
+            wprintf(L"rescum: pass %d contests=%u choices=%u issues=%u%s%s\n", pass, r->ncontests,
+                    ct != NULL ? ct->nchoices : 0, r->nissues, r->nissues > 0 ? L" first: " : L"",
+                    r->nissues > 0 ? r->issues[0].text : L"");
+            goto done;
+        }
+        EeResults_FreeArray(res, nres);
+        res = NULL;
+        nres = 0;
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeArray(res, nres);
+    free(txt.p);
+    free(sml.p);
+    free(nl.p);
+    DeleteFileW(p_txt);
+    DeleteFileW(p_xls);
+    wprintf(L"rescum: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
+/* Find a compare row by contest (NULL = election-wide), choice, precinct (NULL = total) and
+ * vote type (NULL = all). */
+static const EeResultsDiff *rescmp_find(const EeResultsDiff *d, uint32_t n, const wchar_t *contest,
+                                        int nth, const wchar_t *choice, const wchar_t *precinct,
+                                        const wchar_t *vt)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+    {
+        BOOL same_contest = (contest == NULL) ? d[i].contest == NULL
+                                              : (d[i].contest != NULL && wcscmp(d[i].contest, contest) == 0);
+        if (!same_contest || wcscmp(d[i].choice, choice) != 0 ||
+            (precinct == NULL) != (d[i].precinct == NULL) ||
+            (precinct != NULL && wcscmp(d[i].precinct, precinct) != 0) ||
+            (vt == NULL) != (d[i].vote_type == NULL) || (vt != NULL && wcscmp(d[i].vote_type, vt) != 0))
+        {
+            continue;
+        }
+        if (nth-- == 0)
+        {
+            return &d[i];
+        }
+    }
+    return NULL;
+}
+
+static uint32_t rescmp_count(const EeResultsDiff *d, uint32_t n, uint8_t status)
+{
+    uint32_t i, c = 0;
+    for (i = 0; i < n; i++)
+    {
+        c += d[i].status == status;
+    }
+    return c;
+}
+
+/* Compare: results with themselves (all match), with a summary whose total differs, and
+ * with CVR-style tallies (contest "(digits)" and choice "(EC n)" ids dropped, same-named
+ * contests kept apart, over/under votes, ballots; precinct rows when a precinct differs)
+ * (tag: rescmp). */
+static int test_results_compare(void)
+{
+    wchar_t dir[MAX_PATH], p_xml[MAX_PATH], p_sum[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *paths[1];
+    EeResults *x = NULL, *s = NULL;
+    uint32_t nx = 0, ns = 0, nd = 0;
+    EeResultsDiff *d = NULL;
+    EeResults t;
+    const EeResultsDiff *r;
+    char bad[sizeof(k_res_summary)];
+    int rc = 1;
+    static const EeResultsTallyItem k_tally[] = {
+        {7, L"City of X, Mayor (45918)", L"Alice (EC1)", NULL, 20},
+        {7, L"City of X, Mayor (45918)", L"Bob Nguy\x1EC5n (EC2)", NULL, 11},
+        {7, L"City of X, Mayor (45918)", L"undervote", NULL, 2},
+        {7, L"City of X, Mayor (45918)", L"overvote", NULL, 1},
+        {8, L"City of X, Council", L"Carol (EC3)", NULL, 8},
+        {9, L"City of X, Council", L"Dan   Smith (EC4)", NULL, 6},
+        {9, L"City of X, Council", L"undervote", NULL, 3},
+        {9, L"City of X, Council", L"overvote", NULL, 1},
+    };
+    /* Per precinct, with Bob's precinct 102 one vote higher than the results (4 -> 5). */
+    static const EeResultsTallyItem k_ptally[] = {
+        {7, L"City of X, Mayor (45918)", L"Alice (EC1)", L"101", 13},
+        {7, L"City of X, Mayor (45918)", L"Bob Nguy\x1EC5n (EC2)", L"101", 7},
+        {8, L"City of X, Council", L"Carol (EC3)", L"101", 3},
+        {9, L"City of X, Council", L"Dan Smith (EC4)", L"101", 4},
+        {7, L"City of X, Mayor (45918)", L"Alice (EC1)", L"102", 7},
+        {7, L"City of X, Mayor (45918)", L"Bob Nguy\x1EC5n (EC2)", L"102", 5},
+        {8, L"City of X, Council", L"Carol (EC3)", L"102", 5},
+        {9, L"City of X, Council", L"Dan Smith (EC4)", L"102", 2},
+    };
+
+    EeResults_Init(&t);
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_xml, MAX_PATH, L"%sCMP_detail.xml", dir);
+    StringCchPrintfW(p_sum, MAX_PATH, L"%sCMP_summary.csv", dir);
+    StringCchCopyA(bad, ARRAYSIZE(bad), k_res_summary);
+    strstr(bad, "\"NON\",20,")[7] = '1'; /* Alice 21 */
+    if (!cvr_write_bytes(p_xml, k_res_xml, strlen(k_res_xml)) || !cvr_write_bytes(p_sum, bad, strlen(bad)))
+    {
+        wprintf(L"rescmp: fixtures\n");
+        goto done;
+    }
+    paths[0] = p_xml;
+    if (!res_load(paths, 1, &x, &nx, err))
+    {
+        wprintf(L"rescmp: load xml %s\n", err);
+        goto done;
+    }
+    paths[0] = p_sum;
+    if (!res_load(paths, 1, &s, &ns, err))
+    {
+        wprintf(L"rescmp: load summary %s\n", err);
+        goto done;
+    }
+
+    /* 1. Results with themselves. */
+    if (!EeResults_Compare(x, NULL, NULL, x, NULL, NULL, &d, &nd) || nd == 0 ||
+        rescmp_count(d, nd, EE_DIFF_MATCH) != nd)
+    {
+        wprintf(L"rescmp: self compare %u rows, %u match\n", nd, rescmp_count(d, nd, EE_DIFF_MATCH));
+        goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+
+    /* 2. With a summary that says Alice 21 (and has no ballots cast). */
+    if (!EeResults_Compare(x, NULL, NULL, s, NULL, NULL, &d, &nd) ||
+        (r = rescmp_find(d, nd, L"City of X, Mayor", 0, L"Alice", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_DIFFERS || r->a != 20 || r->b != 21 ||
+        rescmp_count(d, nd, EE_DIFF_DIFFERS) != 1 ||
+        (r = rescmp_find(d, nd, NULL, 0, L"Ballots Cast", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_NOT_REPORTED || r->a != 37)
+    {
+        wprintf(L"rescmp: summary compare (%u differ)\n", rescmp_count(d, nd, EE_DIFF_DIFFERS));
+        goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+
+    /* 3. With a CVR-style tally: names match, the second "City of X, Council" is Dan's. */
+    if (!EeResults_FromTally(k_tally, ARRAYSIZE(k_tally), 37, &t) || t.ncontests != 3 ||
+        wcscmp(t.contests[0].title, L"City of X, Mayor") != 0 || wcscmp(t.choices[0].name, L"Alice") != 0 ||
+        !t.contests[0].has_over_under || t.contests[0].under_total != 2 || t.contests[1].has_over_under)
+    {
+        wprintf(L"rescmp: from tally (%u contests)\n", t.ncontests);
+        goto done;
+    }
+    if (!EeResults_Compare(x, NULL, NULL, &t, NULL, NULL, &d, &nd) ||
+        rescmp_count(d, nd, EE_DIFF_DIFFERS) != 0 || rescmp_count(d, nd, EE_DIFF_ONLY_A) != 0 ||
+        rescmp_count(d, nd, EE_DIFF_ONLY_B) != 0 ||
+        (r = rescmp_find(d, nd, L"City of X, Council", 0, L"Carol", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH ||
+        (r = rescmp_find(d, nd, L"City of X, Council", 0, L"Dan Smith", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH || r->b != 6 ||
+        (r = rescmp_find(d, nd, L"City of X, Mayor", 0, L"Under Votes", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_NOT_REPORTED || r->b != 2 ||
+        (r = rescmp_find(d, nd, L"City of X, Council", 0, L"Under Votes", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH || r->a != 3 ||
+        (r = rescmp_find(d, nd, NULL, 0, L"Ballots Cast", NULL, NULL)) == NULL || r->status != EE_DIFF_MATCH)
+    {
+        wprintf(L"rescmp: tally compare: %u differ, %u only A, %u only B\n", rescmp_count(d, nd, EE_DIFF_DIFFERS),
+                rescmp_count(d, nd, EE_DIFF_ONLY_A), rescmp_count(d, nd, EE_DIFF_ONLY_B));
+        goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+    EeResults_Clear(&t);
+
+    /* 4. Per precinct: Bob's total and precinct 102 differ; nothing else. */
+    if (!EeResults_FromTally(k_ptally, ARRAYSIZE(k_ptally), EE_RES_UNKNOWN, &t) || !EeResults_HasPrecinctDetail(&t) ||
+        !EeResults_Compare(x, NULL, NULL, &t, NULL, NULL, &d, &nd) ||
+        (r = rescmp_find(d, nd, L"City of X, Mayor", 0, L"Bob Nguy\x1EC5n", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_DIFFERS || r->a != 11 || r->b != 12 ||
+        (r = rescmp_find(d, nd, L"City of X, Mayor", 0, L"Bob Nguy\x1EC5n", L"102", NULL)) == NULL ||
+        r->status != EE_DIFF_DIFFERS || r->a != 4 || r->b != 5 ||
+        rescmp_count(d, nd, EE_DIFF_DIFFERS) != 2)
+    {
+        wprintf(L"rescmp: precinct compare: %u differ\n", rescmp_count(d, nd, EE_DIFF_DIFFERS));
+        goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+
+    /* 5. Only precinct 101 counted on both sides: no differences. */
+    {
+        uint8_t xm[2] = {1, 0};
+        uint8_t tm[2] = {1, 0};
+        if (!EeResults_Compare(x, xm, NULL, &t, tm, NULL, &d, &nd) || rescmp_count(d, nd, EE_DIFF_DIFFERS) != 0 ||
+            (r = rescmp_find(d, nd, L"City of X, Mayor", 0, L"Alice", NULL, NULL)) == NULL || r->a != 13 ||
+            r->b != 13)
+        {
+            wprintf(L"rescmp: masked compare: %u differ\n", rescmp_count(d, nd, EE_DIFF_DIFFERS));
+            goto done;
+        }
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeDiff(d, nd);
+    EeResults_Clear(&t);
+    EeResults_FreeArray(x, nx);
+    EeResults_FreeArray(s, ns);
+    DeleteFileW(p_xml);
+    DeleteFileW(p_sum);
+    wprintf(L"rescmp: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
+/* A displayed-view export (the results window's Totals view and By Precinct view, as its
+ * Export writes them) loads back: the two same-named Council contests are told apart, Over /
+ * Under Votes rows attach to their contest, and comparing with the XML finds no difference
+ * (precinct by precinct and vote type by vote type for the By Precinct file) (tag: resview). */
+static int test_results_view(void)
+{
+    static const char k_totals[] =
+        "\xEF\xBB\xBF"
+        "Contest,Vote For,Choice,Party,Mail,Early,Total Votes,Percent\r\n"
+        "\"City of X, Mayor\",1,Alice,NON,4,16,20,64.52%\r\n"
+        "\"City of X, Mayor\",1,Bob Nguy\xE1\xBB\x85n,NON,2,9,11,35.48%\r\n"
+        "\"City of X, Council\",1,Carol,NON,3,5,8,100.00%\r\n"
+        "\"City of X, Council\",1,Dan Smith,NON,1,5,6,100.00%\r\n"
+        "\"City of X, Council\",1,Over Votes,,,,1,\r\n"
+        "\"City of X, Council\",1,Under Votes,,,,3,\r\n";
+    static const char k_precinct[] =
+        "\xEF\xBB\xBF"
+        "Contest\tVote For\tChoice\tParty\tPrecinct\tMail\tEarly\tTotal Votes\tPercent\r\n"
+        "City of X, Mayor\t1\tAlice\tNON\t101\t3\t10\t13\t65.00%\r\n"
+        "City of X, Mayor\t1\tBob Nguy\xE1\xBB\x85n\tNON\t101\t2\t5\t7\t35.00%\r\n"
+        "City of X, Mayor\t1\tAlice\tNON\t102\t1\t6\t7\t63.64%\r\n"
+        "City of X, Mayor\t1\tBob Nguy\xE1\xBB\x85n\tNON\t102\t0\t4\t4\t36.36%\r\n"
+        "City of X, Council\t1\tCarol\tNON\t101\t1\t2\t3\t100.00%\r\n"
+        "City of X, Council\t1\tCarol\tNON\t102\t2\t3\t5\t100.00%\r\n"
+        "City of X, Council\t1\tDan Smith\tNON\t101\t0\t4\t4\t100.00%\r\n"
+        "City of X, Council\t1\tOver Votes\t\t101\t\t\t0\t\r\n"
+        "City of X, Council\t1\tUnder Votes\t\t101\t\t\t2\t\r\n"
+        "City of X, Council\t1\tDan Smith\tNON\t102\t1\t1\t2\t100.00%\r\n"
+        "City of X, Council\t1\tOver Votes\t\t102\t\t\t1\t\r\n"
+        "City of X, Council\t1\tUnder Votes\t\t102\t\t\t1\t\r\n";
+    wchar_t dir[MAX_PATH], p_xml[MAX_PATH], p_tot[MAX_PATH], p_pre[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *paths[1];
+    EeResults *x = NULL, *v = NULL;
+    uint32_t nx = 0, nv = 0, nd = 0;
+    EeResultsDiff *d = NULL;
+    int pass;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_xml, MAX_PATH, L"%sVIEW_detail.xml", dir);
+    StringCchPrintfW(p_tot, MAX_PATH, L"%sVIEW-Results.csv", dir);
+    StringCchPrintfW(p_pre, MAX_PATH, L"%sVIEW-Results_By_Precinct.tsv", dir);
+    paths[0] = p_xml;
+    if (!cvr_write_bytes(p_xml, k_res_xml, strlen(k_res_xml)) ||
+        !cvr_write_bytes(p_tot, k_totals, strlen(k_totals)) ||
+        !cvr_write_bytes(p_pre, k_precinct, strlen(k_precinct)) || !res_load(paths, 1, &x, &nx, err))
+    {
+        wprintf(L"resview: fixtures %s\n", err);
+        goto done;
+    }
+    for (pass = 0; pass < 2; pass++)
+    {
+        paths[0] = pass == 0 ? p_tot : p_pre;
+        if (!res_load(paths, 1, &v, &nv, err) || v->sources[0].format != EE_RES_FMT_EE_VIEW ||
+            v->ncontests != 3 || v->contests[2].nchoices != 1 ||
+            wcscmp(v->choices[3].name, L"Dan Smith") != 0 || !v->contests[2].has_over_under ||
+            v->contests[2].under_total != 3 || v->contests[1].has_over_under ||
+            v->contests[0].vote_for != 1 || EeResults_HasPrecinctDetail(v) != (pass == 1) ||
+            (pass == 1 && (v->nvt != 2 || v->nprecincts != 2)))
+        {
+            wprintf(L"resview: pass %d load: %s contests %u\n", pass, err, v != NULL ? v->ncontests : 0);
+            goto done;
+        }
+        if (!EeResults_Compare(x, NULL, NULL, v, NULL, NULL, &d, &nd) ||
+            rescmp_count(d, nd, EE_DIFF_DIFFERS) != 0 || rescmp_count(d, nd, EE_DIFF_ONLY_A) != 0 ||
+            rescmp_count(d, nd, EE_DIFF_ONLY_B) != 0)
+        {
+            uint32_t i;
+            wprintf(L"resview: pass %d compare: %u differ, %u only A, %u only B\n", pass,
+                    rescmp_count(d, nd, EE_DIFF_DIFFERS), rescmp_count(d, nd, EE_DIFF_ONLY_A),
+                    rescmp_count(d, nd, EE_DIFF_ONLY_B));
+            for (i = 0; i < nd; i++)
+            {
+                if (d[i].status != EE_DIFF_MATCH && d[i].status != EE_DIFF_NOT_REPORTED)
+                {
+                    wprintf(L"  %s / %s / %s: %lld vs %lld\n", d[i].contest ? d[i].contest : L"-", d[i].choice,
+                            d[i].precinct ? d[i].precinct : L"-", (long long)d[i].a, (long long)d[i].b);
+                }
+            }
+            goto done;
+        }
+        EeResults_FreeDiff(d, nd);
+        d = NULL;
+        EeResults_FreeArray(v, nv);
+        v = NULL;
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeDiff(d, nd);
+    EeResults_FreeArray(x, nx);
+    EeResults_FreeArray(v, nv);
+    DeleteFileW(p_xml);
+    DeleteFileW(p_tot);
+    DeleteFileW(p_pre);
+    wprintf(L"resview: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -10816,5 +11230,8 @@ int wmain(void)
     failed |= test_dominion_cvr();
     failed |= test_rcv();
     failed |= test_results();
+    failed |= test_results_cumulative();
+    failed |= test_results_compare();
+    failed |= test_results_view();
     return failed == 0 ? 0 : 1;
 }

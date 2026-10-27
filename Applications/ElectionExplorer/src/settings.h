@@ -30,7 +30,9 @@ extern "C"
         BOOL name_surname_first;      /**< Display names surname-first. */
         BOOL cvr_merge_writeins;      /**< CVR report: merge image + text write-ins. */
         int cvr_tab_party_first;      /**< Primary tabulation party shown first:
-                                       *   0 = Republican (default), 1 = Democratic. */
+                                       *   0 = Republican (default), 1 = Democratic. Also
+                                       *   orders the Election Results window. */
+        BOOL results_show_vote_types; /**< Election Results: one column per vote type. */
     } EeSettings;
 
     /** Values for EeSettings.cvr_tab_party_first. */

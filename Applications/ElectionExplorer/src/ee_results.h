@@ -30,6 +30,7 @@ extern "C"
 #define EE_RES_FMT_CLARITY_XLS     0x04u /* detail.xls / detail.xlsx */
 #define EE_RES_FMT_CLARITY_XML     0x08u /* detail.xml */
 #define EE_RES_FMT_EE_EXPORT       0x10u /* Election Explorer results export (CSV/TSV) */
+#define EE_RES_FMT_EE_VIEW         0x20u /* Election Explorer displayed-view export */
 
 /** Unknown count (registered voters, ballots cast, precinct counts). */
 #define EE_RES_UNKNOWN (-1)
@@ -219,13 +220,94 @@ extern "C"
 
     /**
      * Compare two names the way the results cross-check does: case-insensitive, with
-     * whitespace runs collapsed and a '?' on either side matching any one character (a
-     * Windows-1252 summary.csv turns characters it lacks into '?').
+     * whitespace runs collapsed, a '?' on either side matching any one character (a
+     * Windows-1252 summary.csv turns characters it lacks into '?'), and any quote mark
+     * matching any other (Clarity writes a nickname 'Lulu', an ES&S CVR "Lulu").
      */
     BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b);
 
     /** A display label for one EE_RES_FMT_* value ("Clarity detail (XML)", …). */
     const wchar_t *EeResults_FormatLabel(uint32_t format);
+
+    /** One tabulated selection from another source, e.g. a Cast Vote Record tabulation. */
+    typedef struct EeResultsTallyItem
+    {
+        uint32_t contest_key;    /* tells two contests with the same name apart */
+        const wchar_t *contest;  /* CVR header ("Mayor (45918)"); the "(digits)" is dropped */
+        const wchar_t *choice;   /* "Kara King (EC12)" -> "Kara King"; "overvote" and
+                                  * "undervote" become the contest's Over/Under Votes */
+        const wchar_t *precinct; /* NULL for a total over all precincts */
+        int64_t votes;
+    } EeResultsTallyItem;
+
+    /**
+     * Build results from a tabulation so they can be compared with loaded results. Contests
+     * and choices keep their first-seen order. Items with a precinct give precinct detail
+     * (no vote types); choice totals are then the precinct sums.
+     *
+     * @param items   Tabulated selections (all totals, or all per precinct).
+     * @param n       Number of items.
+     * @param ballots Ballots tabulated (EE_RES_UNKNOWN if not known).
+     * @param out     Receives the results (initialized first; free with EeResults_Clear).
+     * @return TRUE on success, FALSE when out of memory.
+     */
+    BOOL EeResults_FromTally(const EeResultsTallyItem *items,
+                             uint32_t n,
+                             int64_t ballots,
+                             EeResults *out);
+
+/** EeResultsDiff.status */
+#define EE_DIFF_MATCH        0u
+#define EE_DIFF_DIFFERS      1u
+#define EE_DIFF_ONLY_A       2u /* only the first results have it (or a non-zero count) */
+#define EE_DIFF_ONLY_B       3u
+#define EE_DIFF_NOT_REPORTED 4u /* one side does not report this figure at all */
+
+/** EeResultsDiff.kind */
+#define EE_DIFFROW_CHOICE     0u
+#define EE_DIFFROW_OVER       1u
+#define EE_DIFFROW_UNDER      2u
+#define EE_DIFFROW_BALLOTS    3u
+#define EE_DIFFROW_REGISTERED 4u
+
+    /** One compared figure. */
+    typedef struct EeResultsDiff
+    {
+        wchar_t *contest;   /* NULL for an election-wide figure (ballots, registered) */
+        wchar_t *choice;    /* the choice, "Over Votes", "Under Votes", "Ballots Cast", … */
+        wchar_t *precinct;  /* NULL for a total over the included precincts */
+        wchar_t *vote_type; /* NULL unless compared within one vote type */
+        uint8_t kind;       /* EE_DIFFROW_* */
+        uint8_t status;     /* EE_DIFF_* */
+        int64_t a;          /* EE_RES_UNKNOWN when the first results have no figure */
+        int64_t b;
+    } EeResultsDiff;
+
+    /**
+     * Compare two results: contests by name (repeated names in order), choices by name
+     * (EeResults_NamesMatch), over/under votes, ballots cast and registered voters. When
+     * both sides have precinct detail, each choice is also compared precinct by precinct
+     * and, when both have the same vote types, by vote type; only differing precinct and
+     * vote-type rows are listed. A choice with no votes and a missing choice are equal.
+     *
+     * @param a, b           The results.
+     * @param a_pmask, b_pmask  Counted precincts (nprecincts flags) of each side, or NULL.
+     * @param a_vmask, b_vmask  Counted vote types (nvt flags) of each side, or NULL.
+     * @param out            Receives a malloc'd array (free with EeResults_FreeDiff).
+     * @param out_count      Receives its length.
+     * @return TRUE on success, FALSE when out of memory.
+     */
+    BOOL EeResults_Compare(const EeResults *a,
+                           const uint8_t *a_pmask,
+                           const uint8_t *a_vmask,
+                           const EeResults *b,
+                           const uint8_t *b_pmask,
+                           const uint8_t *b_vmask,
+                           EeResultsDiff **out,
+                           uint32_t *out_count);
+
+    /** Free an array returned by EeResults_Compare. */
+    void EeResults_FreeDiff(EeResultsDiff *d, uint32_t count);
 
 #ifdef __cplusplus
 }

@@ -275,6 +275,8 @@ extern "C"
         wchar_t *contest;   /* contest name (a contest's title-column header) */
         wchar_t *selection; /* the selection: candidate, Yes/No, undervote, … */
         uint32_t count;     /* number of ballots with that selection          */
+        uint32_t group;     /* the contest's title column (col_group): tells two
+                             * contests with the same title apart                */
     } EeCvrTally;
 
     /**

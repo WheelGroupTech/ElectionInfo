@@ -109,6 +109,48 @@ static BOOL is_ws(wchar_t c)
     return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n' || c == 0x00A0;
 }
 
+/* Copy @p s into @p out with whitespace runs collapsed to one space and the ends trimmed
+ * (exporters write "John   Cornyn"); truncated to @p cch. */
+static void wnorm_buf(const wchar_t *s, wchar_t *out, size_t cch)
+{
+    size_t k = 0;
+    BOOL space = FALSE;
+    if (cch == 0)
+    {
+        return;
+    }
+    for (; s != NULL && *s != L'\0'; s++)
+    {
+        if (is_ws(*s))
+        {
+            space = k > 0;
+            continue;
+        }
+        if (space && k + 1 < cch)
+        {
+            out[k++] = L' ';
+        }
+        space = FALSE;
+        if (k + 1 < cch)
+        {
+            out[k++] = *s;
+        }
+    }
+    out[k] = L'\0';
+}
+
+/* Heap copy of @p s with whitespace collapsed (see wnorm_buf). */
+static wchar_t *wdup_norm(const wchar_t *s)
+{
+    size_t n = s != NULL ? wcslen(s) : 0;
+    wchar_t *d = (wchar_t *)malloc((n + 1) * sizeof(wchar_t));
+    if (d != NULL)
+    {
+        wnorm_buf(s != NULL ? s : L"", d, n + 1);
+    }
+    return d;
+}
+
 /* Trimmed copy of s[0..n). */
 static wchar_t *wdup_trim(const wchar_t *s, size_t n)
 {
@@ -392,6 +434,13 @@ static wchar_t *decode_text(const uint8_t *d, size_t n, size_t *out_len)
     return w;
 }
 
+/* A quote mark: Clarity writes a nickname 'Lulu' and an ES&S CVR "Lulu" (curly ones too). */
+static BOOL is_quote(wchar_t c)
+{
+    return c == L'\'' || c == L'"' || c == 0x2018 || c == 0x2019 || c == 0x201C || c == 0x201D ||
+           c == L'`';
+}
+
 BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b)
 {
     if (a == NULL || b == NULL)
@@ -440,7 +489,7 @@ BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b)
                 a++;
             }
         }
-        else if (towupper(*a) != towupper(*b))
+        else if (towupper(*a) != towupper(*b) && !(is_quote(*a) && is_quote(*b)))
         {
             return FALSE;
         }
@@ -533,10 +582,12 @@ static void b_issue(ResBuilder *b, const wchar_t *text)
 }
 
 /* Index of vote type @p name, added when new. */
-static uint32_t b_vt(ResBuilder *b, const wchar_t *name)
+static uint32_t b_vt(ResBuilder *b, const wchar_t *raw)
 {
     EeResults *r = b->r;
+    wchar_t name[256];
     uint32_t i;
+    wnorm_buf(raw, name, ARRAYSIZE(name));
     for (i = 0; i < r->nvt; i++)
     {
         if (wieq(r->vote_types[i], name))
@@ -588,10 +639,12 @@ static BOOL b_rehash(ResBuilder *b, uint32_t cap)
 }
 
 /* Index of precinct @p name (trimmed by the caller), added when new. */
-static uint32_t b_pre(ResBuilder *b, const wchar_t *name)
+static uint32_t b_pre(ResBuilder *b, const wchar_t *raw)
 {
     EeResults *r = b->r;
+    wchar_t name[512];
     uint32_t s;
+    wnorm_buf(raw, name, ARRAYSIZE(name));
     if (b->pre_hash_cap == 0 || (r->nprecincts + 1) * 2 > b->pre_hash_cap)
     {
         if (!b_rehash(b, b->pre_hash_cap ? b->pre_hash_cap * 2 : 1024))
@@ -705,7 +758,7 @@ static uint32_t b_contest(ResBuilder *b, const wchar_t *title, uint32_t vote_for
     }
     c = &r->contests[r->ncontests];
     ZeroMemory(c, sizeof(*c));
-    c->title = wdup(title);
+    c->title = wdup_norm(title);
     if (c->title == NULL)
     {
         b->oom = TRUE;
@@ -740,8 +793,8 @@ static uint32_t b_choice(ResBuilder *b, const wchar_t *name, const wchar_t *part
         return 0;
     }
     ch = &r->choices[r->nchoices];
-    ch->name = wdup(name != NULL ? name : L"");
-    ch->party = (party != NULL && party[0] != L'\0') ? wdup(party) : NULL;
+    ch->name = wdup_norm(name != NULL ? name : L"");
+    ch->party = (party != NULL && party[0] != L'\0') ? wdup_norm(party) : NULL;
     ch->total = total;
     if (ch->name == NULL)
     {
@@ -939,7 +992,8 @@ static BOOL b_finish(ResBuilder *b)
                 local[p] = npre;
                 order[npre++] = p;
             }
-            if (b->ent[k].choice == RES_OVER || b->ent[k].choice == RES_UNDER)
+            if ((b->ent[k].choice == RES_OVER || b->ent[k].choice == RES_UNDER) &&
+                b->ent[k].votes != RES_PROTECTED)
             {
                 any_ou = TRUE;
             }
@@ -1119,14 +1173,32 @@ static BOOL b_finish(ResBuilder *b)
                     fmt_count(r->ballots_vt[c], bb, ARRAYSIZE(bb));
                     StringCchPrintfW(msg,
                                      ARRAYSIZE(msg),
-                                     L"Ballots cast (%s): the reported total %s differs from the "
-                                     L"sum of its precincts, %s.",
+                                     L"Ballots cast (%s): the file's Total row says %s, but its "
+                                     L"precincts add up to %s.",
                                      r->vote_types[c],
                                      a,
                                      bb);
                     b_issue(b, msg);
                 }
             }
+        }
+    }
+    /* A county total of 0, or precincts that all say 0, means registered voters are not
+     * reported (Galveston withholds them; its TXT/XLS Total rows then say 0). */
+    if (r->registered_total == 0)
+    {
+        r->registered_total = EE_RES_UNKNOWN; /* a county never has 0: not reported */
+    }
+    if (r->nprecincts > 0 && r->registered_total != 0)
+    {
+        BOOL all_zero = TRUE;
+        for (c = 0; c < r->nprecincts && all_zero; c++)
+        {
+            all_zero = r->precincts[c].registered == 0;
+        }
+        for (c = 0; c < r->nprecincts && all_zero; c++)
+        {
+            r->precincts[c].registered = EE_RES_UNKNOWN;
         }
     }
     /* Overall turnout from the precincts when no total was reported. */
@@ -1176,6 +1248,20 @@ static BOOL b_finish(ResBuilder *b)
         {
             r->ballots_total = bal;
         }
+        else if (have_bal && r->ballots_total != bal)
+        {
+            /* as for registered voters (Nueces G22, Hidalgo PR20 XML) */
+            wchar_t msg[300], a[32], bb[32];
+            fmt_count(r->ballots_total, a, ARRAYSIZE(a));
+            fmt_count(bal, bb, ARRAYSIZE(bb));
+            StringCchPrintfW(msg,
+                             ARRAYSIZE(msg),
+                             L"Ballots cast: the reported total %s is not the sum of the "
+                             L"precincts' ballots cast, %s.",
+                             a,
+                             bb);
+            b_issue(b, msg);
+        }
     }
     free(local);
     free(order);
@@ -1192,6 +1278,8 @@ typedef struct SumCtx
     BOOL header_done;
     int col_contest, col_choice, col_party, col_total, col_pct, col_reg, col_bal;
     int col_ptot, col_prpt, col_over, col_under;
+    int col_cum;   /* "Cumulative votes" (cumulative voting contests), or -1 */
+    BOOL in_cum;   /* the last choice was a cumulative-voting candidate */
     char *cur_raw; /* current contest's raw name (UTF-8) */
     double pct_sum;
     int64_t cur_reg, cur_bal;
@@ -1224,6 +1312,7 @@ static BOOL sum_header(SumCtx *sc, const char *const *cells, uint32_t n)
     uint32_t i;
     sc->col_contest = sc->col_choice = sc->col_party = sc->col_total = sc->col_pct = -1;
     sc->col_reg = sc->col_bal = sc->col_ptot = sc->col_prpt = sc->col_over = sc->col_under = -1;
+    sc->col_cum = -1;
     for (i = 0; i < n; i++)
     {
         const char *c = cells[i];
@@ -1238,6 +1327,8 @@ static BOOL sum_header(SumCtx *sc, const char *const *cells, uint32_t n)
             sc->col_total = (int)i;
         else if (_stricmp(c, "percent of votes") == 0)
             sc->col_pct = (int)i;
+        else if (_stricmp(c, "cumulative votes") == 0)
+            sc->col_cum = (int)i;
         else if (_stricmp(c, "registered voters") == 0)
             sc->col_reg = (int)i;
         else if (_stricmp(c, "ballots cast") == 0)
@@ -1295,6 +1386,35 @@ static BOOL sum_sink(void *ctx, const char *const *cells, uint32_t n)
     pct = parse_pct(cell_at(cells, n, sc->col_pct));
     reg = cell_i64(cells, n, sc->col_reg);
     bal = cell_i64(cells, n, sc->col_bal);
+    if (sc->col_cum >= 0)
+    {
+        /* Cumulative voting: a candidate row carries its total in "Cumulative votes"; the
+         * rows after it named " 1", " 2", " 3" split it by ballot oval. */
+        int64_t cum = cell_i64(cells, n, sc->col_cum);
+        const char *q = choice;
+        while (*q == ' ')
+        {
+            q++;
+        }
+        if (cum != EE_RES_UNKNOWN)
+        {
+            total = cum;
+            sc->in_cum = TRUE;
+        }
+        else if (sc->in_cum && *q >= '0' && *q <= '9' && strspn(q, "0123456789 ") == strlen(q))
+        {
+            if (r->ncontests > 0 && r->contests[r->ncontests - 1].registered == EE_RES_UNKNOWN)
+            {
+                r->contests[r->ncontests - 1].registered = reg;
+                r->contests[r->ncontests - 1].ballots = bal;
+            }
+            return TRUE;
+        }
+        else
+        {
+            sc->in_cum = FALSE;
+        }
+    }
     wchoice = u8dup(choice, -1);
     if (wchoice == NULL)
     {
@@ -1738,17 +1858,21 @@ static void parse_clarity_xml(ResBuilder *b, const char *x, size_t n)
             {
                 EeResultsContest *c = &r->contests[contest];
                 int64_t v = xattr_i64(lt, gt, "votes");
+                char vb[32];
+                /* votes="protected": withheld, so unknown (another file may supply it) */
+                BOOL withheld = v == EE_RES_UNKNOWN && xattr(lt, gt, "votes", vb, sizeof(vb)) &&
+                                _stricmp(vb, "protected") == 0;
                 if (wieq(vn, L"Undervotes") || wieq(vn, L"Under Votes"))
                 {
                     mode = 3;
                     c->has_over_under = TRUE;
-                    c->under_total = v == EE_RES_UNKNOWN ? 0 : v;
+                    c->under_total = withheld ? EE_RES_UNKNOWN : (v == EE_RES_UNKNOWN ? 0 : v);
                 }
                 else if (wieq(vn, L"Overvotes") || wieq(vn, L"Over Votes"))
                 {
                     mode = 2;
                     c->has_over_under = TRUE;
-                    c->over_total = v == EE_RES_UNKNOWN ? 0 : v;
+                    c->over_total = withheld ? EE_RES_UNKNOWN : (v == EE_RES_UNKNOWN ? 0 : v);
                 }
                 else
                 {
@@ -1858,12 +1982,14 @@ typedef struct Grid
     uint32_t choice[GRID_MAX_COLS];
     uint32_t gstart[GRID_MAX_COLS]; /* per choice: first and last (total) column */
     uint32_t gend[GRID_MAX_COLS];
+    uint8_t merged[GRID_MAX_COLS];  /* per contest choice: several column groups add up */
 } Grid;
 
 static BOOL is_total_label(const wchar_t *s)
 {
+    /* also "Total Cumulative James Allen" after a cumulative-voting candidate's ovals */
     return wieq(s, L"Total") || wieq(s, L"Total Votes") || wieq(s, L"Totals") ||
-           wieq(s, L"Choice Total");
+           wieq(s, L"Choice Total") || _wcsnicmp(s, L"Total ", 6) == 0;
 }
 
 /* The label of a grid's first column: "Precinct", or "County" / "Area" in setups that
@@ -2056,7 +2182,8 @@ static void grid_row(Grid *g, ResBuilder *b, uint32_t contest, wchar_t *const *c
                 }
                 break;
             case GR_CHOICE_TOTAL:
-                if (total && contest < r->ncontests && g->choice[i] < r->contests[contest].nchoices)
+                if (total && contest < r->ncontests &&
+                    g->choice[i] < r->contests[contest].nchoices && !g->merged[g->choice[i]])
                 {
                     r->choices[r->contests[contest].first_choice + g->choice[i]].total = v;
                 }
@@ -2085,19 +2212,69 @@ static uint32_t grid_contest(Grid *g,
     split_title(title, &vote_for, TRUE);
     ci = b_contest(b, title, vote_for, -1);
     free(title);
-    for (k = 0; k < g->nchoices; k++)
     {
-        const wchar_t *nm = L"";
-        uint32_t c;
-        for (c = g->gstart[k]; c <= g->gend[k] && c < nnames; c++)
+        /* A cumulative-voting contest gives each candidate one column group per ballot oval
+         * ("James Allen - Ballot Oval Selection 1", "... 2", "... 3"); they add up to the
+         * candidate, as in detail.xml. Older detail.xls files give the candidate's own
+         * group the sums and follow it with bare "Ballot Oval Selection N" groups, which are
+         * dropped. remap: column group -> contest choice, or UINT32_MAX to drop. */
+        uint32_t remap[GRID_MAX_COLS];
+        uint32_t nch = 0, col;
+        ZeroMemory(g->merged, sizeof(g->merged));
+        for (k = 0; k < g->nchoices && !b->oom; k++)
         {
-            if (names[c] != NULL && names[c][0] != L'\0')
+            const wchar_t *nm = L"";
+            const wchar_t *oval;
+            wchar_t base[512];
+            uint32_t c, j;
+            for (c = g->gstart[k]; c <= g->gend[k] && c < nnames; c++)
             {
-                nm = names[c];
-                break;
+                if (names[c] != NULL && names[c][0] != L'\0')
+                {
+                    nm = names[c];
+                    break;
+                }
+            }
+            if (nch > 0 && _wcsnicmp(nm, L"Ballot Oval Selection ", 22) == 0)
+            {
+                remap[k] = UINT32_MAX;
+                continue;
+            }
+            StringCchCopyW(base, ARRAYSIZE(base), nm);
+            oval = wcsistr(base, L" - Ballot Oval Selection ");
+            if (oval != NULL)
+            {
+                base[oval - base] = L'\0';
+            }
+            for (j = 0; oval != NULL && j < nch; j++)
+            {
+                const EeResultsContest *ct = &b->r->contests[ci];
+                if (wcscmp(b->r->choices[ct->first_choice + j].name, base) == 0)
+                {
+                    break;
+                }
+            }
+            if (oval != NULL && j < nch)
+            {
+                remap[k] = j;
+                g->merged[j] = 1;
+                continue;
+            }
+            remap[k] = b_choice(b, base, NULL, EE_RES_UNKNOWN);
+            nch++;
+        }
+        for (col = 0; col < g->ncols; col++)
+        {
+            if ((g->role[col] == GR_VOTE || g->role[col] == GR_CHOICE_TOTAL) &&
+                remap[g->choice[col]] == UINT32_MAX)
+            {
+                g->role[col] = GR_NONE;
+            }
+            else if (g->role[col] == GR_VOTE || g->role[col] == GR_CHOICE_TOTAL)
+            {
+                g->choice[col] = remap[g->choice[col]];
             }
         }
-        b_choice(b, nm, NULL, EE_RES_UNKNOWN);
     }
     return ci;
 }
@@ -2172,6 +2349,68 @@ static uint32_t txt_cells(const TxtLine *ln, wchar_t *scratch, wchar_t **cells, 
         memcpy(w, ln->s + a, len * sizeof(wchar_t));
         w[len] = L'\0';
         cells[k] = w;
+        w += len + 1;
+    }
+    return nc;
+}
+
+/* TRUE when one of the first @p nk labels starts at @p s and ends at a space or the
+ * end of the line. */
+static BOOL txt_known_label_at(const wchar_t *s, size_t n, wchar_t *const *known, uint32_t nk)
+{
+    uint32_t k;
+    for (k = 0; k < nk; k++)
+    {
+        size_t len = wcslen(known[k]);
+        if (len > 0 && len <= n && wcsncmp(s, known[k], len) == 0 && (len == n || is_ws(s[len])))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Split a contest header line into cells. Each label is padded to 30 characters, but a
+ * longer one ("Total Cumulative Ileana Garza-Rojas") is written whole and pushes the
+ * rest of the line right. A full cell glued to the next text is extended up to where a
+ * label already seen on the line starts ("...Garza-" + "Rojas" + "EV In-person"). */
+static uint32_t txt_header_cells(const TxtLine *ln, wchar_t *scratch, wchar_t **cells, uint32_t maxc)
+{
+    uint32_t nc = 0;
+    size_t a = 0;
+    wchar_t *w = scratch;
+    while (a < ln->n && nc < maxc)
+    {
+        size_t e = a + TXT_COL < ln->n ? a + TXT_COL : ln->n;
+        size_t s = a, len;
+        if (e < ln->n && !is_ws(ln->s[e - 1]) && !is_ws(ln->s[e]))
+        {
+            size_t k;
+            for (k = 0; k <= 2 * TXT_COL && e + k < ln->n; k++)
+            {
+                if (txt_known_label_at(ln->s + e + k, ln->n - e - k, cells, nc))
+                {
+                    break;
+                }
+            }
+            if (e + k < ln->n && k <= 2 * TXT_COL)
+            {
+                e += k;
+            }
+        }
+        a = e;
+        while (s < e && is_ws(ln->s[s]))
+        {
+            s++;
+        }
+        while (e > s && is_ws(ln->s[e - 1]))
+        {
+            e--;
+        }
+        len = e - s;
+        memcpy(w, ln->s + s, len * sizeof(wchar_t));
+        w[len] = L'\0';
+        cells[nc++] = w;
         w += len + 1;
     }
     return nc;
@@ -2276,6 +2515,31 @@ static BOOL txt_split_right(const TxtLine *ln,
     return TRUE;
 }
 
+/* A data row read by its 30-character columns: Clarity cuts a precinct name to 30
+ * characters, so the next column can follow it with no space ("...and BS17" + "63").
+ * FALSE when a value column holds something other than a number. */
+static BOOL txt_fixed_row(const TxtLine *ln, uint32_t ncols, wchar_t *scratch, wchar_t **cells)
+{
+    static wchar_t empty[1] = {L'\0'};
+    uint32_t nc = txt_cells(ln, scratch, cells, ncols), k;
+    if (nc < 2 || nc > ncols || cells[0][0] == L'\0')
+    {
+        return FALSE;
+    }
+    for (k = 1; k < nc; k++)
+    {
+        if (cells[k][0] != L'\0' && !txt_value_token(cells[k], wcslen(cells[k])))
+        {
+            return FALSE;
+        }
+    }
+    for (k = nc; k < ncols; k++)
+    {
+        cells[k] = empty;
+    }
+    return TRUE;
+}
+
 static void parse_clarity_txt(ResBuilder *b, const wchar_t *w, size_t wn)
 {
     TxtLine *lines = NULL;
@@ -2339,7 +2603,7 @@ static void parse_clarity_txt(ResBuilder *b, const wchar_t *w, size_t wn)
         {
             continue;
         }
-        nc = txt_cells(ln, scratch, cells, GRID_MAX_COLS);
+        nc = txt_header_cells(ln, scratch, cells, GRID_MAX_COLS);
         if (!grid_header(g, b, cells, nc))
         {
             continue;
@@ -2350,13 +2614,20 @@ static void parse_clarity_txt(ResBuilder *b, const wchar_t *w, size_t wn)
             wchar_t *title;
             wchar_t *nw = nscratch;
             uint32_t k;
-            if (i < 2 || lines[i - 1].n == 0 || lines[i - 2].n == 0)
+            size_t up = i;
+            /* Some files put a line of only spaces between the choice names and the
+             * header (a trimmed line that still starts with a space). */
+            if (up >= 3 && lines[up - 1].n == 0 && lines[up - 1].s[0] == L' ')
+            {
+                up--;
+            }
+            if (up < 2 || lines[up - 1].n == 0 || lines[up - 2].n == 0)
             {
                 b_issue(b, L"A contest header without its title and choice names was skipped.");
                 continue;
             }
-            nl = &lines[i - 1];
-            tl = &lines[i - 2];
+            nl = &lines[up - 1];
+            tl = &lines[up - 2];
             for (k = 0; k < g->ncols; k++)
             {
                 names[k] = NULL;
@@ -2406,7 +2677,8 @@ static void parse_clarity_txt(ResBuilder *b, const wchar_t *w, size_t wn)
             {
                 break;
             }
-            if (!txt_split_right(dl, g->ncols - 1, pos, scratch, cells))
+            if (!txt_fixed_row(dl, g->ncols, scratch, cells) &&
+                !txt_split_right(dl, g->ncols - 1, pos, scratch, cells))
             {
                 wchar_t msg[200];
                 StringCchPrintfW(msg,
@@ -3536,9 +3808,9 @@ static BOOL exp_sink(void *ctx, const char *const *cells, uint32_t n)
             if (f[XC_PRECINCT][0] == L'\0')
             {
                 if (over)
-                    ct->over_total = votes == EE_RES_UNKNOWN ? 0 : votes;
+                    ct->over_total = votes; /* blank = withheld (unknown) */
                 else
-                    ct->under_total = votes == EE_RES_UNKNOWN ? 0 : votes;
+                    ct->under_total = votes;
             }
             else if (votes != EE_RES_UNKNOWN)
             {
@@ -3585,6 +3857,358 @@ static void parse_ee_export(ResBuilder *b, const uint8_t *d, size_t n, const wch
                             NULL,
                             err,
                             ARRAYSIZE(err));
+    if (st != EeLoadStatus_Ok && !b->bad && !b->oom)
+    {
+        b_fail(b, err[0] ? err : L"The results export could not be read.");
+    }
+    else if (b->r->ncontests == 0 && !b->bad && !b->oom)
+    {
+        b_fail(b, L"The results export holds no contests.");
+    }
+}
+
+/* --- Election Explorer "displayed view" export ---------------------------- */
+
+#define VIEW_MAX_VT 256
+
+typedef struct ViewCtx
+{
+    ResBuilder *b;
+    BOOL header_done;
+    int col_contest, col_votefor, col_choice, col_party, col_precinct, col_total, col_pct;
+    int vt_col[VIEW_MAX_VT];
+    uint32_t vt_idx[VIEW_MAX_VT];
+    int nvt;
+    wchar_t *cur_title; /* current contest's title */
+    double pct_sum;     /* totals view: percentages so far in the contest */
+    wchar_t *cur_pre;   /* precinct view: the precinct of the rows so far */
+    wchar_t **seen;     /* precincts already finished in the current contest */
+    uint32_t nseen;
+    size_t seen_cap;
+    uint32_t pre_rows; /* rows of the current precinct */
+} ViewCtx;
+
+static void view_reset_contest(ViewCtx *vc)
+{
+    uint32_t i;
+    for (i = 0; i < vc->nseen; i++)
+    {
+        free(vc->seen[i]);
+    }
+    vc->nseen = 0;
+    free(vc->cur_pre);
+    vc->cur_pre = NULL;
+    vc->pct_sum = 0.0;
+    vc->pre_rows = 0;
+}
+
+/* Local index of choice @p name in the last contest, or UINT32_MAX. */
+static uint32_t view_find_choice(const EeResults *r, const wchar_t *name)
+{
+    const EeResultsContest *c;
+    uint32_t k;
+    if (r->ncontests == 0)
+    {
+        return UINT32_MAX;
+    }
+    c = &r->contests[r->ncontests - 1];
+    for (k = 0; k < c->nchoices; k++)
+    {
+        if (wcscmp(r->choices[c->first_choice + k].name, name) == 0)
+        {
+            return k;
+        }
+    }
+    return UINT32_MAX;
+}
+
+static BOOL view_header(ViewCtx *vc, const char *const *cells, uint32_t n)
+{
+    uint32_t i;
+    int after = -1; /* vote type columns lie between Party/Precinct and Total Votes */
+    vc->col_contest = vc->col_votefor = vc->col_choice = vc->col_party = -1;
+    vc->col_precinct = vc->col_total = vc->col_pct = -1;
+    for (i = 0; i < n; i++)
+    {
+        const char *c = cells[i];
+        if (_stricmp(c, "Contest") == 0)
+            vc->col_contest = (int)i;
+        else if (_stricmp(c, "Vote For") == 0)
+            vc->col_votefor = (int)i;
+        else if (_stricmp(c, "Choice") == 0)
+            vc->col_choice = (int)i;
+        else if (_stricmp(c, "Party") == 0)
+            vc->col_party = (int)i;
+        else if (_stricmp(c, "Precinct") == 0)
+            vc->col_precinct = (int)i;
+        else if (_stricmp(c, "Total Votes") == 0)
+            vc->col_total = (int)i;
+        else if (_stricmp(c, "Percent") == 0)
+            vc->col_pct = (int)i;
+    }
+    if (vc->col_contest < 0 || vc->col_choice < 0 || vc->col_total < 0)
+    {
+        return FALSE;
+    }
+    after = vc->col_precinct >= 0 ? vc->col_precinct : vc->col_party;
+    if (after < vc->col_choice)
+    {
+        after = vc->col_choice;
+    }
+    vc->nvt = 0;
+    for (i = (uint32_t)after + 1; (int)i < vc->col_total && vc->nvt < VIEW_MAX_VT; i++)
+    {
+        wchar_t *w = u8dup(cells[i], -1);
+        if (w == NULL)
+        {
+            vc->b->oom = TRUE;
+            return FALSE;
+        }
+        vc->vt_col[vc->nvt] = (int)i;
+        vc->vt_idx[vc->nvt] = b_vt(vc->b, w);
+        vc->nvt++;
+        free(w);
+    }
+    return TRUE;
+}
+
+/* A count cell: a number, "protected" (precinct view) or blank / "withheld" (unknown). */
+static int64_t view_count(const char *const *cells, uint32_t n, int col)
+{
+    const char *s = cell_at(cells, n, col);
+    int64_t v;
+    if (s == NULL)
+    {
+        return EE_RES_UNKNOWN;
+    }
+    if (_stricmp(s, "protected") == 0)
+    {
+        return RES_PROTECTED;
+    }
+    if (!parse_i64a(s, strlen(s), &v))
+    {
+        return EE_RES_UNKNOWN;
+    }
+    return v;
+}
+
+static BOOL view_sink(void *ctx, const char *const *cells, uint32_t n)
+{
+    ViewCtx *vc = (ViewCtx *)ctx;
+    ResBuilder *b = vc->b;
+    EeResults *r = b->r;
+    wchar_t *title = NULL, *choice = NULL, *party = NULL, *pre = NULL;
+    BOOL fresh, special_over, special_under;
+    double pct;
+    int64_t total;
+    int k;
+
+    if (!vc->header_done)
+    {
+        if (n == 0)
+        {
+            return TRUE;
+        }
+        if (!view_header(vc, cells, n))
+        {
+            if (!b->oom)
+            {
+                b_fail(b, L"The export's header has no Contest, Choice or Total Votes column.");
+            }
+            return FALSE;
+        }
+        vc->header_done = TRUE;
+        return TRUE;
+    }
+    if (cell_at(cells, n, vc->col_contest) == NULL || cell_at(cells, n, vc->col_contest)[0] == '\0')
+    {
+        return TRUE;
+    }
+    title = u8dup(cell_at(cells, n, vc->col_contest), -1);
+    choice =
+        u8dup(cell_at(cells, n, vc->col_choice) != NULL ? cell_at(cells, n, vc->col_choice) : "",
+              -1);
+    party =
+        u8dup(cell_at(cells, n, vc->col_party) != NULL ? cell_at(cells, n, vc->col_party) : "", -1);
+    if (vc->col_precinct >= 0 && cell_at(cells, n, vc->col_precinct) != NULL)
+    {
+        pre = u8dup(cell_at(cells, n, vc->col_precinct), -1);
+    }
+    if (title == NULL || choice == NULL || party == NULL)
+    {
+        b->oom = TRUE;
+        goto done;
+    }
+    wtrim(title);
+    wtrim(choice);
+    wtrim(party);
+    if (pre != NULL)
+    {
+        wtrim(pre);
+        if (pre[0] == L'\0' || wcscmp(pre, L"(all)") == 0)
+        {
+            free(pre);
+            pre = NULL; /* a contest without precinct detail */
+        }
+    }
+    special_over = party[0] == L'\0' && wieq(choice, L"Over Votes");
+    special_under = party[0] == L'\0' && wieq(choice, L"Under Votes");
+    pct = parse_pct(cell_at(cells, n, vc->col_pct));
+    total = view_count(cells, n, vc->col_total);
+
+    /* A new contest: another title, or (for back-to-back contests with one title) a choice
+     * repeating in the precinct, a precinct coming back, or the percentages passing 100. */
+    fresh = vc->cur_title == NULL || wcscmp(vc->cur_title, title) != 0;
+    if (!fresh)
+    {
+        if (pre != NULL)
+        {
+            if (vc->cur_pre == NULL || wcscmp(vc->cur_pre, pre) != 0)
+            {
+                uint32_t i;
+                for (i = 0; i < vc->nseen && !fresh; i++)
+                {
+                    fresh = wcscmp(vc->seen[i], pre) == 0;
+                }
+                if (!fresh && vc->cur_pre != NULL)
+                {
+                    if (res_grow((void **)&vc->seen,
+                                 &vc->seen_cap,
+                                 (size_t)vc->nseen + 1,
+                                 sizeof(wchar_t *)))
+                    {
+                        vc->seen[vc->nseen++] = vc->cur_pre;
+                        vc->cur_pre = NULL;
+                    }
+                }
+                vc->pct_sum = 0.0;
+            }
+            else if (!special_over && !special_under && view_find_choice(r, choice) != UINT32_MAX)
+            {
+                /* the choice again in the same precinct: the same name's next contest, unless
+                 * this precinct has not listed it yet */
+                fresh = vc->pre_rows >= r->contests[r->ncontests - 1].nchoices;
+            }
+        }
+        else if (!special_over && !special_under)
+        {
+            fresh = view_find_choice(r, choice) != UINT32_MAX ||
+                    (vc->col_pct >= 0 && pct > 0.0 &&
+                     vc->pct_sum + pct >
+                         100.0 + 0.01 + 0.006 * (double)r->contests[r->ncontests - 1].nchoices);
+        }
+    }
+    if (fresh)
+    {
+        int64_t vf = 0;
+        const char *vfs = cell_at(cells, n, vc->col_votefor);
+        if (vfs != NULL)
+        {
+            parse_i64a(vfs, strlen(vfs), &vf);
+        }
+        b_contest(b, title, vf > 0 ? (uint32_t)vf : 0, -1);
+        free(vc->cur_title);
+        vc->cur_title = title;
+        title = NULL;
+        view_reset_contest(vc);
+    }
+    if (pre != NULL && vc->cur_pre == NULL)
+    {
+        vc->cur_pre = wdup(pre);
+        vc->pre_rows = 0;
+    }
+    if (b->oom || r->ncontests == 0)
+    {
+        goto done;
+    }
+    if (special_over || special_under)
+    {
+        EeResultsContest *ct = &r->contests[r->ncontests - 1];
+        ct->has_over_under = TRUE;
+        if (pre == NULL)
+        {
+            if (special_over)
+                ct->over_total = total; /* blank = withheld (unknown) */
+            else
+                ct->under_total = total;
+        }
+        else if (total != EE_RES_UNKNOWN)
+        {
+            b_count(b,
+                    r->ncontests - 1,
+                    special_over ? RES_OVER : RES_UNDER,
+                    b_pre(b, pre),
+                    0,
+                    total);
+        }
+        goto done;
+    }
+    {
+        uint32_t ci = view_find_choice(r, choice);
+        if (ci == UINT32_MAX)
+        {
+            ci = b_choice(b,
+                          choice,
+                          party,
+                          pre != NULL ? EE_RES_UNKNOWN
+                                      : (total == RES_PROTECTED ? EE_RES_UNKNOWN : total));
+        }
+        vc->pct_sum += pct;
+        if (pre != NULL)
+        {
+            uint32_t pi = b_pre(b, pre);
+            vc->pre_rows++;
+            if (vc->nvt > 0)
+            {
+                for (k = 0; k < vc->nvt; k++)
+                {
+                    int64_t v = view_count(cells, n, vc->vt_col[k]);
+                    if (v != EE_RES_UNKNOWN)
+                    {
+                        b_count(b, r->ncontests - 1, ci, pi, vc->vt_idx[k], v);
+                    }
+                }
+            }
+            else if (total != EE_RES_UNKNOWN)
+            {
+                b_count(b, r->ncontests - 1, ci, pi, 0, total);
+            }
+        }
+    }
+done:
+    free(title);
+    free(choice);
+    free(party);
+    free(pre);
+    return !b->oom;
+}
+
+static void parse_ee_view(ResBuilder *b, const uint8_t *d, size_t n)
+{
+    ViewCtx vc;
+    wchar_t err[256] = L"";
+    EeLoadStatus st;
+    size_t i, tabs = 0, commas = 0;
+    ZeroMemory(&vc, sizeof(vc));
+    vc.b = b;
+    for (i = 0; i < n && d[i] != '\n'; i++)
+    {
+        tabs += d[i] == '\t';
+        commas += d[i] == ',';
+    }
+    st = EeCsv_ReadSheetMem(d,
+                            n,
+                            tabs > commas ? L"view.tsv" : L"view.csv",
+                            view_sink,
+                            &vc,
+                            NULL,
+                            NULL,
+                            NULL,
+                            err,
+                            ARRAYSIZE(err));
+    view_reset_contest(&vc);
+    free(vc.seen);
+    free(vc.cur_title);
     if (st != EeLoadStatus_Ok && !b->bad && !b->oom)
     {
         b_fail(b, err[0] ? err : L"The results export could not be read.");
@@ -3668,6 +4292,11 @@ static uint32_t sniff_format(const uint8_t *d, size_t n)
             {
                 fmt = EE_RES_FMT_EE_EXPORT;
             }
+            else if (lines == 0 && wcsistr(line, L"Contest") != NULL &&
+                     wcsistr(line, L"Choice") != NULL && wcsistr(line, L"Total Votes") != NULL)
+            {
+                fmt = EE_RES_FMT_EE_VIEW; /* the results window's displayed-view export */
+            }
             else if ((e - i > 47 && wcsncmp(line + 30, L"Registered Voters", 17) == 0) ||
                      (e - i > 42 &&
                       (wcsncmp(line, L"County                        Ballots Cast", 42) == 0 ||
@@ -3697,6 +4326,8 @@ static const wchar_t *format_label(uint32_t fmt)
             return L"Clarity detail (XML)";
         case EE_RES_FMT_EE_EXPORT:
             return L"Election Explorer export";
+        case EE_RES_FMT_EE_VIEW:
+            return L"Election Explorer export (displayed view)";
         default:
             return L"results";
     }
@@ -3727,6 +4358,9 @@ static BOOL parse_buffer(const uint8_t *d,
             break;
         case EE_RES_FMT_EE_EXPORT:
             parse_ee_export(&b, d, n, name);
+            break;
+        case EE_RES_FMT_EE_VIEW:
+            parse_ee_view(&b, d, n);
             break;
         case EE_RES_FMT_CLARITY_TXT:
         {
@@ -4092,6 +4726,7 @@ static int format_rank(uint32_t fmt)
         case EE_RES_FMT_CLARITY_XLS:
             return 3;
         case EE_RES_FMT_CLARITY_TXT:
+        case EE_RES_FMT_EE_VIEW:
             return 2;
         default:
             return 1;
@@ -4211,8 +4846,17 @@ static void check_turnout(IssueSink *is, const EeResults *prim, const EeResults 
                          b);
         is_add(is, msg);
     }
+    same_basis = FALSE;
+    if (precinct_sum(prim, FALSE, &psum) && psum == oth->ballots_total)
+    {
+        same_basis = TRUE;
+    }
+    if (precinct_sum(oth, FALSE, &osum) && osum == prim->ballots_total)
+    {
+        same_basis = TRUE;
+    }
     if (prim->ballots_total != EE_RES_UNKNOWN && oth->ballots_total != EE_RES_UNKNOWN &&
-        prim->ballots_total != oth->ballots_total)
+        prim->ballots_total != oth->ballots_total && !same_basis)
     {
         fmt_count(oth->ballots_total, a, ARRAYSIZE(a));
         fmt_count(prim->ballots_total, b, ARRAYSIZE(b));
@@ -4454,7 +5098,9 @@ static void cross_check(EeResults *dst,
                                      pc->vote_for);
                     is_add(&is, msg);
                 }
-                if (pc->has_over_under && oc->has_over_under &&
+                if (pc->has_over_under && oc->has_over_under && pc->over_total != EE_RES_UNKNOWN &&
+                    oc->over_total != EE_RES_UNKNOWN && pc->under_total != EE_RES_UNKNOWN &&
+                    oc->under_total != EE_RES_UNKNOWN &&
                     (pc->over_total != oc->over_total || pc->under_total != oc->under_total))
                 {
                     wchar_t c1[32], c2[32];
@@ -4549,11 +5195,19 @@ static void adopt_figures(EeResults *dst, const EeResults *oth)
                 pc->precincts_total = oc->precincts_total;
             if (pc->precincts_reporting == EE_RES_UNKNOWN)
                 pc->precincts_reporting = oc->precincts_reporting;
-            if (!pc->has_over_under && oc->has_over_under)
+            if (oc->has_over_under && (!pc->has_over_under || pc->over_total == EE_RES_UNKNOWN ||
+                                       pc->under_total == EE_RES_UNKNOWN))
             {
+                /* not reported, or withheld, in the shown file */
                 pc->has_over_under = TRUE;
-                pc->over_total = oc->over_total;
-                pc->under_total = oc->under_total;
+                if (pc->over_total == EE_RES_UNKNOWN || pc->over_total == 0)
+                {
+                    pc->over_total = oc->over_total;
+                }
+                if (pc->under_total == EE_RES_UNKNOWN || pc->under_total == 0)
+                {
+                    pc->under_total = oc->under_total;
+                }
             }
             if (pc->vote_for == 0)
                 pc->vote_for = oc->vote_for;
@@ -5075,4 +5729,853 @@ BOOL EeResults_Tabulate(const EeResults *r,
 const wchar_t *EeResults_FormatLabel(uint32_t format)
 {
     return format_label(format);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Results from another source's tabulation (a CVR), and compare             */
+/* -------------------------------------------------------------------------- */
+
+/* "Mayor (45918)" -> "Mayor": drop a trailing " (digits)" (a CVR contest id). */
+static wchar_t *tally_contest_name(const wchar_t *s)
+{
+    wchar_t *d = wdup_norm(s);
+    size_t n, k;
+    if (d == NULL)
+    {
+        return NULL;
+    }
+    n = wcslen(d);
+    if (n >= 4 && d[n - 1] == L')')
+    {
+        k = n - 1;
+        while (k > 0 && d[k - 1] >= L'0' && d[k - 1] <= L'9')
+        {
+            k--;
+        }
+        if (k < n - 1 && k >= 2 && d[k - 1] == L'(' && d[k - 2] == L' ')
+        {
+            d[k - 2] = L'\0';
+        }
+    }
+    return d;
+}
+
+/* "Kara King (EC12)" -> "Kara King": drop a trailing " (code)" whose code has a digit and
+ * no space (a CVR choice id; "(R) Ted Cruz" and "(DEM)" are kept). */
+static wchar_t *tally_choice_name(const wchar_t *s)
+{
+    wchar_t *d = wdup_norm(s);
+    wchar_t *open;
+    size_t n;
+    if (d == NULL)
+    {
+        return NULL;
+    }
+    n = wcslen(d);
+    if (n >= 4 && d[n - 1] == L')' && (open = wcsrchr(d, L'(')) != NULL && open > d &&
+        open[-1] == L' ')
+    {
+        const wchar_t *q;
+        BOOL digit = FALSE, space = FALSE;
+        for (q = open + 1; q < d + n - 1; q++)
+        {
+            digit = digit || (*q >= L'0' && *q <= L'9');
+            space = space || is_ws(*q);
+        }
+        if (digit && !space && (size_t)((d + n - 1) - (open + 1)) <= 12)
+        {
+            open[-1] = L'\0';
+        }
+    }
+    return d;
+}
+
+/* 1 = over votes, 2 = under votes, 0 = a choice. */
+static int tally_special(const wchar_t *c)
+{
+    if (wieq(c, L"overvote") || wieq(c, L"overvotes") || wieq(c, L"over votes"))
+    {
+        return 1;
+    }
+    if (wieq(c, L"undervote") || wieq(c, L"undervotes") || wieq(c, L"under votes"))
+    {
+        return 2;
+    }
+    return 0;
+}
+
+typedef struct TallyContest
+{
+    uint32_t key;
+    wchar_t *title;
+    wchar_t **choices;
+    int64_t *tot;
+    uint32_t nch;
+    size_t cap;
+    BOOL ou;
+    int64_t over, under;
+} TallyContest;
+
+BOOL EeResults_FromTally(const EeResultsTallyItem *items,
+                         uint32_t n,
+                         int64_t ballots,
+                         EeResults *out)
+{
+    TallyContest *tc = NULL;
+    size_t ntc = 0, captc = 0;
+    uint32_t *ic = NULL, *ich = NULL;
+    BOOL ok = TRUE, by_precinct = FALSE;
+    uint32_t i, last = UINT32_MAX;
+    size_t t;
+    ResBuilder b;
+
+    EeResults_Init(out);
+    ic = (uint32_t *)malloc(((size_t)n + 1) * sizeof(uint32_t));
+    ich = (uint32_t *)malloc(((size_t)n + 1) * sizeof(uint32_t));
+    if (ic == NULL || ich == NULL)
+    {
+        free(ic);
+        free(ich);
+        return FALSE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        by_precinct = by_precinct || items[i].precinct != NULL;
+    }
+    /* Pass 1: contests and choices in first-seen order. */
+    for (i = 0; i < n && ok; i++)
+    {
+        const EeResultsTallyItem *it = &items[i];
+        TallyContest *c;
+        int sp;
+        if (last == UINT32_MAX || tc[last].key != it->contest_key)
+        {
+            for (last = 0; last < ntc && tc[last].key != it->contest_key; last++)
+            {
+            }
+            if (last == ntc)
+            {
+                if (!res_grow((void **)&tc, &captc, ntc + 1, sizeof(TallyContest)))
+                {
+                    ok = FALSE;
+                    break;
+                }
+                ZeroMemory(&tc[ntc], sizeof(TallyContest));
+                tc[ntc].key = it->contest_key;
+                tc[ntc].title = tally_contest_name(it->contest != NULL ? it->contest : L"");
+                ok = tc[ntc].title != NULL;
+                ntc++;
+            }
+        }
+        c = &tc[last];
+        ic[i] = last;
+        sp = tally_special(it->choice != NULL ? it->choice : L"");
+        if (sp != 0)
+        {
+            c->ou = TRUE;
+            ich[i] = sp == 1 ? RES_OVER : RES_UNDER;
+            if (sp == 1)
+            {
+                c->over += it->votes;
+            }
+            else
+            {
+                c->under += it->votes;
+            }
+        }
+        else
+        {
+            wchar_t *name = tally_choice_name(it->choice != NULL ? it->choice : L"");
+            uint32_t k;
+            if (name == NULL)
+            {
+                ok = FALSE;
+                break;
+            }
+            for (k = 0; k < c->nch && wcscmp(c->choices[k], name) != 0; k++)
+            {
+            }
+            if (k == c->nch)
+            {
+                size_t cap = c->cap;
+                if (!res_grow((void **)&c->choices, &cap, (size_t)c->nch + 1, sizeof(wchar_t *)) ||
+                    !res_grow((void **)&c->tot, &c->cap, (size_t)c->nch + 1, sizeof(int64_t)))
+                {
+                    free(name);
+                    ok = FALSE;
+                    break;
+                }
+                if (cap > c->cap) /* keep both arrays at the larger capacity */
+                {
+                    ok = res_grow((void **)&c->tot, &c->cap, cap, sizeof(int64_t));
+                }
+                c->choices[c->nch] = name;
+                c->tot[c->nch] = 0;
+                c->nch++;
+            }
+            else
+            {
+                free(name);
+            }
+            c->tot[k] += it->votes;
+            ich[i] = k;
+        }
+    }
+    /* Build. */
+    if (ok)
+    {
+        b_init(&b, out);
+        for (t = 0; t < ntc && !b.oom; t++)
+        {
+            uint32_t ci = b_contest(&b, tc[t].title, 0, -1);
+            uint32_t k;
+            if (b.oom)
+            {
+                break;
+            }
+            out->contests[ci].has_over_under = tc[t].ou;
+            if (!by_precinct)
+            {
+                out->contests[ci].over_total = tc[t].over;
+                out->contests[ci].under_total = tc[t].under;
+            }
+            for (k = 0; k < tc[t].nch; k++)
+            {
+                b_choice(&b, tc[t].choices[k], NULL, by_precinct ? EE_RES_UNKNOWN : tc[t].tot[k]);
+            }
+        }
+        if (by_precinct)
+        {
+            for (i = 0; i < n && !b.oom; i++)
+            {
+                if (items[i].precinct != NULL)
+                {
+                    b_count(&b, ic[i], ich[i], b_pre(&b, items[i].precinct), 0, items[i].votes);
+                }
+            }
+        }
+        ok = !b.oom && b_finish(&b);
+        b_free(&b);
+        if (ok)
+        {
+            out->ballots_total = ballots;
+        }
+        else
+        {
+            EeResults_Clear(out);
+        }
+    }
+    for (t = 0; t < ntc; t++)
+    {
+        uint32_t k;
+        for (k = 0; k < tc[t].nch; k++)
+        {
+            free(tc[t].choices[k]);
+        }
+        free(tc[t].choices);
+        free(tc[t].tot);
+        free(tc[t].title);
+    }
+    free(tc);
+    free(ic);
+    free(ich);
+    return ok;
+}
+
+typedef struct DiffList
+{
+    EeResultsDiff *d;
+    size_t n, cap;
+    BOOL oom;
+} DiffList;
+
+static void dl_add(DiffList *l,
+                   const wchar_t *contest,
+                   const wchar_t *choice,
+                   const wchar_t *precinct,
+                   const wchar_t *vote_type,
+                   uint8_t kind,
+                   int64_t a,
+                   int64_t b,
+                   uint8_t status)
+{
+    EeResultsDiff *d;
+    if (l->oom || !res_grow((void **)&l->d, &l->cap, l->n + 1, sizeof(EeResultsDiff)))
+    {
+        l->oom = TRUE;
+        return;
+    }
+    d = &l->d[l->n];
+    ZeroMemory(d, sizeof(*d));
+    d->contest = contest != NULL ? wdup(contest) : NULL;
+    d->choice = choice != NULL ? wdup(choice) : NULL;
+    d->precinct = precinct != NULL ? wdup(precinct) : NULL;
+    d->vote_type = vote_type != NULL ? wdup(vote_type) : NULL;
+    d->kind = kind;
+    d->status = status;
+    d->a = a;
+    d->b = b;
+    l->n++;
+    if ((contest != NULL && d->contest == NULL) || (choice != NULL && d->choice == NULL) ||
+        (precinct != NULL && d->precinct == NULL) || (vote_type != NULL && d->vote_type == NULL))
+    {
+        l->oom = TRUE;
+    }
+}
+
+static uint8_t diff_status(int64_t a, int64_t b)
+{
+    if (a == EE_RES_UNKNOWN || b == EE_RES_UNKNOWN)
+    {
+        return a == b ? EE_DIFF_MATCH : EE_DIFF_NOT_REPORTED;
+    }
+    return a == b ? EE_DIFF_MATCH : EE_DIFF_DIFFERS;
+}
+
+/* Is a contest counted under a precinct mask (a contest with no included precinct is
+ * not, like in the results window)? */
+static BOOL contest_counted(const EeResultsContest *ct, const uint8_t *pmask)
+{
+    uint32_t p;
+    if (pmask == NULL || ct->counts == NULL)
+    {
+        return TRUE;
+    }
+    for (p = 0; p < ct->npre; p++)
+    {
+        if (pmask[ct->pre[p]])
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Ballots cast (or registered voters) over the included precincts. */
+static int64_t turnout_of(const EeResults *r, const uint8_t *pmask, BOOL registered)
+{
+    int64_t s = 0;
+    uint32_t p;
+    if (pmask == NULL)
+    {
+        return registered ? r->registered_total : r->ballots_total;
+    }
+    for (p = 0; p < r->nprecincts; p++)
+    {
+        int64_t v = registered ? r->precincts[p].registered : r->precincts[p].ballots;
+        if (!pmask[p])
+        {
+            continue;
+        }
+        if (v == EE_RES_UNKNOWN)
+        {
+            return EE_RES_UNKNOWN;
+        }
+        s += v;
+    }
+    return s;
+}
+
+/* One precinct's votes for a choice (local precinct p), over the included vote types. */
+static int64_t cell_votes(const EeResults *r,
+                          const EeResultsContest *ct,
+                          uint32_t k,
+                          uint32_t p,
+                          const uint8_t *vmask)
+{
+    uint32_t nvt = EE_RESULTS_NVT(r);
+    const int32_t *cell = ct->counts + ((size_t)k * ct->npre + p) * nvt;
+    int64_t s = 0;
+    uint32_t v;
+    for (v = 0; v < nvt; v++)
+    {
+        if (r->nvt == 0 || vmask == NULL || vmask[v])
+        {
+            s += cell[v];
+        }
+    }
+    return s;
+}
+
+typedef struct CmpCtx
+{
+    const EeResults *a, *b;
+    const uint8_t *apm, *avm, *bpm, *bvm;
+    int64_t *ta, *tb, *tva, *tvb, *oa, *ua, *ob, *ub;
+    uint32_t *a2b_pre; /* a precinct -> b precinct (by name), or UINT32_MAX */
+    uint32_t *blocal;  /* b precinct -> local index in the current b contest */
+    uint8_t *bseen;    /* b local precincts matched in the current choice */
+    uint32_t *vmap;    /* a vote type -> b vote type, or NULL when not comparable */
+    DiffList *l;
+} CmpCtx;
+
+/* Precinct (and vote type) rows of one matched choice: only the differing ones. */
+static void cmp_precincts(CmpCtx *x,
+                          const EeResultsContest *pc,
+                          uint32_t i,
+                          const EeResultsContest *qc,
+                          uint32_t j)
+{
+    const EeResults *a = x->a, *b = x->b;
+    const wchar_t *choice = a->choices[pc->first_choice + i].name;
+    uint32_t p, q, v;
+    for (q = 0; q < qc->npre; q++)
+    {
+        x->blocal[qc->pre[q]] = q;
+        x->bseen[q] = 0;
+    }
+    for (p = 0; p < pc->npre; p++)
+    {
+        uint32_t ag = pc->pre[p];
+        uint32_t bg = x->a2b_pre[ag];
+        uint32_t lq = bg != UINT32_MAX ? x->blocal[bg] : UINT32_MAX;
+        BOOL ain = x->apm == NULL || x->apm[ag];
+        BOOL bin = lq != UINT32_MAX && (x->bpm == NULL || x->bpm[bg]);
+        int64_t va = ain ? cell_votes(a, pc, i, p, x->avm) : EE_RES_UNKNOWN;
+        int64_t vb = bin ? cell_votes(b, qc, j, lq, x->bvm) : EE_RES_UNKNOWN;
+        if (lq != UINT32_MAX)
+        {
+            x->bseen[lq] = 1;
+        }
+        if (!ain && !bin)
+        {
+            continue;
+        }
+        if (va == EE_RES_UNKNOWN || vb == EE_RES_UNKNOWN)
+        {
+            int64_t only = va != EE_RES_UNKNOWN ? va : vb;
+            if (only != 0)
+            {
+                dl_add(x->l,
+                       pc->title,
+                       choice,
+                       a->precincts[ag].name,
+                       NULL,
+                       EE_DIFFROW_CHOICE,
+                       va,
+                       vb,
+                       va != EE_RES_UNKNOWN ? EE_DIFF_ONLY_A : EE_DIFF_ONLY_B);
+            }
+            continue;
+        }
+        if (va != vb)
+        {
+            dl_add(x->l,
+                   pc->title,
+                   choice,
+                   a->precincts[ag].name,
+                   NULL,
+                   EE_DIFFROW_CHOICE,
+                   va,
+                   vb,
+                   EE_DIFF_DIFFERS);
+        }
+        if (x->vmap != NULL)
+        {
+            uint32_t anvt = EE_RESULTS_NVT(a), bnvt = EE_RESULTS_NVT(b);
+            for (v = 0; v < a->nvt; v++)
+            {
+                int64_t ca, cb;
+                if ((x->avm != NULL && !x->avm[v]) || (x->bvm != NULL && !x->bvm[x->vmap[v]]))
+                {
+                    continue;
+                }
+                ca = pc->counts[((size_t)i * pc->npre + p) * anvt + v];
+                cb = qc->counts[((size_t)j * qc->npre + lq) * bnvt + x->vmap[v]];
+                if (ca != cb)
+                {
+                    dl_add(x->l,
+                           pc->title,
+                           choice,
+                           a->precincts[ag].name,
+                           a->vote_types[v],
+                           EE_DIFFROW_CHOICE,
+                           ca,
+                           cb,
+                           EE_DIFF_DIFFERS);
+                }
+            }
+        }
+    }
+    for (q = 0; q < qc->npre; q++)
+    {
+        uint32_t bg = qc->pre[q];
+        if (!x->bseen[q] && (x->bpm == NULL || x->bpm[bg]))
+        {
+            int64_t vb = cell_votes(b, qc, j, q, x->bvm);
+            if (vb != 0)
+            {
+                dl_add(x->l,
+                       pc->title,
+                       choice,
+                       b->precincts[bg].name,
+                       NULL,
+                       EE_DIFFROW_CHOICE,
+                       EE_RES_UNKNOWN,
+                       vb,
+                       EE_DIFF_ONLY_B);
+            }
+        }
+        x->blocal[bg] = UINT32_MAX;
+    }
+}
+
+static void cmp_contests(CmpCtx *x, uint32_t c, uint32_t k)
+{
+    const EeResults *a = x->a, *b = x->b;
+    const EeResultsContest *pc = &a->contests[c];
+    const EeResultsContest *qc = &b->contests[k];
+    uint8_t *used = (uint8_t *)calloc((size_t)qc->nchoices + 1, 1);
+    BOOL detail = pc->counts != NULL && qc->counts != NULL;
+    uint32_t i, j, v;
+    if (used == NULL)
+    {
+        x->l->oom = TRUE;
+        return;
+    }
+    for (i = 0; i < pc->nchoices; i++)
+    {
+        const wchar_t *name = a->choices[pc->first_choice + i].name;
+        int64_t va = x->ta[pc->first_choice + i];
+        for (j = 0; j < qc->nchoices; j++)
+        {
+            if (!used[j] && EeResults_NamesMatch(name, b->choices[qc->first_choice + j].name))
+            {
+                break;
+            }
+        }
+        if (j == qc->nchoices)
+        {
+            dl_add(x->l,
+                   pc->title,
+                   name,
+                   NULL,
+                   NULL,
+                   EE_DIFFROW_CHOICE,
+                   va,
+                   va == 0 ? 0 : EE_RES_UNKNOWN,
+                   va == 0 ? EE_DIFF_MATCH : EE_DIFF_ONLY_A);
+            continue;
+        }
+        used[j] = 1;
+        {
+            int64_t vb = x->tb[qc->first_choice + j];
+            dl_add(x->l,
+                   pc->title,
+                   name,
+                   NULL,
+                   NULL,
+                   EE_DIFFROW_CHOICE,
+                   va,
+                   vb,
+                   diff_status(va, vb));
+        }
+        if (detail && x->vmap != NULL)
+        {
+            for (v = 0; v < a->nvt; v++)
+            {
+                int64_t ca, cb;
+                if ((x->avm != NULL && !x->avm[v]) || (x->bvm != NULL && !x->bvm[x->vmap[v]]))
+                {
+                    continue;
+                }
+                ca = x->tva[(size_t)(pc->first_choice + i) * a->nvt + v];
+                cb = x->tvb[(size_t)(qc->first_choice + j) * b->nvt + x->vmap[v]];
+                if (ca != cb)
+                {
+                    dl_add(x->l,
+                           pc->title,
+                           name,
+                           NULL,
+                           a->vote_types[v],
+                           EE_DIFFROW_CHOICE,
+                           ca,
+                           cb,
+                           EE_DIFF_DIFFERS);
+                }
+            }
+        }
+        if (detail)
+        {
+            cmp_precincts(x, pc, i, qc, j);
+        }
+    }
+    for (j = 0; j < qc->nchoices; j++)
+    {
+        if (!used[j])
+        {
+            int64_t vb = x->tb[qc->first_choice + j];
+            dl_add(x->l,
+                   pc->title,
+                   b->choices[qc->first_choice + j].name,
+                   NULL,
+                   NULL,
+                   EE_DIFFROW_CHOICE,
+                   vb == 0 ? 0 : EE_RES_UNKNOWN,
+                   vb,
+                   vb == 0 ? EE_DIFF_MATCH : EE_DIFF_ONLY_B);
+        }
+    }
+    if (pc->has_over_under || qc->has_over_under)
+    {
+        int64_t oa = pc->has_over_under ? x->oa[c] : EE_RES_UNKNOWN;
+        int64_t ob = qc->has_over_under ? x->ob[k] : EE_RES_UNKNOWN;
+        int64_t ua = pc->has_over_under ? x->ua[c] : EE_RES_UNKNOWN;
+        int64_t ub = qc->has_over_under ? x->ub[k] : EE_RES_UNKNOWN;
+        dl_add(x->l,
+               pc->title,
+               L"Over Votes",
+               NULL,
+               NULL,
+               EE_DIFFROW_OVER,
+               oa,
+               ob,
+               diff_status(oa, ob));
+        dl_add(x->l,
+               pc->title,
+               L"Under Votes",
+               NULL,
+               NULL,
+               EE_DIFFROW_UNDER,
+               ua,
+               ub,
+               diff_status(ua, ub));
+    }
+    free(used);
+}
+
+/* All rows of a contest only one side has. */
+static void cmp_one_side(DiffList *l,
+                         const EeResults *r,
+                         const EeResultsContest *ct,
+                         const int64_t *tot,
+                         const int64_t *ovr,
+                         const int64_t *und,
+                         uint32_t c,
+                         BOOL side_a)
+{
+    uint32_t i;
+    int k;
+    for (i = 0; i <= ct->nchoices + 1; i++)
+    {
+        /* the choices, then Over and Under Votes when reported. A figure of 0 equals a
+         * missing one (a contest no ballot carried); anything else is only on this side. */
+        const wchar_t *name;
+        uint8_t kind = EE_DIFFROW_CHOICE;
+        int64_t v, other;
+        if (i < ct->nchoices)
+        {
+            name = r->choices[ct->first_choice + i].name;
+            v = tot[ct->first_choice + i];
+        }
+        else if (!ct->has_over_under)
+        {
+            break;
+        }
+        else
+        {
+            k = (int)(i - ct->nchoices);
+            name = k == 0 ? L"Over Votes" : L"Under Votes";
+            kind = k == 0 ? EE_DIFFROW_OVER : EE_DIFFROW_UNDER;
+            v = k == 0 ? ovr[c] : und[c];
+        }
+        other = v == 0 ? 0 : EE_RES_UNKNOWN;
+        dl_add(l,
+               ct->title,
+               name,
+               NULL,
+               NULL,
+               kind,
+               side_a ? v : other,
+               side_a ? other : v,
+               v == 0 ? EE_DIFF_MATCH : (side_a ? EE_DIFF_ONLY_A : EE_DIFF_ONLY_B));
+    }
+}
+
+BOOL EeResults_Compare(const EeResults *a,
+                       const uint8_t *a_pmask,
+                       const uint8_t *a_vmask,
+                       const EeResults *b,
+                       const uint8_t *b_pmask,
+                       const uint8_t *b_vmask,
+                       EeResultsDiff **out,
+                       uint32_t *out_count)
+{
+    DiffList l;
+    CmpCtx x;
+    uint8_t *bused = NULL;
+    uint32_t c, k, p;
+    BOOL ok = FALSE;
+
+    *out = NULL;
+    *out_count = 0;
+    ZeroMemory(&l, sizeof(l));
+    ZeroMemory(&x, sizeof(x));
+    x.a = a;
+    x.b = b;
+    x.apm = a_pmask;
+    x.avm = a_vmask;
+    x.bpm = b_pmask;
+    x.bvm = b_vmask;
+    x.l = &l;
+    x.ta = (int64_t *)calloc((size_t)a->nchoices + 1, sizeof(int64_t));
+    x.tb = (int64_t *)calloc((size_t)b->nchoices + 1, sizeof(int64_t));
+    x.tva = (int64_t *)calloc((size_t)a->nchoices * EE_RESULTS_NVT(a) + 1, sizeof(int64_t));
+    x.tvb = (int64_t *)calloc((size_t)b->nchoices * EE_RESULTS_NVT(b) + 1, sizeof(int64_t));
+    x.oa = (int64_t *)calloc((size_t)a->ncontests + 1, sizeof(int64_t));
+    x.ua = (int64_t *)calloc((size_t)a->ncontests + 1, sizeof(int64_t));
+    x.ob = (int64_t *)calloc((size_t)b->ncontests + 1, sizeof(int64_t));
+    x.ub = (int64_t *)calloc((size_t)b->ncontests + 1, sizeof(int64_t));
+    x.a2b_pre = (uint32_t *)malloc(((size_t)a->nprecincts + 1) * sizeof(uint32_t));
+    x.blocal = (uint32_t *)malloc(((size_t)b->nprecincts + 1) * sizeof(uint32_t));
+    x.bseen = (uint8_t *)calloc((size_t)b->nprecincts + 1, 1);
+    bused = (uint8_t *)calloc((size_t)b->ncontests + 1, 1);
+    if (x.ta == NULL || x.tb == NULL || x.tva == NULL || x.tvb == NULL || x.oa == NULL ||
+        x.ua == NULL || x.ob == NULL || x.ub == NULL || x.a2b_pre == NULL || x.blocal == NULL ||
+        x.bseen == NULL || bused == NULL)
+    {
+        goto done;
+    }
+    EeResults_Tabulate(a, a_pmask, a_vmask, x.ta, a->nvt > 0 ? x.tva : NULL, x.oa, x.ua);
+    EeResults_Tabulate(b, b_pmask, b_vmask, x.tb, b->nvt > 0 ? x.tvb : NULL, x.ob, x.ub);
+    /* Precincts by name, and vote types when both sides have the same ones. */
+    for (p = 0; p < a->nprecincts; p++)
+    {
+        uint32_t q;
+        x.a2b_pre[p] = UINT32_MAX;
+        for (q = 0; q < b->nprecincts; q++)
+        {
+            if (wcscmp(a->precincts[p].name, b->precincts[q].name) == 0)
+            {
+                x.a2b_pre[p] = q;
+                break;
+            }
+        }
+    }
+    for (p = 0; p < b->nprecincts; p++)
+    {
+        x.blocal[p] = UINT32_MAX;
+    }
+    if (a->nvt > 0 && a->nvt == b->nvt)
+    {
+        x.vmap = (uint32_t *)malloc((size_t)a->nvt * sizeof(uint32_t));
+        for (p = 0; x.vmap != NULL && p < a->nvt; p++)
+        {
+            uint32_t q;
+            for (q = 0; q < b->nvt && !wieq(a->vote_types[p], b->vote_types[q]); q++)
+            {
+            }
+            if (q == b->nvt)
+            {
+                free(x.vmap);
+                x.vmap = NULL;
+                break;
+            }
+            x.vmap[p] = q;
+        }
+    }
+
+    /* Election-wide figures. */
+    {
+        int64_t ba = turnout_of(a, a_pmask, FALSE), bb = turnout_of(b, b_pmask, FALSE);
+        int64_t ra = turnout_of(a, a_pmask, TRUE), rb = turnout_of(b, b_pmask, TRUE);
+        if (ba != EE_RES_UNKNOWN || bb != EE_RES_UNKNOWN)
+        {
+            dl_add(&l,
+                   NULL,
+                   L"Ballots Cast",
+                   NULL,
+                   NULL,
+                   EE_DIFFROW_BALLOTS,
+                   ba,
+                   bb,
+                   diff_status(ba, bb));
+        }
+        if (ra != EE_RES_UNKNOWN && rb != EE_RES_UNKNOWN)
+        {
+            dl_add(&l,
+                   NULL,
+                   L"Registered Voters",
+                   NULL,
+                   NULL,
+                   EE_DIFFROW_REGISTERED,
+                   ra,
+                   rb,
+                   diff_status(ra, rb));
+        }
+    }
+    /* Contests by name, repeated names in order. */
+    for (c = 0; c < a->ncontests && !l.oom; c++)
+    {
+        const EeResultsContest *pc = &a->contests[c];
+        if (!contest_counted(pc, a_pmask))
+        {
+            continue;
+        }
+        for (k = 0; k < b->ncontests; k++)
+        {
+            if (!bused[k] && contest_counted(&b->contests[k], b_pmask) &&
+                EeResults_NamesMatch(pc->title, b->contests[k].title))
+            {
+                break;
+            }
+        }
+        if (k == b->ncontests)
+        {
+            cmp_one_side(&l, a, pc, x.ta, x.oa, x.ua, c, TRUE);
+            continue;
+        }
+        bused[k] = 1;
+        cmp_contests(&x, c, k);
+    }
+    for (k = 0; k < b->ncontests && !l.oom; k++)
+    {
+        if (!bused[k] && contest_counted(&b->contests[k], b_pmask))
+        {
+            cmp_one_side(&l, b, &b->contests[k], x.tb, x.ob, x.ub, k, FALSE);
+        }
+    }
+    ok = !l.oom;
+
+done:
+    if (ok)
+    {
+        *out = l.d;
+        *out_count = (uint32_t)l.n;
+    }
+    else
+    {
+        EeResults_FreeDiff(l.d, (uint32_t)l.n);
+    }
+    free(x.ta);
+    free(x.tb);
+    free(x.tva);
+    free(x.tvb);
+    free(x.oa);
+    free(x.ua);
+    free(x.ob);
+    free(x.ub);
+    free(x.a2b_pre);
+    free(x.blocal);
+    free(x.bseen);
+    free(x.vmap);
+    free(bused);
+    return ok;
+}
+
+void EeResults_FreeDiff(EeResultsDiff *d, uint32_t count)
+{
+    uint32_t i;
+    if (d == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(d[i].contest);
+        free(d[i].choice);
+        free(d[i].precinct);
+        free(d[i].vote_type);
+    }
+    free(d);
 }

@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-26 (1.5 Election Results plan + step 1 engine); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
+**Last updated:** 2026-10-26 (1.5 Election Results: plan, step 1 engine, step 2 window, step 3 filter, step 4 turnout report, step 5 compare, step 6 export, step 7 all Clarity counties); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
 
 ### UNCOMMITTED — Election Explorer 1.5: Election Results, step 1 done (2026-10-26)
 
@@ -23,12 +23,49 @@
 - **Validated:** Travis G24/P26/PR26/L26 all four files agree, and export round trips are identical.
   All 471 Clarity elections of the 50 counties load (sweep harness
   `res_probe.c` + `sweep.sh` lives in the session scratchpad, not the repo).
-- **Next — step 2:** the Election Results window in `main.c`:
-  - File → Load Election Results… in every window;
-  - View Totals / By Precinct;
-  - Copy, and Options (zoom, party first);
-  - the status bar.
-- **Later:** step 7 review items are listed in the design doc. ES&S test set: the older Travis
+- **Step 2 done (uncommitted): the Election Results window** (`main.c` "Election Results window
+  (1.5)" section).
+  - File → Load Election Re&sults… in every window; View Totals / By Precinct; Copy; Options
+    (zoom, vote-type columns, party first); Load Summary; status bar.
+  - New setting `results_show_vote_types` (`settings.c/.h`); new IDs in `resource.h`
+    (40110–40115, 41600–41604).
+  - Engine names now have whitespace collapsed.
+  - Checked by driving the real app (G24, P26, Dallas L22, two elections at once). Header sorting
+    and a zoom change were not clicked yet.
+- **Step 3 done (uncommitted): the results Filter menu.**
+  - The CVR rule-filter window was generalized to a host description (`CvrFilterState`,
+    `Filter_ShowRuleWindow`); the CVR filter was re-checked.
+  - Precinct and vote-type rules re-tabulate; contest, choice and party rules hide rows.
+    Verified against the G24 XML.
+- **Step 4 done (uncommitted): Reports → Display Turnout Report…** (`ResTurnoutWindow`).
+  - Follows the results filter; right-click Copy, Include/Exclude precincts, and Export
+    Selected/All; Help → Reports.
+  - Checked against the G24 XML. The right-click menu was not clicked (Export untested in the
+    GUI).
+- **Step 5 done (uncommitted): Compare.**
+  - `EeResults_FromTally` / `EeResults_Compare` in the engine (smoke `rescmp`); `EeCvrTally.group`
+    was added.
+  - Compare menu in the results and CVR windows; compare window with colors, Differences Only and
+    Export.
+  - Travis L26/PR26/P26/G24 results ↔ CVR are identical both ways, once names match regardless of
+    quote marks ('Lulu' vs "Lulu").
+- **Step 6 done (uncommitted): File → Export Election Results…** (Displayed view / All detail),
+  plus right-click Export Selected.
+  - A displayed-view export loads back (`EE_RES_FMT_EE_VIEW`, smoke `resview`).
+  - The export → load → compare test is identical for Travis G24 and P26 in all three layouts.
+- **Step 7 done (uncommitted): all Clarity counties.**
+  - 471/471 elections load as one each, round trips identical; 389 have no notes. The other 82
+    carry only genuine file notes: totals that aren't their precincts' sum, 2020 detail.xls
+    turnout Total rows with swapped vote types, and withheld counts.
+  - Fixes: withheld ("protected") over/under and registered voters of 0 read as unknown; TXT
+    fixed-column rows, header labels over 30 characters, and a line of spaces before the
+    header; Dallas cumulative voting (oval groups merged; 2021 XLS bare oval groups dropped).
+    Smoke `rescum`.
+  - Design doc "Step 7" lists the findings.
+- **Next:**
+  - step 8: ES&S (older Travis PDFs first: G20 ↔ G20 CVR) and Hart PDF results;
+  - step 9: help, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt.
+- **Later:** ES&S test set: the older Travis
   2020–22 PDFs (G20 PDFs ↔ G20 CVR), then the other ~553 Electionware PDFs.
 
 ### G26 ballot scripts — `Scripts/Travis_County_Elections/2026-11-03_General/` (separate from ElectionExplorer)

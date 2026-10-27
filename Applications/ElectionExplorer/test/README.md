@@ -54,6 +54,26 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
 - another election groups apart;
 - a summary inside a ZIP loads;
 - a file that is not results is refused with its name.
+`rescum` covers cumulative voting (Dallas CFBISD):
+- a detail.txt with one column group per ballot oval and a "Total Cumulative" label longer than 30
+  characters (which pushes the rest of the header right), with a line of spaces between the choice
+  names and the header;
+- an older detail.xls with the sums in the candidate's own group, followed by bare "Ballot Oval
+  Selection N" groups;
+- each alone and both together give each candidate the sum of its ovals, with no notes.
+`rescmp` covers `EeResults_Compare` and `EeResults_FromTally`:
+- results compared with themselves all match;
+- a summary with one changed total gives exactly one "differs" row, and its missing ballots cast is
+  "not reported";
+- a CVR-style tally (contest "(45918)" and choice "(EC1)" ids dropped, "undervote" / "overvote",
+  two contests with the same name told apart by their key) matches the results;
+- a per-precinct tally with one precinct changed flags that choice's total and that precinct;
+- precinct masks on both sides leave no differences.
+`resview` covers the results window's displayed-view export read back:
+- a Totals file (CSV) and a By Precinct file (TSV, with vote type columns) load back;
+- the two same-named contests are told apart;
+- Over / Under Votes rows attach to their contest;
+- each compares with the XML with no difference (precinct and vote type rows too for By Precinct).
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
 wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt),
 plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).

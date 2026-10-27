@@ -1,6 +1,6 @@
 # Election results — design (Election Explorer 1.5)
 
-Status: **step 1 done (engine + Clarity loaders)** (2026-10-26). Decisions D1–D8 are at the end.
+Status: **steps 1–7 done (engine, Clarity loaders, Election Results window, filter, reports, compare, export, all Clarity counties)** (2026-10-26). Decisions D1–D8 are at the end.
 
 ## Goal
 
@@ -180,7 +180,7 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
     choice filter hides rows. A vote type filter re-totals from the included vote types.
   - Needs precinct detail: with only summary.csv loaded, the Precinct and Vote Type columns are
     greyed out.
-  - The rules save and load as `.eefilter`, like the voter and CVR filters (1.5 filter
+  - The rules save and load as CSV / TSV filter files, like the voter and CVR filters (1.5 filter
     export/load).
 - **Reports:**
   - Display Turnout Report…: precinct, registered voters, ballots cast (by vote type when the
@@ -295,6 +295,237 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
 - XLS ballots-cast-by-vote-type totals that are not their precinct sums.
 - Summary over/under totals that differ from the XML's.
 
+### Step 2 — the Election Results window (done 2026-10-26, uncommitted)
+
+- **`main.c`, "Election Results window (1.5)" section.** `ResultsWindow` with
+  `App_BeginOpenResults` (multi-select open dialog → worker thread → one window per election),
+  `App_CreateResultsWindow` and `ResultsWndProc`.
+  - The window is standalone, with its own resource-only `AppState` (`is_cvr_ui`); it is
+    registered in the CVR window list, so it keeps the app alive and closes on Exit.
+- **Menus:**
+  - File: Load Voter List / CVR / Roster / Election Results, Close Election Results, Exit.
+    Load Election Re&sults… was added to the voter, roster and CVR windows too.
+  - Edit: Copy (Ctrl+C, also on right-click), Options….
+  - View: Totals / By Precinct; By Precinct is greyed when no file has precinct detail.
+  - Reports: Display Load Summary….
+  - Help: Loading Election Results, Views and Options, About.
+- **List:**
+  - Owner-data. Columns: Contest | Vote For | Choice | Party | [Precinct] | one per vote type |
+    Total Votes | Percent.
+  - Over/Under Votes rows when reported.
+  - Click a column title to sort: counts sort largest first, precincts numerically.
+  - Withheld cells show "protected"; a withheld total shows "withheld".
+- **Contest order:** a primary's contests are ordered by the shared party-first setting
+  (`cvr_tab_party_first`), so a results window and a CVR tabulation list the parties the same
+  way.
+- **Options** (modal): Zoom (the list font), Show a column for each vote type (new setting
+  `results_show_vote_types`, registry `ResultsShowVoteTypes`, default on), and Party to display
+  first. All three are saved.
+- **Status bar:** election name and date, contests, precincts, rows (By Precinct), the source
+  formats, "as of" the XML timestamp, and the number of differences or notes.
+- **Load Summary:** the files (which one is shown), then each file's notes and differences. It
+  opens by itself when another file disagrees with the shown one.
+- **Engine change:** names (contest, choice, party, precinct, vote type) now have whitespace
+  collapsed, as the CVR loader does ("John   Cornyn" in Travis P26).
+- **Checked:**
+  - The real app was driven headlessly. Travis G24 (four ZIPs) gives 283 rows, and 22,899 by
+    precinct; a copied row matches the summary (Trump 170,781, 29.25%).
+  - Travis P26 lists REP contests first.
+  - Dallas L22 opens its Load Summary (20 differences).
+  - Two elections in one load open two windows.
+  - File → Close and Exit work.
+  - Smoke suite passes (`settings` covers the new option); Release x64 and ARM64 build clean;
+    the 471-election sweep is unchanged.
+- **Not yet checked:** header-click sorting and a zoom change in the GUI.
+
+### Step 3 — the Filter menu (done 2026-10-26, uncommitted)
+
+- **Menu:** Filter → Filter… (Ctrl+L) / Reset Filter, between View and Reports, plus a
+  Help → Filters topic.
+- **Shared filter window.** The CVR window's "is / is not" rule filter is generalized:
+  - `CvrFilterState` now describes a host: column titles, offered columns, a value collector, the
+    applied rule set, an apply callback, the caption and the export base name.
+  - `Filter_ShowRuleWindow` / `Filter_NewState` create it; `App_ShowCvrFilter` and
+    `App_ShowResultsFilter` are the two hosts.
+  - The CVR filter behaves as before (checked: Travis L26 CVR, Ballot Status is not "Not
+    Reviewed" → 9 of 12,710).
+- **Results filter columns: Precinct, Contest, Choice, Party, Vote Type.** Precinct and Vote
+  Type are offered only when loaded.
+  - Each column is filtered by its own rules (`Filter_ColumnAccepts`): an exclude that matches
+    rejects; includes on a column are alternatives.
+  - **Precinct rules** build a precinct mask, and every total, percentage and Over/Under figure
+    is re-tabulated from the included precincts (`EeResults_Tabulate`). A contest with no
+    included precinct is hidden; By Precinct shows only included precincts.
+  - **Vote Type rules** build a vote-type mask: only included vote types are counted, and
+    excluded ones lose their column.
+  - **Contest / Choice / Party rules** hide rows. Totals and percentages stay those of the
+    whole contest.
+- **Status bar:** "N rows • filtered: X of Y precincts", plus "(some totals cannot be
+  filtered)" when a contest has only summary totals or withheld cells.
+- **Export Filter… / Load Filter…** use the shared `.csv` / `.tsv` filter files. The column
+  titles are fixed, so a filter saved in one results window loads in another.
+- **Checked against the XML (Travis G24):**
+  - Precinct is 101 → Trump 4 + 150 + 61 + 2 + 0 = 217, 14.02% of the precinct's 1,548
+    presidential votes.
+  - Adding Vote Type is Early Voting → 150, 12.21%.
+  - Adding Party is (R) → 13 rows.
+  - Excluding precinct 101 → 170,781 − 217 = 170,564.
+  - Reset restores all 283 rows.
+  - Release x64 and ARM64 build clean.
+
+### Step 4 — Reports (done 2026-10-26, uncommitted)
+
+- **Reports → Display Turnout Report…** (`ResTurnoutWindow`, class
+  `ElectionExplorerResultsTurnout`, `IDM_RES_TURNOUT`); greyed when there are no precincts.
+  - Columns: Precinct | Registered Voters | ballots per vote type (when the files give them,
+    and the vote-type option is on) | Ballots Cast | Turnout.
+  - Header click sorts: numbers largest first, precincts numerically.
+  - Ballots by vote type come from the Clarity XLS turnout sheet; the XML has none.
+- **Rows** are the precincts the results filter includes. The report refreshes when the filter
+  or options change (vote-type mask, zoom) and closes with its results window.
+- **Status bar:** precincts, registered, ballots cast, turnout. Unfiltered it shows the file's
+  reported totals; filtered, the sum of the precincts shown.
+- **Right-click:** Copy; Include / Exclude the selected precincts (adds Precinct rules to the
+  results filter); Export Selected / All (CSV / TSV, `<base>-All_Turnout`).
+- **Display Load Summary…** stays under the same menu.
+- **Help → Reports** topic.
+- **Checked against the G24 XML:**
+  - 287 precincts, 925,858 registered, 587,090 ballots cast, 63.41% turnout.
+  - Precinct 100: 3,605 registered, 58 + 1,608 + 402 + 1 + 4 = 2,073 ballots, 57.50%.
+  - Precincts 101 + 102 filtered → 6,604 registered, 3,664 ballots, 55.48%.
+  - Closing the results window closes the report.
+  - Release x64 and ARM64 build clean.
+- **Not yet clicked:** the report's right-click menu (posted mouse messages do not open it), so
+  Export Selected / All are untested in the GUI. They use the shared report exporter
+  (`App_ExportReportModel`).
+
+### Step 5 — Compare (done 2026-10-26, uncommitted)
+
+- **Engine (`ee_results.c`):**
+  - `EeResults_FromTally` turns a tabulation into results. It drops a CVR's contest
+    "(digits)" and choice "(EC n)" ids, makes "overvote" / "undervote" the Over/Under Votes, uses
+    a contest key so same-named contests stay apart, and gives precinct detail when items carry a
+    precinct.
+  - `EeResults_Compare` compares two results, each with its own precinct / vote-type masks:
+    - contests by name (repeats in order), choices by name;
+    - Over/Under Votes, Ballots Cast, Registered Voters;
+    - per precinct, and per vote type when both have the same ones; only differing precinct and
+      vote-type rows are kept.
+    - A 0 and a missing figure are equal, so a contest nobody voted in matches its absence.
+    - Statuses: Match / Differs / Only in this window / Only in the other window / Not
+      reported.
+  - `EeResults_NamesMatch` now also treats all quote marks alike: Clarity writes a nickname
+    'Lulu', an ES&S CVR "Lulu". This was the only difference left in Travis P26 and G24.
+  - `EeCvrTally` gained `group` (the contest's column group).
+  - Smoke test `rescmp`.
+- **UI (`main.c`):**
+  - The results window has a **Compare** menu between Reports and Help, listing the other open
+    results and CVR windows. The **CVR window has a Compare menu too**, listing results windows
+    (D6).
+  - A filtered CVR asks for its filtered ballots or all ballots (D3); CVR write-ins follow the
+    CVR's "merge" option.
+  - When the CVR's Precinct column has real data, its ballots are grouped by precinct
+    (hashed) and tabulated per precinct, so the compare goes precinct by precinct (D7). Travis
+    redacts the Precinct column, so its compares are totals.
+  - A results window's filter applies to its side.
+  - **Compare window** (`ResCompareWindow`, a standalone window registered like a CVR window):
+    - columns Contest | Choice | Precinct | Vote Type | this window | other window | Difference
+      | Status;
+    - rows colored red (differs), yellow (only one side) or grey (not reported);
+    - View → Show Differences Only; Copy; File → Export Compare… (CSV / TSV);
+    - status "Identical: N figures match", or the counts, plus notes (results filter, write-ins
+      not merged, multi-card CVR).
+  - Help → Compare in both windows.
+- **Acceptance (driven in the real app, both directions):**
+
+  | Comparison | Result |
+  |---|---|
+  | Travis L26 results ↔ L26 CVR | identical, 161 figures |
+  | PR26 ↔ CVR | identical, 21 figures |
+  | P26 ↔ CVR | identical, 264 figures |
+  | G24 ↔ 6-file CVR | identical, 284 figures (Ballots Cast 587,090 = 587,090) |
+  | G24 XML ↔ G24 TXT (two results windows) | identical, 285 figures |
+
+  - The only other rows are the CVR's over/under votes, "not reported" by Travis results.
+  - G24's CVR loads in about 16 s and compares in under 1 s.
+  - Smoke suite passes; Release x64 and ARM64 build clean; the 471-election sweep is unchanged.
+- **Still open:**
+  - A CVR with a real Precinct column (precinct-level CVR compare) has not been run on real
+    data yet; the engine path is covered by `rescmp`.
+  - Results ↔ its own export waits for step 6.
+
+### Step 6 — Export (done 2026-10-26, uncommitted)
+
+- **File → Export Election Results…** asks for the layout (D5); the last choice is kept for the
+  session. Then the shared Save dialog (CSV / TSV, UTF-8 with BOM).
+  - **Displayed view:** the shown columns and rows (Totals / By Precinct, filter, vote-type
+    columns, sort), through `App_ExportReportModel`. Named `<base>-Results[_By_Precinct]` or
+    `-Filtered_Results…`.
+  - **All detail (reloadable):** `EeResults_FormatDetailUtf8` with the window's precinct and
+    vote-type masks, and a contest mask of the contests showing a row. Named `<base>-All_Detail`
+    or `-Filtered_Detail`.
+  - **Right-click → Export Selected…:** the selected rows, displayed view.
+  - **Help → Export.**
+- **Engine:** a displayed-view export loads back as format `EE_RES_FMT_EE_VIEW` (`parse_ee_view`),
+  detected by a first line with Contest, Choice and Total Votes.
+  - Vote-type columns lie between Party/Precinct and Total Votes; "Over Votes" / "Under Votes"
+    rows have no party.
+  - Back-to-back same-named contests are split when a precinct comes back, a choice repeats in a
+    precinct, or the percentages pass 100 (Totals).
+  - A Totals file has no precinct or vote-type detail and no turnout.
+  - Smoke test `resview`.
+- **Acceptance (the user's export → load → compare test, driven in the real app):**
+
+  | Election | All detail | Displayed Totals | Displayed By Precinct |
+  |---|---|---|---|
+  | Travis G24 (XML + summary + XLS) | 17 MB; identical, 285 figures | identical, 283 figures | identical, precinct and vote type level |
+  | Travis P26 | 35 MB; identical, 265 figures | identical, 263 figures | identical |
+
+  - "Ballots Cast not reported" is the only other row for the displayed-view files, which carry
+    no turnout.
+  - Smoke suite passes; Release x64 and ARM64 build clean; the 471-election sweep is unchanged.
+
+### Step 7 — all Clarity counties (done 2026-10-26, uncommitted)
+
+- **Sweep:** every Clarity election in `Election_Results/` (471, from the 50-county survey), each
+  loaded with all its files (summary + TXT + XLS/XLSX + XML), then exported (All detail) and
+  reloaded.
+  - 471/471 load as one election each; every round trip is identical.
+  - **389 load with no notes** (350 before the step-7 fixes). The other 82 carry only notes about
+    the files themselves (below).
+- **Format findings handled:**
+  - **Withheld counts** (Galveston, Nueces, Fort Bend): `votes="protected"` cells, including
+    contest-level Under/Overvotes. These figures are unknown, not 0, so the cross-check skips them
+    and takes them from a file that has them.
+  - **Registered voters of 0** (a county total of 0, or every precinct 0) means not reported.
+  - **TXT names cut to 30 characters:** a precinct name fills its column, and the next value
+    follows with no space. Data rows are read by fixed 30-character columns first.
+  - **TXT header labels longer than 30 characters** ("Total Cumulative Ileana Garza-Rojas") are
+    written whole and push the rest of the header right. Such a cell is extended to where a label
+    already seen on the line starts.
+  - **TXT line of spaces** between the choice names and the header (Hunt L26).
+  - **Cumulative voting** (Dallas CFBISD, L21/L22):
+    - The TXT gives one column group per ballot oval ("Kim Brady - Ballot Oval Selection
+      1…3") plus a "Total Cumulative Kim Brady" column. The groups are merged into one choice.
+    - The 2021 XLS puts the sums in the candidate's own group ("Total Cumulative Votes"), then
+      bare "Ballot Oval Selection N" groups, which are dropped.
+    - The summary has a "Cumulative votes" column and " 1"/" 2"/" 3" sub-rows.
+    - Smoke test `rescum`.
+  - **Vote For suffixes** "( 1)", "(Voter Turnout 1)" and "(Vote For -1)"; a first column titled
+    Precinct, County, Area or blank.
+- **Notes left, all genuine file content** (the same figure in every file, or a file's own
+  arithmetic):
+  - **Registered voters / ballots cast:** the reported total is not the sum of the precincts
+    (70 elections). For example, Bell G22 reports 228,113 against a precinct sum of 270,664.
+  - **2020 detail.xls turnout Total rows with the vote-type totals swapped**: Bastrop, Bell,
+    Dallas, El Paso, Fort Bend, Rockwall and Victoria G20/GR20/PR20. For example, Dallas G20
+    "EV In-person" says 118,670, but its precincts add up to 728,888; 118,670 is the Election
+    Day sum.
+  - **Withheld counts** (Galveston P26 51,345 cells; Nueces PR26, Fort Bend LR26 and others),
+    noted once per file.
+  - **Tarrant PR22:** ballots cast of 98,052 against a precinct sum of 62,480, in all three files.
+- Smoke suite passes; Release x64 and ARM64 build clean.
+
 ## Implementation plan (proposed)
 
 1. **Engine `src/ee_results.{c,h}`** (no UI):
@@ -322,7 +553,7 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
      repeated-name contest; export → reload round trip; compare against a CVR tally.
 2. **Window (`main.c`):** the results window, menus, Copy, Options (zoom, party first), status
    bar; File menu items added to the voter, roster and CVR windows.
-3. **Filter:** CVR-style dialog reuse, the precinct re-tabulation, `.eefilter` save/load.
+3. **Filter:** CVR-style dialog reuse, the precinct re-tabulation, filter file save/load (CSV / TSV).
 4. **Reports:** Turnout and Load Summary windows.
 5. **Compare** window + export.
 6. **Export** + round-trip validation on all 18 Travis Clarity elections in `Election_Results/`.

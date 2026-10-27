@@ -83,7 +83,18 @@
     Smoke `rescum`.
   - Design doc "Step 7" lists the findings.
 - **Next:**
-  - step 9: help, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt.
+  - step 9: more ES&S / Hart PDF layouts -- design doc "Step 9". 9a (Electionware without
+    the footer) done 2026-10-27, uncommitted: sweep 1,087 of 1,941 load (978 before), none
+    lost; Hart unchanged. 9b (older Hart reports: McLennan, Montgomery, Harris 2020-22,
+    plus combining an election's per-entity files) done 2026-10-27, uncommitted: sweep
+    1,337 loads. 9c (Travis L22 Cumulative, LR22 Canvass, PR22 Republican Cumulative,
+    printed through PScript5) done 2026-10-27, uncommitted: new `src/ee_glyph_ocr.{c,h}`
+    learns each Type 3 glyph drawing's character with Windows OCR; `pdf_reader.c` reads
+    Type 3 fonts (blank glyph = space, widths from the drawings, `Tc` in the graphics
+    state, a large `Tc` is a word gap). L22 and PR22 equal their precinct reports, LR22's
+    52 rows add up, Travis G20 vs CVR unchanged (399). Smoke `resglyph`. Sweep
+    1,340 of 1,941 load, only the three Travis files changed. Next step 10;
+  - step 10: help, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt.
 - **Later:**
   - other PDF layouts the sweep refuses (design doc "Step 8");
   - Hart CSV exports;

@@ -35,7 +35,8 @@ extern "C"
 #define EE_RES_FMT_ESS_SUMMARY     0x40u /* ES&S Electionware summary results report (PDF) */
 #define EE_RES_FMT_ESS_PRECINCT    0x80u /* ES&S Electionware precinct results report (PDF) */
 #define EE_RES_FMT_HART_SUMMARY    0x100u /* Hart Verity cumulative results report (PDF) */
-#define EE_RES_FMT_HART_PRECINCT   0x200u /* Hart Verity canvass results report (PDF) */
+#define EE_RES_FMT_HART_PRECINCT   0x200u /* Hart canvass results report (PDF) */
+#define EE_RES_FMT_HART_PCT_REPORT 0x400u /* Hart precinct report, before Verity (PDF) */
 
 /** Unknown count (registered voters, ballots cast, precinct counts). */
 #define EE_RES_UNKNOWN (-1)

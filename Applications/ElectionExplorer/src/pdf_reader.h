@@ -58,7 +58,30 @@ extern "C"
         int rot; /* text direction in user space, degrees counterclockwise: 0 = left to
                   * right, 90 = bottom to top, 180, 270 = top to bottom (a page printed
                   * rotated, e.g. landscape through a portrait driver) */
+        int type3; /* drawn in a Type 3 font (glyph outlines, e.g. through PScript5): its
+                    * glyphs are shown one string each, so touching runs are one word */
     } EePdfTextRun;
+
+    /** One glyph of a Type 3 font shown on a page (EePdfPageText.collect_glyphs). */
+    typedef struct EePdfGlyph
+    {
+        uint32_t proc;  /* its CharProcs stream (EePdf_GlyphOutline) */
+        uint32_t fp;    /* a hash of that stream: the same drawing in any font of the file */
+        float m[6];     /* glyph space -> user space */
+        float x0, y0;   /* origin in user space */
+        float x1;       /* origin + advance (x) */
+        float size;     /* text size in user space */
+        BOOL named;     /* its glyph name already gives the character */
+    } EePdfGlyph;
+
+    /** A glyph's outline in glyph space: ops 0 move, 1 line, 2 curve (3 points), 3 close. */
+    typedef struct EePdfOutline
+    {
+        uint8_t *ops;
+        uint32_t nops;
+        float *pts; /* x, y pairs: 1 per move/line, 3 per curve */
+        uint32_t npts;
+    } EePdfOutline;
 
     /** Text runs of one page, in content-stream order. Reused across pages. */
     typedef struct EePdfPageText
@@ -73,6 +96,18 @@ extern "C"
                          * run and the text after it starts a new run at its own position
                          * (tables printed through a PostScript driver draw each line as one
                          * TJ with the column gaps as kerns); off = the gap becomes a space */
+        int std_widths; /* set by the caller (kept across pages): a font without widths (a
+                         * standard 14 font) is measured as Helvetica, so split_gaps also
+                         * splits its TJ gaps, and the text position moves on after each
+                         * string, so strings shown one after another (an Acrobat edit, a
+                         * tagged re-save) come at their own places; off = the position
+                         * stays at the string's start */
+        int collect_glyphs;  /* set by the caller: list Type 3 glyphs in glyphs[] */
+        EePdfGlyph *glyphs;
+        uint32_t nglyphs;
+        uint32_t cap_glyphs;
+        uint32_t unknown_glyphs; /* Type 3 glyphs on the page with no character (no glyph
+                                  * name, not in EePdf_SetGlyphChars): shown as U+FFFD */
     } EePdfPageText;
 
     /**
@@ -117,6 +152,18 @@ extern "C"
      * without text succeeds with zero runs.
      */
     BOOL EePdf_ExtractPageText(EePdf *pdf, uint32_t page_index, EePdfPageText *out);
+
+    /**
+     * Give Type 3 glyphs characters by their drawing (EePdfGlyph.fp -> code point), for a
+     * file whose Type 3 fonts name glyphs /0../255 (PScript5): text extracted afterwards
+     * shows them as these characters. Replaces an earlier map. Returns FALSE out of memory.
+     */
+    BOOL EePdf_SetGlyphChars(EePdf *pdf, const uint32_t *fps, const uint32_t *cps, uint32_t n);
+
+    /** The outline a Type 3 glyph's stream @p proc draws (in glyph space). FALSE when it
+     *  cannot be read or draws an image. Free with EePdf_OutlineFree. */
+    BOOL EePdf_GlyphOutline(EePdf *pdf, uint32_t proc, EePdfOutline *out);
+    void EePdf_OutlineFree(EePdfOutline *o);
 
     /** Kinds of page image returned by EePdf_GetPageImage. */
     enum

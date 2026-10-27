@@ -531,6 +531,7 @@ typedef struct ResBuilder
     BOOL oom;
     BOOL bad; /* the parser met something it cannot read */
     wchar_t bad_msg[256];
+    BOOL quiet; /* combining files already checked: b_finish's checks add no notes */
 } ResBuilder;
 
 static void b_init(ResBuilder *b, EeResults *r)
@@ -564,6 +565,10 @@ static void b_fail(ResBuilder *b, const wchar_t *msg)
 static void b_issue(ResBuilder *b, const wchar_t *text)
 {
     EeResults *r = b->r;
+    if (b->quiet)
+    {
+        return;
+    }
     if (!res_grow((void **)&r->issues,
                   &b->cap_issues,
                   (size_t)r->nissues + 1,
@@ -4224,13 +4229,24 @@ static void parse_ee_view(ResBuilder *b, const uint8_t *d, size_t n)
 /* Format detection and single-file loading                                  */
 /* -------------------------------------------------------------------------- */
 
+/* A file combined into another of the same election and format (combine_split). */
+typedef struct ParsedPart
+{
+    wchar_t *path;
+    wchar_t *member;
+    uint32_t ncontests, nchoices, nprecincts;
+} ParsedPart;
+
 typedef struct Parsed
 {
-    EeResults r;
+    EeResults r; /* its issues' source: 0 = this file, k = parts[k - 1] */
     wchar_t *path;
     wchar_t *member;
     uint32_t format;
     uint32_t group;
+    ParsedPart *parts; /* files of the same election combined into this one */
+    uint32_t nparts;
+    uint32_t own_contests, own_choices, own_precincts; /* this file's, before combining */
 } Parsed;
 
 /* sniff_format: a PDF, whose report kind (and so its EE_RES_FMT_*) the parser decides */
@@ -4349,6 +4365,9 @@ static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
             break;
         case EE_RPDF_HART_PRECINCT:
             fmt = EE_RES_FMT_HART_PRECINCT;
+            break;
+        case EE_RPDF_HART_PCT_REPORT:
+            fmt = EE_RES_FMT_HART_PCT_REPORT;
             break;
         default:
             fmt = EE_RES_FMT_ESS_SUMMARY;
@@ -4470,6 +4489,8 @@ static const wchar_t *format_label(uint32_t fmt)
             return L"Hart cumulative report (PDF)";
         case EE_RES_FMT_HART_PRECINCT:
             return L"Hart canvass report (PDF)";
+        case EE_RES_FMT_HART_PCT_REPORT:
+            return L"Hart precinct report (PDF)";
         default:
             return L"results";
     }
@@ -4624,11 +4645,20 @@ static Parsed *pl_add(ParsedList *pl)
 
 static void parsed_free(Parsed *p)
 {
+    uint32_t k;
     EeResults_Clear(&p->r);
     free(p->path);
     free(p->member);
+    for (k = 0; k < p->nparts; k++)
+    {
+        free(p->parts[k].path);
+        free(p->parts[k].member);
+    }
+    free(p->parts);
     p->path = NULL;
     p->member = NULL;
+    p->parts = NULL;
+    p->nparts = 0;
 }
 
 /* Load @p path (a results file or a ZIP of them) into @p pl. */
@@ -4864,6 +4894,33 @@ static BOOL rows_match(const FlatRow *a, const FlatRow *b)
            EeResults_NamesMatch(a->choice, b->choice);
 }
 
+/* TRUE when at least half of the contests of the shorter list have a title in the other. */
+static BOOL titles_overlap(const FlatRow *a, size_t na, const FlatRow *b, size_t nb)
+{
+    size_t ca = 0, cb = 0, common = 0, i, j;
+    for (j = 0; j < nb; j++)
+    {
+        cb += (j == 0 || b[j].ci != b[j - 1].ci);
+    }
+    for (i = 0; i < na; i++)
+    {
+        if (i > 0 && a[i].ci == a[i - 1].ci)
+        {
+            continue;
+        }
+        ca++;
+        for (j = 0; j < nb; j++)
+        {
+            if ((j == 0 || b[j].ci != b[j - 1].ci) && EeResults_NamesMatch(a[i].contest, b[j].contest))
+            {
+                common++;
+                break;
+            }
+        }
+    }
+    return common * 2 >= (ca < cb ? ca : cb) && common > 0;
+}
+
 /* Align two flat row lists (in order, tolerating insertions on either side). pair[i] =
  * index in b matched to a[i], or SIZE_MAX. Returns the number of matched rows. */
 static size_t align_rows(const FlatRow *a, size_t na, const FlatRow *b, size_t nb, size_t *pair)
@@ -4914,8 +4971,11 @@ static size_t align_rows(const FlatRow *a, size_t na, const FlatRow *b, size_t n
     }
     /* Contests in another order (a precinct report knows no order for contests that never
      * share a ballot): pair what is left by name and repeat number. Skipped when the files
-     * have little in common, so unrelated elections stay quick to tell apart. */
-    if (matched * 10 >= (na < nb ? na : nb) * 3 && matched < na && matched < nb)
+     * have little in common, so unrelated elections stay quick to tell apart; Grayson's
+     * precinct reports order contests too differently for the in-order pass, so sharing
+     * half the contest titles is also enough. */
+    if (matched < na && matched < nb &&
+        (matched * 10 >= (na < nb ? na : nb) * 3 || titles_overlap(a, na, b, nb)))
     {
         uint8_t *used = (uint8_t *)calloc(nb + 1, 1);
         if (used != NULL)
@@ -4962,6 +5022,7 @@ static int format_rank(uint32_t fmt)
         case EE_RES_FMT_CLARITY_XLS:
         case EE_RES_FMT_ESS_PRECINCT:
         case EE_RES_FMT_HART_PRECINCT:
+        case EE_RES_FMT_HART_PCT_REPORT:
             return 3;
         case EE_RES_FMT_CLARITY_TXT:
         case EE_RES_FMT_EE_VIEW:
@@ -5564,11 +5625,32 @@ static BOOL add_source(EeResults *dst, size_t *cap, const Parsed *p, BOOL primar
     s->member = p->member != NULL ? wdup(p->member) : NULL;
     s->format = p->format;
     s->primary = primary;
-    s->ncontests = p->r.ncontests;
-    s->nchoices = p->r.nchoices;
-    s->nprecincts = p->r.nprecincts;
+    s->ncontests = p->nparts > 0 ? p->own_contests : p->r.ncontests;
+    s->nchoices = p->nparts > 0 ? p->own_choices : p->r.nchoices;
+    s->nprecincts = p->nparts > 0 ? p->own_precincts : p->r.nprecincts;
     dst->nsources++;
     dst->formats |= p->format;
+    {
+        /* the files combined into it (combine_split), shown with it */
+        uint32_t k;
+        for (k = 0; k < p->nparts; k++)
+        {
+            if (!res_grow((void **)&dst->sources, cap, (size_t)dst->nsources + 1, sizeof(EeResultsSource)))
+            {
+                return FALSE;
+            }
+            s = &dst->sources[dst->nsources];
+            ZeroMemory(s, sizeof(*s));
+            s->path = wdup(p->parts[k].path);
+            s->member = p->parts[k].member != NULL ? wdup(p->parts[k].member) : NULL;
+            s->format = p->format;
+            s->primary = primary;
+            s->ncontests = p->parts[k].ncontests;
+            s->nchoices = p->parts[k].nchoices;
+            s->nprecincts = p->parts[k].nprecincts;
+            dst->nsources++;
+        }
+    }
     return TRUE;
 }
 
@@ -5689,6 +5771,452 @@ static void adopt_meta(EeResults *dst, EeResults *src)
     }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Files of one election split by entity                                      */
+/* -------------------------------------------------------------------------- */
+
+/* Feed result @p s into builder @p b, leaving out the contests flagged in @p skip (kept from
+ * the other file). A precinct keeps the larger figures of two files (a city's report may count
+ * only its part of a split precinct); @p fed marks precincts whose ballots by vote type are in. */
+static void res_feed(ResBuilder *b, const EeResults *s, const uint8_t *skip, uint8_t *fed)
+{
+    EeResults *r = b->r;
+    uint32_t nvt = EE_RESULTS_NVT(s);
+    uint32_t *vtm = (uint32_t *)malloc(((size_t)s->nvt + 1) * sizeof(uint32_t));
+    uint32_t *pm = (uint32_t *)malloc(((size_t)s->nprecincts + 1) * sizeof(uint32_t));
+    uint32_t c, k, p, v;
+    if (vtm == NULL || pm == NULL)
+    {
+        b->oom = TRUE;
+        goto done;
+    }
+    for (v = 0; v < s->nvt; v++)
+    {
+        vtm[v] = b_vt(b, s->vote_types[v]);
+    }
+    for (p = 0; p < s->nprecincts && !b->oom; p++)
+    {
+        EeResultsPrecinct *d;
+        pm[p] = b_pre(b, s->precincts[p].name);
+        if (b->oom)
+        {
+            break;
+        }
+        d = &r->precincts[pm[p]];
+        if (s->precincts[p].registered > d->registered)
+        {
+            d->registered = s->precincts[p].registered;
+        }
+        if (s->precincts[p].ballots > d->ballots)
+        {
+            d->ballots = s->precincts[p].ballots;
+        }
+    }
+    for (c = 0; c < s->ncontests && !b->oom; c++)
+    {
+        const EeResultsContest *ct = &s->contests[c];
+        EeResultsContest *dc;
+        uint32_t ci;
+        if (skip != NULL && skip[c])
+        {
+            continue;
+        }
+        ci = b_contest(b, ct->title, ct->vote_for, ct->is_question);
+        if (b->oom)
+        {
+            break;
+        }
+        dc = &r->contests[ci];
+        dc->registered = ct->registered;
+        dc->ballots = ct->ballots;
+        dc->precincts_total = ct->precincts_total;
+        dc->precincts_reporting = ct->precincts_reporting;
+        if (ct->has_over_under)
+        {
+            dc->has_over_under = TRUE;
+            dc->over_total = ct->over_total;
+            dc->under_total = ct->under_total;
+        }
+        for (k = 0; k < ct->nchoices; k++)
+        {
+            const EeResultsChoice *ch = &s->choices[ct->first_choice + k];
+            b_choice(b, ch->name, ch->party, ch->total);
+        }
+        for (p = 0; ct->counts != NULL && p < ct->npre; p++)
+        {
+            for (k = 0; k < ct->nchoices; k++)
+            {
+                for (v = 0; v < nvt; v++)
+                {
+                    size_t idx = ((size_t)k * ct->npre + p) * nvt + v;
+                    b_count(b, ci, k, pm[ct->pre[p]], s->nvt != 0 ? vtm[v] : 0,
+                            ct->protected_cells != NULL && ct->protected_cells[idx] ? RES_PROTECTED : ct->counts[idx]);
+                }
+            }
+            if (ct->over != NULL)
+            {
+                b_count(b, ci, RES_OVER, pm[ct->pre[p]], 0, ct->over[p]);
+                b_count(b, ci, RES_UNDER, pm[ct->pre[p]], 0, ct->under[p]);
+            }
+        }
+    }
+    for (p = 0; s->prec_ballots_vt != NULL && s->nvt != 0 && p < s->nprecincts && !b->oom; p++)
+    {
+        if (!fed[pm[p]])
+        {
+            fed[pm[p]] = 1;
+            for (v = 0; v < s->nvt; v++)
+            {
+                b_turnout_vt(b, pm[p], vtm[v], s->prec_ballots_vt[(size_t)p * s->nvt + v]);
+            }
+        }
+    }
+done:
+    free(vtm);
+    free(pm);
+}
+
+/* Contest @p ca of @p ra is contest @p cb of @p rb: the same title, half their choices'
+ * names in common and one choice total the same (or none reported). Two cities' "Board of
+ * Trustees-At Large" or "Proposition A" share a title (and "For" / "Against") but not totals. */
+static BOOL same_contest(const EeResults *ra, uint32_t ca, const EeResults *rb, uint32_t cb)
+{
+    const EeResultsContest *a = &ra->contests[ca];
+    const EeResultsContest *b = &rb->contests[cb];
+    uint32_t i, j, names = 0, minch = a->nchoices < b->nchoices ? a->nchoices : b->nchoices;
+    BOOL total_same = FALSE, any_total = FALSE;
+    if (!EeResults_NamesMatch(a->title, b->title))
+    {
+        return FALSE;
+    }
+    for (i = 0; i < a->nchoices; i++)
+    {
+        const EeResultsChoice *x = &ra->choices[a->first_choice + i];
+        for (j = 0; j < b->nchoices; j++)
+        {
+            const EeResultsChoice *y = &rb->choices[b->first_choice + j];
+            if (EeResults_NamesMatch(x->name, y->name))
+            {
+                names++;
+                if (x->total != EE_RES_UNKNOWN && y->total != EE_RES_UNKNOWN)
+                {
+                    any_total = TRUE;
+                    total_same = total_same || x->total == y->total;
+                }
+                break;
+            }
+        }
+    }
+    if (names * 2 < minch)
+    {
+        return FALSE;
+    }
+    if (total_same || !any_total)
+    {
+        return TRUE;
+    }
+    /* a city's precinct report covers an ISD's contest in the city's precincts only (McLennan
+     * L22 Lorena): the same contest when every precinct both have counts the same */
+    if (a->counts != NULL && b->counts != NULL && EE_RESULTS_NVT(ra) == EE_RESULTS_NVT(rb))
+    {
+        uint32_t nvt = EE_RESULTS_NVT(ra), p, q, v, shared = 0;
+        for (p = 0; p < a->npre; p++)
+        {
+            for (q = 0; q < b->npre; q++)
+            {
+                if (wcscmp(ra->precincts[a->pre[p]].name, rb->precincts[b->pre[q]].name) != 0)
+                {
+                    continue;
+                }
+                shared++;
+                for (i = 0; i < a->nchoices; i++)
+                {
+                    for (j = 0; j < b->nchoices; j++)
+                    {
+                        if (!EeResults_NamesMatch(ra->choices[a->first_choice + i].name,
+                                                  rb->choices[b->first_choice + j].name))
+                        {
+                            continue;
+                        }
+                        for (v = 0; v < nvt; v++)
+                        {
+                            if (a->counts[((size_t)i * a->npre + p) * nvt + v] !=
+                                b->counts[((size_t)j * b->npre + q) * nvt + v])
+                            {
+                                return FALSE;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        return shared > 0;
+    }
+    return FALSE;
+}
+
+/* Combine @p b into @p a (same format, same election): McLennan posts a report per city and
+ * ISD besides (or instead of) the county's, Cameron a summary per entity. A contest in both
+ * is kept from the file with more contests, and the other's totals are checked against it.
+ * @p b is freed. Returns FALSE when out of memory. */
+static BOOL combine_into(Parsed *a, Parsed *b)
+{
+    EeResults out;
+    ResBuilder bld;
+    BOOL a_big = a->r.ncontests >= b->r.ncontests;
+    const EeResults *big = a_big ? &a->r : &b->r;
+    const EeResults *small = a_big ? &b->r : &a->r;
+    const Parsed *bigp = a_big ? a : b;
+    uint32_t small_src = a_big ? a->nparts + 1 : 0; /* where the small file's notes go */
+    uint8_t *skip = (uint8_t *)calloc((size_t)small->ncontests + 1, 1);
+    uint8_t *fed = (uint8_t *)calloc((size_t)a->r.nprecincts + b->r.nprecincts + 1, 1);
+    EeResultsIssue *cmp = NULL; /* the checks of contests in both */
+    size_t ncmp = 0, cap_cmp = 0, cap_issues = 0, cap_parts = 0;
+    const wchar_t *bigname;
+    uint32_t c, d, k, j;
+    BOOL ok = FALSE;
+
+    if (skip == NULL || fed == NULL)
+    {
+        goto done;
+    }
+    bigname = wcsrchr(bigp->path, L'\\') != NULL ? wcsrchr(bigp->path, L'\\') + 1 : bigp->path;
+    if (wcsrchr(bigname, L'/') != NULL)
+    {
+        bigname = wcsrchr(bigname, L'/') + 1;
+    }
+    for (c = 0; c < small->ncontests; c++)
+    {
+        const EeResultsContest *sc = &small->contests[c];
+        for (d = 0; d < big->ncontests && !skip[c]; d++)
+        {
+            const EeResultsContest *bc = &big->contests[d];
+            if (!same_contest(small, c, big, d))
+            {
+                continue;
+            }
+            skip[c] = 1;
+            for (k = 0; k < sc->nchoices; k++)
+            {
+                const EeResultsChoice *sch = &small->choices[sc->first_choice + k];
+                for (j = 0; j < bc->nchoices; j++)
+                {
+                    const EeResultsChoice *bch = &big->choices[bc->first_choice + j];
+                    if (EeResults_NamesMatch(sch->name, bch->name) && sch->total != EE_RES_UNKNOWN &&
+                        bch->total != EE_RES_UNKNOWN && sch->total != bch->total)
+                    {
+                        wchar_t msg[700], x[32], y[32];
+                        fmt_count(sch->total, x, ARRAYSIZE(x));
+                        fmt_count(bch->total, y, ARRAYSIZE(y));
+                        StringCchPrintfW(msg, ARRAYSIZE(msg), L"%s \x2014 %s: %s votes here, %s in %s.", sc->title,
+                                         sch->name, x, y, bigname);
+                        if (res_grow((void **)&cmp, &cap_cmp, ncmp + 1, sizeof(EeResultsIssue)) &&
+                            (cmp[ncmp].text = wdup(msg)) != NULL)
+                        {
+                            cmp[ncmp++].source = small_src;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    b_init(&bld, &out);
+    bld.quiet = TRUE; /* each file ran its own checks */
+    res_feed(&bld, big, NULL, fed);
+    res_feed(&bld, small, skip, fed);
+    out.registered_total = a->r.registered_total > b->r.registered_total ? a->r.registered_total : b->r.registered_total;
+    out.ballots_total = a->r.ballots_total > b->r.ballots_total ? a->r.ballots_total : b->r.ballots_total;
+    if (!b_finish(&bld))
+    {
+        b_free(&bld);
+        EeResults_Clear(&out);
+        goto done;
+    }
+    b_free(&bld);
+    adopt_meta(&out, &a->r);
+    adopt_meta(&out, &b->r);
+    /* notes: a's (sources 0..nparts), b's after them, then the checks */
+    for (k = 0; k < a->r.nissues + b->r.nissues + (uint32_t)ncmp; k++)
+    {
+        EeResultsIssue *src = k < a->r.nissues                 ? &a->r.issues[k]
+                              : k < a->r.nissues + b->r.nissues ? &b->r.issues[k - a->r.nissues]
+                                                                : &cmp[k - a->r.nissues - b->r.nissues];
+        if (!res_grow((void **)&out.issues, &cap_issues, (size_t)out.nissues + 1, sizeof(EeResultsIssue)))
+        {
+            EeResults_Clear(&out);
+            goto done;
+        }
+        out.issues[out.nissues].text = src->text;
+        out.issues[out.nissues].source =
+            k >= a->r.nissues && k < a->r.nissues + b->r.nissues ? src->source + a->nparts + 1 : src->source;
+        src->text = NULL;
+        out.nissues++;
+    }
+    /* b becomes a's parts */
+    if (a->nparts == 0)
+    {
+        a->own_contests = a->r.ncontests;
+        a->own_choices = a->r.nchoices;
+        a->own_precincts = a->r.nprecincts;
+    }
+    cap_parts = a->nparts;
+    if (!res_grow((void **)&a->parts, &cap_parts, (size_t)a->nparts + 1 + b->nparts, sizeof(ParsedPart)))
+    {
+        EeResults_Clear(&out);
+        goto done;
+    }
+    a->parts[a->nparts].path = b->path;
+    a->parts[a->nparts].member = b->member;
+    a->parts[a->nparts].ncontests = b->nparts > 0 ? b->own_contests : b->r.ncontests;
+    a->parts[a->nparts].nchoices = b->nparts > 0 ? b->own_choices : b->r.nchoices;
+    a->parts[a->nparts].nprecincts = b->nparts > 0 ? b->own_precincts : b->r.nprecincts;
+    a->nparts++;
+    for (k = 0; k < b->nparts; k++)
+    {
+        a->parts[a->nparts++] = b->parts[k];
+    }
+    free(b->parts);
+    b->parts = NULL;
+    b->nparts = 0;
+    b->path = NULL;
+    b->member = NULL;
+    EeResults_Clear(&a->r);
+    a->r = out;
+    EeResults_Clear(&b->r);
+    ok = TRUE;
+done:
+    for (k = 0; k < ncmp; k++)
+    {
+        free(cmp[k].text);
+    }
+    free(cmp);
+    free(skip);
+    free(fed);
+    return ok;
+}
+
+/* The same letters and digits, ignoring case ("Cameron County,TX" and "Cameron County, TX"). */
+static BOOL alnum_eq(const wchar_t *a, const wchar_t *b)
+{
+    for (;;)
+    {
+        while (*a != L'\0' && !iswalnum(*a))
+        {
+            a++;
+        }
+        while (*b != L'\0' && !iswalnum(*b))
+        {
+            b++;
+        }
+        if (*a == L'\0' || *b == L'\0')
+        {
+            return *a == *b;
+        }
+        if (towlower(*a) != towlower(*b))
+        {
+            return FALSE;
+        }
+        a++;
+        b++;
+    }
+}
+
+/* The primary party of every contest with one (contest.party), or NULL when none has one or
+ * they differ. */
+static const wchar_t *res_one_party(const EeResults *r)
+{
+    const wchar_t *p = NULL;
+    uint32_t c;
+    for (c = 0; c < r->ncontests; c++)
+    {
+        const wchar_t *q = r->contests[c].party;
+        if (q == NULL)
+        {
+            continue;
+        }
+        if (p != NULL && wcscmp(p, q) != 0)
+        {
+            return NULL;
+        }
+        p = q;
+    }
+    return p;
+}
+
+/* Combine files of one election that one county splits by entity (results report PDFs of
+ * the same format, election, date and region with less than half their contests in
+ * common; two snapshots of an election share them all and stay apart). */
+static BOOL combine_split(ParsedList *pl)
+{
+    size_t i, j, w;
+    for (i = 0; i < pl->n; i++)
+    {
+        Parsed *a = &pl->p[i];
+        if (a->path == NULL || (a->format & (EE_RES_FMT_ESS_SUMMARY | EE_RES_FMT_ESS_PRECINCT | EE_RES_FMT_HART_SUMMARY |
+                                             EE_RES_FMT_HART_PRECINCT | EE_RES_FMT_HART_PCT_REPORT)) == 0 ||
+            a->r.election_name == NULL || a->r.election_date == NULL || a->r.region == NULL)
+        {
+            continue;
+        }
+        for (j = i + 1; j < pl->n; j++)
+        {
+            Parsed *b = &pl->p[j];
+            const EeResults *big, *small;
+            uint32_t c, d, common = 0;
+            if (b->path == NULL || b->format != a->format || b->r.election_name == NULL || b->r.election_date == NULL ||
+                b->r.region == NULL || !alnum_eq(a->r.election_name, b->r.election_name) ||
+                !alnum_eq(a->r.election_date, b->r.election_date) || !alnum_eq(a->r.region, b->r.region))
+            {
+                continue;
+            }
+            {
+                /* a primary's two parties stay two elections (Cameron's P26 summaries name no
+                 * party in the election) */
+                const wchar_t *pa = res_one_party(&a->r), *pb = res_one_party(&b->r);
+                if (pa != NULL && pb != NULL && wcscmp(pa, pb) != 0)
+                {
+                    continue;
+                }
+            }
+            big = a->r.ncontests >= b->r.ncontests ? &a->r : &b->r;
+            small = big == &a->r ? &b->r : &a->r;
+            for (c = 0; c < small->ncontests; c++)
+            {
+                for (d = 0; d < big->ncontests; d++)
+                {
+                    if (same_contest(small, c, big, d))
+                    {
+                        common++;
+                        break;
+                    }
+                }
+            }
+            if (common * 2 >= big->ncontests && big->ncontests > 0)
+            {
+                continue;
+            }
+            if (!combine_into(a, b))
+            {
+                return FALSE;
+            }
+        }
+    }
+    for (i = 0, w = 0; i < pl->n; i++)
+    {
+        if (pl->p[i].path != NULL)
+        {
+            pl->p[w++] = pl->p[i];
+        }
+        else
+        {
+            parsed_free(&pl->p[i]);
+        }
+    }
+    pl->n = w;
+    return TRUE;
+}
+
 EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
                                  uint32_t count,
                                  EeResults **out,
@@ -5745,6 +6273,11 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
         }
     }
 
+    if (!combine_split(&pl))
+    {
+        res_set_err(error_message, error_cch, L"Out of memory loading the results.");
+        goto cleanup;
+    }
     /* Group: same contest list, one file per format per group. */
     gfirst = (uint32_t *)malloc((pl.n + 1) * sizeof(uint32_t));
     if (gfirst == NULL)
@@ -5806,10 +6339,7 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
         EeResults_Init(&pl.p[prim].r);
         own_issues = dst->nissues;
         issue_cap = dst->nissues;
-        for (i = 0; i < own_issues; i++)
-        {
-            dst->issues[i].source = 0;
-        }
+        (void)own_issues; /* (their sources: this file 0, its combined parts 1..) */
         dst->sources = NULL;
         dst->nsources = 0;
         dst->formats = 0;
@@ -5845,7 +6375,7 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
                              (size_t)dst->nissues + 1,
                              sizeof(EeResultsIssue)))
                 {
-                    dst->issues[dst->nissues].source = sidx;
+                    dst->issues[dst->nissues].source = sidx + p->r.issues[k].source;
                     dst->issues[dst->nissues].text = p->r.issues[k].text;
                     p->r.issues[k].text = NULL;
                     dst->nissues++;

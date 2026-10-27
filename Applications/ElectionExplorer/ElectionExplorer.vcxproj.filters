@@ -45,6 +45,9 @@
     <ClCompile Include="src\ee_results_pdf.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ee_glyph_ocr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\hart_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -99,6 +102,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ee_results_pdf.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ee_glyph_ocr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\pdf_reader.h">

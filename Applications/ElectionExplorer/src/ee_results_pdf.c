@@ -12,7 +12,10 @@
  *   heading may take two lines, "Election" over "Day"), then 8 pt rows: candidates (a
  *   party code may lead the name), "Write-In Totals" with indented "Write-In: name" and
  *   "Not Assigned" rows, "Total Votes Cast", "Overvotes", "Undervotes", "Contest Totals";
- * - footer: "Report generated with Electionware", the run date and "Page N of M".
+ * - footer: "Report generated with Electionware", the run date and "Page N of M". Some
+ *   counties' reports leave the footer out (Cameron, Grayson, Dallas, Williamson); a
+ *   JasperReports PDF is then taken as Electionware when it shows a "STATISTICS" block
+ *   or a contest's "Vote For" line.
  * Numbers are right-aligned in their columns, so each is given to the column whose right
  * edge (heading centre plus half the column pitch) is nearest its own right edge.
  *
@@ -30,6 +33,7 @@
  */
 
 #include "ee_results_pdf.h"
+#include "ee_glyph_ocr.h"
 #include "pdf_reader.h"
 
 #include <math.h>
@@ -129,6 +133,26 @@ static void rp_norm(wchar_t *s)
     *w = L'\0';
 }
 
+/* Words in cells 2+ spaces apart ("TOTAL  VOTE %  Absentee"): two or more cells and a letter. */
+static BOOL rp_split_cells(const wchar_t *s)
+{
+    BOOL letter = FALSE, gap = FALSE, seen = FALSE, cells = FALSE;
+    for (; *s != L'\0'; s++)
+    {
+        if (rp_ws(s[0]) && rp_ws(s[1]))
+        {
+            gap = gap || seen;
+        }
+        else if (!rp_ws(*s))
+        {
+            cells = cells || gap;
+            seen = TRUE;
+            letter = letter || iswalpha(*s);
+        }
+    }
+    return cells && letter;
+}
+
 static wchar_t *rp_wdup(const wchar_t *s)
 {
     size_t n = wcslen(s) + 1;
@@ -145,42 +169,54 @@ static BOOL rp_starts(const wchar_t *s, const wchar_t *prefix)
     return _wcsnicmp(s, prefix, wcslen(prefix)) == 0;
 }
 
-/* Advance width of @p s at @p size in Helvetica (Electionware's numbers use a standard
- * font that carries no glyph widths). */
+/* Advance width of @p s at @p size in Helvetica (Electionware's numbers and headings use a
+ * standard font that carries no glyph widths). Williamson's headings sit 1 pt apart, so the
+ * widths are Helvetica's own (AFM, 1/1000 em, ' ' through '~'). */
+static float rp_char_width(wchar_t c, float size)
+{
+    static const unsigned short k_helv[95] = {
+        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, /* ' '-'/' */
+        556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, /* '0'-'?' */
+        1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, /* '@'-'O' */
+        667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,  /* 'P'-'_' */
+        333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,  /* '`'-'o' */
+        556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584};      /* 'p'-'~' */
+    return (float)((c >= L' ' && c <= L'~') ? k_helv[c - L' '] : 556u) / 1000.0f * size;
+}
+
+/* Only digits, ",", ".", "%" and spaces in the @p n characters at @p s. */
+static BOOL rp_numeric_chars(const wchar_t *s, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++)
+    {
+        if (!((s[i] >= L'0' && s[i] <= L'9') || s[i] == L',' || s[i] == L'.' || s[i] == L'%' || s[i] == L' '))
+        {
+            return FALSE;
+        }
+    }
+    return n > 0;
+}
+
+static float rp_text_width_n(const wchar_t *s, size_t n, float size)
+{
+    float w = 0.0f;
+    size_t i;
+    for (i = 0; i < n; i++)
+    {
+        w += rp_char_width(s[i], size);
+    }
+    return w;
+}
+
 static float rp_text_width(const wchar_t *s, float size)
 {
     float w = 0.0f;
     for (; *s != L'\0'; s++)
     {
-        wchar_t c = *s;
-        float g;
-        if (c >= L'0' && c <= L'9')
-        {
-            g = 0.556f;
-        }
-        else if (c == L',' || c == L'.' || c == L' ')
-        {
-            g = 0.278f;
-        }
-        else if (c == L'%')
-        {
-            g = 0.889f;
-        }
-        else if (c == L'-')
-        {
-            g = 0.333f;
-        }
-        else if (c >= L'A' && c <= L'Z')
-        {
-            g = 0.667f;
-        }
-        else
-        {
-            g = 0.5f;
-        }
-        w += g;
+        w += rp_char_width(*s, size);
     }
-    return w * size;
+    return w;
 }
 
 /* A number cell: "1,234" (kind 1) or "12.34%" (kind 2). Returns 0 for anything else. */
@@ -279,6 +315,9 @@ typedef struct RpItem
     wchar_t *text; /* in the page's text pool */
     int num;       /* rp_number kind */
     int64_t value;
+    int multi;     /* numbers in a run of several cells ("4,219 59.75% 295"), else 0 */
+    BOOL exact;    /* x1 comes from the font's own widths */
+    BOOL sp_before, sp_after; /* the shown string began / ended with a space */
     int rot; /* text direction (pdf_reader), 90 for Hart's column headings */
 } RpItem;
 
@@ -322,6 +361,8 @@ typedef struct RpCtx
     EeRpdfDoc *d;
     BOOL oom;
     BOOL electionware; /* the footer names Electionware */
+    BOOL jasper;       /* the Creator is JasperReports (Electionware with no footer) */
+    BOOL structure;    /* a "STATISTICS" block or a contest's "Vote For" line was read */
     BOOL any_text;
     uint32_t pre; /* current precinct, UINT32_MAX before the first */
     int section;
@@ -343,6 +384,8 @@ typedef struct RpCtx
     uint64_t writein_rows;
     uint32_t dropped_numbers;
     wchar_t dropped_first[300]; /* where the first one was */
+    uint32_t place_pages;       /* pages of results by polling place, not read */
+    wchar_t place_first[128];
     uint32_t nbvt; /* entries in d->ballots_vt_total */
     uint32_t *seq; /* contests in the order each precinct shows them (UINT32_MAX = next precinct) */
     size_t nseq, cap_seq;
@@ -356,6 +399,17 @@ typedef struct RpCtx
     wchar_t hpending[512]; /* cumulative: a title waiting for its table heading */
     BOOL hart_title_line; /* the previous line was (part of) a contest title */
     float hart_title_y;
+    /* Hart before Verity (hl_page) */
+    BOOL hart_old;       /* the first page has "Precincts Reporting" and a voters line */
+    BOOL hl_table;       /* a cumulative or precinct report table was read */
+    BOOL hl_canvass;     /* a canvass grid was read */
+    BOOL hl_head_done;   /* the page heading was read (from the first report page) */
+    wchar_t hl_party[8]; /* a primary's party code from the report title ("REP"), else "" */
+    wchar_t hl_title[512]; /* a title waiting for its first row */
+    float hl_cols[16];   /* table: the heading centres after "Candidate" */
+    int hl_colvt[16];    /* their vote types (rp_vt), or -1 for Total */
+    int hl_ncols;
+    uint32_t hl_bad_rows; /* canvass rows whose numbers did not match the columns */
 } RpCtx;
 
 static void rp_note(RpCtx *cx, const wchar_t *text)
@@ -578,14 +632,17 @@ static int __cdecl rp_ptr_x_cmp(const void *pa, const void *pb)
     return a->x < b->x ? -1 : (a->x > b->x ? 1 : 0);
 }
 
-/* Join the texts of @p n items with single spaces into @p out. */
+/* Join the texts of @p n items with single spaces into @p out; an item that starts where
+ * the one before it ends goes on the same word (Smith: "City of Linda" + "le" by the font's
+ * widths, "H" + "ershal" by Helvetica's, trusted for a letter or two). */
 static void rp_join(RpItem *const *it, size_t n, wchar_t *out, size_t cch)
 {
     size_t i;
     out[0] = L'\0';
     for (i = 0; i < n; i++)
     {
-        if (i > 0)
+        if (i > 0 && !((it[i - 1]->exact || wcslen(it[i - 1]->text) <= 2) && !it[i - 1]->sp_after && !it[i]->sp_before &&
+                       fabsf(it[i]->x - it[i - 1]->x1) < 0.5f && fabsf(it[i]->y - it[i - 1]->y) < 1.0f))
         {
             StringCchCatW(out, cch, L" ");
         }
@@ -675,7 +732,9 @@ static void rp_build_cols(RpCtx *cx, float *edges, size_t nedges)
                  * "ective"): the line above fills the heading's width and this one goes on in
                  * lower case. */
                 const RpPiece *prev = &p[c->pieces[a - 1]];
-                BOOL mid_word = prev->x1 - prev->x0 >= 0.85f * widest && iswlower(q->text[0]);
+                size_t plen = wcslen(prev->text);
+                BOOL mid_word = (prev->x1 - prev->x0 >= 0.85f * widest && iswlower(q->text[0])) ||
+                                (plen > 1 && prev->text[plen - 1] == L'-' && iswalpha(prev->text[plen - 2])); /* "Day In-" / "Person" */
                 if (!mid_word)
                 {
                     StringCchCatW(label, ARRAYSIZE(label), L" ");
@@ -799,8 +858,9 @@ static int rp_nearest_col(const RpCtx *cx, float x1, float *dist)
     return best;
 }
 
-/* Split "263 1,361" into its numbers (all counts). Returns how many, 0 if it is not that. */
-static int rp_multi_number(const wchar_t *s, wchar_t tok[][32], int64_t *vals, int cap)
+/* Split "263 1,361" or "4,219 59.75% 295" into its numbers; @p kinds receives each one's
+ * rp_number kind (1 count, 2 percentage). Returns how many, 0 if it is not that. */
+static int rp_multi_number(const wchar_t *s, wchar_t tok[][32], int64_t *vals, int *kinds, int cap)
 {
     int n = 0;
     while (*s != L'\0')
@@ -823,7 +883,8 @@ static int rp_multi_number(const wchar_t *s, wchar_t tok[][32], int64_t *vals, i
             return 0;
         }
         wcsncpy_s(tok[n], 32, s, len);
-        if (rp_number(tok[n], &vals[n]) != 1)
+        kinds[n] = rp_number(tok[n], &vals[n]);
+        if (kinds[n] == 0)
         {
             return 0;
         }
@@ -867,12 +928,18 @@ static void rp_row(RpCtx *cx, RpItem *const *it, size_t n)
              * number keeps its own position, each next one goes to the next column */
             wchar_t tok[8][32];
             int64_t tv[8];
-            int nt = rp_multi_number(t->text, tok, tv, 8), q;
+            int tk[8];
+            int nt = rp_multi_number(t->text, tok, tv, tk, 8), q;
             if (nt > 0)
             {
                 float bd;
                 int col = rp_nearest_col(cx, t->x + rp_text_width(tok[0], t->size), &bd);
-                if (col >= 0 && bd <= cx->pitch * 0.6f && col + nt <= cx->ncols)
+                BOOL fits = col >= 0 && bd <= cx->pitch * 0.6f && col + nt <= cx->ncols;
+                for (q = 0; fits && q < nt; q++)
+                {
+                    fits = tk[q] != 2 || cx->cols[col + q].kind == RC_PCT; /* a % under VOTE % */
+                }
+                if (fits)
                 {
                     for (q = 0; q < nt; q++)
                     {
@@ -889,6 +956,10 @@ static void rp_row(RpCtx *cx, RpItem *const *it, size_t n)
         }
         if (t->num == 0 || t->x < left)
         {
+            if (t->num != 0 && nlab > 0 && fabsf(t->size - lab[0]->size) > 0.5f)
+            {
+                continue; /* Smith 2025: a stray 9 pt "183" beside an 8 pt "Total Votes Cast" */
+            }
             if (nlab < ARRAYSIZE(lab))
             {
                 lab[nlab++] = it[i];
@@ -1113,7 +1184,8 @@ enum
     RL_STATS,    /* "STATISTICS" */
     RL_HEAD,     /* the column heading line with TOTAL */
     RL_HEADPART, /* another line of a column heading (owner: its RL_HEAD line) */
-    RL_CONT      /* a row's label going on (owner: its RL_DATA line) */
+    RL_CONT,     /* a row's label going on (owner: its RL_DATA line) */
+    RL_EMPTY     /* nothing left (stray heading words dropped) */
 };
 
 typedef struct RpLine
@@ -1176,7 +1248,7 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
             nraw++;
         }
         line_of[i] = nraw - 1;
-        if (items[i].num == 0)
+        if (items[i].num == 0 && items[i].multi == 0)
         {
             lab[nraw - 1] = 1;
             allnum[nraw - 1] = 0;
@@ -1243,7 +1315,7 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
             {
                 ln->maxx = t->x1;
             }
-            if (t->num != 0)
+            if (t->num != 0 || t->multi != 0)
             {
                 ln->num = TRUE;
                 if (t->x < ln->num_x)
@@ -1279,6 +1351,46 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
             ln->kind = ln->num ? RL_DATA : RL_TEXT;
         }
     }
+    /* Smith 2025 has stray 9 pt "TOTAL" and "VOTE %" beside a contest's title, not shown on
+     * the page; column headings come after "Vote For", so heading words in the two lines
+     * above it are dropped */
+    for (k = 1; k < nl; k++)
+    {
+        size_t up;
+        if (L[k].kind != RL_VOTEFOR)
+        {
+            continue;
+        }
+        for (up = k; up > 0 && up + 2 > k && L[up - 1].y - L[k].y <= 20.0f; up--)
+        {
+            RpLine *ln = &L[up - 1];
+            size_t m = 0;
+            if (ln->kind != RL_HEAD && ln->kind != RL_TEXT)
+            {
+                continue;
+            }
+            for (i = 0; i < ln->n; i++)
+            {
+                RpItem *t = pool[ln->first + i];
+                if (_wcsicmp(t->text, L"TOTAL") != 0 && _wcsicmp(t->text, L"VOTE %") != 0)
+                {
+                    pool[ln->first + m++] = t;
+                }
+            }
+            if (m != ln->n)
+            {
+                ln->n = m;
+                ln->kind = m == 0 ? RL_EMPTY : RL_TEXT;
+                ln->minx = 1e9f;
+                ln->maxx = -1e9f;
+                for (i = 0; i < m; i++)
+                {
+                    ln->minx = fminf(ln->minx, pool[ln->first + i]->x);
+                    ln->maxx = fmaxf(ln->maxx, pool[ln->first + i]->x1);
+                }
+            }
+        }
+    }
     /* the other lines of each column heading */
     for (k = 0; k < nl; k++)
     {
@@ -1289,10 +1401,13 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
             continue;
         }
         tx = L[k].total_x - 10.0f;
-        if (k > 0 && L[k - 1].kind == RL_TEXT && L[k - 1].y - L[k].y <= 8.0f && L[k - 1].minx >= tx)
+        /* "Election" above "TOTAL ... Day"; Williamson stacks two lines above ("Election" over
+         * "Early Voting ... Day In-"), Bowie sets "Late" (over "Mail/Correcti") 11.7 pt above.
+         * A title starts left of TOTAL, so it is never taken. */
+        for (j = k; j > 0 && L[j - 1].kind == RL_TEXT && L[j - 1].y - L[j].y <= 13.0f && L[j - 1].minx >= tx; j--)
         {
-            L[k - 1].kind = RL_HEADPART; /* "Election" above "TOTAL ... Day" */
-            L[k - 1].owner = (int)k;
+            L[j - 1].kind = RL_HEADPART;
+            L[j - 1].owner = (int)k;
         }
         last = k;
         for (j = k + 1; j < nl && L[k].y - L[j].y <= 45.0f; j++)
@@ -1355,6 +1470,7 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
                 }
                 break;
             case RL_VOTEFOR:
+                cx->structure = TRUE;
                 if (cx->ptitle[0] != L'\0')
                 {
                     rp_start_contest(cx, cx->ptitle, (uint32_t)_wtoi(text + 9));
@@ -1367,6 +1483,7 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
                 cols_fresh = FALSE;
                 break;
             case RL_STATS:
+                cx->structure = TRUE;
                 cx->section = RS_STATS;
                 cx->ptitle[0] = L'\0';
                 /* a new precinct section: a precinct name can come back in a later section
@@ -1395,7 +1512,12 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
                         for (i = 0; i < L[j].n && cx->npieces < RP_MAX_PIECES; i++)
                         {
                             const RpItem *t = pool[L[j].first + i];
-                            RpPiece *pc = &cx->pieces[cx->npieces++];
+                            RpPiece *pc;
+                            if (t->x < ln->total_x - 10.0f)
+                            {
+                                continue; /* left of TOTAL: not a heading (Smith's stray "Statistics") */
+                            }
+                            pc = &cx->pieces[cx->npieces++];
                             pc->x0 = t->x;
                             pc->x1 = t->x1;
                             pc->y = t->y;
@@ -1466,6 +1588,41 @@ out:
     free(L);
 }
 
+/* A report status ("Final Unofficial", "OFFICIAL RESULTS"): only status words. */
+static BOOL rp_is_status(const wchar_t *s)
+{
+    static const wchar_t *const k[] = {L"Final", L"Official", L"Unofficial", L"Results", L"Preliminary", L"Semi-Official"};
+    BOOL any = FALSE;
+    while (*s != L'\0')
+    {
+        size_t len = 0, i;
+        BOOL known = FALSE;
+        while (*s == L' ')
+        {
+            s++;
+        }
+        while (s[len] != L'\0' && s[len] != L' ')
+        {
+            len++;
+        }
+        if (len == 0)
+        {
+            break;
+        }
+        for (i = 0; i < ARRAYSIZE(k) && !known; i++)
+        {
+            known = wcslen(k[i]) == len && _wcsnicmp(s, k[i], len) == 0;
+        }
+        if (!known)
+        {
+            return FALSE;
+        }
+        any = TRUE;
+        s += len;
+    }
+    return any;
+}
+
 /* The page heading's election name, date and county (first page). */
 static void rp_heading(RpCtx *cx, RpItem *const *it, size_t n)
 {
@@ -1483,15 +1640,19 @@ static void rp_heading(RpCtx *cx, RpItem *const *it, size_t n)
                 d->election_date = rp_wdup(s);
             }
         }
-        else if (wcsstr(s, L"County") != NULL)
+        else if (wcsstr(s, L"County") != NULL && wcsstr(s, L"Election") == NULL && wcsstr(s, L" Joint ") == NULL &&
+                 wcsstr(s, L" General") == NULL && wcsstr(s, L" Special") == NULL && wcsstr(s, L" Primary") == NULL &&
+                 wcsstr(s, L" Runoff") == NULL)
         {
+            /* (Williamson's election line "May Primary Run-Off Elections of Williamson County,
+             * TX" names the county too, and Travis's cut-off "Travis County Joint General and
+             * Special") */
             if (d->region == NULL)
             {
                 d->region = rp_wdup(s);
             }
         }
-        else if (_wcsicmp(s, L"OFFICIAL RESULTS") == 0 || _wcsicmp(s, L"UNOFFICIAL RESULTS") == 0 ||
-                 wcsstr(s, L"Report") != NULL || wcsstr(s, L"Canvass") != NULL ||
+        else if (rp_is_status(s) || wcsstr(s, L"Report") != NULL || wcsstr(s, L"Canvass") != NULL ||
                  (len >= 7 && _wcsicmp(s + len - 7, L"Results") == 0))
         {
             continue; /* the report's own title or status */
@@ -1520,39 +1681,155 @@ static void rp_heading(RpCtx *cx, RpItem *const *it, size_t n)
     }
 }
 
-/* The page's text runs as items (rotated runs only with @p keep_rot), sorted top down. */
+/* The page's text runs as items (rotated runs only with @p keep_rot), sorted top down.
+ * pdf_reader does not move the text position after a string is shown, so strings shown one
+ * after another come at the same point (Cameron's "104" "," "443", numbers edited in Acrobat;
+ * Smith's "TOTAL " " VOTE % " and "R." " Wade Washmon"): such runs are joined first, spaces
+ * kept, and then read as one string. */
 static size_t rp_items(RpCtx *cx, const EePdfPageText *pt, RpItem *items, wchar_t *pool, BOOL keep_rot)
 {
     size_t nitems = 0, i, poolpos = 0;
+    size_t cap = pt->text_len + pt->nruns; /* pool capacity before the final NUL */
+    wchar_t tok[8][32];
+    int64_t tv[8];
+    int tk[8];
     for (i = 0; i < pt->nruns; i++)
     {
         const EePdfTextRun *r = &pt->runs[i];
-        int wn = 0;
+        size_t len = 0, last_off = 0;
+        BOOL has_width = r->has_width, sp_before, sp_after;
+        float width = r->width, endx;
         RpItem *t;
+        float w;
+        int wn;
         if ((r->rot != 0 && !(keep_rot && r->rot == 90)) || r->text_len == 0)
         {
             continue;
         }
         wn = MultiByteToWideChar(CP_UTF8, 0, pt->text + r->text_off, (int)r->text_len, pool + poolpos,
-                                 (int)(pt->text_len + pt->nruns - poolpos));
+                                 (int)(cap - poolpos));
         if (wn <= 0)
         {
             continue;
         }
-        pool[poolpos + (size_t)wn] = L'\0';
+        len = (size_t)wn;
+        endx = r->x + (r->has_width ? r->width : rp_text_width_n(pool + poolpos, len, r->font_size));
+        /* the runs shown after it from the same point (not a repeat of the same text), or
+         * starting where it ends in the same size ("104" "," "443" placed one after another) */
+        while (i + 1 < pt->nruns && !cx->hart) /* (Hart reports are read as in step 8) */
+        {
+            const EePdfTextRun *n = &pt->runs[i + 1];
+            BOOL same = fabsf(n->x - r->x) < 0.05f;
+            /* a glyph outline's width is measured from its drawing: near enough */
+            float touch = r->type3 && n->type3 ? 0.3f * r->font_size : 0.5f;
+            int nn;
+            if (n->text_len == 0 || n->rot != r->rot || fabsf(n->y - r->y) >= 0.05f ||
+                !(same || (fabsf(n->x - endx) < touch && fabsf(n->font_size - r->font_size) < 0.5f)))
+            {
+                break;
+            }
+            nn = MultiByteToWideChar(CP_UTF8, 0, pt->text + n->text_off, (int)n->text_len, pool + poolpos + len,
+                                     (int)(cap - poolpos - len));
+            if (nn <= 0)
+            {
+                break;
+            }
+            /* touching joins the pieces of a number, or pieces with a space between them
+             * (Cameron's "2" " of" " 2"); Bowie's "Early" and "Voting" touch by their widths
+             * (the space is in "Early"'s) and stay two words */
+            if (!same && !(rp_numeric_chars(pool + poolpos, len) && rp_numeric_chars(pool + poolpos + len, (size_t)nn)) &&
+                !rp_ws(pool[poolpos + len - 1]) && !rp_ws(pool[poolpos + len]) &&
+                !(r->type3 && n->type3)) /* (glyph outlines are shown a letter or two at a time) */
+            {
+                break;
+            }
+            if (same && (size_t)nn == len - last_off &&
+                memcmp(pool + poolpos + last_off, pool + poolpos + len, (size_t)nn * sizeof(wchar_t)) == 0)
+            {
+                break; /* the same text again: drawn twice, its own item as before */
+            }
+            endx = n->x + (n->has_width ? n->width : rp_text_width_n(pool + poolpos + len, (size_t)nn, n->font_size));
+            last_off = len;
+            len += (size_t)nn;
+            has_width = has_width && n->has_width;
+            width = endx - r->x;
+            i++;
+        }
+        pool[poolpos + len] = L'\0';
+        if (!cx->hart && !cx->hart_old && r->rot == 0 && r->x >= 100.0f && rp_split_cells(pool + poolpos))
+        {
+            /* Smith prints a contest's column headings as one string ("TOTAL  VOTE %  Absentee
+             * Early  Election", then "Voting  Day"): cells are 2+ spaces apart, each is an item
+             * at its place measured in Helvetica (rows of numbers stay one item, see multi) */
+            const wchar_t *raw = pool + poolpos;
+            size_t rd = 0, wr = poolpos;
+            float xoff = 0.0f;
+            while (raw[rd] != L'\0' && rp_ws(raw[rd]))
+            {
+                xoff += rp_char_width(L' ', r->font_size);
+                rd++;
+            }
+            while (raw[rd] != L'\0')
+            {
+                size_t s0 = rd, e, slen;
+                float segw = 0.0f, gap = 0.0f;
+                while (raw[rd] != L'\0' && !(rp_ws(raw[rd]) && rp_ws(raw[rd + 1])))
+                {
+                    segw += rp_char_width(raw[rd], r->font_size);
+                    rd++;
+                }
+                e = rd;
+                while (raw[rd] != L'\0' && rp_ws(raw[rd]))
+                {
+                    gap += rp_char_width(L' ', r->font_size);
+                    rd++;
+                }
+                /* the copy and its NUL end at or before e, behind the reader (now past the gap) */
+                memmove(pool + wr, raw + s0, (e - s0) * sizeof(wchar_t));
+                pool[wr + (e - s0)] = L'\0';
+                rp_norm(pool + wr);
+                slen = wcslen(pool + wr);
+                if (slen > 0)
+                {
+                    t = &items[nitems++];
+                    t->text = pool + wr;
+                    t->x = r->x + xoff;
+                    t->y = r->y;
+                    t->size = r->font_size;
+                    t->x1 = t->x + segw;
+                    t->exact = FALSE;
+                    t->sp_before = t->sp_after = TRUE;
+                    t->num = rp_number(t->text, &t->value);
+                    t->multi = 0;
+                    t->rot = r->rot;
+                    wr += slen + 1;
+                }
+                xoff += segw + gap;
+            }
+            poolpos = wr;
+            cx->any_text = TRUE;
+            continue;
+        }
+        sp_before = rp_ws(pool[poolpos]);
+        sp_after = len > 0 && rp_ws(pool[poolpos + len - 1]);
         rp_norm(pool + poolpos);
         if (pool[poolpos] == L'\0')
         {
             continue;
         }
+        w = has_width ? width : rp_text_width(pool + poolpos, r->font_size);
         t = &items[nitems++];
+        t->sp_before = sp_before;
+        t->sp_after = sp_after;
         t->text = pool + poolpos;
         poolpos += wcslen(pool + poolpos) + 1;
         t->x = r->x;
         t->y = r->y;
         t->size = r->font_size;
-        t->x1 = r->x + (r->has_width ? r->width : rp_text_width(t->text, r->font_size));
+        t->x1 = r->x + w;
+        t->exact = has_width;
         t->num = rp_number(t->text, &t->value);
+        t->multi = t->num == 0 ? rp_multi_number(t->text, tok, tv, tk, 8) : 0;
         t->rot = r->rot;
         cx->any_text = TRUE;
     }
@@ -1571,8 +1848,9 @@ static void rp_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
     {
         return;
     }
-    items = (RpItem *)malloc(pt->nruns * sizeof(RpItem));
-    ptrs = (RpItem **)malloc(pt->nruns * sizeof(RpItem *));
+    /* a run split into cells (rp_items) gives up to one item per 3 characters */
+    items = (RpItem *)malloc((pt->nruns + pt->text_len / 3 + 1) * sizeof(RpItem));
+    ptrs = (RpItem **)malloc((pt->nruns + pt->text_len / 3 + 1) * sizeof(RpItem *));
     pool = (wchar_t *)malloc((pt->text_len + pt->nruns + 1) * sizeof(wchar_t));
     if (items == NULL || ptrs == NULL || pool == NULL)
     {
@@ -1586,6 +1864,7 @@ static void rp_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
         size_t nhead = 0, npre = 0, j;
         float ly[24];
         int nl = 0, l;
+        BOOL skip_body = FALSE; /* a page of results by polling place */
         float hsize = 0.0f, top_y = 0.0f;
         float pre_lo = 1e9f, pre_hi = -1e9f; /* the precinct line's y range */
         float head_lo = 1e9f;               /* the heading's lowest line */
@@ -1706,12 +1985,34 @@ static void rp_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
                 ptrs[npre++] = &items[i];
             }
         }
-        if (npre > 0)
         {
-            wchar_t name[512];
-            qsort(ptrs, npre, sizeof(RpItem *), rp_ptr_x_cmp);
-            rp_join(ptrs, npre, name, ARRAYSIZE(name));
-            if (cx->pre == UINT32_MAX || wcscmp(cx->d->precincts[cx->pre].name, name) != 0)
+            wchar_t name[512] = L"";
+            if (npre > 0)
+            {
+                qsort(ptrs, npre, sizeof(RpItem *), rp_ptr_x_cmp);
+                rp_join(ptrs, npre, name, ARRAYSIZE(name));
+            }
+            else
+            {
+                /* Williamson 2020-21 print results by polling place first, headed "Precinct 119 -
+                 * Results" at the right with the county's registered voters (its vote centres
+                 * take any precinct's voters), then the precinct pages: not read */
+                for (i = 0; i < nitems; i++)
+                {
+                    size_t len = wcslen(items[i].text);
+                    if (items[i].y >= RP_FOOTER_Y && items[i].y >= head_lo && fabsf(items[i].size - hsize) < 0.6f &&
+                        items[i].x > 250.0f && len > 10 && _wcsicmp(items[i].text + len - 10, L" - Results") == 0)
+                    {
+                        if (cx->place_pages++ == 0)
+                        {
+                            StringCchCopyW(cx->place_first, ARRAYSIZE(cx->place_first), items[i].text);
+                        }
+                        skip_body = TRUE;
+                        break;
+                    }
+                }
+            }
+            if (name[0] != L'\0' && (cx->pre == UINT32_MAX || wcscmp(cx->d->precincts[cx->pre].name, name) != 0))
             {
                 cx->pre = rp_precinct(cx, name);
                 cx->nocc = 0;
@@ -1728,6 +2029,7 @@ static void rp_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
             }
         }
         /* the body: what is left above the footer */
+        if (!skip_body)
         {
             size_t nb = 0;
             for (i = 0; i < nitems; i++)
@@ -2453,6 +2755,994 @@ done:
     free(pool);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Hart reports before Verity (McLennan, Montgomery, Harris 2020-22)          */
+/* -------------------------------------------------------------------------- */
+
+/* Landscape pages with no Producer or Creator. Every page starts with the report title
+ * ("<entity> Cumulative Report  -  Official", "Canvass Report  -  Total Voters  -
+ * Official"; counties edit it), "<County>  -  <election>  -  <date>", "Page N of M", the run
+ * date and "Total Number of Voters : 98,898 of 149,737 = 66.05%" beside "Precincts
+ * Reporting". Then:
+ * - cumulative and precinct reports: a "Party  Candidate  Absentee  Early  Election  Total"
+ *   heading, contest titles ("..., Vote For 1"), and rows with a count and a percentage under
+ *   each heading; the precinct report repeats the contests under "Precinct 075  (Ballots
+ *   Cast: 17)". Baselines wander by up to 2 pt within a row;
+ * - canvass: per contest a precinct grid, the ballots cast by vote type, total, registered
+ *   voters and turnout, then one column per choice with its heading turned 90 degrees and
+ *   wrapped (the party on the first line), and a "Totals" column. Choices that do not fit go
+ *   on to a following page under the same title ("Continued"). */
+
+/* A page looks like one: a voters line and "Precincts Reporting" or a report title (Harris's
+ * 2020 reports, retyped in Word, have no "Precincts Reporting"). */
+static BOOL hl_detect(const EePdfPageText *pt)
+{
+    static const char *const k_need[] = {"Number of Voters", "Party Voters", "Precincts Reporting",
+                                         "Cumulative Report", "Precinct Report", "Canvass Report"};
+    BOOL found[6] = {FALSE, FALSE, FALSE, FALSE, FALSE, FALSE};
+    size_t i, k;
+    for (k = 0; k < 6; k++)
+    {
+        size_t m = strlen(k_need[k]);
+        for (i = 0; i + m <= pt->text_len && !found[k]; i++)
+        {
+            found[k] = memcmp(pt->text + i, k_need[k], m) == 0;
+        }
+    }
+    return (found[0] || found[1]) && (found[2] || found[3] || found[4] || found[5]);
+}
+
+/* The vote type a heading names ("Early" is "Early Voting", "Election" is "Election Day"). */
+static uint32_t hl_vt(RpCtx *cx, const wchar_t *word)
+{
+    if (_wcsicmp(word, L"Early") == 0)
+    {
+        return rp_vt(cx, L"Early Voting");
+    }
+    if (_wcsicmp(word, L"Election") == 0)
+    {
+        return rp_vt(cx, L"Election Day");
+    }
+    return rp_vt(cx, word);
+}
+
+/* "A of B" after the colon of a voters line: ballots cast of registered voters. A line drawn
+ * in two strings ("... : 273,098 of " and "372,882 = 73.24%") gives B from @p rest. */
+static void hl_voters(RpCtx *cx, const wchar_t *s, const wchar_t *rest)
+{
+    const wchar_t *p = wcschr(s, L':');
+    wchar_t num[32];
+    size_t k = 0;
+    int64_t a, b;
+    if (p == NULL)
+    {
+        return;
+    }
+    for (p++; *p == L' '; p++)
+    {
+    }
+    while ((iswdigit(*p) || *p == L',') && k + 1 < ARRAYSIZE(num))
+    {
+        num[k++] = *p++;
+    }
+    num[k] = L'\0';
+    if (rp_number(num, &a) != 1)
+    {
+        return;
+    }
+    cx->d->ballots_total = a;
+    p = wcsstr(p, L" of ");
+    if (p != NULL)
+    {
+        p += 4;
+    }
+    else if (rest != NULL)
+    {
+        p = rest;
+    }
+    else
+    {
+        return;
+    }
+    for (k = 0; (iswdigit(*p) || *p == L',') && k + 1 < ARRAYSIZE(num); p++)
+    {
+        num[k++] = *p;
+    }
+    num[k] = L'\0';
+    if (rp_number(num, &b) == 1)
+    {
+        cx->d->registered_total = b;
+    }
+}
+
+/* The first page's heading: report title (a primary's party), "<County> - <election> -
+ * <date>", the run date and the voters line. */
+static void hl_heading(RpCtx *cx, RpItem *items, size_t n)
+{
+    EeRpdfDoc *d = cx->d;
+    wchar_t line[2][512] = {L"", L""};
+    float ly[2] = {0.0f, 0.0f};
+    int nl = 0, l;
+    size_t i;
+    BOOL district = FALSE;
+    for (i = 0; i < n && nl <= 2; i++)
+    {
+        if (items[i].rot != 0 || items[i].size < 10.9f)
+        {
+            continue;
+        }
+        if (nl == 0 || items[i].y < ly[nl - 1] - 4.0f)
+        {
+            if (nl == 2)
+            {
+                break;
+            }
+            ly[nl++] = items[i].y;
+        }
+        else if (line[nl - 1][0] != L'\0')
+        {
+            StringCchCatW(line[nl - 1], ARRAYSIZE(line[0]), L" ");
+        }
+        StringCchCatW(line[nl - 1], ARRAYSIZE(line[0]), items[i].text);
+    }
+    for (l = 0; l < nl; l++)
+    {
+        rp_norm(line[l]);
+    }
+    if (nl > 0)
+    {
+        /* "Democratic Party Canvass Report", "Democratic Primary Runoff Canvass Report" */
+        if (rp_starts(line[0], L"Democratic "))
+        {
+            StringCchCopyW(cx->hl_party, ARRAYSIZE(cx->hl_party), L"DEM");
+        }
+        else if (rp_starts(line[0], L"Republican "))
+        {
+            StringCchCopyW(cx->hl_party, ARRAYSIZE(cx->hl_party), L"REP");
+        }
+    }
+    if (nl > 1)
+    {
+        /* "McLennan County  -  JOINT GENERAL ELECTION  -  November 03, 2020" (the dash may come
+         * out as an unmapped character) */
+        wchar_t *part[4] = {NULL, NULL, NULL, NULL}, *p = line[1];
+        int np = 0, k;
+        BOOL dash = FALSE;
+        for (; *p != L'\0'; p++)
+        {
+            if (*p == 0x2014 || *p == 0xFFFD || *p == 0x2013)
+            {
+                *p = L'|';
+                dash = TRUE;
+            }
+        }
+        for (p = line[1]; !dash && *p != L'\0'; p++)
+        {
+            if (p[0] == L' ' && p[1] == L'-' && p[2] == L' ')
+            {
+                p[1] = L'|'; /* plain " - " (McLennan's Crawford ISD reports) */
+            }
+        }
+        part[np++] = line[1];
+        for (p = line[1]; *p != L'\0' && np < 4; p++)
+        {
+            if (*p == L'|')
+            {
+                *p = L'\0';
+                part[np++] = p + 1;
+            }
+        }
+        for (k = 0; k < np; k++)
+        {
+            rp_norm(part[k]);
+        }
+        if (np >= 1 && part[0][0] != L'\0' && d->region == NULL)
+        {
+            d->region = rp_wdup(part[0]);
+        }
+        if (np >= 2 && part[1][0] != L'\0' && d->election_name == NULL)
+        {
+            wchar_t name[512];
+            StringCchPrintfW(name, ARRAYSIZE(name), L"%s%s%s%s", part[1], cx->hl_party[0] ? L" (" : L"",
+                             cx->hl_party[0] ? (cx->hl_party[0] == L'D' ? L"Democratic Party" : L"Republican Party")
+                                             : L"",
+                             cx->hl_party[0] ? L")" : L"");
+            d->election_name = rp_wdup(name);
+        }
+        if (np >= 3 && part[2][0] != L'\0' && d->election_date == NULL)
+        {
+            d->election_date = rp_wdup(part[2]);
+        }
+    }
+    /* an entity's report (McLennan's per city and ISD) also gives "Number of District Voters":
+     * its precincts are the district's, and the county's totals come from the county's report */
+    for (i = 0; i < n; i++)
+    {
+        if (items[i].rot == 0 && wcsstr(items[i].text, L"District Voters") != NULL)
+        {
+            district = TRUE;
+        }
+    }
+    /* the run date and the voters line, each read as a joined line (Harris draws "11" and
+     * "/16/2020 08:18 AM", "Total Number of Voters" and ": 1,656,686 of 2,431,457 = 68.14%") */
+    for (i = 0; i < n; i++)
+    {
+        RpItem *row[32];
+        size_t nr = 0, j;
+        wchar_t s[512];
+        const wchar_t *p;
+        if (items[i].rot != 0 || (i > 0 && items[i - 1].rot == 0 && fabsf(items[i - 1].y - items[i].y) < 1.0f))
+        {
+            continue; /* not the first item of its line */
+        }
+        for (j = i; j < n && fabsf(items[j].y - items[i].y) < 1.0f && nr < 32; j++)
+        {
+            if (items[j].rot == 0)
+            {
+                row[nr++] = &items[j];
+            }
+        }
+        qsort(row, nr, sizeof(RpItem *), rp_ptr_x_cmp);
+        rp_join(row, nr, s, ARRAYSIZE(s));
+        for (p = s; d->timestamp == NULL && *p != L'\0'; p++)
+        {
+            /* "11/10/2020 04:59 PM" */
+            if (iswdigit(p[0]) && iswdigit(p[1]) && p[2] == L'/' && iswdigit(p[3]) && p[5] == L'/' && wcslen(p) >= 19 &&
+                p[10] == L' ' && p[13] == L':' && p[16] == L' ' && (p[17] == L'A' || p[17] == L'P'))
+            {
+                wchar_t ts[20];
+                StringCchCopyNW(ts, ARRAYSIZE(ts), p, 19);
+                d->timestamp = rp_wdup(ts);
+            }
+        }
+        /* (a primary party's report counts that party's voters: "Total Democratic Party Voters";
+         * McLennan's 2022 "Total Number of Voters" there is both parties') */
+        if (!district && d->ballots_total == EE_RPDF_UNKNOWN && (p = wcsstr(s, L"Voters")) != NULL &&
+            wcschr(p, L':') != NULL && wcsstr(s, L"District") == NULL &&
+            (cx->hl_party[0] == L'\0' || wcsstr(s, L"Party Voters") != NULL))
+        {
+            hl_voters(cx, p, NULL);
+        }
+    }
+}
+
+/* Spacing as the cumulative report prints it; Harris's Word copies of the canvass split words
+ * into pieces with spaces between: "14 th", "Assessor -Collector", "( Four Year Term)",
+ * "Appeals , Place 3". A " - " with spaces on both sides stays. */
+static void hl_tidy(wchar_t *t)
+{
+    size_t r, w = 0;
+    BOOL inq = FALSE, opened = FALSE; /* inside a quote; the last thing written opened one */
+    for (r = 0; t[r] != L'\0'; r++)
+    {
+        wchar_t c = t[r];
+        BOOL quote = c == L'"' || (c == L'\'' && t[r + 1] == L'\'');
+        if (quote)
+        {
+            /* a quote mark ('"' or "''"): no space just inside it ("Tamika " Tami " Craft",
+             * "''STORMCHASER '' NELSON") */
+            if (inq && w > 0 && t[w - 1] == L' ')
+            {
+                w--;
+            }
+            t[w++] = c;
+            if (c == L'\'')
+            {
+                t[w++] = t[++r];
+            }
+            inq = !inq;
+            opened = inq;
+            continue;
+        }
+        if (c == L' ' && opened)
+        {
+            continue;
+        }
+        opened = FALSE;
+        if (c == L' ')
+        {
+            if (t[r + 1] == L',' || t[r + 1] == L')' || (w > 0 && t[w - 1] == L'('))
+            {
+                continue;
+            }
+            if (t[r + 1] == L'-' && t[r + 2] != L' ' && t[r + 2] != L'\0')
+            {
+                continue; /* " -Collector" */
+            }
+            if (w > 0 && t[w - 1] == L'-' && w > 1 && t[w - 2] != L' ')
+            {
+                continue; /* "Rivas- Molloy" */
+            }
+            if (w > 0 && iswdigit(t[w - 1]) &&
+                (_wcsnicmp(t + r + 1, L"st", 2) == 0 || _wcsnicmp(t + r + 1, L"nd", 2) == 0 ||
+                 _wcsnicmp(t + r + 1, L"rd", 2) == 0 || _wcsnicmp(t + r + 1, L"th", 2) == 0) &&
+                !iswalpha(t[r + 3]))
+            {
+                continue; /* "14 th" */
+            }
+        }
+        t[w++] = c;
+    }
+    t[w] = L'\0';
+}
+
+/* A contest title as the rest of the program names it: ", Vote For 1" becomes Vote For,
+ * and a primary's titles take the party code ("REP Governor"). */
+static void hl_title(RpCtx *cx, const wchar_t *raw, wchar_t *title, size_t cch, uint32_t *vote_for)
+{
+    wchar_t t[512];
+    wchar_t *cut;
+    *vote_for = 0;
+    StringCchCopyW(t, ARRAYSIZE(t), raw);
+    if ((cut = wcsstr(t, L", Vote For ")) != NULL || (cut = wcsstr(t, L", Vote for ")) != NULL)
+    {
+        *vote_for = (uint32_t)_wtoi(cut + 11);
+        *cut = L'\0';
+    }
+    rp_norm(t);
+    hl_tidy(t);
+    {
+        /* Montgomery's primary canvass titles a contest's first page "President D - Democratic
+         * Party" and the pages after it "President D" */
+        static const wchar_t *const k_sfx[] = {L" - Democratic Party", L" - Republican Party", L" Democratic Party",
+                                               L" Republican Party"};
+        size_t s, tl = wcslen(t);
+        for (s = 0; s < ARRAYSIZE(k_sfx); s++)
+        {
+            size_t sl = wcslen(k_sfx[s]);
+            if (tl > sl && _wcsicmp(t + tl - sl, k_sfx[s]) == 0)
+            {
+                t[tl - sl] = L'\0';
+                break;
+            }
+        }
+    }
+    if (cx->hl_party[0] != L'\0')
+    {
+        StringCchPrintfW(title, cch, L"%s %s", cx->hl_party, t);
+    }
+    else
+    {
+        StringCchCopyW(title, cch, t);
+    }
+}
+
+/* A choice's name as all three reports give it: one spacing around "/" (the canvass wraps
+ * "Donald J. Trump/ " onto "Michael R. Pence") and no write-in mark (" (W)", which only some
+ * reports print). */
+static void hl_name(wchar_t *s, size_t cch)
+{
+    wchar_t out[512];
+    size_t i, o = 0, n;
+    hl_tidy(s);
+    for (i = 0; s[i] != L'\0' && o + 4 < ARRAYSIZE(out); i++)
+    {
+        if (s[i] == L'/')
+        {
+            while (o > 0 && out[o - 1] == L' ')
+            {
+                o--;
+            }
+            out[o++] = L' ';
+            out[o++] = L'/';
+            out[o++] = L' ';
+            while (s[i + 1] == L' ')
+            {
+                i++;
+            }
+            continue;
+        }
+        out[o++] = s[i];
+    }
+    out[o] = L'\0';
+    rp_norm(out);
+    n = wcslen(out);
+    if (n > 4 && wcscmp(out + n - 4, L" (W)") == 0)
+    {
+        out[n - 4] = L'\0';
+    }
+    StringCchCopyW(s, cch, out);
+}
+
+/* Start (or go on with) the contest titled @p raw. In a precinct report the same contests
+ * come back for every precinct. */
+static void hl_start_contest(RpCtx *cx, const wchar_t *raw)
+{
+    wchar_t title[512];
+    uint32_t vote_for;
+    hl_title(cx, raw, title, ARRAYSIZE(title), &vote_for);
+    if (cx->have_contest && wcscmp(cx->d->contests[cx->contest].title, title) == 0)
+    {
+        return; /* the title again at the top of a following page */
+    }
+    cx->contest = rp_contest(cx, title, vote_for);
+    cx->have_contest = !cx->oom;
+    if (cx->pre != UINT32_MAX && rp_grow((void **)&cx->seq, &cx->cap_seq, cx->nseq + 1, sizeof(uint32_t)))
+    {
+        cx->seq[cx->nseq++] = cx->contest;
+    }
+}
+
+typedef struct HlLine
+{
+    float y;
+    RpItem *text[24]; /* the label's items, left to right */
+    int ntext;
+    int64_t val[16]; /* by column */
+    BOOL has[16];
+    BOOL any; /* a count lined up with it */
+} HlLine;
+
+/* A cumulative or precinct report page; @p head_y is the "Party ... Total" heading's line. */
+static void hl_table(RpCtx *cx, RpItem *items, size_t n, float head_y)
+{
+    EeRpdfDoc *d = cx->d;
+    HlLine *lines = (HlLine *)calloc(n + 1, sizeof(HlLine));
+    size_t nl = 0, i, l;
+    int k, total_col = -1;
+    if (lines == NULL)
+    {
+        cx->oom = TRUE;
+        return;
+    }
+    for (k = 0; k < cx->hl_ncols; k++)
+    {
+        if (cx->hl_colvt[k] < 0)
+        {
+            total_col = k;
+        }
+    }
+    /* the labels' lines (a row's baselines wander by up to 2 pt) */
+    for (i = 0; i < n; i++)
+    {
+        RpItem *t = &items[i];
+        if (t->rot != 0 || t->y >= head_y - 3.0f || t->num != 0) /* (no footer: rows go down to 20 pt) */
+        {
+            continue;
+        }
+        if (nl == 0 || t->y < lines[nl - 1].y - 2.5f)
+        {
+            lines[nl++].y = t->y;
+        }
+        if (lines[nl - 1].ntext < 24)
+        {
+            lines[nl - 1].text[lines[nl - 1].ntext++] = t;
+        }
+    }
+    /* each count to the nearest label line and the heading nearest just right of it */
+    for (i = 0; i < n; i++)
+    {
+        RpItem *t = &items[i];
+        size_t best = SIZE_MAX;
+        float bd = 5.01f, cd = 61.0f;
+        int col = -1;
+        if (t->rot != 0 || t->y >= head_y - 3.0f || t->num != 1)
+        {
+            continue;
+        }
+        for (l = 0; l < nl; l++)
+        {
+            if (fabsf(lines[l].y - t->y) < bd)
+            {
+                bd = fabsf(lines[l].y - t->y);
+                best = l;
+            }
+        }
+        for (k = 0; k < cx->hl_ncols; k++)
+        {
+            float dd = fabsf(cx->hl_cols[k] - (t->x1 + 10.0f));
+            if (dd < cd)
+            {
+                cd = dd;
+                col = k;
+            }
+        }
+        if (best != SIZE_MAX && col >= 0)
+        {
+            lines[best].val[col] = t->value;
+            lines[best].has[col] = TRUE;
+            lines[best].any = TRUE;
+        }
+    }
+    for (l = 0; l < nl && !cx->oom; l++)
+    {
+        HlLine *ln = &lines[l];
+        wchar_t text[512] = L"", party[16] = L"";
+        RpItem *words[24];
+        int j, nw = 0;
+        qsort(ln->text, (size_t)ln->ntext, sizeof(RpItem *), rp_ptr_x_cmp);
+        for (j = 0; j < ln->ntext; j++)
+        {
+            RpItem *t = ln->text[j];
+            if (ln->any && t->x < 60.0f && rp_party_code(t->text, wcslen(t->text)))
+            {
+                StringCchCopyW(party, ARRAYSIZE(party), t->text);
+                continue;
+            }
+            words[nw++] = t;
+        }
+        rp_join(words, (size_t)nw, text, ARRAYSIZE(text)); /* touching pieces are one word (Harris's Word copies) */
+        if (text[0] == L'\0')
+        {
+            continue;
+        }
+        if (rp_starts(text, L"Precinct ") && wcsstr(text, L"(Ballots Cast:") != NULL)
+        {
+            /* "Precinct 075  (Ballots Cast: 17)" */
+            wchar_t name[128];
+            const wchar_t *open = wcsstr(text, L"(Ballots Cast:");
+            int64_t bal;
+            wchar_t num[32];
+            size_t m = 0;
+            const wchar_t *p = open + 14;
+            StringCchCopyNW(name, ARRAYSIZE(name), text + 9, (size_t)(open - text) - 9);
+            rp_norm(name);
+            cx->pre = rp_precinct(cx, name);
+            cx->nocc = 0;
+            cx->have_contest = FALSE;
+            cx->hl_title[0] = L'\0';
+            if (rp_grow((void **)&cx->seq, &cx->cap_seq, cx->nseq + 1, sizeof(uint32_t)))
+            {
+                cx->seq[cx->nseq++] = UINT32_MAX;
+            }
+            for (; *p == L' '; p++)
+            {
+            }
+            while ((iswdigit(*p) || *p == L',') && m + 1 < ARRAYSIZE(num))
+            {
+                num[m++] = *p++;
+            }
+            num[m] = L'\0';
+            if (!cx->oom && rp_number(num, &bal) == 1)
+            {
+                d->precincts[cx->pre].ballots = bal;
+            }
+            continue;
+        }
+        if (!ln->any)
+        {
+            /* a contest title (a long one may wrap) */
+            if (cx->hl_title[0] != L'\0' && l > 0 && !lines[l - 1].any && lines[l - 1].y - ln->y < 12.0f)
+            {
+                StringCchCatW(cx->hl_title, ARRAYSIZE(cx->hl_title), L" ");
+                StringCchCatW(cx->hl_title, ARRAYSIZE(cx->hl_title), text);
+            }
+            else
+            {
+                StringCchCopyW(cx->hl_title, ARRAYSIZE(cx->hl_title), text);
+            }
+            continue;
+        }
+        if (cx->hl_title[0] != L'\0')
+        {
+            hl_start_contest(cx, cx->hl_title);
+            cx->hl_title[0] = L'\0';
+        }
+        if (!cx->have_contest || cx->oom)
+        {
+            continue;
+        }
+        cx->hl_table = TRUE;
+        {
+            EeRpdfContest *c = &d->contests[cx->contest];
+            int64_t total = total_col >= 0 && ln->has[total_col] ? ln->val[total_col] : EE_RPDF_UNKNOWN;
+            BOOL in_pre = cx->pre != UINT32_MAX;
+            uint32_t ch;
+            if (_wcsicmp(text, L"Cast Votes:") == 0)
+            {
+                continue;
+            }
+            if (_wcsicmp(text, L"Over Votes:") == 0 || _wcsicmp(text, L"Under Votes:") == 0)
+            {
+                BOOL over = _wcsicmp(text, L"Over Votes:") == 0;
+                c->has_over_under = TRUE;
+                ch = over ? EE_RPDF_OVER : EE_RPDF_UNDER;
+                if (!in_pre)
+                {
+                    if (over)
+                    {
+                        c->over = total;
+                    }
+                    else
+                    {
+                        c->under = total;
+                    }
+                    continue;
+                }
+            }
+            else
+            {
+                hl_name(text, ARRAYSIZE(text));
+                ch = rp_choice(cx, cx->contest, text, party);
+                if (cx->oom)
+                {
+                    break;
+                }
+                if (!in_pre)
+                {
+                    d->contests[cx->contest].choices[ch].total = total;
+                    continue;
+                }
+            }
+            /* a precinct's counts by vote type (or its total when there are none) */
+            {
+                BOOL any_vt = FALSE;
+                for (k = 0; k < cx->hl_ncols; k++)
+                {
+                    if (cx->hl_colvt[k] >= 0 && ln->has[k])
+                    {
+                        rp_count(cx, FALSE, cx->contest, ch, (uint32_t)cx->hl_colvt[k], ln->val[k]);
+                        any_vt = TRUE;
+                    }
+                }
+                if (!any_vt && total != EE_RPDF_UNKNOWN)
+                {
+                    rp_count(cx, FALSE, cx->contest, ch, EE_RPDF_NO_VT, total);
+                }
+            }
+        }
+    }
+    free(lines);
+}
+
+/* Turned headings in reading order: line by line (left to right), and up each line (Harris's
+ * Word copies draw "Tom Hoefling" "/" on one line as separate pieces). */
+static int __cdecl hl_rot_cmp(const void *pa, const void *pb)
+{
+    const RpItem *a = *(const RpItem *const *)pa;
+    const RpItem *b = *(const RpItem *const *)pb;
+    if (fabsf(a->x - b->x) > 1.0f)
+    {
+        return a->x < b->x ? -1 : 1;
+    }
+    return a->y < b->y ? -1 : (a->y > b->y ? 1 : 0);
+}
+
+/* A canvass page; @p pre_y is the "Precinct" heading's line. */
+static void hl_canvass(RpCtx *cx, RpItem *items, size_t n, float pre_y)
+{
+    EeRpdfDoc *d = cx->d;
+    float top = 1e9f, rot_lo = 1e9f;
+    float hx[16];      /* fixed headings' centres */
+    int hkind[16];     /* -1 skip, -2 total ballots, -3 registered, else rp_vt */
+    int nh = 0, k;
+    float fixed_end = 0.0f; /* where the choice columns start */
+    RpItem *rot[96];
+    int nrot = 0;
+    struct
+    {
+        wchar_t name[256];
+        wchar_t party[16];
+        int kind; /* 0 choice, 1 totals, 2 "Continued" */
+        uint32_t ch;
+    } cols[24];
+    int ncols = 0, c;
+    wchar_t title[512] = L"";
+    size_t i;
+
+    /* the title: between the voters lines ("Total ...", "Number of District ...") and the
+     * "Precinct" heading */
+    for (i = 0; i < n; i++)
+    {
+        if (items[i].rot == 0 && items[i].y > pre_y + 6.0f && items[i].y < top &&
+            (wcsstr(items[i].text, L"Voters") != NULL || wcsstr(items[i].text, L"Precincts Reporting") != NULL))
+        {
+            top = items[i].y;
+        }
+    }
+    {
+        RpItem *tw[48];
+        size_t ntw = 0;
+        for (i = 0; i < n && ntw < 48; i++)
+        {
+            if (items[i].rot == 0 && items[i].y < top - 3.0f && items[i].y > pre_y + 6.0f)
+            {
+                tw[ntw++] = &items[i]; /* (top down, left to right) */
+            }
+        }
+        rp_join(tw, ntw, title, ARRAYSIZE(title));
+    }
+    {
+        size_t tl = wcslen(title);
+        if (tl > 10 && wcscmp(title + tl - 10, L" Continued") == 0)
+        {
+            title[tl - 10] = L'\0'; /* Harris's Word copies title a following page so */
+        }
+    }
+    if (title[0] == L'\0')
+    {
+        return;
+    }
+    /* the fixed headings: their first line, on the "Precinct" line */
+    for (i = 0; i < n && nh < 16; i++)
+    {
+        const RpItem *t = &items[i];
+        if (t->rot != 0 || fabsf(t->y - pre_y) > 1.5f || _wcsicmp(t->text, L"Precinct") == 0)
+        {
+            continue;
+        }
+        hx[nh] = (t->x + t->x1) / 2.0f;
+        if (_wcsicmp(t->text, L"Total") == 0)
+        {
+            hkind[nh] = -2;
+        }
+        else if (_wcsicmp(t->text, L"Registered") == 0)
+        {
+            hkind[nh] = -3;
+        }
+        else
+        {
+            /* turnout, and ballots cast by vote type: the canvass splits no choice's votes by
+             * vote type (some have no Absentee column), so it has none, as in Verity */
+            hkind[nh] = -1;
+        }
+        if (t->x1 > fixed_end)
+        {
+            fixed_end = t->x1;
+        }
+        nh++;
+    }
+    /* the choices' turned headings, grouped into columns by the gaps between them */
+    for (i = 0; i < n && nrot < 96; i++)
+    {
+        if (items[i].rot == 90 && items[i].x > fixed_end)
+        {
+            rot[nrot++] = &items[i];
+            if (items[i].y < rot_lo)
+            {
+                rot_lo = items[i].y;
+            }
+        }
+    }
+    qsort(rot, (size_t)nrot, sizeof(RpItem *), hl_rot_cmp);
+    for (k = 0; k < nrot; k++)
+    {
+        const wchar_t *s = rot[k]->text;
+        /* a heading's lines are 10.8 pt apart; the next heading starts 15 pt or more on */
+        if (k == 0 || rot[k]->x - rot[k - 1]->x > 13.0f)
+        {
+            if (ncols == 24)
+            {
+                break;
+            }
+            ZeroMemory(&cols[ncols], sizeof(cols[0]));
+            ncols++;
+            if (rp_party_code(s, wcslen(s)))
+            {
+                StringCchCopyW(cols[ncols - 1].party, ARRAYSIZE(cols[0].party), s);
+                continue;
+            }
+        }
+        /* a piece that starts where the one before it on the line ends (up the line, by its
+         * width) goes on the same word ("Alma A" "." in Harris's Word copies) */
+        /* a line that ends inside a word ("Sanchez-Miramo" / "ntez") has no space at its end:
+         * one that ends a word does ("Donald J. " / "Trump") */
+        if (cols[ncols - 1].name[0] != L'\0' &&
+            !(k > 0 && rot[k - 1]->exact && !rot[k - 1]->sp_after && !rot[k]->sp_before &&
+              fabsf(rot[k]->x - rot[k - 1]->x) < 1.0f &&
+              fabsf(rot[k]->y - (rot[k - 1]->y + (rot[k - 1]->x1 - rot[k - 1]->x))) < 0.5f) &&
+            !(k > 0 && fabsf(rot[k]->x - rot[k - 1]->x) >= 1.0f && !rot[k - 1]->sp_after && !rot[k]->sp_before &&
+              iswalpha(rot[k - 1]->text[wcslen(rot[k - 1]->text) - 1]) && iswalpha(rot[k]->text[0])))
+        {
+            StringCchCatW(cols[ncols - 1].name, ARRAYSIZE(cols[0].name), L" ");
+        }
+        StringCchCatW(cols[ncols - 1].name, ARRAYSIZE(cols[0].name), s);
+    }
+    hl_start_contest(cx, title);
+    if (!cx->have_contest)
+    {
+        return;
+    }
+    for (c = 0; c < ncols; c++)
+    {
+        rp_norm(cols[c].name);
+        if (wcsstr(cols[c].name, L"tinued") != NULL)
+        {
+            cols[c].kind = 2; /* "Con tinued" */
+        }
+        else if (_wcsicmp(cols[c].name, L"Totals") == 0)
+        {
+            cols[c].kind = 1;
+        }
+        else
+        {
+            hl_name(cols[c].name, ARRAYSIZE(cols[c].name));
+            cols[c].ch = rp_choice(cx, cx->contest, cols[c].name, cols[c].party);
+        }
+    }
+    cx->hl_canvass = TRUE;
+    /* rows: a precinct name at the left, then the numbers */
+    i = 0;
+    while (i < n && !cx->oom)
+    {
+        float y = items[i].y;
+        size_t j, first = i;
+        const RpItem *label = NULL;
+        int64_t vals[32];
+        int nv = 0, m, h;
+        if (items[i].rot != 0 || y >= rot_lo - 2.0f || y >= pre_y - 2.0f)
+        {
+            i++;
+            continue;
+        }
+        for (j = i; j < n && items[j].y > y - 2.5f; j++)
+        {
+        }
+        i = j;
+        for (j = first; j < i; j++)
+        {
+            if (items[j].rot == 0 && items[j].x < 40.0f && label == NULL)
+            {
+                label = &items[j];
+            }
+        }
+        if (label == NULL || _wcsicmp(label->text, L"Totals") == 0)
+        {
+            continue;
+        }
+        cx->pre = rp_precinct(cx, label->text);
+        if (cx->oom)
+        {
+            break;
+        }
+        {
+            /* a contest's ballots are those of its part of a split precinct: a precinct's own
+             * are the largest of its contests' */
+            for (j = first; j < i; j++)
+            {
+                const RpItem *t = &items[j];
+                float bd = 41.0f;
+                int best = -1;
+                if (t == label || t->rot != 0 || t->num != 1)
+                {
+                    continue;
+                }
+                if (t->x1 > fixed_end + 12.0f)
+                {
+                    if (nv < 32)
+                    {
+                        vals[nv++] = t->value; /* a choice's (left to right) */
+                    }
+                    continue;
+                }
+                for (h = 0; h < nh; h++)
+                {
+                    float dd = fabsf(hx[h] - (t->x1 - 15.0f));
+                    if (dd < bd)
+                    {
+                        bd = dd;
+                        best = h;
+                    }
+                }
+                if (best >= 0 && hkind[best] == -2 && t->value > d->precincts[cx->pre].ballots)
+                {
+                    d->precincts[cx->pre].ballots = t->value;
+                }
+                else if (best >= 0 && hkind[best] == -3 && t->value > 0 && t->value > d->precincts[cx->pre].registered)
+                {
+                    /* (McLennan's 2020 Republican canvass prints 0 for every precinct: not reported) */
+                    d->precincts[cx->pre].registered = t->value;
+                }
+            }
+        }
+        /* the choices' columns in order ("Continued" holds no numbers) */
+        m = 0;
+        for (c = 0; c < ncols; c++)
+        {
+            m += cols[c].kind != 2;
+        }
+        if (nv != m)
+        {
+            cx->hl_bad_rows++;
+            continue;
+        }
+        for (c = 0, m = 0; c < ncols; c++)
+        {
+            if (cols[c].kind == 2)
+            {
+                continue;
+            }
+            if (cols[c].kind == 0)
+            {
+                rp_count(cx, FALSE, cx->contest, cols[c].ch, EE_RPDF_NO_VT, vals[m]);
+            }
+            m++;
+        }
+    }
+}
+
+static void hl_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
+{
+    RpItem *items = NULL;
+    wchar_t *pool = NULL;
+    size_t n, i, k;
+    float head_y = 0.0f, pre_y = 0.0f;
+    BOOL table = FALSE, canvass = FALSE;
+
+    if (pt->nruns == 0)
+    {
+        return;
+    }
+    items = (RpItem *)malloc((pt->nruns + 1) * sizeof(RpItem));
+    pool = (wchar_t *)malloc((pt->text_len + pt->nruns + 1) * sizeof(wchar_t));
+    if (items == NULL || pool == NULL)
+    {
+        cx->oom = TRUE;
+        goto done;
+    }
+    n = rp_items(cx, pt, items, pool, TRUE);
+    (void)first_page;
+    /* "Party  Candidate  ...  Total" (a table) or "Precinct" over turned headings (a canvass) */
+    for (i = 0; i < n && !table && !canvass; i++)
+    {
+        if (items[i].rot != 0)
+        {
+            continue;
+        }
+        if (wcscmp(items[i].text, L"Candidate") == 0)
+        {
+            for (k = 0; k < n; k++)
+            {
+                if (items[k].rot == 0 && fabsf(items[k].y - items[i].y) < 2.0f && wcscmp(items[k].text, L"Total") == 0)
+                {
+                    table = TRUE;
+                    head_y = items[i].y;
+                }
+            }
+        }
+        else if (wcscmp(items[i].text, L"Precinct") == 0 && items[i].x < 120.0f)
+        {
+            for (k = 0; k < n; k++)
+            {
+                if (items[k].rot == 90)
+                {
+                    canvass = TRUE;
+                    pre_y = items[i].y;
+                    break;
+                }
+            }
+        }
+    }
+    if ((table || canvass) && !cx->hl_head_done)
+    {
+        /* the heading of the first report page (McLennan's 2020 primaries open with a cover) */
+        hl_heading(cx, items, n);
+        cx->hl_head_done = TRUE;
+    }
+    if (table)
+    {
+        float cand_x1 = 0.0f;
+        int nc = 0;
+        for (i = 0; i < n; i++)
+        {
+            if (items[i].rot == 0 && fabsf(items[i].y - head_y) < 2.0f && wcscmp(items[i].text, L"Candidate") == 0)
+            {
+                cand_x1 = items[i].x1;
+            }
+        }
+        for (i = 0; i < n && nc < 16; i++)
+        {
+            const RpItem *t = &items[i];
+            if (t->rot != 0 || fabsf(t->y - head_y) >= 2.0f || t->x <= cand_x1)
+            {
+                continue;
+            }
+            cx->hl_cols[nc] = (t->x + t->x1) / 2.0f;
+            cx->hl_colvt[nc] = _wcsicmp(t->text, L"Total") == 0 ? -1 : (int)hl_vt(cx, t->text);
+            nc++;
+        }
+        cx->hl_ncols = nc;
+        hl_table(cx, items, n, head_y);
+    }
+    else if (canvass)
+    {
+        hl_canvass(cx, items, n, pre_y);
+    }
+done:
+    free(items);
+    free(pool);
+}
+
 /* A precinct report meets contests precinct by precinct, so one missing from the first
  * precincts would come late. Each precinct shows its contests in ballot order: put the
  * contests in an order that agrees with every precinct (a topological sort of "comes just
@@ -2638,8 +3928,10 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
     EePdfPageText pt;
     RpCtx cx;
     wchar_t perr[256] = L"";
-    uint32_t np, p;
+    uint32_t np, p, hl_first = 0;
     BOOL ok = FALSE;
+    BOOL glyphs_learned = FALSE; /* the text was learned through OCR (ee_glyph_ocr.c) */
+    EeGlyphOcrStats gst = {0};
 
     ZeroMemory(out, sizeof(*out));
     out->registered_total = EE_RPDF_UNKNOWN;
@@ -2657,6 +3949,7 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
     {
         char prod[256];
         cx.hart = EePdf_GetInfoText(pdf, "Producer", prod, sizeof(prod)) && strstr(prod, "Reporting Services") != NULL;
+        cx.jasper = EePdf_GetInfoText(pdf, "Creator", prod, sizeof(prod)) && strstr(prod, "JasperReports") != NULL;
         if (cx.hart && (cx.hcols = (struct HtCol *)calloc(RP_MAX_COLS, sizeof(struct HtCol))) == NULL)
         {
             cx.oom = TRUE;
@@ -2664,7 +3957,28 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
     }
     EePdf_PageTextInit(&pt);
     pt.split_gaps = 1; /* "263 1,361": two numbers shown by one TJ with a gap between */
+    pt.std_widths = !cx.hart; /* Smith's "(TOTAL ) Tj [-831.5 (VOTE %)] TJ": each string at its place */
     np = EePdf_PageCount(pdf);
+    if (np > 0 && EePdf_ExtractPageText(pdf, 0, &pt) && pt.unknown_glyphs >= 40)
+    {
+        /* printed through PScript5 (Travis L22, LR22, PR22): the text is glyph outlines with no
+         * characters; learn them through OCR, then read the report as usual */
+        wchar_t gerr[256] = L"";
+        if (!EeGlyphOcr_Learn(pdf, np, &gst, gerr, ARRAYSIZE(gerr)))
+        {
+            wchar_t msg[400];
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"The report's text is drawn as glyph outlines (printed through a printer "
+                             L"driver) and could not be read by OCR: %s",
+                             gerr);
+            EePdf_PageTextFree(&pt);
+            EePdf_Close(pdf);
+            free(cx.hcols);
+            rp_set_err(err, errcch, msg);
+            return FALSE;
+        }
+        glyphs_learned = TRUE;
+    }
     for (p = 0; p < np && !cx.oom; p++)
     {
         if (!EePdf_ExtractPageText(pdf, p, &pt))
@@ -2680,11 +3994,29 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
             }
             continue;
         }
+        if (p <= 1 && !cx.hart_old && !cx.jasper && !cx.electionware && hl_detect(&pt))
+        {
+            cx.hart_old = TRUE; /* (McLennan's 2020 primaries start with a cover page) */
+            hl_first = p;
+        }
+        if (cx.hart_old)
+        {
+            hl_page(&cx, &pt, p == hl_first);
+            if (p == hl_first + 1 && !cx.hl_table && !cx.hl_canvass)
+            {
+                break; /* no table or canvass grid on its first two pages */
+            }
+            continue;
+        }
         rp_page(&cx, &pt, p == 0);
-        if (p == 1 && !cx.electionware)
+        if (p == 1 && !cx.electionware && !(cx.jasper && cx.structure))
         {
             break; /* not an Electionware report: stop early */
         }
+    }
+    if (cx.jasper && cx.structure)
+    {
+        cx.electionware = TRUE;
     }
     EePdf_PageTextFree(&pt);
     EePdf_Close(pdf);
@@ -2699,12 +4031,20 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
                    L"The PDF has no text to read (a scanned report?). Results PDFs from ES&S "
                    L"Electionware can be loaded.");
     }
-    else if (!cx.electionware && !cx.hart_canvass && !cx.hart_cum)
+    else if (!cx.electionware && !cx.hart_canvass && !cx.hart_cum && !cx.hl_table && !cx.hl_canvass)
     {
         rp_set_err(err, errcch,
                    L"It is not a results report this version can read. Summary and precinct "
-                   L"results reports from ES&S Electionware, and cumulative and canvass "
-                   L"reports from Hart Verity, can be loaded.");
+                   L"results reports from ES&S Electionware, and cumulative, precinct and "
+                   L"canvass reports from Hart, can be loaded.");
+    }
+    else if (cx.hart_old && (out->election_date == NULL || !rp_is_date(out->election_date)))
+    {
+        /* Ector's scans carry an OCR text layer ("Governor, voto For l"): its heading's
+         * "<County> - <election> - <date>" line does not read, nor can its numbers be trusted */
+        rp_set_err(err, errcch,
+                   L"The report's text cannot be read reliably (it looks like the text layer of a "
+                   L"scanned report).");
     }
     else if (out->ncontests == 0)
     {
@@ -2717,11 +4057,33 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
         {
             out->kind = cx.hart_canvass ? EE_RPDF_HART_PRECINCT : EE_RPDF_HART_SUMMARY;
         }
+        else if (cx.hart_old)
+        {
+            out->kind = cx.hl_canvass         ? EE_RPDF_HART_PRECINCT
+                        : out->nprecincts > 0 ? EE_RPDF_HART_PCT_REPORT
+                                              : EE_RPDF_HART_SUMMARY;
+        }
         else
         {
             out->kind = out->nprecincts > 0 ? EE_RPDF_ESS_PRECINCT : EE_RPDF_ESS_SUMMARY;
         }
-        if (out->kind == EE_RPDF_ESS_PRECINCT)
+        if (glyphs_learned)
+        {
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"The report's text is drawn as glyph outlines (printed through a printer "
+                             L"driver); its %u distinct characters were read by OCR over %u pages%s.",
+                             gst.learned, gst.pages,
+                             gst.uncertain > 0 ? L", some with few or split readings: check its figures" : L"");
+            rp_note(&cx, msg);
+        }
+        if (cx.hl_bad_rows > 0)
+        {
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"%u canvass rows did not have a number for each choice and were not read.",
+                             cx.hl_bad_rows);
+            rp_note(&cx, msg);
+        }
+        if (out->kind == EE_RPDF_ESS_PRECINCT || out->kind == EE_RPDF_HART_PCT_REPORT)
         {
             rp_order_contests(&cx);
         }
@@ -2736,6 +4098,14 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
                              L"%llu write-in rows (\"Write-In: name\", \"Not Assigned\") are part of "
                              L"Write-In Totals and are not listed separately.",
                              (unsigned long long)cx.writein_rows);
+            rp_note(&cx, msg);
+        }
+        if (cx.place_pages > 0)
+        {
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"%u pages of results by polling place (the first: \"%s\") were not read; the "
+                             L"precinct pages were.",
+                             cx.place_pages, cx.place_first);
             rp_note(&cx, msg);
         }
         if (cx.dropped_numbers > 0)

@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
+  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_glyph_ocr.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -73,7 +73,27 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
   " - Democratic Party" title (read as "DEM ..."), "110 - DEM" precincts and a voting instruction
   read as Vote For;
 - `EeResults_MatchPrecinctName` files a CVR's "110BS3" and "110-DEM" under precinct 110, but not
-  "1100".
+  "1100";
+- an Electionware summary with no "Report generated with Electionware" footer loads from its
+  JasperReports Creator. The fixture has a status ("Final Unofficial") beside an election name that
+  names the county, a number shown in pieces from one point ("104" "," "443", as Acrobat edits write
+  it), rows whose numbers are one string with the percentage ("4,219 59.75% 2,380 1,839") and
+  three-line headings joined at a hyphen ("Election" / "Day In-" / "Person").
+`reshart0` covers Hart reports from before Verity (McLennan, Montgomery, Harris 2020-22):
+- a cumulative report, a precinct report and a canvass of one election load as one result with
+  no differences. The fixtures have the "<County> - <election> - <date>" heading, counts with a
+  percentage under Absentee / Early / Election, baselines that wander within a row, "Precinct 101
+  (Ballots Cast: 120)" lines, and turned canvass headings with the party on the first line and a
+  name wrapped onto the next;
+- a second entity's cumulative report of the same election combines with the first into one
+  election (`combine_split`).
+`resglyph` covers reports printed to PDF through PScript5 (Travis L22, LR22, PR22;
+`src\ee_glyph_ocr.c`, needs an OCR language and is skipped without one):
+- an Electionware summary whose text is a Type 3 font of unnamed glyph outlines (Arial's, each
+  declared 1 em wide and placed one at a time, a space an empty glyph) is read through OCR and
+  carries the load note;
+- two cells shown as one string spread by a character spacing, which a `Q` restored, read as two;
+- the summary agrees with a plain-text precinct report of the same election.
 `rescmp` covers `EeResults_Compare` and `EeResults_FromTally`:
 - results compared with themselves all match;
 - a summary with one changed total gives exactly one "differs" row, and its missing ballots cast is

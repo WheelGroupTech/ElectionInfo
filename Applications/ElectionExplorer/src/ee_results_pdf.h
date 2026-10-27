@@ -27,6 +27,8 @@ extern "C"
 #define EE_RPDF_ESS_PRECINCT  2 /* the same tables repeated for each precinct */
 #define EE_RPDF_HART_SUMMARY  3 /* Hart cumulative report */
 #define EE_RPDF_HART_PRECINCT 4 /* Hart canvass: precinct x choice grids, no vote types */
+#define EE_RPDF_HART_PCT_REPORT 5 /* Hart precinct report (before Verity): the cumulative
+                                   * tables repeated for each precinct, by vote type */
 
 /** Unknown figure (the same value as EE_RES_UNKNOWN). */
 #define EE_RPDF_UNKNOWN (-1)

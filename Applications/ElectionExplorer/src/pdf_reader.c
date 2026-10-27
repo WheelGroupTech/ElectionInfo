@@ -816,6 +816,15 @@ typedef struct PdfFont
     uint16_t *units;
     uint32_t nunits;
     uint32_t cap_units;
+    /* Type 3: glyphs drawn by content streams (a printer driver's outlines, PScript5) */
+    int type3;
+    double fm[6];        /* FontMatrix: glyph space -> text space */
+    uint32_t proc[256];  /* per code: the CharProcs stream's object number, 0 = none */
+    uint32_t fp[256];    /* per code: a hash of that stream (the same drawing, the same glyph) */
+    uint8_t named[256];  /* per code: its glyph name gave the character */
+    uint8_t blank[256];  /* per code: its drawing is empty (a space) */
+    float ink_r[256];    /* per code: where its drawing ends (1/1000 em, ink_widths) */
+    int ink_widths;      /* every glyph declared one width (PScript5): measure by the drawings */
 } PdfFont;
 
 struct EePdf
@@ -858,6 +867,11 @@ struct EePdf
     uint32_t cap_fonts;
     uint32_t *font_hash; /* slot -> index + 1 */
     uint32_t font_hash_cap;
+
+    /* Type 3 glyphs' characters by drawing (EePdf_SetGlyphChars), sorted by fp */
+    uint32_t *gm_fp;
+    uint32_t *gm_cp;
+    uint32_t ngm;
 
     /* scratch */
     Arena arena;     /* per page */
@@ -2541,6 +2555,121 @@ static float font_string_width(const PdfFont *f, const unsigned char *s, uint32_
     return w;
 }
 
+/* Width (1/1000 em) of decoded UTF-8 text in Helvetica (AFM widths, ' ' through '~'; other
+ * characters 556), for a font that carries no widths (EePdfPageText.std_widths). */
+static float helv_utf8_width(const char *s, size_t n)
+{
+    static const unsigned short k_helv[95] = {
+        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556,
+        556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778,
+        722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278,
+        278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+        556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584};
+    float w = 0.0f;
+    size_t i;
+    for (i = 0; i < n; i++)
+    {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 0x20 && c <= 0x7E)
+        {
+            w += k_helv[c - 0x20];
+        }
+        else if (c >= 0xC0 || c < 0x20)
+        {
+            w += 556.0f; /* a multi-byte character's first byte (continuation bytes add nothing) */
+        }
+    }
+    return w;
+}
+
+/* The horizontal extent (glyph space) of a Type 3 glyph's path points: q, Q, cm and the path
+ * operators; anything else just clears the operands. FALSE when it draws no path. */
+static BOOL glyph_ink_x(const unsigned char *p, size_t n, double *x0, double *x1)
+{
+    const unsigned char *e = p + n;
+    double num[8], m[8][6] = {{1, 0, 0, 1, 0, 0}};
+    int nn = 0, gsp = 0, k;
+    BOOL any = FALSE;
+    *x0 = *x1 = 0.0;
+    while (p < e)
+    {
+        const unsigned char *t;
+        if (is_ws(*p))
+        {
+            p++;
+            continue;
+        }
+        t = p;
+        if ((*p >= '0' && *p <= '9') || *p == '-' || *p == '+' || *p == '.')
+        {
+            char buf[32];
+            size_t len;
+            while (p < e && !is_ws(*p))
+            {
+                p++;
+            }
+            len = (size_t)(p - t) < sizeof buf - 1 ? (size_t)(p - t) : sizeof buf - 1;
+            memcpy(buf, t, len);
+            buf[len] = 0;
+            if (nn == 8)
+            {
+                memmove(num, num + 1, 7 * sizeof(double));
+                nn = 7;
+            }
+            num[nn++] = strtod(buf, NULL);
+            continue;
+        }
+        while (p < e && !is_ws(*p))
+        {
+            p++;
+        }
+        if (p - t == 1 && *t == 'q' && gsp < 7)
+        {
+            memcpy(m[gsp + 1], m[gsp], sizeof m[0]);
+            gsp++;
+        }
+        else if (p - t == 1 && *t == 'Q' && gsp > 0)
+        {
+            gsp--;
+        }
+        else if (p - t == 2 && t[0] == 'c' && t[1] == 'm' && nn == 6)
+        {
+            /* m = num x m */
+            const double *a = num, *b = m[gsp];
+            double r[6] = {a[0] * b[0] + a[1] * b[2],        a[0] * b[1] + a[1] * b[3],
+                           a[2] * b[0] + a[3] * b[2],        a[2] * b[1] + a[3] * b[3],
+                           a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5]};
+            memcpy(m[gsp], r, sizeof r);
+        }
+        else if (p - t <= 2 && (*t == 'm' || *t == 'l' || *t == 'c' || *t == 'v' || *t == 'y' || *t == 'r') &&
+                 nn >= 2 && (p - t == 1 || (t[0] == 'r' && t[1] == 'e')))
+        {
+            int np = nn / 2;
+            if (*t == 'r' && nn == 4)
+            {
+                /* re: the corners x and x + width */
+                num[2] = num[0] + num[2];
+                num[3] = num[1];
+            }
+            for (k = 0; k < np; k++)
+            {
+                double x = num[2 * k] * m[gsp][0] + num[2 * k + 1] * m[gsp][2] + m[gsp][4];
+                if (!any || x < *x0)
+                {
+                    *x0 = x;
+                }
+                if (!any || x > *x1)
+                {
+                    *x1 = x;
+                }
+                any = TRUE;
+            }
+        }
+        nn = 0;
+    }
+    return any;
+}
+
 /* Build a font from its dictionary @p fd (in arena @p a). */
 static PdfFont *font_build(EePdf *pdf, Arena *a, const PdfObj *fd, uint32_t num)
 {
@@ -2555,10 +2684,25 @@ static PdfFont *font_build(EePdf *pdf, Arena *a, const PdfObj *fd, uint32_t num)
     enc_winansi(f->enc);
     sub = dict_get(fd, "Subtype");
     f->two_byte = obj_is_name(sub, "Type0");
+    f->type3 = obj_is_name(sub, "Type3");
+    if (f->type3)
+    {
+        const PdfObj *m = resolve(pdf, a, dict_get(fd, "FontMatrix"), &tmp);
+        int k;
+        f->fm[0] = f->fm[3] = 0.001;
+        if (m != NULL && m->t == PO_ARRAY && m->n == 6)
+        {
+            for (k = 0; k < 6; k++)
+            {
+                f->fm[k] = obj_num(&m->u.items[k]);
+            }
+        }
+    }
     enc = resolve(pdf, a, dict_get(fd, "Encoding"), &tmp);
     if (!f->two_byte && enc != NULL && enc->t == PO_DICT)
     {
         const PdfObj *diff = resolve(pdf, a, dict_get(enc, "Differences"), NULL);
+        const PdfObj *procs = f->type3 ? resolve(pdf, a, dict_get(fd, "CharProcs"), NULL) : NULL;
         if (diff != NULL && diff->t == PO_ARRAY)
         {
             uint32_t k;
@@ -2575,14 +2719,61 @@ static PdfFont *font_build(EePdf *pdf, Arena *a, const PdfObj *fd, uint32_t num)
                     if (code >= 0 && code < 256)
                     {
                         uint16_t u = glyph_to_unicode((const char *)it->u.s);
+                        const PdfObj *pr;
                         if (u != 0)
                         {
                             f->enc[code] = u;
+                            f->named[code] = 1;
+                        }
+                        if (procs != NULL && procs->t == PO_DICT &&
+                            (pr = dict_get(procs, (const char *)it->u.s)) != NULL && pr->t == PO_REF)
+                        {
+                            f->proc[code] = pr->u.ref.num;
                         }
                     }
                     code++;
                 }
             }
+        }
+    }
+    if (f->type3)
+    {
+        /* each glyph's drawing, hashed: PScript5 names glyphs /0../255 in order of first use,
+         * so only the drawing tells a glyph (pdf_glyph_map gives it a character) */
+        int code;
+        for (code = 0; code < 256; code++)
+        {
+            PdfObj sd;
+            uint64_t soff = 0;
+            ByteBuf data = {0};
+            if (f->proc[code] != 0 && pdf_load(pdf, f->proc[code], a, &sd, &soff) && soff != 0 &&
+                stream_decode(pdf, a, &sd, soff, &data))
+            {
+                uint32_t h = 2166136261u;
+                size_t i;
+                double x0, x1;
+                for (i = 0; i < data.len; i++)
+                {
+                    h = (h ^ data.p[i]) * 16777619u;
+                }
+                f->fp[code] = h != 0 ? h : 1;
+                if (glyph_ink_x(data.p, data.len, &x0, &x1))
+                {
+                    /* the drawing's right edge plus a bearing like its left one */
+                    f->ink_r[code] = (float)((x1 + (x0 > 0.0 ? x0 : 0.0)) * f->fm[0] * 1000.0);
+                }
+                else
+                {
+                    f->blank[code] = 1;
+                    f->ink_r[code] = 250.0f;
+                    if (!f->named[code])
+                    {
+                        f->enc[code] = ' ';
+                        f->named[code] = 1;
+                    }
+                }
+            }
+            bb_free(&data);
         }
     }
     tu = dict_get(fd, "ToUnicode");
@@ -2599,6 +2790,34 @@ static PdfFont *font_build(EePdf *pdf, Arena *a, const PdfObj *fd, uint32_t num)
         bb_free(&data);
     }
     font_read_widths(pdf, a, f, fd);
+    if (f->type3 && f->has_widths)
+    {
+        /* Type 3 widths are in glyph space: to 1/1000 em through the FontMatrix */
+        int k;
+        for (k = 0; k < 256; k++)
+        {
+            f->widths[k] = (float)(f->widths[k] * f->fm[0] * 1000.0);
+        }
+        f->dw = (float)(f->dw * f->fm[0] * 1000.0);
+    }
+    if (f->type3 && f->has_widths)
+    {
+        /* PScript5 declares every glyph 1 em and places each one itself: then a run's
+         * width comes from where its last drawing ends */
+        int k, n = 0, same = 1;
+        float w0 = 0.0f;
+        for (k = 0; k < 256; k++)
+        {
+            float w = font_code_width(f, (uint32_t)k);
+            if (f->proc[k] != 0 && w > 0.0f)
+            {
+                same = same && (n == 0 || fabsf(w - w0) < 0.5f);
+                w0 = w;
+                n++;
+            }
+        }
+        f->ink_widths = same && n >= 8 && w0 >= 900.0f;
+    }
     return f;
 }
 
@@ -2885,6 +3104,7 @@ typedef struct GState
     double cx0, cy0, cx1, cy1;
     int has_clip;
     uint32_t clip_id;
+    double tc; /* Tc character spacing (text space; applied to Type 3 fonts only) */
 } GState;
 
 static void mat_mul(const double *m, const double *n, double *out)
@@ -2923,6 +3143,7 @@ typedef struct Interp
     double tl;
     PdfFont *font;
     double font_size; /* Tf size (text space) */
+    double ink_end;   /* show_text: where the last Type 3 drawing ends (1/1000 em, ink_widths) */
     /* path bbox */
     int has_path;
     double px0, py0, px1, py1;
@@ -3005,10 +3226,15 @@ static BOOL push_run(Interp *in, size_t start, double adv0, double adv1)
         double dx = adv0 / 1000.0 * in->font_size;
         r->font_size = (float)(in->font_size * vs);
         r->has_width = (in->font != NULL && in->font->has_widths);
+        if (r->has_width && in->font->ink_widths && in->ink_end > adv0)
+        {
+            adv1 = in->ink_end;
+        }
         r->width = r->has_width ? (float)((adv1 - adv0) / 1000.0 * in->font_size * hs) : 0.0f;
         r->x = (float)(in->tm[4] * c[0] + in->tm[5] * c[2] + c[4] + dx * hx);
         r->y = (float)(in->tm[4] * c[1] + in->tm[5] * c[3] + c[5] + dx * hy);
         r->rot = (fabs(hx) >= fabs(hy)) ? (hx >= 0 ? 0 : 180) : (hy > 0 ? 90 : 270);
+        r->type3 = in->font != NULL && in->font->type3;
     }
     r->has_clip = g->has_clip;
     r->clip_x0 = (float)g->cx0;
@@ -3021,22 +3247,188 @@ static BOOL push_run(Interp *in, size_t start, double adv0, double adv1)
     return TRUE;
 }
 
+/* Move the text position on by @p adv (text space, 1/1000 em) after a string is shown. */
+static void text_advance(Interp *in, double adv)
+{
+    double tx = adv / 1000.0 * in->font_size;
+    in->tm[4] += tx * in->tm[0];
+    in->tm[5] += tx * in->tm[1];
+}
+
+/* The character EePdf_SetGlyphChars gave drawing @p fp, or 0. */
+static uint32_t gm_lookup(const EePdf *pdf, uint32_t fp)
+{
+    uint32_t lo = 0, hi = pdf->ngm;
+    while (lo < hi)
+    {
+        uint32_t mid = (lo + hi) / 2;
+        if (pdf->gm_fp[mid] < fp)
+        {
+            lo = mid + 1;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+    return lo < pdf->ngm && pdf->gm_fp[lo] == fp ? pdf->gm_cp[lo] : 0;
+}
+
+/* List glyph @p code of the current Type 3 font, @p adv (1/1000 em) along the string. */
+static BOOL glyph_add(Interp *in, uint32_t code, double adv)
+{
+    EePdfPageText *pt = in->pt;
+    const PdfFont *f = in->font;
+    const double *c = in->gs[in->gsp].ctm;
+    double ts[6], m2[6], m[6];
+    double w = f->ink_widths ? f->ink_r[code] / 1000.0 : (f->has_widths ? font_code_width(f, code) / 1000.0 : 0.0);
+    double vx, vy;
+    EePdfGlyph *g;
+    int k;
+    if (pt->nglyphs == pt->cap_glyphs)
+    {
+        uint32_t nc = pt->cap_glyphs ? pt->cap_glyphs * 2 : 512;
+        EePdfGlyph *ng = (EePdfGlyph *)realloc(pt->glyphs, (size_t)nc * sizeof(EePdfGlyph));
+        if (ng == NULL)
+        {
+            return FALSE;
+        }
+        pt->glyphs = ng;
+        pt->cap_glyphs = nc;
+    }
+    /* em units -> text space (size, and the advance so far), then Tm and the CTM */
+    ts[0] = in->font_size;
+    ts[1] = 0.0;
+    ts[2] = 0.0;
+    ts[3] = in->font_size;
+    ts[4] = adv / 1000.0 * in->font_size;
+    ts[5] = 0.0;
+    mat_mul(ts, in->tm, m2);
+    mat_mul(m2, c, m2);
+    mat_mul(f->fm, m2, m);
+    g = &pt->glyphs[pt->nglyphs++];
+    g->proc = f->proc[code];
+    g->fp = f->fp[code];
+    for (k = 0; k < 6; k++)
+    {
+        g->m[k] = (float)m[k];
+    }
+    g->x0 = (float)m2[4];
+    g->y0 = (float)m2[5];
+    g->x1 = (float)(w * m2[0] + m2[4]);
+    vx = m2[2];
+    vy = m2[3];
+    g->size = (float)sqrt(vx * vx + vy * vy);
+    g->named = f->named[code] != 0;
+    return TRUE;
+}
+
+/* Decode string bytes into the page text and add their advance (1/1000 em) to @p adv. A
+ * Type 3 font's glyph without a name takes its character from EePdf_SetGlyphChars (U+FFFD
+ * when it has none) and is listed when the caller collects glyphs. */
+static BOOL show_bytes(Interp *in, const unsigned char *s, uint32_t n, double *adv, BOOL helv)
+{
+    EePdfPageText *pt = in->pt;
+    const PdfFont *f = in->font;
+    size_t before = pt->text_len;
+    uint32_t i;
+    if (f == NULL || !f->type3)
+    {
+        if (!font_decode(f, s, n, pt))
+        {
+            return FALSE;
+        }
+        if (f != NULL && f->has_widths)
+        {
+            *adv += font_string_width(f, s, n);
+        }
+        else if (helv)
+        {
+            *adv += helv_utf8_width(pt->text + before, pt->text_len - before);
+        }
+        return TRUE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        uint32_t code = s[i], cp;
+        if (f->named[code])
+        {
+            cp = f->enc[code];
+        }
+        else if ((cp = gm_lookup(in->pdf, f->fp[code])) == 0)
+        {
+            cp = 0xFFFD;
+            pt->unknown_glyphs++;
+        }
+        if (!text_put_cp(pt, cp) ||
+            (pt->collect_glyphs && f->proc[code] != 0 && !f->blank[code] && !glyph_add(in, code, *adv)))
+        {
+            return FALSE;
+        }
+        if (f->ink_widths)
+        {
+            in->ink_end = *adv + f->ink_r[code];
+        }
+        *adv += f->has_widths ? font_code_width(f, code) : 0.0;
+        if (in->font_size != 0.0)
+        {
+            *adv += in->gs[in->gsp].tc / in->font_size * 1000.0; /* Tc, in text space units */
+        }
+    }
+    return TRUE;
+}
+
+/* Show one string. A Type 3 font's large Tc is a word gap (PScript5 sets a number's first
+ * digit apart from its label that way): with split_gaps it ends the run, as a large TJ kern
+ * does, and otherwise it reads as a space. */
+static BOOL show_str(Interp *in, const PdfObj *str, double *adv, double *adv0, size_t *start, BOOL helv, BOOL split)
+{
+    EePdfPageText *pt = in->pt;
+    double gap = in->font_size != 0.0 ? in->gs[in->gsp].tc / in->font_size * 1000.0 : 0.0;
+    uint32_t i;
+    if (in->font == NULL || !in->font->type3 || gap <= 200.0)
+    {
+        return show_bytes(in, str->u.s, str->n, adv, helv);
+    }
+    for (i = 0; i < str->n; i++)
+    {
+        /* the gap follows every glyph, the last of an earlier TJ string too */
+        if (split && pt->text_len > *start)
+        {
+            if (!push_run(in, *start, *adv0, *adv))
+            {
+                return FALSE;
+            }
+            *start = pt->text_len;
+            *adv0 = *adv;
+        }
+        else if (!split && pt->text_len > *start && !text_put_cp(pt, ' '))
+        {
+            return FALSE;
+        }
+        if (!show_bytes(in, str->u.s + i, 1, adv, helv))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
 static BOOL show_text(Interp *in, const PdfObj *str_or_array)
 {
     EePdfPageText *pt = in->pt;
     size_t start = pt->text_len;
     double adv = 0.0;  /* advance in text space units of 1/1000 em */
     double adv0 = 0.0; /* where the current run starts (split_gaps) */
-    BOOL split = pt->split_gaps && in->font != NULL && in->font->has_widths;
+    BOOL helv = in->font != NULL && !in->font->has_widths && pt->std_widths; /* measured as Helvetica */
+    BOOL split = pt->split_gaps && in->font != NULL && (in->font->has_widths || helv);
+    BOOL ok;
+    in->ink_end = 0.0;
     if (str_or_array->t == PO_STR)
     {
-        if (!font_decode(in->font, str_or_array->u.s, str_or_array->n, pt))
+        if (!show_str(in, str_or_array, &adv, &adv0, &start, helv, split))
         {
             return FALSE;
-        }
-        if (in->font != NULL && in->font->has_widths)
-        {
-            adv += font_string_width(in->font, str_or_array->u.s, str_or_array->n);
         }
     }
     else if (str_or_array->t == PO_ARRAY)
@@ -3047,13 +3439,9 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
             const PdfObj *it = &str_or_array->u.items[k];
             if (it->t == PO_STR)
             {
-                if (!font_decode(in->font, it->u.s, it->n, pt))
+                if (!show_str(in, it, &adv, &adv0, &start, helv, split))
                 {
                     return FALSE;
-                }
-                if (in->font != NULL && in->font->has_widths)
-                {
-                    adv += font_string_width(in->font, it->u.s, it->n);
                 }
             }
             else if (it->t == PO_INT || it->t == PO_REAL)
@@ -3084,9 +3472,17 @@ static BOOL show_text(Interp *in, const PdfObj *str_or_array)
     }
     if (split && pt->text_len == start && pt->nruns > 0 && adv0 > 0.0)
     {
-        return TRUE; /* the array ended with a gap */
+        ok = TRUE; /* the array ended with a gap */
     }
-    return push_run(in, start, adv0, adv);
+    else
+    {
+        ok = push_run(in, start, adv0, adv);
+    }
+    if (pt->std_widths)
+    {
+        text_advance(in, adv);
+    }
+    return ok;
 }
 
 static void text_newline(Interp *in, double tx, double ty)
@@ -3289,6 +3685,10 @@ static BOOL interpret(Interp *in, const unsigned char *data, size_t len)
                     {
                         in->tl = obj_num(&ops[nops - 1]);
                     }
+                    else if (op[1] == 'c' && op[2] == 0 && nops >= 1)
+                    {
+                        in->gs[in->gsp].tc = obj_num(&ops[nops - 1]);
+                    }
                     else if (op[1] == 'd' && op[2] == 0 && nops >= 2)
                     {
                         text_newline(in, obj_num(&ops[nops - 2]), obj_num(&ops[nops - 1]));
@@ -3384,6 +3784,8 @@ void EePdf_Close(EePdf *pdf)
     }
     free(pdf->fonts);
     free(pdf->font_hash);
+    free(pdf->gm_fp);
+    free(pdf->gm_cp);
     arena_free(&pdf->arena);
     arena_free(&pdf->tmp_arena);
     arena_free(&pdf->os_arena);
@@ -3599,8 +4001,221 @@ void EePdf_PageTextFree(EePdfPageText *pt)
     {
         free(pt->runs);
         free(pt->text);
+        free(pt->glyphs);
         ZeroMemory(pt, sizeof(*pt));
     }
+}
+
+BOOL EePdf_SetGlyphChars(EePdf *pdf, const uint32_t *fps, const uint32_t *cps, uint32_t n)
+{
+    uint32_t *f = (uint32_t *)malloc(((size_t)n + 1) * sizeof(uint32_t));
+    uint32_t *c = (uint32_t *)malloc(((size_t)n + 1) * sizeof(uint32_t));
+    uint32_t i, j;
+    if (f == NULL || c == NULL)
+    {
+        free(f);
+        free(c);
+        return FALSE;
+    }
+    for (i = 0; i < n; i++)
+    {
+        /* insertion by fp (a page's few hundred drawings) */
+        for (j = i; j > 0 && f[j - 1] > fps[i]; j--)
+        {
+            f[j] = f[j - 1];
+            c[j] = c[j - 1];
+        }
+        f[j] = fps[i];
+        c[j] = cps[i];
+    }
+    free(pdf->gm_fp);
+    free(pdf->gm_cp);
+    pdf->gm_fp = f;
+    pdf->gm_cp = c;
+    pdf->ngm = n;
+    return TRUE;
+}
+
+static BOOL outline_put(EePdfOutline *o, uint8_t op, const double *m, const double *xy, int npts)
+{
+    int k;
+    uint8_t *no = (uint8_t *)realloc(o->ops, (size_t)o->nops + 1);
+    float *np;
+    if (no == NULL)
+    {
+        return FALSE;
+    }
+    o->ops = no;
+    o->ops[o->nops++] = op;
+    if (npts == 0)
+    {
+        return TRUE;
+    }
+    np = (float *)realloc(o->pts, ((size_t)o->npts + (size_t)npts) * 2 * sizeof(float));
+    if (np == NULL)
+    {
+        return FALSE;
+    }
+    o->pts = np;
+    for (k = 0; k < npts; k++)
+    {
+        double x = xy[2 * k], y = xy[2 * k + 1];
+        o->pts[2 * o->npts] = (float)(x * m[0] + y * m[2] + m[4]);
+        o->pts[2 * o->npts + 1] = (float)(x * m[1] + y * m[3] + m[5]);
+        o->npts++;
+    }
+    return TRUE;
+}
+
+void EePdf_OutlineFree(EePdfOutline *o)
+{
+    if (o != NULL)
+    {
+        free(o->ops);
+        free(o->pts);
+        ZeroMemory(o, sizeof(*o));
+    }
+}
+
+BOOL EePdf_GlyphOutline(EePdf *pdf, uint32_t proc, EePdfOutline *out)
+{
+    PdfObj sd;
+    uint64_t soff = 0;
+    ByteBuf data = {0};
+    Lex lx;
+    PdfObj ops[8];
+    int nops = 0, gsp = 0;
+    double ctm[8][6]; /* q/Q stack of the glyph's own cm */
+    double cur[2] = {0, 0};
+    BOOL ok = FALSE;
+    ZeroMemory(out, sizeof(*out));
+    arena_reset(&pdf->tmp_arena);
+    if (!pdf_load(pdf, proc, &pdf->tmp_arena, &sd, &soff) || soff == 0 ||
+        !stream_decode(pdf, &pdf->tmp_arena, &sd, soff, &data))
+    {
+        bb_free(&data);
+        return FALSE;
+    }
+    mat_ident(ctm[0]);
+    lx.p = data.p;
+    lx.end = data.p + data.len;
+    lx.truncated = 0;
+    for (;;)
+    {
+        PdfObj o;
+        const char *op;
+        double xy[6];
+        int k;
+        lex_skip_ws(&lx);
+        if (lx.p >= lx.end)
+        {
+            ok = TRUE;
+            break;
+        }
+        if (!parse_obj(&lx, &pdf->tmp_arena, &o, 0))
+        {
+            break;
+        }
+        if (o.t != PO_KEYWORD)
+        {
+            if (nops < 8)
+            {
+                ops[nops++] = o;
+            }
+            continue;
+        }
+        op = (const char *)o.u.s;
+        for (k = 0; k < nops && k < 6; k++)
+        {
+            xy[k] = obj_num(&ops[k]);
+        }
+        if (strcmp(op, "BI") == 0)
+        {
+            break; /* an image glyph: no outline */
+        }
+        else if (strcmp(op, "q") == 0 && gsp + 1 < 8)
+        {
+            memcpy(ctm[gsp + 1], ctm[gsp], sizeof(ctm[0]));
+            gsp++;
+        }
+        else if (strcmp(op, "Q") == 0 && gsp > 0)
+        {
+            gsp--;
+        }
+        else if (strcmp(op, "cm") == 0 && nops == 6)
+        {
+            mat_mul(xy, ctm[gsp], ctm[gsp]);
+        }
+        else if ((strcmp(op, "m") == 0 || strcmp(op, "l") == 0) && nops == 2)
+        {
+            if (!outline_put(out, op[0] == 'm' ? 0 : 1, ctm[gsp], xy, 1))
+            {
+                break;
+            }
+            cur[0] = xy[0];
+            cur[1] = xy[1];
+        }
+        else if (strcmp(op, "c") == 0 && nops == 6)
+        {
+            if (!outline_put(out, 2, ctm[gsp], xy, 3))
+            {
+                break;
+            }
+            cur[0] = xy[4];
+            cur[1] = xy[5];
+        }
+        else if ((strcmp(op, "v") == 0 || strcmp(op, "y") == 0) && nops == 4)
+        {
+            /* v: the first control point is the current point; y: the second is the end */
+            double c3[6];
+            if (op[0] == 'v')
+            {
+                c3[0] = cur[0];
+                c3[1] = cur[1];
+                c3[2] = xy[0];
+                c3[3] = xy[1];
+            }
+            else
+            {
+                c3[0] = xy[0];
+                c3[1] = xy[1];
+                c3[2] = xy[2];
+                c3[3] = xy[3];
+            }
+            c3[4] = xy[2];
+            c3[5] = xy[3];
+            if (!outline_put(out, 2, ctm[gsp], c3, 3))
+            {
+                break;
+            }
+            cur[0] = xy[2];
+            cur[1] = xy[3];
+        }
+        else if (strcmp(op, "re") == 0 && nops == 4)
+        {
+            double r[8] = {xy[0], xy[1], xy[0] + xy[2], xy[1], xy[0] + xy[2], xy[1] + xy[3], xy[0], xy[1] + xy[3]};
+            if (!outline_put(out, 0, ctm[gsp], r, 1) || !outline_put(out, 1, ctm[gsp], r + 2, 1) ||
+                !outline_put(out, 1, ctm[gsp], r + 4, 1) || !outline_put(out, 1, ctm[gsp], r + 6, 1) ||
+                !outline_put(out, 3, ctm[gsp], r, 0))
+            {
+                break;
+            }
+        }
+        else if (strcmp(op, "h") == 0)
+        {
+            if (!outline_put(out, 3, ctm[gsp], xy, 0))
+            {
+                break;
+            }
+        }
+        nops = 0;
+    }
+    bb_free(&data);
+    if (!ok)
+    {
+        EePdf_OutlineFree(out);
+    }
+    return ok;
 }
 
 /* Append the decoded data of content stream reference/object @p c to pdf->content. */
@@ -3651,6 +4266,8 @@ static BOOL page_interpret(EePdf *pdf, uint32_t page_index, EePdfPageText *out,
     }
     out->nruns = 0;
     out->text_len = 0;
+    out->nglyphs = 0;
+    out->unknown_glyphs = 0;
     if (out->text != NULL)
     {
         out->text[0] = 0;

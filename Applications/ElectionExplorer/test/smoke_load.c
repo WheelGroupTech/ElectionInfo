@@ -5140,6 +5140,8 @@ static BOOL tpdf_row(TBuf *c, double *y_top, const char *t1, const char *t2,
 
 /* The Info Producer tpdf_write writes; NULL = Microsoft Reporting Services (Hart). */
 static const char *g_tpdf_producer = NULL;
+/* The Info Creator tpdf_write writes (PDF string syntax); NULL = none. */
+static const char *g_tpdf_creator = NULL;
 
 /* Write a PDF whose pages have the given content streams. @p hart adds the Info Title
  * and the Type0/ToUnicode font; @p break_startxref writes a bogus negative startxref so
@@ -5190,9 +5192,11 @@ static BOOL tpdf_write(const wchar_t *path, TBuf *pages, int npages, BOOL break_
     ok = ok && tb_add(&b, k_Cmap, strlen(k_Cmap));
     ok = ok && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
     OBJ(6);
-    ok = ok && tb_printf(&b, "<< /Title (Count_CvrReport) /Producer (%s) >>\r\nendobj\r\n",
+    ok = ok && tb_printf(&b, "<< /Title (Count_CvrReport) /Producer (%s)%s%s%s >>\r\nendobj\r\n",
                          g_tpdf_producer != NULL ? g_tpdf_producer
-                                                 : "Microsoft Reporting Services PDF Rendering Extension 2019.11.0.0");
+                                                 : "Microsoft Reporting Services PDF Rendering Extension 2019.11.0.0",
+                         g_tpdf_creator != NULL ? " /Creator (" : "", g_tpdf_creator != NULL ? g_tpdf_creator : "",
+                         g_tpdf_creator != NULL ? ")" : "");
     for (i = 0; i < npages && ok; i++)
     {
         int pn = 7 + i * 3;
@@ -11083,28 +11087,69 @@ done:
     return rc;
 }
 
-/* Helvetica advance width, as ee_results_pdf.c estimates it for a font without widths. */
+/* Helvetica advance width, as ee_results_pdf.c takes it for a font without widths. */
 static double rpdf_w(const char *s, double size)
 {
+    static const unsigned short k_helv[95] = {
+        278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556, 556,
+        556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778,
+        722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278,
+        278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
+        556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584};
     double w = 0.0;
     for (; *s != '\0'; s++)
     {
-        char c = *s;
-        w += (c >= '0' && c <= '9') ? 0.556
-             : (c == ',' || c == '.' || c == ' ') ? 0.278
-             : c == '%'               ? 0.889
-             : c == '-'               ? 0.333
-             : (c >= 'A' && c <= 'Z') ? 0.667
-                                      : 0.5;
+        w += (*s >= ' ' && *s <= '~') ? k_helv[*s - ' '] : 556;
     }
-    return w * size;
+    return w / 1000.0 * size;
+}
+
+/* A report printed through PScript5: its characters, codes 0.. in order of first use, drawn
+ * by a Type 3 font with no names to tell them (rpdf_t3_write). */
+typedef struct T3Chars
+{
+    char ch[128];
+    int n;
+} T3Chars;
+
+/* Set: rpdf_text_at shows text as PScript5 does, one glyph at a time in font T1. */
+static T3Chars *g_rpdf_t3 = NULL;
+
+static int rpdf_t3_code(char ch)
+{
+    int i;
+    for (i = 0; i < g_rpdf_t3->n; i++)
+    {
+        if (g_rpdf_t3->ch[i] == ch)
+        {
+            return i;
+        }
+    }
+    if (g_rpdf_t3->n == (int)ARRAYSIZE(g_rpdf_t3->ch))
+    {
+        return 0;
+    }
+    g_rpdf_t3->ch[g_rpdf_t3->n] = ch;
+    return g_rpdf_t3->n++;
 }
 
 /* Text at (x, y) in font F5; @p rot90 turns it to read bottom to top. */
 static BOOL rpdf_text_at(TBuf *c, double x, double y, double size, const char *s, BOOL rot90)
 {
-    BOOL ok = rot90 ? tb_printf(c, "BT /F5 %.1f Tf 0 1 -1 0 %.2f %.2f Tm (", size, x, y)
-                    : tb_printf(c, "BT /F5 %.1f Tf %.2f %.2f Td (", size, x, y);
+    BOOL ok;
+    if (g_rpdf_t3 != NULL && !rot90)
+    {
+        /* each glyph 1 em wide in the font, placed by its Helvetica width */
+        ok = tb_printf(c, "BT /T1 1 Tf %.1f 0 0 %.1f %.2f %.2f Tm 0 Tc\n", size, size, x, y);
+        for (; *s != '\0' && ok; s++)
+        {
+            char one[2] = {*s, '\0'};
+            ok = tb_printf(c, "(\\%03o)Tj %.4f 0 TD\n", rpdf_t3_code(*s), rpdf_w(one, 1.0));
+        }
+        return ok && tb_printf(c, "ET\n");
+    }
+    ok = rot90 ? tb_printf(c, "BT /F5 %.1f Tf 0 1 -1 0 %.2f %.2f Tm (", size, x, y)
+               : tb_printf(c, "BT /F5 %.1f Tf %.2f %.2f Td (", size, x, y);
     for (; *s != '\0' && ok; s++)
     {
         if (*s == '(' || *s == ')' || *s == '\\')
@@ -11125,6 +11170,61 @@ static BOOL rpdf_text(TBuf *c, double x, double y, double size, const char *s)
 static BOOL rpdf_right(TBuf *c, double right, double y, double size, const char *s)
 {
     return rpdf_text_at(c, right - rpdf_w(s, size), y, size, s, FALSE);
+}
+
+/* Strings shown one after another from one point, right-aligned as one cell at @p right
+ * ("104" "," "443": numbers edited in Acrobat). */
+static BOOL rpdf_pieces_right(TBuf *c, double right, double y, double size, const char *const *pieces, int n)
+{
+    double w = 0.0;
+    int i;
+    BOOL ok;
+    for (i = 0; i < n; i++)
+    {
+        w += rpdf_w(pieces[i], size);
+    }
+    ok = tb_printf(c, "BT /F5 %.1f Tf %.2f %.2f Td", size, right - w, y);
+    for (i = 0; i < n && ok; i++)
+    {
+        ok = tb_printf(c, " (%s) Tj", pieces[i]);
+    }
+    return ok && tb_printf(c, " ET\n");
+}
+
+/* A summary page in the Electionware template some counties print without the footer
+ * (Cameron, Williamson): 12 pt heading with the status beside the election, "Statistics"
+ * below its headings, three-line headings ("Election" / "Day In-" / "Person"), a number
+ * shown in pieces, and rows whose numbers are one string with the percentage. */
+static BOOL ess3_page(TBuf *c)
+{
+    static const char *const k_reg[] = {"104", ",", "443"};
+    BOOL ok = rpdf_text(c, 20.0, 760.9, 12.0, "Summary Results Report") &&
+              rpdf_text(c, 459.0, 760.9, 12.0, "UNOFFICIAL RESULTS") &&
+              rpdf_text(c, 20.0, 745.9, 12.0, "May Joint Elections of Test County, TX") &&
+              rpdf_text(c, 470.0, 745.9, 12.0, "Final Unofficial") && rpdf_text(c, 20.0, 730.9, 12.0, "May 3, 2025") &&
+              rpdf_text(c, 498.3, 730.9, 12.0, "Test County");
+    /* statistics: TOTAL right edge 200, Election Day In-Person 240, Mail 280 */
+    ok = ok && rpdf_text(c, 169.2, 712.6, 8.0, "TOTAL") && rpdf_text(c, 205.8, 718.4, 8.0, "Election") &&
+         rpdf_text(c, 207.1, 712.6, 8.0, "Day In-") && rpdf_text(c, 207.3, 706.8, 8.0, "Person") &&
+         rpdf_text(c, 252.7, 712.6, 8.0, "Mail") && rpdf_text(c, 20.0, 698.0, 13.0, "Statistics") &&
+         rpdf_text(c, 20.0, 673.0, 8.0, "Registered Voters - Total") &&
+         rpdf_pieces_right(c, 200.0, 675.0, 8.0, k_reg, 3) && rpdf_text(c, 20.0, 658.0, 8.0, "Ballots Cast - Total") &&
+         rpdf_right(c, 200.0, 660.0, 8.0, "7,428") && rpdf_right(c, 240.0, 660.3, 8.0, "4,000") &&
+         rpdf_right(c, 280.0, 660.3, 8.0, "3,428");
+    /* a contest: TOTAL 201.4, VOTE % 241.4, Election Day In-Person 281.4, Mail 321.4 */
+    ok = ok && rpdf_text(c, 20.0, 601.4, 9.0, "Proposition A Test City") &&
+         rpdf_text(c, 20.0, 590.5, 7.0, "Vote For 1") && rpdf_text(c, 174.2, 580.6, 8.0, "TOTAL") &&
+         rpdf_text(c, 204.4, 580.6, 8.0, "VOTE %") && rpdf_text(c, 245.8, 586.4, 8.0, "Election") &&
+         rpdf_text(c, 247.1, 580.6, 8.0, "Day In-") && rpdf_text(c, 247.3, 574.8, 8.0, "Person") &&
+         rpdf_text(c, 292.7, 580.6, 8.0, "Mail");
+    ok = ok && rpdf_text(c, 20.0, 560.3, 8.0, "For") &&
+         rpdf_text(c, 201.4 - rpdf_w("4,219", 8.0), 560.3, 8.0, "4,219 59.75% 2,380 1,839") &&
+         rpdf_text(c, 20.0, 547.3, 8.0, "Against") &&
+         rpdf_text(c, 201.4 - rpdf_w("2,842", 8.0), 547.3, 8.0, "2,842 40.25% 1,557 1,285") &&
+         rpdf_text(c, 30.0, 534.3, 8.0, "Overvotes") && rpdf_right(c, 201.4, 534.3, 8.0, "3") &&
+         rpdf_text(c, 281.4 - rpdf_w("1", 8.0), 534.3, 8.0, "1 2") && rpdf_text(c, 30.0, 521.3, 8.0, "Undervotes") &&
+         rpdf_right(c, 201.4, 521.3, 8.0, "364") && rpdf_text(c, 281.4 - rpdf_w("200", 8.0), 521.3, 8.0, "200 164");
+    return ok && rpdf_text(c, 21.0, 38.6, 8.0, "Test City Summary - 05/12/2025 02:01PM");
 }
 
 /* An Electionware page heading (and precinct line) and footer. */
@@ -11360,13 +11460,15 @@ static BOOL rpdf_no_diffs(const EeResults *r)
  * the name, write-in rows, two numbers shown as one string, contests met in another order
  * precinct by precinct), and so do a Hart cumulative report and canvass (turned headings,
  * a primary's " - Democratic Party" title and "110 - DEM" precincts, a voting instruction
- * read as Vote For); EeResults_MatchPrecinctName files "110BS3" under precinct 110
- * (tag: respdf). */
+ * read as Vote For); EeResults_MatchPrecinctName files "110BS3" under precinct 110; an
+ * Electionware summary with no footer (JasperReports Creator) reads its pieced number, its
+ * rows printed as one string with the percentage and its three-line headings (tag: respdf). */
 static int test_results_pdf(void)
 {
-    wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH], p_hcum[MAX_PATH], p_hcan[MAX_PATH], p_new[MAX_PATH];
+    wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH], p_hcum[MAX_PATH], p_hcan[MAX_PATH], p_new[MAX_PATH],
+        p_nof[MAX_PATH];
     wchar_t err[512] = L"";
-    TBuf sum = {0}, pre[2] = {{0}, {0}}, hcum = {0}, hcan[2] = {{0}, {0}}, newp[2] = {{0}, {0}};
+    TBuf sum = {0}, pre[2] = {{0}, {0}}, hcum = {0}, hcan[2] = {{0}, {0}}, newp[2] = {{0}, {0}}, nof = {0};
     EeResults *res = NULL;
     uint32_t nres = 0;
     const wchar_t *paths[2];
@@ -11380,6 +11482,7 @@ static int test_results_pdf(void)
     StringCchPrintfW(p_hcum, MAX_PATH, L"%sRPDF_hart_cumulative.pdf", dir);
     StringCchPrintfW(p_hcan, MAX_PATH, L"%sRPDF_hart_canvass.pdf", dir);
     StringCchPrintfW(p_new, MAX_PATH, L"%sRPDF_precinct_new.pdf", dir);
+    StringCchPrintfW(p_nof, MAX_PATH, L"%sRPDF_summary_nofooter.pdf", dir);
 
     /* ES&S summary report */
     ok = ess_page(&sum, "Summary Results Report", NULL) && rpdf_text(&sum, 25.0, 689.1, 10.0, "STATISTICS") &&
@@ -11469,9 +11572,14 @@ static int test_results_pdf(void)
         ok = ok && ess2_page(&newp[0], "Precinct 1", k_v1) && ess2_page(&newp[1], "Precinct 2", k_v2);
     }
 
+    ok = ok && ess3_page(&nof);
+
     g_tpdf_producer = "iText 2.1.7 by 1T3XT";
     ok = ok && tpdf_write(p_sum, &sum, 1, FALSE) && tpdf_write(p_pre, pre, 2, FALSE) &&
          tpdf_write(p_new, newp, 2, FALSE);
+    g_tpdf_creator = "JasperReports \\(02 CBR Sum\\)";
+    ok = ok && tpdf_write(p_nof, &nof, 1, FALSE);
+    g_tpdf_creator = NULL;
     g_tpdf_producer = NULL;
     ok = ok && tpdf_write(p_hcum, &hcum, 1, FALSE) && tpdf_write(p_hcan, hcan, 2, FALSE);
     if (!ok)
@@ -11573,10 +11681,37 @@ static int test_results_pdf(void)
                 res[0].nprecincts, res[0].nvt);
         goto done;
     }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* ES&S summary without the footer */
+    paths[0] = p_nof;
+    if (!res_load(paths, 1, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"respdf: no-footer load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = rpdf_contest(&res[0], L"Proposition A Test City");
+    if (ct == NULL || res[0].ncontests != 1 || res[0].sources[0].format != EE_RES_FMT_ESS_SUMMARY ||
+        res[0].nvt != 2 || wcscmp(res[0].vote_types[0], L"Election Day In-Person") != 0 ||
+        wcscmp(res[0].vote_types[1], L"Mail") != 0 || res[0].election_name == NULL ||
+        wcscmp(res[0].election_name, L"May Joint Elections of Test County, TX") != 0 || res[0].region == NULL ||
+        wcscmp(res[0].region, L"Test County") != 0 || res[0].registered_total != 104443 ||
+        res[0].ballots_total != 7428 || ct->nchoices != 2 || wcscmp(res[0].choices[ct->first_choice].name, L"For") != 0 ||
+        res[0].choices[ct->first_choice].total != 4219 || res[0].choices[ct->first_choice + 1].total != 2842 ||
+        ct->over_total != 3 || ct->under_total != 364 || res[0].nissues != 0)
+    {
+        wprintf(L"respdf: no-footer result (contests %u, vt %u, reg %lld, ballots %lld, issues %u)\n",
+                res[0].ncontests, res[0].nvt, (long long)res[0].registered_total, (long long)res[0].ballots_total,
+                res[0].nissues);
+        goto done;
+    }
     rc = 0;
 
 done:
     g_tpdf_producer = NULL;
+    g_tpdf_creator = NULL;
     EeResults_FreeArray(res, nres);
     free(sum.p);
     free(pre[0].p);
@@ -11586,6 +11721,8 @@ done:
     free(hcan[1].p);
     free(newp[0].p);
     free(newp[1].p);
+    free(nof.p);
+    DeleteFileW(p_nof);
     DeleteFileW(p_new);
     DeleteFileW(p_sum);
     DeleteFileW(p_pre);
@@ -11629,6 +11766,501 @@ static uint32_t rescmp_count(const EeResultsDiff *d, uint32_t n, uint8_t status)
         c += d[i].status == status;
     }
     return c;
+}
+
+/* The heading of a Hart report before Verity (McLennan 2020): title, "<County> - <election> -
+ * <date>" (WinAnsi em dashes), page, run date and the voters line. */
+static BOOL hl_page_head(TBuf *c, const char *title)
+{
+    return rpdf_text(c, 244.1, 585.0, 12.2, title) &&
+           rpdf_text(c, 189.6, 570.8, 11.4, "Test County  \x97  JOINT GENERAL ELECTION  \x97  November 03, 2020") &&
+           rpdf_text(c, 371.4, 557.0, 8.8, "Page 1 of 1") && rpdf_text(c, 691.3, 556.1, 8.8, "11/10/2020 04:59 PM") &&
+           rpdf_text(c, 14.9, 539.0, 8.9, "Total Number of Voters : 260 of 700 = 37.14%") &&
+           rpdf_text(c, 620.8, 539.0, 8.9, "Precincts Reporting 2 of 2 = 100.00%");
+}
+
+/* Its table heading and a row: a count right of each heading's start, then its percentage
+ * (baselines 0.9 pt apart, as the county's wander). */
+static BOOL hl_table_head(TBuf *c, double y)
+{
+    return rpdf_text(c, 34.0, y, 6.9, "Party") && rpdf_text(c, 143.4, y, 6.9, "Candidate") &&
+           rpdf_text(c, 294.3, y, 6.9, "Absentee") && rpdf_text(c, 407.2, y, 6.9, "Early") &&
+           rpdf_text(c, 510.4, y, 6.9, "Election") && rpdf_text(c, 623.4, y, 6.9, "Total");
+}
+
+static BOOL hl_row(TBuf *c, double y, double lx, const char *label, const char *ab, const char *ev, const char *ed,
+                   const char *tot)
+{
+    return rpdf_text(c, lx, y, 7.2, label) && rpdf_right(c, 318.0, y - 0.9, 7.2, ab) &&
+           rpdf_text(c, 327.5, y, 7.2, "50.00%") && rpdf_right(c, 421.5, y - 0.9, 7.2, ev) &&
+           rpdf_text(c, 438.4, y, 7.2, "50.00%") && rpdf_right(c, 516.8, y - 0.9, 7.2, ed) &&
+           rpdf_text(c, 536.2, y, 7.2, "50.00%") && rpdf_right(c, 628.5, y - 0.9, 7.2, tot) &&
+           rpdf_text(c, 640.8, y, 7.2, "50.00%");
+}
+
+/* Hart reports before Verity: a cumulative report, a precinct report and a canvass (turned
+ * headings, a wrapped name under its party, a "Totals" column) load as one election with
+ * vote types and no differences; a second entity's cumulative report of the same election
+ * combines with the first (tag: reshart0). */
+static int test_results_hart_old(void)
+{
+    wchar_t dir[MAX_PATH], p_cum[MAX_PATH], p_pre[MAX_PATH], p_can[MAX_PATH], p_isd[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf cum = {0}, pre = {0}, can = {0}, isd = {0};
+    EeResults *res = NULL;
+    uint32_t nres = 0;
+    const wchar_t *paths[3];
+    const EeResultsContest *ct;
+    BOOL ok;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_cum, MAX_PATH, L"%sHL_cumulative.pdf", dir);
+    StringCchPrintfW(p_pre, MAX_PATH, L"%sHL_precinct.pdf", dir);
+    StringCchPrintfW(p_can, MAX_PATH, L"%sHL_canvass.pdf", dir);
+    StringCchPrintfW(p_isd, MAX_PATH, L"%sHL_isd_cumulative.pdf", dir);
+
+    /* cumulative: Ann Lee 10 / 100 / 50 = 160, Bob Ray 5 / 60 / 30 = 95 */
+    ok = hl_page_head(&cum, "Test City Cumulative Report  \x97  Official ") && hl_table_head(&cum, 513.6) &&
+         rpdf_text(&cum, 21.2, 494.4, 6.9, "Mayor Test City, Vote For 1") &&
+         hl_row(&cum, 479.4, 74.2, "Ann Lee", "10", "100", "50", "160") &&
+         hl_row(&cum, 467.9, 74.2, "Bob Ray", "5", "60", "30", "95") &&
+         hl_row(&cum, 450.1, 189.9, "Cast Votes:", "15", "160", "80", "255") &&
+         hl_row(&cum, 434.5, 189.1, "Over Votes:", "0", "0", "0", "0") &&
+         hl_row(&cum, 422.6, 184.8, "Under Votes:", "1", "2", "2", "5");
+    /* precinct report: 101 (120 ballots) and 102 (140) */
+    ok = ok && hl_page_head(&pre, "Test City Precinct Report  \x97  Official ") && hl_table_head(&pre, 511.9) &&
+         rpdf_text(&pre, 19.7, 484.7, 7.8, "Precinct 101  (Ballots Cast: 120)") &&
+         rpdf_text(&pre, 29.5, 468.0, 6.9, "Mayor Test City, Vote For 1") &&
+         hl_row(&pre, 459.6, 66.9, "Ann Lee", "6", "60", "30", "96") &&
+         hl_row(&pre, 450.4, 66.9, "Bob Ray", "3", "36", "18", "57") &&
+         hl_row(&pre, 437.4, 151.6, "Cast Votes:", "9", "96", "48", "153") &&
+         hl_row(&pre, 424.4, 150.8, "Over Votes:", "0", "0", "0", "0") &&
+         hl_row(&pre, 411.4, 146.5, "Under Votes:", "1", "1", "1", "3") &&
+         rpdf_text(&pre, 19.7, 390.0, 7.8, "Precinct 102  (Ballots Cast: 140)") &&
+         rpdf_text(&pre, 29.5, 373.3, 6.9, "Mayor Test City, Vote For 1") &&
+         hl_row(&pre, 364.9, 66.9, "Ann Lee", "4", "40", "20", "64") &&
+         hl_row(&pre, 355.7, 66.9, "Bob Ray", "2", "24", "12", "38") &&
+         hl_row(&pre, 342.7, 151.6, "Cast Votes:", "6", "64", "32", "102") &&
+         hl_row(&pre, 329.7, 150.8, "Over Votes:", "0", "0", "0", "0") &&
+         hl_row(&pre, 316.7, 146.5, "Under Votes:", "0", "1", "1", "2");
+    /* canvass: ballots by vote type, total, registered, turnout, then the turned headings */
+    ok = ok && hl_page_head(&can, "Canvass Report  \x97  Total Voters  \x97  Official ") &&
+         rpdf_text(&can, 285.8, 523.5, 10.5, "Mayor   Test City") && rpdf_text(&can, 53.0, 501.2, 7.8, "Precinct") &&
+         rpdf_text(&can, 130.1, 501.2, 7.8, "Absentee ") && rpdf_text(&can, 188.2, 501.2, 7.8, "Early ") &&
+         rpdf_text(&can, 233.4, 501.2, 7.8, "Election ") && rpdf_text(&can, 292.0, 501.2, 7.8, "Total ") &&
+         rpdf_text(&can, 333.9, 501.2, 7.8, "Registered ") && rpdf_text(&can, 392.5, 501.2, 7.8, "Percent ") &&
+         rpdf_text_at(&can, 442.0, 461.6, 7.8, "DEM ", TRUE) && rpdf_text_at(&can, 452.8, 445.0, 7.8, "Ann Lee", TRUE) &&
+         rpdf_text_at(&can, 490.0, 450.0, 7.8, "Bob ", TRUE) && rpdf_text_at(&can, 500.8, 455.0, 7.8, "Ray", TRUE) &&
+         rpdf_text_at(&can, 539.0, 447.4, 7.8, "Totals", TRUE);
+    {
+        static const char *const k_rows[][9] = {{"101", "9", "96", "15", "120", "300", "96", "57", "153"},
+                                                {"102", "6", "64", "70", "140", "400", "64", "38", "102"},
+                                                {"Totals", "15", "160", "85", "260", "700", "160", "95", "255"}};
+        static const double k_right[] = {172.8, 223.8, 274.6, 325.3, 379.0, 480.8, 528.8, 576.8};
+        int r, k;
+        for (r = 0; r < 3 && ok; r++)
+        {
+            double y = 415.2 - 9.9 * r;
+            ok = rpdf_text(&can, 12.9, y, 7.2, k_rows[r][0]) && rpdf_text(&can, 407.9, y, 7.2, "37.14%");
+            for (k = 0; k < 8 && ok; k++)
+            {
+                ok = rpdf_right(&can, k_right[k], y, 7.2, k_rows[r][k + 1]);
+            }
+        }
+    }
+    /* another entity's cumulative report of the election */
+    ok = ok && hl_page_head(&isd, "Test ISD Cumulative Report  \x97  Official ") && hl_table_head(&isd, 513.6) &&
+         rpdf_text(&isd, 21.2, 494.4, 6.9, "Board of Trustees   Test ISD, Vote For 1") &&
+         hl_row(&isd, 479.4, 74.2, "Cy Doe", "3", "40", "20", "63") &&
+         hl_row(&isd, 467.9, 74.2, "Di Roe", "2", "30", "10", "42");
+
+    g_tpdf_producer = ""; /* none, as the county's */
+    ok = ok && tpdf_write(p_cum, &cum, 1, FALSE) && tpdf_write(p_pre, &pre, 1, FALSE) && tpdf_write(p_can, &can, 1, FALSE) &&
+         tpdf_write(p_isd, &isd, 1, FALSE);
+    g_tpdf_producer = NULL;
+    if (!ok)
+    {
+        wprintf(L"reshart0: fixtures\n");
+        goto done;
+    }
+
+    paths[0] = p_cum;
+    paths[1] = p_pre;
+    paths[2] = p_can;
+    if (!res_load(paths, 3, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"reshart0: load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = rpdf_contest(&res[0], L"Mayor Test City");
+    if (ct == NULL || res[0].nsources != 3 || res[0].sources[0].format != EE_RES_FMT_HART_PCT_REPORT ||
+        res[0].nprecincts != 2 || res[0].nvt != 3 || wcscmp(res[0].vote_types[1], L"Early Voting") != 0 ||
+        wcscmp(res[0].vote_types[2], L"Election Day") != 0 || ct->vote_for != 1 || ct->nchoices != 2 ||
+        wcscmp(res[0].choices[ct->first_choice + 1].name, L"Bob Ray") != 0 ||
+        res[0].choices[ct->first_choice].total != 160 || rpdf_cell(&res[0], ct, 0, L"101", 1) != 60 ||
+        rpdf_cell(&res[0], ct, 1, L"102", 2) != 12 || ct->under_total != 5 || res[0].registered_total != 700 ||
+        res[0].ballots_total != 260 || res[0].election_name == NULL ||
+        wcscmp(res[0].election_name, L"JOINT GENERAL ELECTION") != 0 || res[0].region == NULL ||
+        wcscmp(res[0].region, L"Test County") != 0 || !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"reshart0: result (contests %u, precincts %u, vt %u, issues %u)\n", res[0].ncontests,
+                res[0].nprecincts, res[0].nvt, res[0].nissues);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* two entities' cumulative reports: one election */
+    paths[0] = p_cum;
+    paths[1] = p_isd;
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1 || res[0].ncontests != 2 || res[0].nsources != 2 ||
+        rpdf_contest(&res[0], L"Board of Trustees Test ISD") == NULL)
+    {
+        wprintf(L"reshart0: combined (%u results, %u contests) %s\n", nres, nres ? res[0].ncontests : 0, err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_tpdf_producer = NULL;
+    EeResults_FreeArray(res, nres);
+    free(cum.p);
+    free(pre.p);
+    free(can.p);
+    free(isd.p);
+    DeleteFileW(p_cum);
+    DeleteFileW(p_pre);
+    DeleteFileW(p_can);
+    DeleteFileW(p_isd);
+    wprintf(L"reshart0: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
+/* PScript5's two cells in one string: the last digit of @p a (right edge @p ra) and the
+ * first of @p b (right edge @p rb) shown together, spread by a character spacing set before
+ * a q ... Q that sets it to 0 inside (the Q restores it, as in Travis's L22 report). */
+static BOOL rpdf_t3_spread(TBuf *c, double y, double size, double ra, const char *a, double rb, const char *b)
+{
+    size_t la = strlen(a), lb = strlen(b), i;
+    double xa = ra - rpdf_w(a, size), xb = rb - rpdf_w(b, size);
+    double xl = ra - rpdf_w(a + la - 1, size); /* a's last digit */
+    char b0[2] = {b[0], '\0'};
+    BOOL ok = tb_printf(c, "BT %.4f Tc ET q BT 0 Tc ET Q\nBT /T1 1 Tf %.1f 0 0 %.1f %.2f %.2f Tm\n",
+                        (xb - xl) / size - 1.0, size, size, xa, y);
+    for (i = 0; i + 1 < la && ok; i++)
+    {
+        char one[2] = {a[i], '\0'};
+        ok = tb_printf(c, "(\\%03o)Tj %.4f 0 TD\n", rpdf_t3_code(a[i]), rpdf_w(one, 1.0));
+    }
+    ok = ok && tb_printf(c, "(\\%03o\\%03o)Tj %.4f 0 TD 0 Tc\n", rpdf_t3_code(a[la - 1]), rpdf_t3_code(b[0]),
+                         (xb + rpdf_w(b0, size) - xl) / size);
+    for (i = 1; i < lb && ok; i++)
+    {
+        char one[2] = {b[i], '\0'};
+        ok = tb_printf(c, "(\\%03o)Tj %.4f 0 TD\n", rpdf_t3_code(b[i]), rpdf_w(one, 1.0));
+    }
+    return ok && tb_printf(c, "ET\n");
+}
+
+#define T3FX(f) (((double)(f).value + (double)(f).fract / 65536.0) / 1000.0)
+
+/* Character @p ch's CharProc: Arial's outline (1 em = 1, y up) filled; a space draws
+ * nothing. */
+static BOOL rpdf_t3_proc(HDC dc, char ch, TBuf *out)
+{
+    static const MAT2 k_ident = {{0, 1}, {0, 0}, {0, 0}, {0, 1}};
+    GLYPHMETRICS gm;
+    DWORD n;
+    unsigned char *buf, *p;
+    BOOL ok = tb_printf(out, "1 0 -10 -10 10 10 d1\n");
+    if (ch == ' ')
+    {
+        return ok;
+    }
+    n = GetGlyphOutlineW(dc, (UINT)(unsigned char)ch, GGO_NATIVE | GGO_UNHINTED, &gm, 0, NULL, &k_ident);
+    if (n == GDI_ERROR || n == 0 || (buf = (unsigned char *)malloc(n)) == NULL)
+    {
+        return FALSE;
+    }
+    if (GetGlyphOutlineW(dc, (UINT)(unsigned char)ch, GGO_NATIVE | GGO_UNHINTED, &gm, n, buf, &k_ident) == GDI_ERROR)
+    {
+        free(buf);
+        return FALSE;
+    }
+    for (p = buf; ok && p < buf + n;)
+    {
+        const TTPOLYGONHEADER *h = (const TTPOLYGONHEADER *)p;
+        const unsigned char *q = p + sizeof(TTPOLYGONHEADER), *end = p + h->cb;
+        double cx = T3FX(h->pfxStart.x), cy = T3FX(h->pfxStart.y);
+        ok = tb_printf(out, "%.4f %.4f m\n", cx, cy);
+        while (ok && q < end)
+        {
+            const TTPOLYCURVE *pc = (const TTPOLYCURVE *)q;
+            int i, np = pc->cpfx;
+            for (i = 0; ok && i < np; i++)
+            {
+                double x = T3FX(pc->apfx[i].x), y = T3FX(pc->apfx[i].y);
+                if (pc->wType == TT_PRIM_QSPLINE && i + 1 < np)
+                {
+                    /* a control point: the curve ends halfway to the next, or at the last point */
+                    double ex = T3FX(pc->apfx[i + 1].x), ey = T3FX(pc->apfx[i + 1].y);
+                    if (i + 2 < np)
+                    {
+                        ex = (x + ex) / 2.0;
+                        ey = (y + ey) / 2.0;
+                    }
+                    ok = tb_printf(out, "%.4f %.4f %.4f %.4f %.4f %.4f c\n", cx + 2.0 / 3.0 * (x - cx),
+                                   cy + 2.0 / 3.0 * (y - cy), ex + 2.0 / 3.0 * (x - ex), ey + 2.0 / 3.0 * (y - ey),
+                                   ex, ey);
+                    cx = ex;
+                    cy = ey;
+                    i += (i + 2 >= np); /* the last point ended this curve */
+                }
+                else if (pc->wType == TT_PRIM_CSPLINE && i + 2 < np)
+                {
+                    cx = T3FX(pc->apfx[i + 2].x);
+                    cy = T3FX(pc->apfx[i + 2].y);
+                    ok = tb_printf(out, "%.4f %.4f %.4f %.4f %.4f %.4f c\n", x, y, T3FX(pc->apfx[i + 1].x),
+                                   T3FX(pc->apfx[i + 1].y), cx, cy);
+                    i += 2;
+                }
+                else
+                {
+                    ok = tb_printf(out, "%.4f %.4f l\n", x, y);
+                    cx = x;
+                    cy = y;
+                }
+            }
+            q += sizeof(WORD) * 2 + sizeof(POINTFX) * (size_t)np;
+        }
+        ok = ok && tb_printf(out, "h\n");
+        p += h->cb;
+    }
+    free(buf);
+    return ok && tb_printf(out, "f\n");
+}
+
+/* Write a PDF as Acrobat Distiller makes it from PScript5's output: the pages' text in font
+ * T1, a Type 3 font whose glyphs (named /0 /1 ... in order of first use, a space /i255) are
+ * Arial outlines, each declared 1 em wide. */
+static BOOL rpdf_t3_write(const wchar_t *path, TBuf *pages, int npages, const T3Chars *t3)
+{
+    TBuf b = {0};
+    uint64_t offs[256];
+    int nobj = 5 + t3->n + 2 * npages, i;
+    HDC dc = CreateCompatibleDC(NULL);
+    HFONT font = CreateFontW(-1000, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_TT_ONLY_PRECIS,
+                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Arial");
+    HGDIOBJ old = NULL;
+    FILE *fp = NULL;
+    uint64_t xref;
+    BOOL ok = dc != NULL && font != NULL && nobj < (int)ARRAYSIZE(offs);
+    if (ok)
+    {
+        old = SelectObject(dc, font);
+    }
+    ok = ok && tb_printf(&b, "%%PDF-1.4\n");
+#define OBJ(n) (offs[n] = b.len, ok = ok && tb_printf(&b, "%d 0 obj\n", n))
+    OBJ(1);
+    ok = ok && tb_printf(&b, "<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    OBJ(2);
+    ok = ok && tb_printf(&b, "<< /Type /Pages /Count %d /Kids [", npages);
+    for (i = 0; i < npages; i++)
+    {
+        ok = ok && tb_printf(&b, " %d 0 R", 6 + t3->n + 2 * i);
+    }
+    ok = ok && tb_printf(&b, " ] >>\nendobj\n");
+    OBJ(3);
+    ok = ok && tb_printf(&b, "<< /Producer (Acrobat Distiller 23.0 \\(Windows\\)) /Creator (PScript5.dll Version "
+                             "5.2.2) >>\nendobj\n");
+    OBJ(4);
+    ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /Type3 /FontBBox [-10 -10 10 10] /FontMatrix [1 0 0 1 0 0] "
+                             "/CharProcs 5 0 R /Encoding << /Type /Encoding /Differences [0");
+    for (i = 0; i < t3->n; i++)
+    {
+        ok = ok && (t3->ch[i] == ' ' ? tb_printf(&b, " /i255") : tb_printf(&b, " /%d", i));
+    }
+    ok = ok && tb_printf(&b, "] >> /FirstChar 0 /LastChar %d /Widths [", t3->n - 1);
+    for (i = 0; i < t3->n; i++)
+    {
+        ok = ok && tb_printf(&b, " 1");
+    }
+    ok = ok && tb_printf(&b, " ] /Resources << >> >>\nendobj\n");
+    OBJ(5);
+    ok = ok && tb_printf(&b, "<<");
+    for (i = 0; i < t3->n; i++)
+    {
+        ok = ok && (t3->ch[i] == ' ' ? tb_printf(&b, " /i255 %d 0 R", 6 + i) : tb_printf(&b, " /%d %d 0 R", i, 6 + i));
+    }
+    ok = ok && tb_printf(&b, " >>\nendobj\n");
+    for (i = 0; i < t3->n && ok; i++)
+    {
+        TBuf g = {0};
+        ok = rpdf_t3_proc(dc, t3->ch[i], &g);
+        OBJ(6 + i);
+        ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n", (unsigned)g.len) && tb_add(&b, g.p, g.len) &&
+             tb_printf(&b, "\nendstream\nendobj\n");
+        free(g.p);
+    }
+    for (i = 0; i < npages && ok; i++)
+    {
+        int pn = 6 + t3->n + 2 * i;
+        OBJ(pn);
+        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
+                                 "/Resources << /Font << /T1 4 0 R >> >> >>\nendobj\n", pn + 1);
+        OBJ(pn + 1);
+        ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n", (unsigned)pages[i].len) &&
+             tb_add(&b, pages[i].p, pages[i].len) && tb_printf(&b, "\nendstream\nendobj\n");
+    }
+#undef OBJ
+    xref = b.len;
+    ok = ok && tb_printf(&b, "xref\n0 %d\n0000000000 65535 f \n", nobj + 1);
+    for (i = 1; i <= nobj && ok; i++)
+    {
+        ok = tb_printf(&b, "%010llu 00000 n \n", (unsigned long long)offs[i]);
+    }
+    ok = ok && tb_printf(&b, "trailer\n<< /Size %d /Root 1 0 R /Info 3 0 R >>\nstartxref\n%llu\n%%%%EOF\n", nobj + 1,
+                         (unsigned long long)xref);
+    if (ok)
+    {
+        ok = (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL && fwrite(b.p, 1, b.len, fp) == b.len);
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    if (old != NULL)
+    {
+        SelectObject(dc, old);
+    }
+    if (font != NULL)
+    {
+        DeleteObject(font);
+    }
+    if (dc != NULL)
+    {
+        DeleteDC(dc);
+    }
+    free(b.p);
+    return ok;
+}
+
+/* A results report printed to PDF through PScript5 (tag: resglyph): its text, drawn by a
+ * Type 3 font of unnamed glyph outlines (each declared 1 em wide and placed one at a time, a
+ * space an empty glyph), is read through OCR; two cells shown as one string spread by a
+ * character spacing that a Q restored read as two; the summary then agrees with the
+ * plain-text precinct report. */
+static int test_results_glyphs(void)
+{
+    wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf sum = {0}, pre[2] = {{0}, {0}};
+    T3Chars t3;
+    EeResults *res = NULL;
+    uint32_t nres = 0, i;
+    const wchar_t *paths[2];
+    const EeResultsContest *ct;
+    BOOL ok, noted = FALSE, summary = FALSE;
+    int rc = 1;
+    {
+        /* skip when the machine has no OCR language */
+        EeOcr *probe = NULL;
+        if (!EeOcr_Create(&probe, err, ARRAYSIZE(err)))
+        {
+            wprintf(L"resglyph skipped (%s)\n", err);
+            return 0;
+        }
+        EeOcr_Destroy(probe);
+    }
+    ZeroMemory(&t3, sizeof(t3));
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_sum, MAX_PATH, L"%sRPDF_glyph_cumulative.pdf", dir);
+    StringCchPrintfW(p_pre, MAX_PATH, L"%sRPDF_glyph_precinct.pdf", dir);
+
+    /* the summary report, printed through PScript5 */
+    g_rpdf_t3 = &t3;
+    ok = ess_page(&sum, "Summary Results Report", NULL) && rpdf_text(&sum, 25.0, 689.1, 10.0, "STATISTICS") &&
+         ess_heads(&sum, 661.1, FALSE) && rpdf_text(&sum, 21.0, 632.3, 8.0, "Registered Voters - Total") &&
+         rpdf_right(&sum, 248.0, 632.3, 8.0, "1,000") && rpdf_text(&sum, 21.0, 613.3, 8.0, "Ballots Cast - Total") &&
+         rpdf_right(&sum, 248.0, 613.3, 8.0, "300") && rpdf_right(&sum, 302.0, 613.3, 8.0, "100") &&
+         rpdf_right(&sum, 357.0, 613.3, 8.0, "200") && rpdf_text(&sum, 21.0, 594.3, 8.0, "Voter Turnout - Total") &&
+         rpdf_right(&sum, 248.0, 594.3, 8.0, "30.00%");
+    ok = ok && ess_contest(&sum, 560.0, "Council District 1") && rpdf_text(&sum, 20.0, 490.0, 8.0, "Ann Lee") &&
+         rpdf_right(&sum, 248.0, 490.0, 8.0, "76") && rpdf_right(&sum, 308.0, 490.0, 8.0, "79.17%") &&
+         rpdf_t3_spread(&sum, 490.0, 8.0, 363.0, "40", 418.0, "36") &&
+         ess_row(&sum, 470.0, 20.0, "Dan Roe", "20", "20.83%", "10", "10", NULL);
+    ok = ok && ess_contest(&sum, 420.0, "Council District 2") &&
+         ess_row(&sum, 350.0, 20.0, "Eve Poe", "150", "71.77%", "40", "110", NULL) &&
+         ess_row(&sum, 330.0, 20.0, "Sam Ray", "59", "28.23%", "19", "40", NULL);
+    g_rpdf_t3 = NULL;
+    /* the precinct report in text: 101 has Council District 2, 102 has District 1 */
+    ok = ok && ess_page(&pre[0], "Precinct Summary Results Report", "101") &&
+         rpdf_text(&pre[0], 24.0, 670.1, 10.0, "STATISTICS") && ess_heads(&pre[0], 641.1, FALSE) &&
+         rpdf_right(&pre[0], 248.0, 611.0, 8.0, "600") &&
+         rpdf_text(&pre[0], 20.0, 609.0, 8.0, "Registered Voters - Total") &&
+         rpdf_right(&pre[0], 302.0, 594.3, 8.0, "60") && rpdf_right(&pre[0], 357.0, 594.3, 8.0, "140") &&
+         rpdf_right(&pre[0], 248.0, 592.0, 8.0, "200") && rpdf_text(&pre[0], 20.0, 590.0, 8.0, "Ballots Cast - Total") &&
+         ess_contest(&pre[0], 560.0, "Council District 2") &&
+         ess_row(&pre[0], 490.0, 20.0, "Eve Poe", "150", "71.77%", "40", "110", NULL) &&
+         ess_row(&pre[0], 470.0, 20.0, "Sam Ray", "59", "28.23%", "19", "40", NULL);
+    ok = ok && ess_page(&pre[1], "Precinct Summary Results Report", "102") &&
+         rpdf_text(&pre[1], 24.0, 670.1, 10.0, "STATISTICS") && ess_heads(&pre[1], 641.1, FALSE) &&
+         rpdf_right(&pre[1], 248.0, 611.0, 8.0, "400") &&
+         rpdf_text(&pre[1], 20.0, 609.0, 8.0, "Registered Voters - Total") &&
+         rpdf_right(&pre[1], 302.0, 594.3, 8.0, "40") && rpdf_right(&pre[1], 357.0, 594.3, 8.0, "60") &&
+         rpdf_right(&pre[1], 248.0, 592.0, 8.0, "100") && rpdf_text(&pre[1], 20.0, 590.0, 8.0, "Ballots Cast - Total") &&
+         ess_contest(&pre[1], 560.0, "Council District 1") &&
+         ess_row(&pre[1], 490.0, 20.0, "Ann Lee", "76", "79.17%", "40", "36", NULL) &&
+         ess_row(&pre[1], 470.0, 20.0, "Dan Roe", "20", "20.83%", "10", "10", NULL);
+    ok = ok && rpdf_t3_write(p_sum, &sum, 1, &t3);
+    g_tpdf_producer = "iText 2.1.7 by 1T3XT";
+    ok = ok && tpdf_write(p_pre, pre, 2, FALSE);
+    g_tpdf_producer = NULL;
+    if (!ok)
+    {
+        wprintf(L"resglyph: fixtures\n");
+        goto done;
+    }
+
+    paths[0] = p_sum;
+    paths[1] = p_pre;
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"resglyph: load (%u) %s\n", nres, err);
+        goto done;
+    }
+    for (i = 0; i < res[0].nsources; i++)
+    {
+        summary = summary || res[0].sources[i].format == EE_RES_FMT_ESS_SUMMARY;
+    }
+    for (i = 0; i < res[0].nissues; i++)
+    {
+        noted = noted || wcsstr(res[0].issues[i].text, L"glyph outlines") != NULL;
+    }
+    ct = rpdf_contest(&res[0], L"Council District 1");
+    if (!summary || !noted || res[0].nsources != 2 || res[0].ncontests != 2 || ct == NULL || ct->nchoices != 2 ||
+        wcscmp(res[0].choices[ct->first_choice].name, L"Ann Lee") != 0 || res[0].choices[ct->first_choice].total != 76 ||
+        rpdf_contest(&res[0], L"Council District 2") == NULL || res[0].registered_total != 1000 ||
+        res[0].ballots_total != 300 || !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"resglyph: summary (summary %d, note %d, %u sources, %u contests)\n", summary, noted,
+                res[0].nsources, res[0].ncontests);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_rpdf_t3 = NULL;
+    EeResults_FreeArray(res, nres);
+    free(sum.p);
+    free(pre[0].p);
+    free(pre[1].p);
+    DeleteFileW(p_sum);
+    DeleteFileW(p_pre);
+    wprintf(L"resglyph: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
 }
 
 /* Compare: results with themselves (all match), with a summary whose total differs, and
@@ -11962,6 +12594,8 @@ int wmain(void)
     failed |= test_results();
     failed |= test_results_cumulative();
     failed |= test_results_pdf();
+    failed |= test_results_hart_old();
+    failed |= test_results_glyphs();
     failed |= test_results_compare();
     failed |= test_results_view();
     return failed == 0 ? 0 : 1;

@@ -9160,7 +9160,9 @@ static const wchar_t k_HelpLoading[] =
     L"ignored. A confidential (masked) address is kept exactly as the county masked "
     L"it.\r\n\r\n"
     L"To see who has voted in an election, use File → Load Voter Roster… instead; a roster "
-    L"opens in its own window (see Help → Loading Voter Rosters there).";
+    L"opens in its own window (see Help → Loading Voter Rosters there). An election's results "
+    L"(Clarity Elections files, or ES&S and Hart results reports) open with File → Load "
+    L"Election Results…, also in a window of their own.";
 
 static const wchar_t k_HelpRosterLoading[] =
     L"Load Voter Roster (File menu) opens the rosters a county publishes during an election "
@@ -9171,7 +9173,7 @@ static const wchar_t k_HelpRosterLoading[] =
     L"Tarrant, Harris, Dallas, Bexar, Collin, Denton, Fort Bend, Hidalgo, El Paso, Montgomery, "
     L"Williamson, Cameron, Brazoria, Bell, Galveston, Lubbock, Webb, McLennan, Smith, Brazos, "
     L"Grayson, Randall, Wichita, Gregg, Hunt, Tom Green, Bastrop, Potter, Bowie, Victoria, "
-    L"Henderson, Angelina, and Jefferson, plus the statewide and county rosters of the "
+    L"Henderson, Angelina, Jefferson, and Guadalupe, plus the statewide and county rosters of the "
     L"Texas Secretary of State. If a selected file cannot be read, the load "
     L"summary lists it; when none can, a message names them. Large "
     L"rosters load in the background with a progress bar, an estimate of the time remaining, "
@@ -9500,7 +9502,10 @@ static const wchar_t k_CvrHelpLoading[] =
     L"\"<Redacted>\".\r\n\r\n"
     L"In ES&S and Hart primaries each party's contests are separate columns, prefixed "
     L"\"REP\" or \"DEM\". Each row is one ballot record; when ballots span several cards "
-    L"or sheets, each card is its own record and the status bar says so.";
+    L"or sheets, each card is its own record and the status bar says so.\r\n\r\n"
+    L"To check a tabulation against the county's published results, load them with File → "
+    L"Load Election Results… and use the Compare menu (see Help → Compare in the results "
+    L"window).";
 
 static const wchar_t k_CvrHelpOptions[] =
     L"Options (Edit → Options) control how the Cast Vote Records are tabulated. The "
@@ -16304,6 +16309,8 @@ static const wchar_t k_ResHelpLoading[] =
     L"no vote-type breakdown.\r\n"
     L"\x2022 Hart reports from before Verity (2020\x2013" L"2022): the cumulative report, the "
     L"precinct report (by vote type) and the canvass.\r\n"
+    L"Not read: scanned (image-only) results PDFs, ES&S \"Statement of Votes Cast\" and custom "
+    L"table reports, and password-protected PDFs.\r\n"
     L"A summary report gives totals only; the precinct report or canvass gives each "
     L"precinct. A county that posts a report per city or school district (McLennan, Cameron): "
     L"select them all, and the files of one election open as one window.\r\n\r\n"

@@ -991,6 +991,34 @@ one rerun the full sweep and record the counts. Expected result: about 1,300 loa
   - the encrypted Ellis PDFs (30);
   - Word documents and other one-off layouts.
 
+### Step 10 — help, version 1.5.0.0, release notes (done 2026-10-27)
+
+- **Help:**
+  - the results window's six topics (Loading, Views and Options, Filters, Reports, Export,
+    Compare) were checked against what 1.5 reads;
+  - Loading Election Results now says what is not read: scanned PDFs, ES&S "Statement of Votes
+    Cast" and custom table reports, and password-protected PDFs;
+  - the voter list and CVR Loading topics point to File → Load Election Results… (the CVR topic
+    to Compare);
+  - Loading Voter Rosters lists 35 counties, Guadalupe now included (its check-in reports load
+    since `fe26791`; its scanned mail lists still do not).
+- **Version 1.5.0.0:** `res/ElectionExplorer.rc`, `res/app.manifest` and
+  `ElectionExplorer.Package/Package.appxmanifest`.
+- **Release notes:**
+  - `RELEASES.md`: a 1.5.0.0 "What's new" note (1,175 characters; Partner Center allows 1,500);
+  - `STORE-LISTING.txt` (7,584 characters): a "Check the official results" section, official
+    results in the opening line, .xls workbooks, saved filters, 35 roster counties, and the
+    Electionware, Verity and Clarity Elections trademarks;
+  - the top-level `README.md` mentions election results and the local `Election_Results/`
+    folder.
+- **Store bundle:**
+  - `Build/msix/ElectionExplorer.Package_1.5.0.0_x64_arm64_bundle.msixupload` (5.3 MB), built
+    with `/t:Rebuild` after clearing the package's `bin`, `obj` and `BundleArtifacts`;
+  - the bundle and both packages are `WheelGroupTech.ElectionExplorer` 1.5.0.0, and both EXEs
+    are 1.5.0.0 (x64 and ARM64) with the new help text;
+  - each package has 19 logo images and only the runFullTrust capability.
+- **Checks:** the smoke suite passes, and Release x64 and ARM64 build clean.
+
 ## Implementation plan (proposed)
 
 1. **Engine `src/ee_results.{c,h}`** (no UI):
@@ -1073,7 +1101,7 @@ one rerun the full sweep and record the counts. Expected result: about 1,300 loa
 9. **More ES&S and Hart PDF layouts (step 9):** Electionware reports without the footer,
    older Hart reports (McLennan, Montgomery, Harris 2020–22), and Travis's three
    PScript5-printed reports read through learned glyph maps.
-10. **Help topics, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt.**
+10. **Help topics, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt** (done 2026-10-27).
 11. **Later:** Dominion (Liberty Vote) PDFs; ES&S CSV exports (Collin, Bexar); Enhanced Voting
     (Comal); per-county website formats.
 

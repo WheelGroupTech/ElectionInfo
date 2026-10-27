@@ -2,7 +2,7 @@
 
 Tools and reference data for working with U.S. election data. The centerpiece is
 **Election Explorer**, a native Windows desktop application for viewing cast vote
-records (CVRs), voter lists, and voter rosters. The repository also includes a
+records (CVRs), voter lists, voter rosters, and election results. The repository also includes a
 collection of Python analysis scripts and some public reference datasets.
 
 ## Start here: Election Explorer
@@ -12,8 +12,9 @@ solution with the desktop app and its build outputs. See
 [`Applications/README.md`](Applications/README.md) for what it does, how to build
 it, and how to run it.
 
-Sample data the app can open (cast vote records, voter lists, and voter rosters)
-is kept locally in `Election_CVRs/`, `Voter_Lists/`, and `Voter_Rosters/`. These
+Sample data the app can open (cast vote records, voter lists, voter rosters, and
+election results) is kept locally in `Election_CVRs/`, `Voter_Lists/`,
+`Voter_Rosters/`, and `Election_Results/`. These
 folders are **not** in the repository — they are `.gitignore`d because the files
 are too large for GitHub, so they only appear if you add them yourself. None of
 the analysis scripts depend on them.
@@ -27,7 +28,7 @@ the analysis scripts depend on them.
 | [`State_Election_Info/`](State_Election_Info/) | Reference dataset of each state's election code, election-administration agency, and voter portal |
 
 Local-only sample data for Election Explorer (`Election_CVRs/`, `Voter_Lists/`,
-`Voter_Rosters/`) is `.gitignore`d and not part of the repository.
+`Voter_Rosters/`, `Election_Results/`) is `.gitignore`d and not part of the repository.
 
 ## Scripts
 

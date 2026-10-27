@@ -4,9 +4,22 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-26 (1.5 Election Results: plan, step 1 engine, step 2 window, step 3 filter, step 4 turnout report, step 5 compare, step 6 export, step 7 all Clarity counties, step 8 ES&S + Hart PDFs); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
+**Last updated:** 2026-10-27 (1.5.0.0 built: step 10 help, version, RELEASES, STORE-LISTING, Store bundle; steps 8-9c committed); 2026-10-26 (1.5 Election Results: plan, step 1 engine, step 2 window, step 3 filter, step 4 turnout report, step 5 compare, step 6 export, step 7 all Clarity counties, step 8 ES&S + Hart PDFs); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
 
-### Election Explorer 1.5: Election Results, steps 1–7 + Reset View committed (2026-10-26)
+### Election Explorer 1.5: Election Results, steps 1–9c committed; step 10 done, uncommitted (2026-10-27)
+
+- **Step 10 done (uncommitted): 1.5.0.0 release prep.**
+  - Version 1.5.0.0 in `res/ElectionExplorer.rc`, `res/app.manifest`, `Package.appxmanifest`.
+  - Help: results Loading topic says what is not read (scanned, Statement of Votes Cast, custom
+    table, encrypted); voter list + CVR Loading topics point to Load Election Results; roster
+    help lists 35 counties (+ Guadalupe).
+  - `RELEASES.md` 1.5.0.0 note (1,175 chars), `STORE-LISTING.txt` (7,584 chars, new "Check the
+    official results" section), top-level `README.md`.
+  - Store bundle BUILT: `Build/msix/ElectionExplorer.Package_1.5.0.0_x64_arm64_bundle.msixupload`
+    (5.3 MB); bundle, both packages and both EXEs verified 1.5.0.0, 19 logos each,
+    runFullTrust only. Smoke passes; Release x64 + ARM64 clean.
+  - **Next:** user submits 1.5.0.0 in Partner Center (paste the RELEASES 1.5 note as "What's
+    new" and STORE-LISTING.txt as the description).
 
 - **Step 8 done (uncommitted): ES&S Electionware and Hart Verity results PDFs.**
   - New `src/ee_results_pdf.{c,h}` (in the .vcxproj and filters; smoke build line updated), wired
@@ -93,8 +106,8 @@
     Type 3 fonts (blank glyph = space, widths from the drawings, `Tc` in the graphics
     state, a large `Tc` is a word gap). L22 and PR22 equal their precinct reports, LR22's
     52 rows add up, Travis G20 vs CVR unchanged (399). Smoke `resglyph`. Sweep
-    1,340 of 1,941 load, only the three Travis files changed. Next step 10;
-  - step 10: help, version 1.5.0.0, RELEASES.md, STORE-LISTING.txt.
+    1,340 of 1,941 load, only the three Travis files changed. All committed;
+  - step 10: done 2026-10-27 (above).
 - **Later:**
   - other PDF layouts the sweep refuses (design doc "Step 8");
   - Hart CSV exports;

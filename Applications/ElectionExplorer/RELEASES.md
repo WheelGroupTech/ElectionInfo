@@ -3,7 +3,7 @@
 Microsoft Store releases, newest first. Each entry's text is the Store listing's
 "What's new in this version" note and can be pasted into Partner Center as is.
 
-## 1.5.0.0 (built 2026-10-27, not yet submitted)
+## 1.5.0.0 (submitted 2026-10-27)
 
 New in 1.5: Election results. Load the official results counties publish into a new Election Results window: Clarity Elections files (the summary and detail ZIPs, or the CSV, TXT, XLS, XLSX, and XML files inside them) and the results report PDFs made by ES&S Electionware and Hart InterCivic, including reports printed to PDF, which are read with the OCR built into Windows. Several files from one election open as one window and are checked against each other, with every disagreement listed in a load summary. Show totals or every precinct, with a column for each vote type; filter by precinct, vote type, contest, choice, or party; see each precinct's turnout; and export to CSV or TSV, including a detailed layout that loads back exactly. Compare results with another results window, such as an earlier unofficial snapshot, or with the tabulation of a cast vote record, precinct by precinct. Filters can now be saved to a file and loaded again in every window. Voter rosters from Jefferson and Guadalupe counties, for 35 Texas counties in all, and rosters from several other counties load more reliably. Excel 97-2003 (.xls) workbooks now open as voter lists and rosters.
 

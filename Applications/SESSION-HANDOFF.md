@@ -6,7 +6,11 @@
 
 **Last updated:** 2026-10-26 (1.5 Election Results: plan, step 1 engine, step 2 window, step 3 filter, step 4 turnout report, step 5 compare, step 6 export, step 7 all Clarity counties); 2026-10-24 (Oct 23 layout fixes + 10/24 report, uncommitted; .xls committed); 2026-10-22 (1.4.1.0 submitted)
 
-### UNCOMMITTED — Election Explorer 1.5: Election Results, step 1 done (2026-10-26)
+### Election Explorer 1.5: Election Results, steps 1–7 committed (2026-10-26)
+
+- **Uncommitted:** View → Reset View in the results window (`IDM_RES_VIEW_RESET` 40121) undoes a
+  column sort; greyed while unsorted; Help → Views and Options mentions it. Checked in the real app
+  (Travis G24: sort by Contest, then Reset View).
 
 - **Plan, decisions D1–D8, and the step-1 status / format-variant table:**
   `ElectionExplorer/docs/election-results-design.md`.

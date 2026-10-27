@@ -82,6 +82,7 @@
 #define IDM_RESCMP_CLOSE        40118
 #define IDM_RESCMP_DIFFONLY     40119
 #define IDM_FILE_EXPORT_RESULTS 40120
+#define IDM_RES_VIEW_RESET      40121
 
 /* Election Results options dialog. */
 #define IDC_RES_ZOOM      41600

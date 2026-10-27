@@ -16337,7 +16337,8 @@ static const wchar_t k_ResHelpOptions[] =
     L"provisional and so on, as the county names them.\r\n"
     L"\x2022 Party to display first: in a primary, the Republican or the Democratic contests come "
     L"first (shared with the CVR tabulation).\r\n\r\n"
-    L"Click a column title to sort by it; click again to reverse. Edit \x2192 Copy (Ctrl+C) or "
+    L"Click a column title to sort by it; click again to reverse. View \x2192 Reset View puts "
+    L"the rows back in the order they had when loaded. Edit \x2192 Copy (Ctrl+C) or "
     L"right-click copies the selected rows as tab-separated text.";
 
 /* Rank of a contest for the party-first order: 0 = the display-first party, 1 = the other
@@ -19628,6 +19629,8 @@ static HMENU App_CreateResultsMenu(void)
     AppendMenuW(edit_menu, MF_STRING, IDM_RES_OPTIONS, L"&Options…");
     AppendMenuW(view_menu, MF_STRING, IDM_RES_VIEW_TOTALS, L"&Totals");
     AppendMenuW(view_menu, MF_STRING, IDM_RES_VIEW_PRECINCT, L"By &Precinct");
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(view_menu, MF_STRING, IDM_RES_VIEW_RESET, L"&Reset View");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…\tCtrl+L");
     AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(reports_menu, MF_STRING, IDM_RES_TURNOUT, L"Display &Turnout Report…");
@@ -19755,6 +19758,8 @@ static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             CheckMenuItem(m, IDM_RES_VIEW_PRECINCT,
                           MF_BYCOMMAND | (rw->by_precinct ? MF_CHECKED : MF_UNCHECKED));
             EnableMenuItem(m, IDM_RES_VIEW_PRECINCT, MF_BYCOMMAND | (detail ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(m, IDM_RES_VIEW_RESET,
+                           MF_BYCOMMAND | (rw->sort_col >= 0 ? MF_ENABLED : MF_GRAYED));
             EnableMenuItem(m, IDM_FILTER_RESET,
                            MF_BYCOMMAND | (rw->filters.count > 0 ? MF_ENABLED : MF_GRAYED));
             EnableMenuItem(m, IDM_RES_TURNOUT,
@@ -19805,6 +19810,15 @@ static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             }
             return 0;
         }
+        case IDM_RES_VIEW_RESET:
+            /* back to the order the rows had when loaded */
+            if (rw->sort_col >= 0)
+            {
+                rw->sort_col = -1;
+                Res_Sort(rw);
+                InvalidateRect(rw->list, NULL, FALSE);
+            }
+            return 0;
         case IDM_RES_LOAD_SUMMARY:
             App_ShowResultsLoadSummary(rw);
             return 0;

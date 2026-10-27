@@ -186,7 +186,7 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
   - Display Turnout Report…: precinct, registered voters, ballots cast (by vote type when the
     file has it), turnout %.
   - Display Load Summary….
-- **View:** Totals / By Precinct.
+- **View:** Totals / By Precinct; Reset View (back to the loaded row order after sorting).
 - **Compare:**
   - Compare with `<window>`: one item for each open results window and each open CVR window.
   - The CVR is compared using its tabulation. **If the CVR window has an active filter, ask**
@@ -307,6 +307,8 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
     Load Election Re&sults… was added to the voter, roster and CVR windows too.
   - Edit: Copy (Ctrl+C, also on right-click), Options….
   - View: Totals / By Precinct; By Precinct is greyed when no file has precinct detail.
+  - View → Reset View (added after step 7) undoes a column sort, putting the rows back in the
+    order they had when loaded; greyed while unsorted.
   - Reports: Display Load Summary….
   - Help: Loading Election Results, Views and Options, About.
 - **List:**

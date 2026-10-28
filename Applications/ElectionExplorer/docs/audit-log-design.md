@@ -1,7 +1,8 @@
 # ES&S audit logs — design (Election Explorer 1.6)
 
-Status: **proposed** (2026-10-28). Survey and validation done on the Travis and Dallas logs;
-decisions D1–D10 at the end await the user's confirmation. No code yet.
+Status: **steps 1–3 done** (2026-10-28): the engine `src/ee_audit.{c,h}` reads, merges and
+replays the logs, with no UI yet. The user started implementation on the proposed decisions
+D1–D10 (at the end). See "Implementation status".
 
 ## Goal
 
@@ -148,6 +149,7 @@ Validation of the replay, using the latest copy of each election log:
 | Travis L26 | 04/29/2026 11:01 AM | 37 | 12,710 | 12,710 | 12,710 |
 | Travis PR26 | 05/23/2026 10:52 AM | 270 | 97,460 | 97,460 | 97,460 |
 | Dallas P24 | 03/04/2024 09:56 AM | 1,145 | **231,464** | 231,465 | 231,465 (DEM 126,055 + REP 105,410) |
+| Dallas L24 (found by the county survey) | 05/03/2024 09:48 AM | 1,081 (1,087 commits; 3 media clears) | 83,030 | — | 83,030 |
 | Dallas G24 | 11/02/2024 11:27 AM | 3,934 (4,383 commits; 4 media clears on 11/14) | **858,562** | 873,455 rows = 858,562 ballots + 14,893 continuation sheets | 858,562 |
 
 - **"Number of Ballots" counts ballots, not sheets.**
@@ -368,6 +370,60 @@ toward `App_MaybeQuit`, File → Close.
 - The Events export reloads (detected by its header), so a large merged log can be saved and
   reopened without the PDFs. Copy membership is kept in the `Copies` / `First Copy` columns.
 
+## Implementation status
+
+### Steps 1–3 — the engine (done 2026-10-28)
+
+`src/ee_audit.{c,h}` (in the project; smoke tests `audit`, `auditmerge`, `auditacct`). Release
+x64 and ARM64 build with no warnings. An AddressSanitizer probe run over 23 PDFs is clean.
+
+- **Reader (`EeAudit_LoadCopy`):**
+  - `pdf_reader.c` gives these pages' runs turned 90° (`rot` 90): x runs down the page and y
+    across. Each column starts at a fixed y, learned from the heading row of every page (Event 43,
+    Description 95, Timestamp 439, User Id 574, Module 651).
+  - Event levels are runs of their own in the Event column (unlike PyMuPDF's output).
+  - Every run belongs to the row whose timestamp is level with it or above it.
+  - Text above a page's first row is joined to the previous page's last row, column by column.
+  - **JasperReports quirk:** when a row splits at a page end because another of its cells ran
+    over (a wrapped module, "Paper Ballot" / "Application"), the next page prints the cells that
+    fit again in full. Such a repeat is dropped, so "Read 112 Districts." does not double.
+  - **Sweep:** all 70 Electionware PDFs read, 1,875,864 events, 39 s in all, at most 2.5 s a file
+    (Travis P26, 6,197 pages).
+  - Against the research extraction (68 files, 1,753,271 events), every timestamp, level, user and
+    page agrees. The 206 differences are the reader being more complete: modules and long
+    descriptions that ran onto the next page, which the research cut short.
+  - Parker's Hart reports are refused with "is not an ES&S Electionware audit events report".
+- **Merge (`EeAudit_LoadFiles` / `EeAudit_GroupCopies`):**
+  - Copies are grouped by customer ("Dallas" = "Dallas County") and election date, and ordered by
+    print time.
+  - The merge starts from the last copy printed and merges the earlier ones into it. Events match
+    on timestamp, level, user and description, ignoring whitespace; each copy's own order is kept,
+    as are identical events in one second.
+  - **Validated:**
+    - every one of the 24 logs (12 elections × Election / Admin): the final copy holds every
+      earlier event, **0 missing**;
+    - Dallas G24's start-dated copies: 38,920 (Election) and 53 (Admin) events outside their date
+      range;
+    - the merged count equals the final copy's in every log.
+- **Accounting (`EeAudit_Accounting`):** replays the merged Election log oldest first.
+  - **The device type matters in a media clear.** "Central Count Media-24" removes only central
+    count batches (`A0013-EV Vote Center - 24`), not a poll place tabulator's `EV Vote Center -
+    24`, whose media are numbered apart.
+  - The poll place is the next one loaded, looking past further media clears (Dallas cleared
+    Media-86 and -24 back to back).
+  - **Results:**
+    - all 9 Travis elections, Dallas G24 (**858,562**) and Dallas L24 (83,030) equal the official
+      ballots cast;
+    - Dallas G24 by vote type: early voting in person 636,880, Election Day 188,811, mail 31,468,
+      provisional 1,403.
+  - **Dallas P24 is still one short** (231,464). Its election night has "Results validation
+    error. Verify poll closed correctly. You may need to recollect these ballots." (CCount1 and
+    CCount2), "Election is not closed or missing Poll Place collection file." and several
+    "Media validation unsuccessful." events. These are a lead for the Notable Events report and
+    are left open.
+  - Dallas P24's Election Day batches are named by location ("Our Redeemer Lutheran Church") and
+    read as vote type Other.
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**
@@ -483,8 +539,9 @@ exists.
 - **D4 — Election session:** the last session that loaded non-test batches, changeable in
   Ballot Accounting. Test sessions are labeled L&A tests (first, before counting, after
   counting) by their place in the timeline.
-- **D5 — Media clears:** remove the cleared media's batches of the poll place reloaded next;
-  show the other readings and their totals when ambiguous.
+- **D5 — Media clears:** remove the cleared media's batches of the poll place reloaded next,
+  on the device type the clear names ("Central Count Media-n": central count batches, the
+  `A0013-` names, only); show the other readings and their totals when ambiguous.
 - **D6 — Reconciliation:** through a Compare menu in the audit, CVR and results windows, like
   1.5's D6.
 - **D7 — Multi-sheet:** compare EMS ballots with CVR ballots (page-1 rows), show rows and

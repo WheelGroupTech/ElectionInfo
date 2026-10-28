@@ -11,6 +11,7 @@
 #include "voter_roster.h"
 #include "xls.h"
 #include "ee_results.h"
+#include "ee_audit.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -12518,6 +12519,416 @@ done:
     return rc;
 }
 
+/* ---- ES&S Electionware audit event reports (ee_audit.c) ---- */
+
+/* Text on an Electionware audit page: JasperReports prints the landscape table turned, so
+ * a run's x runs down the page (@p row) and its y across (@p col). */
+static BOOL aud_text(TBuf *c, double row, double col, const char *s)
+{
+    return rpdf_text_at(c, row, col, 10.0, s, TRUE);
+}
+
+/* The page header and column headings, and the footer. */
+static BOOL aud_page(TBuf *c, const char *title, int page, int pages)
+{
+    char foot[64], of[16];
+    StringCchPrintfA(foot, ARRAYSIZE(foot), "Page %d of", page);
+    StringCchPrintfA(of, ARRAYSIZE(of), " %d", pages);
+    return rpdf_text_at(c, 80.6, 42.0, 18.0, title, TRUE) && aud_text(c, 82.5, 536.2, "06/03/2026 11:53AM") &&
+           aud_text(c, 52.5, 686.3, "Travis County") && aud_text(c, 67.9, 646.9, "PR26 Canvass CC 3rd") &&
+           aud_text(c, 82.6, 687.4, "May 26, 2026") && aud_text(c, 100.1, 43.0, "Event") &&
+           aud_text(c, 100.1, 95.0, "Description") && aud_text(c, 100.1, 439.0, "Timestamp") &&
+           aud_text(c, 100.1, 574.0, "User Id") && aud_text(c, 100.1, 651.0, "Module") &&
+           aud_text(c, 551.0, 650.1, foot) && aud_text(c, 551.0, 43.0, "Election Audit Events Report - 06/03/2026 11:53AM") &&
+           aud_text(c, 551.0, 704.0, of);
+}
+
+/* One table row: level, the description's first line, timestamp, user and module. */
+static BOOL aud_row(TBuf *c, double row, const char *level, const char *desc, const char *ts, const char *user,
+                    const char *module)
+{
+    return aud_text(c, row, 51.0, level) && aud_text(c, row + 0.3, 95.0, desc) && aud_text(c, row, 439.0, ts) &&
+           aud_text(c, row, 574.0, user) && aud_text(c, row, 651.0, module);
+}
+
+static int aud_check(const EeAuditCopy *c, uint32_t i, const char *level, const char *desc, const char *ts,
+                     const char *user, const char *module, uint32_t page)
+{
+    char t[40];
+    const EeAuditEvent *e;
+    if (i >= c->nevents)
+    {
+        wprintf(L"audit: event %u missing\n", i);
+        return 1;
+    }
+    e = &c->events[i];
+    EeAudit_FormatTime(e->ts, t, sizeof(t));
+    if (strcmp(EeAudit_Str(c, e->level), level) != 0 || strcmp(EeAudit_Desc(c, e), desc) != 0 || strcmp(t, ts) != 0 ||
+        strcmp(EeAudit_Str(c, e->user), user) != 0 || strcmp(EeAudit_Str(c, e->module), module) != 0 || e->page != page)
+    {
+        printf("audit: event %u: [%s] [%s] [%s] [%s] [%s] p%u\n", i, EeAudit_Str(c, e->level), EeAudit_Desc(c, e), t,
+               EeAudit_Str(c, e->user), EeAudit_Str(c, e->module), e->page);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_audit(void)
+{
+    wchar_t dir[MAX_PATH], p_el[MAX_PATH], p_ad[MAX_PATH], p_no[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf el[3] = {{0}, {0}, {0}}, ad = {0}, no = {0};
+    EeAuditCopy c;
+    char t[40];
+    BOOL ok;
+    int rc = 1, bad = 0;
+
+    EeAudit_InitCopy(&c);
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_el, MAX_PATH, L"%sAUD_election.pdf", dir);
+    StringCchPrintfW(p_ad, MAX_PATH, L"%sAUD_admin.pdf", dir);
+    StringCchPrintfW(p_no, MAX_PATH, L"%sAUD_other.pdf", dir);
+
+    /* page 1: a wrapped description, Warning and Verbose rows, two rows in one second, a
+     * word broken at its hyphen, a wrapped module, and a last row whose description and
+     * module run onto page 2 */
+    ok = aud_page(&el[0], "Election Audit Events Report", 1, 3) &&
+         aud_row(&el[0], 115.1, "Info", "Committing new Batch A0005-EV Vote Center - 33 ID 2,669 Number of",
+                 "05/26/2026 08:33:39PM", "dgrant", "Reporting") &&
+         aud_text(&el[0], 126.9, 95.0, "Ballots 13") &&
+         aud_row(&el[0], 137.1, "Warning", "There are pending changes. Do you want to save?", "05/26/2026 08:33:38PM",
+                 "PlumbleyN", "Reporting") &&
+         aud_row(&el[0], 156.1, "Verbose", "You have unsaved changes. Please save or discard your changes, then re-",
+                 "05/26/2026 08:33:38PM", "PlumbleyN", "Paper Ballot") &&
+         aud_text(&el[0], 167.6, 95.0, "try this action.") && aud_text(&el[0], 168.1, 651.0, "Application") &&
+         aud_row(&el[0], 519.0, "Info", "Committing new Batch A0013-EV Vote Center - 33 ID 2,668 Number of",
+                 "12/31/2025 12:05:00AM", "dgrant", "Paper Ballot");
+    /* page 2: the continuation above the first row, an Error row, and a long description
+     * whose rest fills page 3, which has no row of its own */
+    ok = ok && aud_page(&el[1], "Election Audit Events Report", 2, 3) && aud_text(&el[1], 115.4, 95.0, "Ballots 116") &&
+         aud_text(&el[1], 115.4, 651.0, "Application") &&
+         aud_row(&el[1], 134.1, "Error", "An error occurred while loading Ballot Sheet ID 374539",
+                 "12/30/2025 12:30:00PM", "CCS1", "Reporting") &&
+         aud_row(&el[1], 519.0, "Info", "Ballot Review filter applied: Contests - [A]", "12/30/2025 12:29:00PM", "CCS1",
+                 "Reporting");
+    ok = ok && aud_page(&el[2], "Election Audit Events Report", 3, 3) && aud_text(&el[2], 115.4, 95.0, "[B]") &&
+         aud_text(&el[2], 126.9, 95.0, "[C]");
+    ok = ok && aud_page(&ad, "Admin Audit Events Report", 1, 1) &&
+         aud_row(&ad, 115.1, "Info", "Election Opened: PR26 Canvass CC 3rd Tab Test", "06/03/2026 11:40:21AM",
+                 "PlumbleyN", "Home");
+    ok = ok && rpdf_text(&no, 50.0, 700.0, 12.0, "Summary Results Report");
+    g_tpdf_producer = "iText 2.1.7 by 1T3XT";
+    g_tpdf_creator = "JasperReports \\(AuditEventsReport\\)";
+    ok = ok && tpdf_write(p_el, el, 3, FALSE) && tpdf_write(p_ad, &ad, 1, FALSE);
+    g_tpdf_creator = NULL;
+    ok = ok && tpdf_write(p_no, &no, 1, FALSE);
+    if (!ok)
+    {
+        wprintf(L"audit: fixtures\n");
+        goto done;
+    }
+
+    if (!EeAudit_IsAuditPdf(p_el) || EeAudit_IsAuditPdf(p_no))
+    {
+        wprintf(L"audit: detection\n");
+        goto done;
+    }
+    if (EeAudit_LoadCopy(p_el, &c, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"audit: load: %s\n", err);
+        goto done;
+    }
+    EeAudit_FormatTime(c.printed, t, sizeof(t));
+    if (c.kind != EE_AUDIT_ELECTION || c.nevents != 6 || c.pages != 3 || c.election_date != 20260526 ||
+        c.customer == NULL || strcmp(c.customer, "Travis County") != 0 || c.election == NULL ||
+        strcmp(c.election, "PR26 Canvass CC 3rd") != 0 || strcmp(t, "06/03/2026 11:53:00AM") != 0)
+    {
+        printf("audit: header: kind %d, %u events, %u pages, %d, [%s] [%s] printed %s\n", c.kind, c.nevents, c.pages,
+               c.election_date, c.customer ? c.customer : "", c.election ? c.election : "", t);
+        goto done;
+    }
+    bad |= aud_check(&c, 0, "Info", "Committing new Batch A0005-EV Vote Center - 33 ID 2,669 Number of Ballots 13",
+                     "05/26/2026 08:33:39PM", "dgrant", "Reporting", 1);
+    bad |= aud_check(&c, 1, "Warning", "There are pending changes. Do you want to save?", "05/26/2026 08:33:38PM",
+                     "PlumbleyN", "Reporting", 1);
+    bad |= aud_check(&c, 2, "Verbose",
+                     "You have unsaved changes. Please save or discard your changes, then re-try this action.",
+                     "05/26/2026 08:33:38PM", "PlumbleyN", "Paper Ballot Application", 1);
+    bad |= aud_check(&c, 3, "Info", "Committing new Batch A0013-EV Vote Center - 33 ID 2,668 Number of Ballots 116",
+                     "12/31/2025 12:05:00AM", "dgrant", "Paper Ballot Application", 1);
+    bad |= aud_check(&c, 4, "Error", "An error occurred while loading Ballot Sheet ID 374539", "12/30/2025 12:30:00PM",
+                     "CCS1", "Reporting", 2);
+    bad |= aud_check(&c, 5, "Info", "Ballot Review filter applied: Contests - [A] [B] [C]", "12/30/2025 12:29:00PM",
+                     "CCS1", "Reporting", 2);
+    if (bad || c.events[3].ts != EeAudit_MakeTime(2025, 12, 31, 0, 5, 0) ||
+        c.events[0].ts - c.events[1].ts != 1)
+    {
+        goto done;
+    }
+    EeAudit_FreeCopy(&c);
+
+    if (EeAudit_LoadCopy(p_ad, &c, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        c.kind != EE_AUDIT_ADMIN || c.nevents != 1 ||
+        aud_check(&c, 0, "Info", "Election Opened: PR26 Canvass CC 3rd Tab Test", "06/03/2026 11:40:21AM", "PlumbleyN",
+                  "Home", 1) != 0)
+    {
+        wprintf(L"audit: admin report: %s\n", err);
+        goto done;
+    }
+    EeAudit_FreeCopy(&c);
+    err[0] = L'\0';
+    if (EeAudit_LoadCopy(p_no, &c, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Error ||
+        wcsstr(err, L"AUD_other.pdf") == NULL)
+    {
+        wprintf(L"audit: a results report was not refused: %s\n", err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_tpdf_producer = NULL;
+    g_tpdf_creator = NULL;
+    EeAudit_FreeCopy(&c);
+    free(el[0].p);
+    free(el[1].p);
+    free(el[2].p);
+    free(ad.p);
+    free(no.p);
+    DeleteFileW(p_el);
+    DeleteFileW(p_ad);
+    DeleteFileW(p_no);
+    wprintf(L"audit: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
+/* A copy of a log built in memory: @p n rows of {seconds after 08:00, level, description},
+ * newest first, as printed. */
+typedef struct AudRow
+{
+    int secs;
+    const char *level;
+    const char *desc;
+} AudRow;
+
+static BOOL aud_copy(EeAuditCopy *c, int kind, const char *customer, int date, int printed_hour, const AudRow *rows,
+                     int n)
+{
+    int i;
+    EeAudit_InitCopy(c);
+    c->kind = kind;
+    c->customer = _strdup(customer);
+    c->election = _strdup("November 5, 2024 Joint");
+    c->election_date = date;
+    c->printed = EeAudit_MakeTime(2024, 11, 13, printed_hour, 0, 0);
+    for (i = 0; i < n; i++)
+    {
+        if (!EeAudit_AddEvent(c, EeAudit_MakeTime(2024, 11, 5, 8, 0, 0) + rows[i].secs, rows[i].level, rows[i].desc,
+                              "LeverE", "Reporting", 1))
+        {
+            return FALSE;
+        }
+    }
+    return c->customer != NULL && c->election != NULL;
+}
+
+static int test_audit_merge(void)
+{
+    /* e1 .. e6 oldest to newest; e2 twice in one second (both kept) */
+    static const AudRow k_a[] = {{30, "Info", "e3 Starting Acquire Server."},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {10, "Info", "e1 Home module activated."}};
+    /* printed with a start date: no e1; e4's text wrapped elsewhere */
+    static const AudRow k_b[] = {{50, "Info", "e5 Results successfully cleared"},
+                                 {40, "Warning", "e4 There are pending  changes. Do you want to save?"},
+                                 {30, "Info", "e3 Starting Acquire Server."},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {20, "Info", "e2 Election Opened: G24"}};
+    /* the last copy lacks e4 inside its span */
+    static const AudRow k_c[] = {{60, "Info", "e6 Election Closed: G24"},
+                                 {50, "Info", "e5 Results successfully cleared"},
+                                 {30, "Info", "e3 Starting Acquire Server."},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {10, "Info", "e1 Home module activated."}};
+    static const AudRow k_admin[] = {{5, "Info", "LeverE logged in."}};
+    static const char *const k_order[] = {"e6", "e5", "e4", "e3", "e2", "e2", "e1"};
+    EeAuditCopy copies[5];
+    EeAuditElection *els = NULL;
+    uint32_t nels = 0, i;
+    const EeAuditLog *log;
+    int rc = 1;
+
+    memset(copies, 0, sizeof(copies));
+    /* given out of print order; the admin copy says "Travis" for "Travis County" */
+    if (!aud_copy(&copies[0], EE_AUDIT_ELECTION, "Travis County", 20241105, 20, k_c, ARRAYSIZE(k_c)) ||
+        !aud_copy(&copies[1], EE_AUDIT_ELECTION, "Travis County", 20241105, 9, k_a, ARRAYSIZE(k_a)) ||
+        !aud_copy(&copies[2], EE_AUDIT_ELECTION, "Travis County", 20241105, 12, k_b, ARRAYSIZE(k_b)) ||
+        !aud_copy(&copies[3], EE_AUDIT_ADMIN, "Travis", 20241105, 9, k_admin, ARRAYSIZE(k_admin)) ||
+        !aud_copy(&copies[4], EE_AUDIT_ELECTION, "Travis County", 20241214, 9, k_a, ARRAYSIZE(k_a)) ||
+        !EeAudit_GroupCopies(copies, 5, &els, &nels))
+    {
+        wprintf(L"auditmerge: setup\n");
+        goto done;
+    }
+    if (nels != 2 || els[0].election_date != 20241105 || els[1].election_date != 20241214 ||
+        EeAudit_Log(&els[0], EE_AUDIT_ADMIN)->ncopies != 1 || EeAudit_Log(&els[0], EE_AUDIT_ELECTION)->ncopies != 3)
+    {
+        wprintf(L"auditmerge: grouping (%u elections)\n", nels);
+        goto done;
+    }
+    log = EeAudit_Log(&els[0], EE_AUDIT_ELECTION);
+    if (log->nevents != ARRAYSIZE(k_order) || log->copies[0].printed > log->copies[1].printed ||
+        log->copies[1].printed > log->copies[2].printed)
+    {
+        wprintf(L"auditmerge: %u merged events\n", log->nevents);
+        goto done;
+    }
+    for (i = 0; i < log->nevents; i++)
+    {
+        const EeAuditCopy *c;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        if (strncmp(EeAudit_Desc(c, e), k_order[i], 2) != 0)
+        {
+            printf("auditmerge: event %u is [%s]\n", i, EeAudit_Desc(c, e));
+            goto done;
+        }
+    }
+    /* copies in print order: A (9h), B (12h), C (20h). e4 is in B only; e1 in A and C */
+    if (log->events[2].copies != 2 || log->events[6].copies != 5 || log->events[4].copies != 7 ||
+        log->events[5].copies != 7)
+    {
+        wprintf(L"auditmerge: copy masks\n");
+        goto done;
+    }
+    if (log->checks[1].new_events != 2 || log->checks[1].lacks_outside != 1 || log->checks[1].lacks_missing != 0 ||
+        log->checks[2].new_events != 1 || log->checks[2].lacks_outside != 0 || log->checks[2].lacks_missing != 1 ||
+        log->checks[0].new_events != 4)
+    {
+        wprintf(L"auditmerge: checks B new %u outside %u missing %u, C new %u outside %u missing %u\n",
+                log->checks[1].new_events, log->checks[1].lacks_outside, log->checks[1].lacks_missing,
+                log->checks[2].new_events, log->checks[2].lacks_outside, log->checks[2].lacks_missing);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeAudit_FreeElections(els, nels);
+    wprintf(L"auditmerge: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
+static int test_audit_accounting(void)
+{
+    /* oldest first here; reversed into report order below */
+    static const AudRow k_rows[] = {
+        {0, "Info", "Committing new Batch F0001-Logic EV - 1 ID 1 Number of Ballots 10"},
+        {1, "Warning", "All Electionware election results will be cleared. You may want to backup the election before proceeding. Do you want to continue?"},
+        {2, "Warning", "User Response: Yes"},
+        {3, "Info", "Results successfully cleared"},
+        {10, "Info", "Committing new Batch A0001-EV Vote Center - 5 ID 2 Number of Ballots 100"},
+        {11, "Info", "Committing new Batch A0002-EV Mail - 5 ID 3 Number of Ballots 40"},
+        {12, "Info", "Committing new Batch ED Vote Center - 5 ID 4 Number of Ballots 1,200"},
+        {13, "Info", "Committing new Batch A0003-EV Provisional - 1 ID 5 Number of Ballots 3"},
+        {20, "Warning", "Electionware election results for Central Count Media-5 will be cleared. You may want to backup the election before proceeding. Do you want to continue?"},
+        {21, "Warning", "User Response: Yes"},
+        {22, "Info", "Results successfully cleared"},
+        {30, "Info", "Committing new Batch A0004-EV Vote Center - 7 ID 6 Number of Ballots 101"},
+        {40, "Warning", "All Electionware election results will be cleared. You may want to backup the election before proceeding. Do you want to continue?"},
+        {41, "Warning", "User Response: No"},
+        {50, "Warning", "This batch was previously loaded.  Results and Ballot Images have not changed."},
+        {51, "Error", "An error occurred while loading Ballot Sheet ID 374539"},
+        {52, "Error", "An error occurred while loading Ballot Sheet ID 374539"},
+        {53, "Error", "An error occurred while loading Ballot Sheet ID 5"},
+        {60, "Info", "Committing new Batch ED Vote Center - 5 ID 4 Number of Ballots 1,250"},
+        {70, "Warning", "All Electionware election results will be cleared. You may want to backup the election before proceeding. Do you want to continue?"},
+        {71, "Warning", "User Response: Yes"},
+        {72, "Info", "Results successfully cleared"},
+        {80, "Info", "Committing new Batch F0001-Logic EV - 1 ID 7 Number of Ballots 10"}};
+    static const struct
+    {
+        const char *place;
+        int vt;
+        BOOL test;
+    } k_places[] = {{"Travis County Early Vote Center", EE_AUDIT_VT_EARLY, FALSE},
+                    {"Travis County Vote Center", EE_AUDIT_VT_ELECTION_DAY, FALSE},
+                    {"Vote By Mail", EE_AUDIT_VT_MAIL, FALSE},
+                    {"EV_PfISD Rock Gym", EE_AUDIT_VT_EARLY, FALSE},
+                    {"ED_Hendrickson High School", EE_AUDIT_VT_ELECTION_DAY, FALSE},
+                    {"ED Provisional", EE_AUDIT_VT_PROVISIONAL, FALSE},
+                    {"Mail Central Count", EE_AUDIT_VT_MAIL, FALSE},
+                    {"Our Redeemer Lutheran Church", EE_AUDIT_VT_OTHER, FALSE},
+                    {"Logic By Mail", EE_AUDIT_VT_MAIL, TRUE},
+                    {"LA-EV Vote Center", EE_AUDIT_VT_EARLY, TRUE},
+                    {"Logic/Acurracy-EV", EE_AUDIT_VT_EARLY, TRUE}};
+    AudRow rows[ARRAYSIZE(k_rows)];
+    EeAuditCopy copy;
+    EeAuditElection *els = NULL;
+    uint32_t nels = 0, i;
+    EeAuditAccounting a;
+    const EeAuditSession *s;
+    int rc = 1;
+
+    memset(&a, 0, sizeof(a));
+    for (i = 0; i < ARRAYSIZE(k_places); i++)
+    {
+        if (EeAudit_VoteTypeOf(k_places[i].place) != k_places[i].vt ||
+            EeAudit_IsTestDeck(k_places[i].place) != k_places[i].test)
+        {
+            printf("auditacct: %s is vote type %d, test %d\n", k_places[i].place, EeAudit_VoteTypeOf(k_places[i].place),
+                   EeAudit_IsTestDeck(k_places[i].place));
+            goto done;
+        }
+    }
+    for (i = 0; i < ARRAYSIZE(k_rows); i++)
+    {
+        rows[i] = k_rows[ARRAYSIZE(k_rows) - 1 - i];
+    }
+    if (!aud_copy(&copy, EE_AUDIT_ELECTION, "Dallas", 20241105, 9, rows, ARRAYSIZE(rows)) ||
+        !EeAudit_GroupCopies(&copy, 1, &els, &nels) || nels != 1 ||
+        !EeAudit_Accounting(EeAudit_Log(&els[0], EE_AUDIT_ELECTION), &a))
+    {
+        wprintf(L"auditacct: setup\n");
+        goto done;
+    }
+    if (a.nsessions != 3 || a.election_session != 1 || !a.sessions[0].test || !a.sessions[2].test ||
+        a.sessions[1].test || a.nbatches != 8 || a.nclears != 1 || a.previously_loaded != 1 || a.sheet_errors != 3 ||
+        a.sheet_error_ids != 2)
+    {
+        wprintf(L"auditacct: %u sessions (election %d), %u batches, %u clears, %u reloads, %u sheet errors (%u ids)\n",
+                a.nsessions, a.election_session, a.nbatches, a.nclears, a.previously_loaded, a.sheet_errors,
+                a.sheet_error_ids);
+        goto done;
+    }
+    s = &a.sessions[1];
+    /* the central count clear of media 5 removes the EV Vote Center batch loaded next, not
+     * EV Mail's media 5 nor the poll place tabulator's; batch 4 loaded again replaces itself */
+    if (s->ballots != 1394 || s->counted != 4 || s->ballots_vt[EE_AUDIT_VT_EARLY] != 101 ||
+        s->ballots_vt[EE_AUDIT_VT_ELECTION_DAY] != 1250 || s->ballots_vt[EE_AUDIT_VT_MAIL] != 40 ||
+        s->ballots_vt[EE_AUDIT_VT_PROVISIONAL] != 3)
+    {
+        wprintf(L"auditacct: election session %lld ballots, %u counted\n", (long long)s->ballots, s->counted);
+        goto done;
+    }
+    if (a.batches[1].status != EE_AUDIT_BATCH_CLEARED || a.batches[3].status != EE_AUDIT_BATCH_REPLACED ||
+        a.batches[2].status != EE_AUDIT_BATCH_COUNTED || !a.batches[1].central || a.batches[3].central ||
+        a.batches[1].media != 5 || strcmp(a.batches[1].place, "EV Vote Center") != 0 || a.batches[3].ballots != 1200 ||
+        a.clears[0].device != 1 || a.clears[0].media != 5 || a.clears[0].place == NULL ||
+        strcmp(a.clears[0].place, "EV Vote Center") != 0 || a.clears[0].removed != 1 || a.clears[0].places != 2 ||
+        a.clears[0].all_ballots != 140)
+    {
+        wprintf(L"auditacct: batches / media clear\n");
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeAudit_FreeAccounting(&a);
+    EeAudit_FreeElections(els, nels);
+    wprintf(L"auditacct: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -12598,5 +13009,8 @@ int wmain(void)
     failed |= test_results_glyphs();
     failed |= test_results_compare();
     failed |= test_results_view();
+    failed |= test_audit();
+    failed |= test_audit_merge();
+    failed |= test_audit_accounting();
     return failed == 0 ? 0 : 1;
 }

@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_glyph_ocr.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
+  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_glyph_ocr.c src\ee_audit.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -107,6 +107,34 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
 - the two same-named contests are told apart;
 - Over / Under Votes rows attach to their contest;
 - each compares with the XML with no difference (precinct and vote type rows too for By Precinct).
+`audit` covers ES&S Electionware audit event reports (`src\ee_audit.c`):
+- a three-page Election Audit Events Report printed turned, as JasperReports prints it, reads its
+  header (customer, election, election date, print time) and six events;
+- a description wrapped onto a second line, Info / Warning / Verbose / Error levels, two rows in one
+  second, a word broken at its hyphen ("re-" / "try" = "re-try"), and a wrapped module ("Paper
+  Ballot" / "Application");
+- a row whose description and module run onto the top of the next page is joined back, and so is
+  a long description whose rest fills a page with no row of its own;
+- 12:05 AM reads as hour 0;
+- an Admin Audit Events Report reads as one;
+- a results report is refused, naming the file.
+`auditmerge` covers grouping and merging copies of a log (`EeAudit_GroupCopies`):
+- copies given out of print order are ordered by print time; "Travis" and "Travis County" with one
+  election date are one election, another date another;
+- three copies merge into one list, newest first, each event once with the copies that hold it,
+  including two identical events in one second (both kept) and a description wrapped at another
+  word;
+- a copy printed with a start date lacks an older event "outside its date range", and the last copy
+  lacking an event inside its own span counts it as "missing".
+`auditacct` covers the ballot accounting (`EeAudit_Accounting`):
+- poll place names to vote types ("Travis County Early Vote Center", "Vote Center", "EV_..." /
+  "ED_...", "Mail Central Count", a church name as Other) and L&A test decks ("Logic By Mail",
+  "LA-EV Vote Center", "Logic/Acurracy-EV");
+- a test deck, a full clear, four batches (one with "1,200" ballots), a "Central Count Media-5"
+  clear that removes only the batch of the poll place loaded next (not EV Mail's media 5, nor a
+  poll place tabulator's media 5), a declined full clear, a reload notice, sheet load errors
+  (three, two sheet IDs), a batch ID loaded again (replacing the first), and an L&A test after
+  counting: three sessions, the middle one the election's, 1,394 ballots by vote type.
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
 wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt),
 plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).

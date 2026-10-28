@@ -1,0 +1,311 @@
+/**
+ * @file ee_audit.h
+ * @brief ES&S Electionware audit logs: the "Election Audit Events Report" and "Admin Audit
+ *        Events Report" PDFs read into events.
+ *
+ * Each PDF is one printed copy of a log: a JasperReports table (Event | Description |
+ * Timestamp | User Id | Module) printed on landscape pages, newest event first. Text is
+ * placed by column position through pdf_reader.c; a row's description, or its module's
+ * second line, can run onto the top of the next page and is joined back to its event.
+ *
+ * See docs/audit-log-design.md.
+ */
+#pragma once
+
+#include <windows.h>
+#include <stdint.h>
+
+#include "voter_table.h" /* EeLoadStatus, EeLoadProgressFn */
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+/** EeAuditCopy.kind */
+#define EE_AUDIT_ELECTION 1 /* "Election Audit Events Report": one election's database */
+#define EE_AUDIT_ADMIN    2 /* "Admin Audit Events Report": the whole system */
+
+    /** One row of the report. Strings are UTF-8 in the copy's pools. */
+    typedef struct EeAuditEvent
+    {
+        int64_t ts;    /* the Timestamp, seconds since 1970-01-01 in local time (no zone) */
+        uint32_t desc; /* offset of the NUL-terminated description in EeAuditCopy.pool */
+        uint32_t page; /* the page the row starts on (1-based) */
+        uint32_t level;  /* Event column ("Info", "Warning", ...): index in EeAuditCopy.strs */
+        uint32_t user;   /* User Id: index in strs */
+        uint32_t module; /* Module: index in strs */
+    } EeAuditEvent;
+
+    /** One printed copy of a log (one PDF). */
+    typedef struct EeAuditCopy
+    {
+        wchar_t *path;
+        int kind;            /* EE_AUDIT_* */
+        char *customer;      /* header: "Travis County" */
+        char *election;      /* header: the open election's name, cut at the field width */
+        int election_date;   /* header election date as yyyymmdd, 0 when unreadable */
+        int64_t printed;     /* print time (seconds, minute precision), 0 when unreadable */
+        uint32_t pages;
+        EeAuditEvent *events; /* in report order: newest first */
+        uint32_t nevents;
+        uint32_t cap_events;
+        char *pool; /* descriptions */
+        size_t pool_len;
+        size_t pool_cap;
+        char **strs; /* interned levels, users and modules */
+        uint32_t nstrs;
+        uint32_t cap_strs;
+        uint32_t *str_hash; /* open-addressing table of indexes into strs (+1; 0 = empty) */
+        uint32_t hash_cap;
+    } EeAuditCopy;
+
+    /** Initialize an empty copy. */
+    void EeAudit_InitCopy(EeAuditCopy *c);
+
+    /** Release a copy's memory (the struct itself is not freed). */
+    void EeAudit_FreeCopy(EeAuditCopy *c);
+
+    /** An interned string of @p c ("" for an index out of range). */
+    const char *EeAudit_Str(const EeAuditCopy *c, uint32_t id);
+
+    /** An event's description. */
+    const char *EeAudit_Desc(const EeAuditCopy *c, const EeAuditEvent *e);
+
+    /**
+     * TRUE when the PDF's Creator or first page shows an Electionware audit events report.
+     * Does not read the whole file.
+     */
+    BOOL EeAudit_IsAuditPdf(const wchar_t *path);
+
+    /**
+     * Read one audit log PDF.
+     *
+     * @param path          The PDF.
+     * @param out           Receives the copy (initialized first; free with EeAudit_FreeCopy).
+     * @param cancel_flag   Optional; non-zero requests cancel.
+     * @param progress_fn   Optional progress callback (percent of the pages).
+     * @param progress_user Passed to @p progress_fn.
+     * @param err           Optional; receives a message on failure.
+     * @param errcch        Capacity of @p err.
+     * @return EeLoadStatus_Ok, _Cancelled, or _Error (unreadable, or not an Electionware
+     *         audit events report).
+     */
+    EeLoadStatus EeAudit_LoadCopy(const wchar_t *path,
+                                  EeAuditCopy *out,
+                                  volatile LONG *cancel_flag,
+                                  EeLoadProgressFn progress_fn,
+                                  void *progress_user,
+                                  wchar_t *err,
+                                  size_t errcch);
+
+    /* ---------------------------------------------------------------------- */
+    /* One election's logs: copies grouped and merged                          */
+    /* ---------------------------------------------------------------------- */
+
+    /** Most copies of one log the merge keeps apart (EeAuditMerged.copies is a mask). */
+#define EE_AUDIT_MAX_COPIES 64
+
+    /** An event of the merged log: held by one or more copies. */
+    typedef struct EeAuditMerged
+    {
+        uint32_t copy;   /* the first copy (in print order) that holds it: its strings */
+        uint32_t index;  /* the event in that copy */
+        uint64_t copies; /* bit i: copy i holds the event */
+    } EeAuditMerged;
+
+    /** How one copy compares with the copies printed before it. */
+    typedef struct EeAuditCopyCheck
+    {
+        int64_t first_ts;       /* its oldest and newest events */
+        int64_t last_ts;
+        uint32_t events;        /* its events */
+        uint32_t new_events;    /* events no earlier copy holds */
+        uint32_t lacks_outside; /* earlier copies' events it lacks, older than its oldest event
+                                 * (printed with a start date) or newer than its newest */
+        uint32_t lacks_missing; /* earlier copies' events it lacks inside its own time span */
+    } EeAuditCopyCheck;
+
+    /** One log of an election (Election or Admin): all its copies, merged. */
+    typedef struct EeAuditLog
+    {
+        int kind; /* EE_AUDIT_*; 0 = no copy loaded */
+        EeAuditCopy *copies; /* in print order, oldest first */
+        uint32_t ncopies;
+        EeAuditCopyCheck *checks; /* one per copy */
+        EeAuditMerged *events;    /* every event of every copy once, newest first */
+        uint32_t nevents;
+        BOOL names_differ; /* the copies' headers name more than one election */
+    } EeAuditLog;
+
+    /** The logs of one election (one county, one election date). */
+    typedef struct EeAuditElection
+    {
+        char *customer;    /* from the first copy's header */
+        char *election;    /* the election name of the most copies */
+        int election_date; /* yyyymmdd */
+        EeAuditLog logs[2]; /* [0] Election log, [1] Admin log */
+    } EeAuditElection;
+
+    /** The log of @p kind in @p el. */
+    const EeAuditLog *EeAudit_Log(const EeAuditElection *el, int kind);
+
+    /** A merged event's copy and its event there. */
+    const EeAuditEvent *EeAudit_MergedEvent(const EeAuditLog *log, uint32_t i, const EeAuditCopy **copy);
+
+    /**
+     * Load audit log PDFs and group them into elections: copies with the same customer and
+     * election date belong to one election, Election and Admin logs apart. Each log's copies
+     * are ordered by print time and merged.
+     *
+     * @param paths         Array of @p count wide file paths.
+     * @param count         Number of files (>= 1).
+     * @param out           Receives a malloc'd array of elections (free with
+     *                      EeAudit_FreeElections), ordered by election date.
+     * @param out_count     Receives the number of elections.
+     * @param cancel_flag   Optional; non-zero requests cancel.
+     * @param progress_fn   Optional progress callback (percent over the files' pages).
+     * @param progress_user Passed to @p progress_fn.
+     * @param err           Optional; receives a message naming the file on failure.
+     * @param errcch        Capacity of @p err.
+     */
+    EeLoadStatus EeAudit_LoadFiles(const wchar_t *const *paths,
+                                   uint32_t count,
+                                   EeAuditElection **out,
+                                   uint32_t *out_count,
+                                   volatile LONG *cancel_flag,
+                                   EeLoadProgressFn progress_fn,
+                                   void *progress_user,
+                                   wchar_t *err,
+                                   size_t errcch);
+
+    /**
+     * Group already loaded copies (taken over: on success and on failure the caller no
+     * longer owns them) into elections, as EeAudit_LoadFiles does after reading.
+     */
+    BOOL EeAudit_GroupCopies(EeAuditCopy *copies, uint32_t ncopies, EeAuditElection **out, uint32_t *out_count);
+
+    /** Free an array from EeAudit_LoadFiles / EeAudit_GroupCopies. */
+    void EeAudit_FreeElections(EeAuditElection *els, uint32_t count);
+
+    /* ---------------------------------------------------------------------- */
+    /* Ballot accounting: the batches loaded into the EMS                      */
+    /* ---------------------------------------------------------------------- */
+
+/** EeAuditBatch.status */
+#define EE_AUDIT_BATCH_COUNTED  0 /* still loaded when its session ended */
+#define EE_AUDIT_BATCH_CLEARED  1 /* removed by a media clear */
+#define EE_AUDIT_BATCH_REPLACED 2 /* its batch ID was committed again later in the session */
+
+/** Vote types told from a batch's poll place name (EeAuditBatch.vote_type). */
+#define EE_AUDIT_VT_OTHER        0
+#define EE_AUDIT_VT_EARLY        1 /* early voting in person */
+#define EE_AUDIT_VT_ELECTION_DAY 2
+#define EE_AUDIT_VT_MAIL         3
+#define EE_AUDIT_VT_PROVISIONAL  4
+#define EE_AUDIT_VT_COUNT        5
+
+    /** One batch commit ("Committing new Batch <name> ID <id> Number of Ballots <n>") or
+     *  manual-entry batch ("Updating Batch ... Revision <r>"). */
+    typedef struct EeAuditBatch
+    {
+        uint32_t event;  /* merged event of its commit (its last update for a revised batch) */
+        uint32_t id;     /* EMS batch ID */
+        char *name;      /* "A0013-EV Vote Center - 33" */
+        char *place;     /* poll place: the name without the "A0013-" prefix and " - 33" media */
+        int media;       /* media ID from the name, -1 when the name has none */
+        BOOL central;    /* a central count batch: the name starts "A0013-" (a poll place's
+                          * own tabulator media are numbered apart) */
+        int64_t ballots; /* Number of Ballots: ballots, not sheets */
+        int64_t ts;
+        uint32_t session;
+        int status;    /* EE_AUDIT_BATCH_* */
+        int vote_type; /* EE_AUDIT_VT_* */
+        BOOL test;     /* a logic and accuracy test deck ("Logic EV", "LA-Mail") */
+        uint32_t revision;
+    } EeAuditBatch;
+
+    /** A media clear: "Electionware election results for Central Count Media-<m> will be
+     *  cleared" confirmed by "Results successfully cleared". */
+    typedef struct EeAuditMediaClear
+    {
+        uint32_t event; /* merged event of "Results successfully cleared" */
+        int64_t ts;
+        int media;
+        int device;       /* 1 "Central Count Media-n", 2 "Poll Place Media-n", 0 not named */
+        char *place;      /* the poll place whose batches it removed; NULL when ambiguous */
+        uint32_t removed; /* batches it removed */
+        int64_t removed_ballots;
+        uint32_t places;      /* poll places that had batches on this media number */
+        int64_t all_ballots;  /* the ballots of every batch on this media number (any place) */
+        uint32_t session;
+    } EeAuditMediaClear;
+
+    /** The batches between two full clears ("All Electionware election results will be
+     *  cleared" + "Results successfully cleared"), or before the first. */
+    typedef struct EeAuditSession
+    {
+        int64_t start; /* the clear that started it, or the log's first event */
+        int64_t end;   /* the last event before the next full clear */
+        BOOL after_clear;
+        uint32_t first_batch; /* its batches: batches[first_batch .. first_batch + nbatches) */
+        uint32_t nbatches;
+        uint32_t counted; /* batches still loaded at its end */
+        int64_t ballots;  /* their ballots */
+        int64_t ballots_vt[EE_AUDIT_VT_COUNT];
+        uint32_t first_clear; /* its media clears: clears[first_clear .. + nclears) */
+        uint32_t nclears;
+        BOOL test; /* every batch is an L&A test deck (or it has none) */
+    } EeAuditSession;
+
+    typedef struct EeAuditAccounting
+    {
+        EeAuditBatch *batches; /* in load order */
+        uint32_t nbatches;
+        EeAuditSession *sessions;
+        uint32_t nsessions;
+        EeAuditMediaClear *clears;
+        uint32_t nclears;
+        int election_session;       /* the last session that loaded non-test batches; -1 none */
+        uint32_t previously_loaded; /* "This batch was previously loaded ..." (no change) */
+        uint32_t sheet_errors;      /* "An error occurred while loading Ballot Sheet ID n" */
+        uint32_t sheet_error_ids;   /* distinct sheet IDs among them */
+    } EeAuditAccounting;
+
+    /**
+     * Replay an Election log's batch loads and clears, oldest first. A full clear starts a
+     * session. A media clear names a device type ("Central Count") and a media number,
+     * which each poll place numbers on its own: it removes that device type's batches on
+     * that media of the poll place whose batches are loaded next (or of the only poll place
+     * with that media), otherwise nothing (ambiguous).
+     */
+    BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out);
+
+    /** Release an accounting (the struct itself is not freed). */
+    void EeAudit_FreeAccounting(EeAuditAccounting *a);
+
+    /** The vote type a poll place name points to (EE_AUDIT_VT_*). */
+    int EeAudit_VoteTypeOf(const char *place);
+
+    /** "Early voting", "Election Day", "Mail", "Provisional", "Other". */
+    const wchar_t *EeAudit_VoteTypeName(int vote_type);
+
+    /** TRUE for a logic and accuracy test deck's poll place or batch name. */
+    BOOL EeAudit_IsTestDeck(const char *name);
+
+    /**
+     * Append an event to @p c (events are kept in report order: add the newest first). For
+     * copies read from somewhere other than a PDF, such as a reloaded export.
+     */
+    BOOL EeAudit_AddEvent(EeAuditCopy *c, int64_t ts, const char *level, const char *desc, const char *user,
+                          const char *module, uint32_t page);
+
+    /** Seconds since 1970-01-01 for a civil date and time (no zone). */
+    int64_t EeAudit_MakeTime(int year, int month, int day, int hour, int minute, int second);
+
+    /** Format @p ts as "MM/DD/YYYY hh:mm:ssAM", the report's own form. */
+    void EeAudit_FormatTime(int64_t ts, char *buf, size_t cap);
+
+#ifdef __cplusplus
+}
+#endif

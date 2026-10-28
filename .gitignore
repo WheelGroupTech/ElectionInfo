@@ -218,3 +218,9 @@ Election_CVRs/
 
 # Election results - raw county and state exports, too large to push to GitHub
 Election_Results/
+
+# Audit logs - raw county and state exports, too large to push to GitHub
+Audit_Logs/
+
+# Election reports - raw county and state exports, too large to push to GitHub
+ePollbook_Reports/

@@ -133,7 +133,10 @@ static BOOL has_letter(const char *s)
     return FALSE;
 }
 
-/* Copy @p s into @p out (cap) trimmed, with runs of whitespace collapsed to one space. */
+/* Copy @p s into @p out (cap) trimmed, with runs of whitespace collapsed to one space.
+ * A UTF-8 no-break space (U+00A0, C2 A0) is whitespace too: Bastrop's Windows-1252 CSVs
+ * pad some names with runs of 0xA0, which the reader turns into C2 A0. When @p out fills,
+ * the copy ends on a character boundary, never inside a multibyte UTF-8 character. */
 static void clean_text(const char *s, char *out, size_t cap)
 {
     size_t o = 0;
@@ -150,12 +153,44 @@ static void clean_text(const char *s, char *out, size_t cap)
             space = (o > 0);
             continue;
         }
-        if (space && o + 2 < cap)
+        if ((unsigned char)c == 0xC2 && (unsigned char)s[1] == 0xA0)
         {
+            space = (o > 0);
+            s++; /* skip the A0 byte as well */
+            continue;
+        }
+        if (space)
+        {
+            if (o + 2 >= cap)
+            {
+                break; /* no room for the space and a character: end at the word */
+            }
             out[o++] = ' ';
         }
         space = FALSE;
         out[o++] = c;
+    }
+    if (*s != '\0' && o > 0)
+    {
+        /* Out of room: drop a trailing partial UTF-8 character, then any trailing space. */
+        size_t lead = o;
+        while (lead > 0 && ((unsigned char)out[lead - 1] & 0xC0) == 0x80)
+        {
+            lead--;
+        }
+        if (lead > 0 && (unsigned char)out[lead - 1] >= 0xC0)
+        {
+            unsigned char b = (unsigned char)out[lead - 1];
+            size_t need = (b >= 0xF0) ? 4 : (b >= 0xE0) ? 3 : 2;
+            if (o - (lead - 1) < need)
+            {
+                o = lead - 1;
+            }
+        }
+        while (o > 0 && out[o - 1] == ' ')
+        {
+            o--;
+        }
     }
     out[o] = '\0';
 }

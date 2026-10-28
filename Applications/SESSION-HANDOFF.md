@@ -4,17 +4,15 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-27. Election Explorer **1.5.0.0 submitted to the Microsoft Store**; all
-code committed (latest `5971ff7`). This note was condensed from a long changelog on 2026-10-27;
-the old text is in git history.
+**Last updated:** 2026-10-28. Election Explorer **1.5.0.0 certified and published on the
+Microsoft Store**. Uncommitted: the Bastrop name fix in `src/voter_roster.c` (see Next steps).
+This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
 
-- **Released:** 1.5.0.0, submitted to the Store 2026-10-27, awaiting certification. 1.4.1.0
-  (submitted 2026-10-22) is the version before it. Per-version notes: `ElectionExplorer/RELEASES.md`;
-  Store description: `ElectionExplorer/STORE-LISTING.txt`.
-- **Not yet committed (the user's own):** `RELEASES.md` marks 1.5.0.0 "submitted 2026-10-27";
-  two new screenshots in `ElectionExplorer/docs/Screenshots/` (G24 Travis results and turnout).
+- **Released:** 1.5.0.0, submitted 2026-10-27, certified and published on the Store by
+  2026-10-28. 1.4.1.0 (submitted 2026-10-22) is the version before it. Per-version notes:
+  `ElectionExplorer/RELEASES.md`; Store description: `ElectionExplorer/STORE-LISTING.txt`.
 - **Store bundle:** `Build/msix/ElectionExplorer.Package_1.5.0.0_x64_arm64_bundle.msixupload`.
   After a version bump, delete the package's `bin/`, `obj/`, `BundleArtifacts/` and build with
   `/t:Rebuild`, then check every inner `AppxManifest.xml` version (stale-manifest trap).
@@ -59,12 +57,18 @@ Win32 C11 desktop app (no MFC, static CRT, x64 + ARM64) under `ElectionExplorer/
 
 ## Ongoing — Texas rosters for the Nov 3, 2026 election
 
-- **Daily download:** scheduled task `tx-early-voting-roster-download` runs at 1 PM through
-  Nov 4: the 50 largest counties' rosters plus the SOS county CSVs into
-  `Voter_Rosters/TX_<County>_County/` (gitignored).
+- **Daily download:** scheduled task `tx-early-voting-roster-download` (recreated 2026-10-28 as a
+  claude.ai scheduled task bound to the desktop) runs daily at 12:32 PM Central through Nov 4:
+  the 50 largest counties' rosters plus the SOS county CSVs into
+  `Voter_Rosters/TX_<County>_County/` (gitignored). Its runs use the desktop's device shell,
+  where the repo is mounted at `$HOME/mnt/ElectionInfo`; the original task definition is backed
+  up in `C:\Users\dteal\Claude-Backup\scheduled-tasks\`.
+- **Wichita:** its PDFs sit behind a Cloudflare challenge; the user downloads them by hand
+  (through 10/27 done).
 - **Nightly review reports:**
   `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_<date>`
-  (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-26.
+  (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-27 (data
+  through 10/26).
   - Report 100% county↔state agreement only when the county-only and state-only counts are
     both 0.
   - Supplements give VUIDs and file locations only (no names or addresses).
@@ -92,7 +96,16 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- Watch 1.5.0.0 certification; fix and resubmit if it fails.
+- **Bastrop name fix (uncommitted, verified 2026-10-28):** Bastrop's Windows-1252 CSVs pad
+  some names with runs of 0xA0, which become UTF-8 no-break spaces (C2 A0); a 63-space run
+  overflowed the 128-byte name buffers and `clean_text` cut a character in half. `clean_text`
+  in `src/voter_roster.c` now treats C2 A0 as whitespace, ends a full buffer on a character
+  boundary, and no longer glues a stray character onto the last word when only one byte is
+  left. Verified on Windows: `Applications.sln` Release x64 + ARM64 build clean, the smoke
+  suite passes, and reloading Bastrop `G26_Monday-October-26.csv` with the loader gives all 12
+  padded rows clean names (no no-break spaces, valid UTF-8, the cut middle name now empty),
+  no invalid UTF-8 anywhere in the file, and no other record changed. Ready to commit;
+  candidate for 1.5.1.
 - **Candidates for the next version** (design doc "After step 9" and "Implementation plan" 11):
   - results PDFs still refused: scanned reports (~450), Electionware "Statement of Votes Cast"
     and custom table grids (~78), the encrypted Ellis PDFs;

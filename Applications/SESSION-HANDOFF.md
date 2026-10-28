@@ -5,7 +5,7 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-28. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: the Bastrop name fix in `src/voter_roster.c` (see Next steps).
+Microsoft Store**. Uncommitted: the 1.6 audit-log plan `docs/audit-log-design.md` (see Next steps).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -96,16 +96,21 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- **Bastrop name fix (uncommitted, verified 2026-10-28):** Bastrop's Windows-1252 CSVs pad
-  some names with runs of 0xA0, which become UTF-8 no-break spaces (C2 A0); a 63-space run
-  overflowed the 128-byte name buffers and `clean_text` cut a character in half. `clean_text`
-  in `src/voter_roster.c` now treats C2 A0 as whitespace, ends a full buffer on a character
-  boundary, and no longer glues a stray character onto the last word when only one byte is
-  left. Verified on Windows: `Applications.sln` Release x64 + ARM64 build clean, the smoke
-  suite passes, and reloading Bastrop `G26_Monday-October-26.csv` with the loader gives all 12
-  padded rows clean names (no no-break spaces, valid UTF-8, the cut middle name now empty),
-  no invalid UTF-8 anywhere in the file, and no other record changed. Ready to commit;
-  candidate for 1.5.1.
+- **1.6 ES&S audit logs — plan written, awaiting decisions:**
+  `ElectionExplorer/docs/audit-log-design.md`.
+  - **Data:** Travis and Dallas Electionware Election/Admin audit event PDFs in `Audit_Logs/`
+    (gitignored).
+  - **Research done 2026-10-28:**
+    - Every later copy holds every event of the earlier copies. Two Dallas G24 copies were
+      printed with a start date.
+    - Replaying the batch-commit and clear events gives the official ballots cast for all 9
+      Travis elections and Dallas G24 (858,562, multi-sheet; the CVR has 873,455 rows).
+    - Dallas P24 is one ballot short (open).
+  - **County survey 2026-10-28** (`docs/audit-log-county-survey.md`): only Dallas, Parker and Hays
+    post logs; added Dallas L24 + 22 Dallas machine logs (`TX_Dallas_County/Machine_Logs/`), Parker's 14
+    Hart VerityCount reports and Hays PR24. Refresh: `python -I Audit_Logs/_download_tools/audit_download.py`.
+  - **Next:** the user confirms D1–D10 (D10: the L&A Testing Timeline), then step 1 (`src/ee_audit.{c,h}` PDF reader).
+- **Bastrop name fix:** committed 2026-10-28 (`fca8719`); candidate for 1.5.1.
 - **Candidates for the next version** (design doc "After step 9" and "Implementation plan" 11):
   - results PDFs still refused: scanned reports (~450), Electionware "Statement of Votes Cast"
     and custom table grids (~78), the encrypted Ellis PDFs;

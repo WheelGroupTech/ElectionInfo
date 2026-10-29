@@ -68,8 +68,14 @@ Win32 C11 desktop app (no MFC, static CRT, x64 + ARM64) under `ElectionExplorer/
   (through 10/27 done).
 - **Nightly review reports:**
   `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_<date>`
-  (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-27 (data
-  through 10/26).
+  (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-28 (data
+  through 10/27).
+  - **Loader gaps found 2026-10-28** (worked around in the report, not yet fixed):
+    - Guadalupe's 10/27 roster is a new layout (a PScript5 "Detailed Check-in Report") that the
+      loader refuses;
+    - one page of Gregg's 10/27 PDF prints rows in pieces: the loader misses 2 voters and
+      mis-pairs that page's names;
+    - the loader dates Bexar rows from the misdated file name "10272028".
   - Report 100% county↔state agreement only when the county-only and state-only counts are
     both 0.
   - Supplements give VUIDs and file locations only (no names or addresses).

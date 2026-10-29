@@ -755,6 +755,35 @@ Export All… in every report window. Release x64 and ARM64 build with no warnin
 - **Not kept:** a page for copies other than an event's first holder (it reloads as 0). The
   status bar shows only the first holder's page, so nothing visible changes.
 
+### Step 10 — help, version 1.6.0.0, release notes (done 2026-10-29; 1.6 not final)
+
+The user has more changes before 1.6.0.0 is finished. After them, update the release notes and
+build the Store bundle again.
+
+- **Help:**
+  - The audit window's topics: Loading, Views and Options, Filters, Reports, Compare and Export.
+    Loading now mentions reloading an export.
+  - The voter list Loading topic points to File → Load Audit Logs….
+  - The CVR Loading topic says the status bar gives the ballots and sheets of a multi-card CVR,
+    and points to Compare → Check Ballot Counts with….
+  - The results window's Compare topic describes Check Ballot Counts with an audit log window.
+- **Version 1.6.0.0:** `res/ElectionExplorer.rc`, `res/app.manifest` and
+  `ElectionExplorer.Package/Package.appxmanifest`.
+- **Release notes:**
+  - `RELEASES.md`: a 1.6.0.0 "What's new" note of 1,190 characters (Partner Center allows 1,500).
+    It covers audit logs, multi-card CVR ballot counts, and the Bastrop, Bexar, Gregg and
+    Guadalupe roster fixes.
+  - `STORE-LISTING.txt` (8,659 characters): a "Review the audit logs" section, and audit logs in
+    the opening line.
+  - The top-level `README.md` mentions audit logs and the local `Audit_Logs/` folder.
+- **Store bundle (pre-release):**
+  - `Build/msix/ElectionExplorer.Package_1.6.0.0_x64_arm64_bundle.msixupload` (5.8 MB), built
+    with `/t:Rebuild` after clearing the package's `bin`, `obj` and `BundleArtifacts`.
+  - The bundle and both packages are `WheelGroupTech.ElectionExplorer` 1.6.0.0, and both EXEs
+    are 1.6.0.0.
+  - Each package has 19 logo images and only the runFullTrust capability.
+- **Checks:** the smoke suite passes, and Release x64 and ARM64 build clean.
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**

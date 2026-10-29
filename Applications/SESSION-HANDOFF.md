@@ -5,8 +5,9 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: 1.6 audit log step 9: Export and the reloadable Events export
-(`ee_audit.{c,h}`, `main.c`, `resource.h`, smoke test `auditexp`, design doc; see Next steps).
+Microsoft Store**. Uncommitted: 1.6 step 10 (help, version 1.6.0.0, RELEASES.md,
+STORE-LISTING.txt, README). **1.6.0.0 is not final:** the user has more changes first; then update
+the notes and rebuild the bundle.
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -143,7 +144,14 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     - Legal citations are to be confirmed by the user.
     - The PR26 timeline equals the design-doc trace.
     - Another election's history (a different dated name in "Election Opened:") is not checked.
-  - **Step 9 (done 2026-10-29, uncommitted):** File → Export… (Events: Displayed view or Reloadable;
+  - **Step 10 (done 2026-10-29, uncommitted):** help topics (voter list, CVR and results topics
+    point to audit logs), version 1.6.0.0 in the three files, RELEASES.md note (1,190
+    characters), STORE-LISTING.txt section, README.
+    - A pre-release bundle `Build/msix/ElectionExplorer.Package_1.6.0.0_x64_arm64_bundle.msixupload`
+      is built and checked (1.6.0.0 throughout).
+    - Rebuild the bundle (clear the package's bin/obj/BundleArtifacts, `/t:Rebuild`) after the
+      remaining 1.6 changes.
+  - **Step 9 (done 2026-10-29):** File → Export… (Events: Displayed view or Reloadable;
     Batches: plus Session), Export Selected…, and report windows' Export Selected / All….
     - The reloadable file ("Record Type" Copy / Event records, copies as "1-3,5 of 5") loads back
       through File → Load Audit Logs….
@@ -156,7 +164,8 @@ Listing; all committed, lint 10/10. Run with `python -I`.
       gives ballots for those CVRs too.
     - Dallas G24: 873,455 rows → 858,562 ballots.
     - EMS = CVR = results for Dallas G24 and Travis G24 / P26 / PR26 / L26 / GR25.
-  - **Next:** step 10, help topics, version 1.6.0.0, RELEASES.md, STORE-LISTING.txt, README.
+  - **Next:** the user's remaining 1.6.0.0 changes. Then update RELEASES.md / STORE-LISTING.txt
+    if needed, rebuild and check the Store bundle, and submit.
     Scratch tools in the desktop session scratchpad: `audit_probe.c` (`-merge` mode), `cards/`
     (card-count probe) and `uia/drive_audit.ps1`, which drives the app through UI Automation and
     saves screenshots. Its `-Then` list takes:

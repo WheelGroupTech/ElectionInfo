@@ -9168,7 +9168,8 @@ static const wchar_t k_HelpLoading[] =
     L"To see who has voted in an election, use File → Load Voter Roster… instead; a roster "
     L"opens in its own window (see Help → Loading Voter Rosters there). An election's results "
     L"(Clarity Elections files, or ES&S and Hart results reports) open with File → Load "
-    L"Election Results…, also in a window of their own.";
+    L"Election Results…, also in a window of their own, and ES&S Electionware audit logs with "
+    L"File → Load Audit Logs… (see Help → Loading Audit Logs there).";
 
 static const wchar_t k_HelpRosterLoading[] =
     L"Load Voter Roster (File menu) opens the rosters a county publishes during an election "
@@ -9508,10 +9509,13 @@ static const wchar_t k_CvrHelpLoading[] =
     L"\"<Redacted>\".\r\n\r\n"
     L"In ES&S and Hart primaries each party's contests are separate columns, prefixed "
     L"\"REP\" or \"DEM\". Each row is one ballot record; when ballots span several cards "
-    L"or sheets, each card is its own record and the status bar says so.\r\n\r\n"
+    L"or sheets, each card is its own record and the status bar gives the ballots and the "
+    L"sheets.\r\n\r\n"
     L"To check a tabulation against the county's published results, load them with File → "
     L"Load Election Results… and use the Compare menu (see Help → Compare in the results "
-    L"window).";
+    L"window). To check the ballots against the ballots the county's ES&S Electionware audit "
+    L"log shows loaded into the EMS, load the logs with File → Load Audit Logs… and use "
+    L"Compare → Check Ballot Counts with… (see Help → Compare in the audit log window).";
 
 static const wchar_t k_CvrHelpOptions[] =
     L"Options (Edit → Options) control how the Cast Vote Records are tabulated. The "
@@ -19317,7 +19321,10 @@ static const wchar_t k_ResHelpCompare[] =
     L"the figure (Travis County's results do not report over/under votes). View \x2192 Show "
     L"Differences Only hides the matches; File \x2192 Export Compare\x2026 saves the rows. For a "
     L"CVR, turn on the CVR window's \"Merge image and text write-ins\" option so its write-ins "
-    L"add up like the results' single Write-in total.";
+    L"add up like the results' single Write-in total.\r\n\r\n"
+    L"Compare \x2192 Check Ballot Counts with\x2026 an open audit log window compares the ballots "
+    L"cast with the ballots the county's ES&S Electionware audit log shows loaded into the EMS, "
+    L"and each vote type with a lower bound (see Help \x2192 Compare in the audit log window).";
 
 static void App_ShowResultsCompareHelp(AppState *app, HWND owner)
 {

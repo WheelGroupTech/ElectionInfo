@@ -1,4 +1,4 @@
-Election Explorer is a fast, private desktop tool for working with the election data counties publish: voter-registration lists, voter rosters (who has voted), cast vote records (CVRs), and official election results. Open files with millions of voters or hundreds of thousands of ballots, and browse, search, filter, tabulate, and compare them in seconds, all on your own computer.
+Election Explorer is a fast, private desktop tool for working with the election data counties publish: voter-registration lists, voter rosters (who has voted), cast vote records (CVRs), official election results, and voting system audit logs. Open files with millions of voters or hundreds of thousands of ballots, and browse, search, filter, tabulate, and compare them in seconds, all on your own computer.
 
 Everything happens locally. Election Explorer has no accounts, no ads, and no telemetry, and it never uploads your files. Your data stays on your machine.
 
@@ -39,6 +39,9 @@ Load the election results counties publish into an Election Results window: the 
 See each contest's totals or every precinct's results, with a column for each vote type (mail, early voting, Election Day, and so on). Filter by precinct, vote type, contest, choice, or party, and every total and percentage is recomputed from the precincts you include. The Turnout report lists each precinct's registered voters, ballots cast, and turnout. Export to CSV or TSV, as displayed or in a detailed layout that loads back exactly.
 
 Compare the results with another results window, such as an earlier unofficial snapshot, or with the tabulation of the election's cast vote records, contest by contest and precinct by precinct, to see exactly where the figures agree and where they differ.
+
+REVIEW THE AUDIT LOGS
+Load the Election and Admin audit event reports printed by ES&S Electionware election management systems, as the PDFs counties publish, into an Audit Log window, one per election. Every copy a county printed is merged, so each event appears once with the copies that hold it, and events missing from the final copy stand out. The Ballot Batches view and the Ballot Accounting report replay the ballot loads: every batch, media clears and replaced batches, and the ballots of each session, poll place, and vote type. Other reports check the printed copies against each other, lay out the logic and accuracy tests and the counting periods in time order, list each user's and workstation's activity, and sort notable events by severity, such as results printed or exported before Election Day. Filter events by time, log, user, module, or text, check the audit log's ballot count against the cast vote records or the official results, and export events, batches, and reports, including a layout that loads back without the PDFs.
 
 WORK YOUR WAY
 Copy selected rows to the clipboard, or export any list, ballot view, or report to CSV or TSV for use in other tools. Look up any address in your preferred map service (Google, Bing, Apple, or OpenStreetMap), and adjust zoom and display options to suit you. Your preferences are remembered between sessions.

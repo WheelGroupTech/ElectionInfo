@@ -13057,7 +13057,8 @@ static int test_audit_accounting(void)
         wprintf(L"auditacct: election session %lld ballots, %u counted\n", (long long)s->ballots, s->counted);
         goto done;
     }
-    if (a.batches[1].status != EE_AUDIT_BATCH_CLEARED || a.batches[3].status != EE_AUDIT_BATCH_REPLACED ||
+    if (a.batches[1].status != EE_AUDIT_BATCH_CLEARED || a.batches[1].clear != 0 ||
+        a.batches[3].status != EE_AUDIT_BATCH_REPLACED ||
         a.batches[2].status != EE_AUDIT_BATCH_COUNTED || !a.batches[1].central || a.batches[3].central ||
         a.batches[1].media != 5 || strcmp(a.batches[1].place, "EV Vote Center") != 0 || a.batches[3].ballots != 1200 ||
         a.clears[0].device != 1 || a.clears[0].media != 5 || a.clears[0].place == NULL ||

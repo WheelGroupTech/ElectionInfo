@@ -220,7 +220,8 @@ extern "C"
         int64_t ts;
         uint32_t session;
         int status;    /* EE_AUDIT_BATCH_* */
-        int vote_type; /* EE_AUDIT_VT_* */
+        uint32_t clear; /* EE_AUDIT_BATCH_CLEARED: the media clear that removed it (in clears) */
+        int vote_type;  /* EE_AUDIT_VT_* */
         BOOL test;     /* a logic and accuracy test deck ("Logic EV", "LA-Mail") */
         uint32_t revision;
     } EeAuditBatch;

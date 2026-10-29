@@ -132,7 +132,8 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
   "LA-EV Vote Center", "Logic/Acurracy-EV");
 - a test deck, a full clear, four batches (one with "1,200" ballots), a "Central Count Media-5"
   clear that removes only the batch of the poll place loaded next (not EV Mail's media 5, nor a
-  poll place tabulator's media 5), a declined full clear, a reload notice, sheet load errors
+  poll place tabulator's media 5) and records that clear on the batch, a declined full clear, a
+  reload notice, sheet load errors
   (three, two sheet IDs), a batch ID loaded again (replacing the first), and an L&A test after
   counting: three sessions, the middle one the election's, 1,394 ballots by vote type.
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a

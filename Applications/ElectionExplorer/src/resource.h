@@ -92,6 +92,13 @@
 #define IDM_AUD_LOG_ELECTION    40135
 #define IDM_AUD_LOG_ADMIN       40136
 #define IDM_AUD_COPY_MERGED     40137
+#define IDM_AUD_VIEW_EVENTS     40138
+#define IDM_AUD_VIEW_BATCHES    40139
+#define IDM_AUD_REP_COPIES      40140
+#define IDM_AUD_REP_ACCT        40141
+#define IDM_AUD_SELECT_SESSION  40142
+#define IDM_AUD_GOTO_EVENT      40143
+#define IDM_AUD_USE_SESSION     40144
 /* View -> Copy: one item per copy, IDM_AUD_COPY_FIRST + log * EE_AUDIT_MAX_COPIES + copy
  * (two logs of up to 64 copies: 40200..40327). */
 #define IDM_AUD_COPY_FIRST      40200

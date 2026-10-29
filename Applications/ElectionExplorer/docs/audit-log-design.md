@@ -454,6 +454,63 @@ no warnings.
     outside its date range)", in red when sorted oldest first.
 - **Not in step 4:** Filter, Reports, Compare and Export menus (steps 5–9).
 
+### Step 5 — Ballot Batches, Ballot Accounting and Copies Check (done 2026-10-29)
+
+`main.c` (same section). Engine: `EeAuditBatch.clear` names the media clear that removed a batch
+(smoke test `auditacct`). Release x64 and ARM64 build with no warnings.
+
+- **View → Events / Ballot Batches.** The Batches view lists one session's commits in load order.
+  - Columns: Committed, Batch ID (with the revision of a manual update), Batch Name, Poll Place,
+    Media ("67 (central)"), Vote Type, Ballots, User Id, Status. Status reads "Counted", "Removed
+    by media clear at …", or "Replaced: its batch ID was committed again"; a test deck reads "L&A
+    test deck — …". The plan's table had no Batch Name column; it was added so a row can be
+    matched with its commit text.
+  - Batches that no longer count are grey.
+  - Double-click or right-click → Go to Event shows the commit, selected, in the merged Events view.
+  - Status bar: the session ("Session 14 of 16 (Election session), start to end"), batches,
+    counted, EMS ballots and media clears; part 2 shows the commit's first copy, file and page.
+- **Reports → Ballot Accounting…** is a separate window. Its summary lines give:
+  - the sessions;
+  - the election session's totals by vote type;
+  - the media clears' other readings;
+  - the "previously loaded" and sheet-error counts;
+  - a reminder that ballots are not sheets.
+  - **Tabs:**
+    - **Sessions:** start, end, started by, batches, counted, ballots, media clears, kind
+      (Election session / L&A test / Other (not test decks) / No batches; "— shown" marks the
+      session in use).
+    - **Poll Places** and **Vote Types:** for the session shown, with a total row kept last when
+      sorted.
+    - **Media Clears:** for the session shown. Each clear lists the poll place it removed (or
+      "not known: nothing removed"), and the session totals if it had removed nothing or every poll
+      place on its media (D5).
+  - Double-click a session, or right-click → Use This Session, to switch the Batches view and the
+    tabs to it. **Reports → Select Session…** opens the Sessions tab.
+- **Reports → Copies Check…:** one row per copy in print order. Columns: log, copy, file, print
+  time, the election its header names, first and last event, events, new events, lacks outside
+  its span, lacks missing. Missing events are red; the final copy is bold.
+  - Summary lines give the verdict per log ("contains every event of the 4 earlier copies"; or "lacks
+    N events …, all outside its own time span …, so none is missing"; or the split).
+  - A summary line also flags headers that name more than one election.
+- Help → Reports describes both reports.
+- **Checked in the app** (UI Automation and screenshots):
+  - **Dallas G24, all 10 files:** session 14 of 16 is the election session, with 858,562 ballots
+    in 3,934 counted batches. By vote type: early voting 636,880, Election Day 188,811, mail 31,468,
+    provisional 1,403.
+    - Four central-count media clears removed 449 batches (14,593 + 3,088 + 12,265 + 17,671).
+    - The other readings are 906,179 (if the clears removed nothing) and 857,597 (if each removed
+      every poll place on its media). These are the numbers this plan predicted.
+    - Copies Check: both final copies hold every earlier event.
+    - Switching to session 12 shows its 5 test-deck batches.
+    - Status sort puts the removed batches first, in grey.
+    - Go to Event selects the commit.
+  - **Dallas G24, "before EV" + "After EV":** "lacks 38,920 events …, all outside its own time span".
+  - **Travis PR26 (10 files):**
+    - 97,460 ballots in session 31 of 32, with 27 L&A test sessions.
+    - Copies Check notes the final copies' headers name "PR26 Canvass CC 3rd", the restored test
+      copy.
+  - File → Exit closes the report windows with the audit window.
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**

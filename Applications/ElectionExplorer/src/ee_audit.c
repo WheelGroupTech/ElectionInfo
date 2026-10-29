@@ -1998,6 +1998,7 @@ static BOOL au_media_clear(AuReplay *rp, const EeAuditLog *log, uint32_t ev, int
                 strcmp(b->place, mc->place) == 0)
             {
                 b->status = EE_AUDIT_BATCH_CLEARED;
+                b->clear = a->nclears - 1;
                 mc->removed++;
                 mc->removed_ballots += b->ballots;
             }

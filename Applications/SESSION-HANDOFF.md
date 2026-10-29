@@ -70,12 +70,13 @@ Win32 C11 desktop app (no MFC, static CRT, x64 + ARM64) under `ElectionExplorer/
   `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_<date>`
   (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-28 (data
   through 10/27).
-  - **Loader gaps found 2026-10-28** (worked around in the report, not yet fixed):
-    - Guadalupe's 10/27 roster is a new layout (a PScript5 "Detailed Check-in Report") that the
-      loader refuses;
-    - one page of Gregg's 10/27 PDF prints rows in pieces: the loader misses 2 voters and
-      mis-pairs that page's names;
-    - the loader dates Bexar rows from the misdated file name "10272028".
+  - **Loader gaps found 2026-10-28, fixed 2026-10-29 (uncommitted; smoke test `pdfpieces`):**
+    - Guadalupe from 10/27 draws its "VUID"/"DATE" titles in two pieces (one in its cell's clip,
+      one not): header titles now join across that;
+    - Gregg 10/27 page 32 selects a one-glyph font between q and Q: `pdf_reader.c` now restores
+      the text font, size and leading on Q (all 1,940 rows, names paired right);
+    - Bexar "10272028": a file-name year after the file's write time becomes the year written
+      (noted). Only these three of 320 roster PDFs load differently.
   - Report 100% county↔state agreement only when the county-only and state-only counts are
     both 0.
   - Supplements give VUIDs and file locations only (no names or addresses).

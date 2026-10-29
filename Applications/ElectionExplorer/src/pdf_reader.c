@@ -3105,6 +3105,11 @@ typedef struct GState
     int has_clip;
     uint32_t clip_id;
     double tc; /* Tc character spacing (text space; applied to Type 3 fonts only) */
+    /* the text font, size and leading when this state was saved with q (the text state is
+     * part of the graphics state: Gregg selects a one-glyph font between q and Q) */
+    PdfFont *saved_font;
+    double saved_font_size;
+    double saved_tl;
 } GState;
 
 static void mat_mul(const double *m, const double *n, double *out)
@@ -3554,6 +3559,9 @@ static BOOL interpret(Interp *in, const unsigned char *data, size_t len)
                     {
                         if (in->gsp + 1 < PDF_GSTACK_MAX)
                         {
+                            g->saved_font = in->font;
+                            g->saved_font_size = in->font_size;
+                            g->saved_tl = in->tl;
                             in->gs[in->gsp + 1] = in->gs[in->gsp];
                             in->gsp++;
                         }
@@ -3573,6 +3581,9 @@ static BOOL interpret(Interp *in, const unsigned char *data, size_t len)
                         else if (in->gsp > 0)
                         {
                             in->gsp--;
+                            in->font = in->gs[in->gsp].saved_font;
+                            in->font_size = in->gs[in->gsp].saved_font_size;
+                            in->tl = in->gs[in->gsp].saved_tl;
                         }
                     }
                     break;

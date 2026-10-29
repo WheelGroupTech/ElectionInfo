@@ -1224,6 +1224,7 @@ typedef struct Loader
     uint32_t odd_examples;
     BOOL date_fix_noted;
     WBuf date_fixes;
+    WBuf year_fixes; /* file names whose year is after the file was written */
     WBuf swapped; /* sheets whose Voter ID / name columns were read by their contents */
     uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
     uint32_t limited_forms; /* Limited Ballot poll lists (SOS form 5-38) read from PDFs */
@@ -2864,6 +2865,31 @@ static EeVotingMethod sheet_column_method(const SheetRows *r, uint32_t from, int
     return one;
 }
 
+/* A file-name date in a year after the file was written is a typo in the year (Bexar
+ * "EV_VoterCheckins_10272028.pdf", downloaded October 28, 2026): the same day in the latest
+ * year in which it is not after the day the file (or its ZIP) was written. */
+static uint32_t fix_future_year(uint32_t date, const wchar_t *path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    FILETIME local;
+    SYSTEMTIME st;
+    uint32_t written;
+    uint32_t y;
+    if (date == 0 || path == NULL || !GetFileAttributesExW(path, GetFileExInfoStandard, &fa) ||
+        !FileTimeToLocalFileTime(&fa.ftLastWriteTime, &local) || !FileTimeToSystemTime(&local, &st) ||
+        date / 10000u <= st.wYear)
+    {
+        return date;
+    }
+    written = st.wYear * 10000u + st.wMonth * 100u + st.wDay;
+    y = st.wYear;
+    if (y * 10000u + date % 10000u > written)
+    {
+        y--;
+    }
+    return y * 10000u + date % 10000u;
+}
+
 static void process_sheet(Loader *L, int si, const char *sheet_name, const SheetRows *r,
                           HeaderMap *wb_map, BOOL *wb_have)
 {
@@ -3025,6 +3051,18 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         }
         wb_append(&L->date_fixes, s->name);
         date = title_date;
+    }
+    else if (title_date == 0 && fix_future_year(date, s->path) != date)
+    {
+        date = fix_future_year(date, s->path);
+        if (L->year_fixes.len == 0 || wcsstr(L->year_fixes.p, s->name) == NULL) /* once per workbook */
+        {
+            if (L->year_fixes.len > 0)
+            {
+                wb_append(&L->year_fixes, L"; ");
+            }
+            wb_append(&L->year_fixes, s->name);
+        }
     }
     if (m.sos_list)
     {
@@ -3701,9 +3739,24 @@ static BOOL pdf_runs_abut(const EePdfPageText *pt, const EePdfTextRun *a, const 
            end - b->x < tol && (a->y - b->y < 1.0f && b->y - a->y < 1.0f);
 }
 
+/* Run @p r (unclipped) lies inside the clip of run @p c. */
+static BOOL pdf_run_in_clip(const EePdfTextRun *r, const EePdfTextRun *c)
+{
+    return c->has_clip && r->clip_id == 0 && r->x >= c->clip_x0 - 0.5f &&
+           r->x + pdf_run_width(r) <= c->clip_x1 + 0.5f && r->y >= c->clip_y0 && r->y <= c->clip_y1;
+}
+
 static BOOL pdf_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
 {
     return a->clip_id == b->clip_id && pdf_runs_abut(pt, a, b);
+}
+
+/* Two pieces of one column title: runs that touch, or abut with one of them unclipped inside
+ * the other's clip (Guadalupe from October 27 draws "V" in its cell's clip, then "UID" outside
+ * it). Data rows keep pdf_runs_touch: Gregg's clipped last letters are joined apart. */
+static BOOL pdf_title_runs_touch(const EePdfPageText *pt, const EePdfTextRun *a, const EePdfTextRun *b)
+{
+    return (a->clip_id == b->clip_id || pdf_run_in_clip(b, a) || pdf_run_in_clip(a, b)) && pdf_runs_abut(pt, a, b);
 }
 
 /* One to three letters drawn as a run of their own: the end of a word (Gregg draws the last
@@ -3927,6 +3980,14 @@ static BOOL pdf_line_is_header(const EePdfPageText *pt, const uint32_t *ord, con
         char t[PDF_TABLE_CELL];
         char lab[96];
         pdf_run_text(pt, &pt->runs[ord[ln->first + k]], t, sizeof(t));
+        while (k + 1 < ln->count &&
+               pdf_title_runs_touch(pt, &pt->runs[ord[ln->first + k]], &pt->runs[ord[ln->first + k + 1]]))
+        {
+            /* one title drawn in pieces (Guadalupe from October 27: "V" + "UID") */
+            char more[PDF_TABLE_CELL];
+            pdf_run_text(pt, &pt->runs[ord[ln->first + ++k]], more, sizeof(more));
+            StringCchCatA(t, sizeof(t), more);
+        }
         header_label(t, lab, sizeof(lab));
         if (vuid_rank(lab) > 0 || contains_ci(lab, "name of voter"))
         {
@@ -4527,7 +4588,7 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                 for (k = 0; k < ln->count && ncols < PDF_TABLE_MAX_COLS; k++)
                 {
                     const EePdfTextRun *r = &pt.runs[ord[ln->first + k]];
-                    if (ncols > 0 && k > 0 && pdf_runs_touch(&pt, &pt.runs[ord[ln->first + k - 1]], r))
+                    if (ncols > 0 && k > 0 && pdf_title_runs_touch(&pt, &pt.runs[ord[ln->first + k - 1]], r))
                     {
                         /* one title drawn in pieces (Gregg: "MiddleNam" + "e") */
                         char t[PDF_TABLE_CELL];
@@ -5412,6 +5473,12 @@ static void build_note(Loader *L)
                      L"was used: %s",
                   L->date_fixes.p);
     }
+    if (L->year_fixes.len > 0)
+    {
+        wb_printf(&b, L"\r\n\r\nThe year in these file names is after the file was written, so Date Voted is "
+                     L"the same day in the year the file was written: %s",
+                  L->year_fixes.p);
+    }
     if (in->rows_vuid_only || in->rows_non_voter)
     {
         wb_append(&b, L"\r\n\r\nRows skipped:");
@@ -5673,6 +5740,7 @@ static void loader_free(Loader *L)
     free(L->skipped.p);
     free(L->odd_ids.p);
     free(L->date_fixes.p);
+    free(L->year_fixes.p);
     free(L->swapped.p);
     free(L->limited_dates.p);
     intern_free(&L->str);

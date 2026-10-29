@@ -276,6 +276,11 @@ two-page Bexar-style mail list (cells centered under their headers via the font'
 /Widths, a title line, no header on page 2, a "Page 2 of 2" footer, a suffix column, a
 blank middle name), a Bell-style roster (a short name left-aligned under a centered NAME,
 nearer the Voter ID title) and a PDF with no roster table (listed as not readable);
+`pdfpieces` covers column titles drawn in two pieces, one inside its cell's clip and one
+outside ("V" + "UID", "PC" + "T": Guadalupe), a row drawn after a one-glyph font was
+selected between q and Q (the reader restores the font on Q: Gregg), and a file-name year
+after the file's write time ("10272028": Date Voted in the year written, noted; not when the
+file was written later);
 `limitedpdf` covers Limited Ballot poll lists (SOS form 5-38) printed to PDF (needs
 `src\pdf_reader.c`): names as separate merge-field runs (a two-word first name, a two-word
 surname, an empty middle name with "BABIN Jr", a surname drawn in two pieces) or one run

@@ -12,6 +12,7 @@
 #include "xls.h"
 #include "ee_results.h"
 #include "ee_audit.h"
+#include "pdf_reader.h"
 
 #include "third_party/miniz/miniz.h"
 
@@ -8319,7 +8320,8 @@ static BOOL proster_text(TBuf *b, double cx, double y, const char *s)
 }
 
 /* Write a PDF (classic xref table, uncompressed content) whose pages have the given
- * content streams; font F1 is a TrueType font with /Widths (all 600). */
+ * content streams; font F1 is a TrueType font with /Widths (all 600), F2 one with a width
+ * for the space only (as Gregg's). */
 static BOOL proster_write(const wchar_t *path, TBuf *pages, int npages)
 {
     TBuf b = {0};
@@ -8328,7 +8330,7 @@ static BOOL proster_write(const wchar_t *path, TBuf *pages, int npages)
     BOOL ok;
     FILE *fp = NULL;
     long xref;
-    nobj = 3 + npages * 2; /* 1 catalog, 2 pages, 3 font, then page + content per page */
+    nobj = 4 + npages * 2; /* 1 catalog, 2 pages, 3-4 fonts, then page + content per page */
     if (nobj + 1 > (int)ARRAYSIZE(offs))
     {
         return FALSE;
@@ -8341,7 +8343,7 @@ static BOOL proster_write(const wchar_t *path, TBuf *pages, int npages)
     ok = ok && tb_printf(&b, "<< /Type /Pages /Count %d /Kids [", npages);
     for (i = 0; i < npages; i++)
     {
-        ok = ok && tb_printf(&b, " %d 0 R", 4 + i * 2);
+        ok = ok && tb_printf(&b, " %d 0 R", 5 + i * 2);
     }
     ok = ok && tb_printf(&b, " ] >>\nendobj\n");
     POBJ(3);
@@ -8352,12 +8354,15 @@ static BOOL proster_write(const wchar_t *path, TBuf *pages, int npages)
         ok = ok && tb_printf(&b, " 600");
     }
     ok = ok && tb_printf(&b, " ] >>\nendobj\n");
+    POBJ(4);
+    ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /TrueType /BaseFont /MicrosoftSansSerif /FirstChar 32 "
+                             "/LastChar 32 /Encoding /WinAnsiEncoding /Widths [ 266 ] >>\nendobj\n");
     for (i = 0; i < npages && ok; i++)
     {
-        POBJ(4 + i * 2);
-        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents %d 0 R "
-                                 "/Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n", 5 + i * 2);
         POBJ(5 + i * 2);
+        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [ 0 0 612 792 ] /Contents %d 0 R "
+                                 "/Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> >>\nendobj\n", 6 + i * 2);
+        POBJ(6 + i * 2);
         ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n", (unsigned)pages[i].len) &&
              tb_add(&b, pages[i].p, pages[i].len) && tb_printf(&b, "\nendstream\nendobj\n");
     }
@@ -8510,6 +8515,148 @@ done:
     if (rc != 0)
     {
         wprintf(L"pdfroster test failed\n");
+    }
+    return rc;
+}
+
+/* Set a file's last-write time to noon UTC of the given day. */
+static BOOL set_write_day(const wchar_t *path, WORD y, WORD m, WORD d)
+{
+    SYSTEMTIME st = {0};
+    FILETIME ft;
+    HANDLE h;
+    BOOL ok;
+    st.wYear = y;
+    st.wMonth = m;
+    st.wDay = d;
+    st.wHour = 12;
+    if (!SystemTimeToFileTime(&st, &ft))
+    {
+        return FALSE;
+    }
+    h = CreateFileW(path, FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+    {
+        return FALSE;
+    }
+    ok = SetFileTime(h, NULL, NULL, &ft);
+    CloseHandle(h);
+    return ok;
+}
+
+/* PDF roster pieces (tag: pdfpieces; needs src\pdf_reader.c): column titles drawn in two
+ * pieces, one of them in its cell's clip and the other not ("V" + "UID", "PC" + "T":
+ * Guadalupe from October 27, 2026); a row drawn after a one-glyph font was selected between
+ * q and Q, whose widths must come from the font restored by Q (Gregg's October 27 page 32);
+ * and a file name whose year is after the file was written (Bexar's
+ * "EV_VoterCheckins_10272028.pdf"): Date Voted is that day in the year written, and noted --
+ * but not when the file was written later than that year. */
+static int test_pdf_pieces(void)
+{
+    TBuf page = {0};
+    wchar_t p1[MAX_PATH];
+    const wchar_t *paths[1];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    int pass;
+    int rc = 1;
+
+    BOOL ok = tb_printf(&page, "BT /F1 10 Tf 1 0 0 1 40 740 Tm (NAME) Tj ET\n"
+                               "q 200 738 24 10 re W n BT /F1 10 Tf 1 0 0 1 200 740 Tm (V) Tj ET Q\n"
+                               "BT /F1 10 Tf 1 0 0 1 206 740 Tm (UID) Tj ET\n"
+                               "BT /F1 10 Tf 1 0 0 1 300 740 Tm (PC) Tj ET\n"
+                               "q 300 738 18 10 re W n BT /F1 10 Tf 1 0 0 1 312 740 Tm (T) Tj ET Q\n"
+                               "BT /F1 10 Tf 1 0 0 1 40 725 Tm (SMITH, ANNA) Tj ET\n"
+                               "BT /F1 10 Tf 1 0 0 1 200 725 Tm [(1064047867) -4000 (105)] TJ ET\n"
+                               "BT /F1 10 Tf 1 0 0 1 40 711 Tm (JONES, BOB) Tj ET\n"
+                               "q 280 709 0.12 12 re W n BT /F2 11 Tf 1 0 0 1 280 711 Tm ( ) Tj ET Q\n"
+                               "BT 1 0 0 1 200 711 Tm [(2166120393) -4000 (212)] TJ ET\n");
+    GetTempPathW(MAX_PATH, p1);
+    StringCchCatW(p1, MAX_PATH, L"G26_EV_VoterCheckins_10272028.pdf");
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(p1, &page, 1))
+    {
+        wprintf(L"pdfpieces: could not write the PDF\n");
+        goto done;
+    }
+    /* The reader: "212" lies at x 300 (the 600-unit widths of F1, restored by Q), not at
+     * 244 (F2's zero widths, 11 pt). */
+    {
+        EePdf *pdf = NULL;
+        EePdfPageText pt;
+        uint32_t i;
+        float x = -1.0f;
+        EePdf_PageTextInit(&pt);
+        pt.split_gaps = 1;
+        if (EePdf_Open(p1, &pdf, NULL, 0) && EePdf_ExtractPageText(pdf, 0, &pt))
+        {
+            for (i = 0; i < pt.nruns; i++)
+            {
+                if (pt.runs[i].text_len == 3 && memcmp(pt.text + pt.runs[i].text_off, "212", 3) == 0)
+                {
+                    x = pt.runs[i].x;
+                }
+            }
+        }
+        EePdf_PageTextFree(&pt);
+        EePdf_Close(pdf);
+        if (x < 299.5f || x > 300.5f)
+        {
+            wprintf(L"pdfpieces: \"212\" at x %.1f, not 300 (font not restored on Q)\n", x);
+            goto done;
+        }
+    }
+    paths[0] = p1;
+    for (pass = 0; pass < 2; pass++)
+    {
+        BOOL fixed = (pass == 0);
+        if (!set_write_day(p1, fixed ? 2026 : 2029, fixed ? 10 : 1, fixed ? 28 : 5))
+        {
+            wprintf(L"pdfpieces: could not set the file time\n");
+            goto done;
+        }
+        EeRoster_FreeInfo(&info);
+        EeVoterTable_Clear(&t);
+        EeVoterTable_Init(&t);
+        if (EeRoster_LoadFiles(paths, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+        {
+            wprintf(L"pdfpieces: load failed: %s\n", err);
+            goto done;
+        }
+        if (t.row_count != 2 || info.rows_non_voter != 0 || info.rows_no_date != 0)
+        {
+            wprintf(L"pdfpieces: rows %u nonvoter %u nodate %u\n", t.row_count, info.rows_non_voter,
+                    info.rows_no_date);
+            goto done;
+        }
+        if (!rt_expect(&t, L"SMITH", L"ANNA", L"VUID", L"1064047867") ||
+            !rt_expect(&t, L"SMITH", L"ANNA", L"Precinct", L"105") ||
+            !rt_expect(&t, L"SMITH", L"ANNA", L"Voting Method", L"Early Vote In-Person") ||
+            !rt_expect(&t, L"JONES", L"BOB", L"VUID", L"2166120393") ||
+            !rt_expect(&t, L"JONES", L"BOB", L"Precinct", L"212") ||
+            !rt_expect(&t, L"JONES", L"BOB", L"Date Voted", fixed ? L"10/27/2026" : L"10/27/2028"))
+        {
+            goto done;
+        }
+        if ((info.note != NULL && wcsstr(info.note, L"after the file was written") != NULL &&
+             wcsstr(info.note, L"G26_EV_VoterCheckins_10272028.pdf") != NULL) != fixed)
+        {
+            wprintf(L"pdfpieces: note: %s\n", info.note ? info.note : L"(none)");
+            goto done;
+        }
+    }
+    rc = 0;
+    wprintf(L"pdfpieces ok\n");
+done:
+    free(page.p);
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    DeleteFileW(p1);
+    if (rc != 0)
+    {
+        wprintf(L"pdfpieces test failed\n");
     }
     return rc;
 }
@@ -12949,6 +13096,7 @@ int wmain(void)
     failed |= test_harris_roster();
     failed |= test_dallas_roster();
     failed |= test_pdf_roster();
+    failed |= test_pdf_pieces();
     failed |= test_limited_pdf();
     failed |= test_county_rosters();
     failed |= test_county50();

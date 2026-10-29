@@ -342,6 +342,31 @@ extern "C"
      */
     BOOL EeCvr_HasMultiCard(const EeCvrTable *t);
 
+/** EeCvrCardCounts.method */
+#define EE_CVR_CARDS_ONE_PER_ROW  0 /* one row per ballot */
+#define EE_CVR_CARDS_SHEET_COLUMN 1 /* Hart "Sheet Number" / Dominion "Card": the rows numbered 1 */
+#define EE_CVR_CARDS_PAGE_ONE     2 /* multi-card without a sheet column: the rows that carry a
+                                     * top-of-ballot contest (President, U.S. Senator, Governor;
+                                     * an undervote counts, a contest not on the card does not) */
+
+    /** Ballots and ballot sheets (rows) of a CVR. */
+    typedef struct EeCvrCardCounts
+    {
+        uint32_t rows;         /* rows counted: ballot sheets (cards) */
+        uint32_t ballots;      /* ballots: the first sheet of each */
+        uint32_t continuation; /* rows - ballots: second and later sheets */
+        int method;            /* EE_CVR_CARDS_* */
+    } EeCvrCardCounts;
+
+    /**
+     * Count the ballots of @p t, or of its rows @p rows (NULL = all rows; @p nrows then
+     * ignored). A Hart or Dominion CVR names each row's sheet / card, so the ballots are the
+     * rows numbered 1 (a Dominion ballot-marking session "1,2" is one ballot). An ES&S CVR
+     * has no such column: when EeCvr_HasMultiCard finds continuation sheets, the ballots are
+     * the rows with an entry in a top-of-ballot contest. Otherwise each row is a ballot.
+     */
+    BOOL EeCvr_CardCounts(const EeCvrTable *t, const uint32_t *rows, uint32_t nrows, EeCvrCardCounts *out);
+
     /* --- Ranked-choice (instant-runoff) tabulation -- see ee_rcv.c ------------- */
 
     /**

@@ -5,9 +5,8 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: 1.6 audit log step 7: L&A timeline, Notable Events (with the
-results-before-Election-Day red flag), Users and Workstations (`ee_audit.{c,h}`, `main.c`, tests,
-design doc; see Next steps).
+Microsoft Store**. Uncommitted: 1.6 audit log step 8: Ballot Reconciliation (`EeCvr_CardCounts`
+in `ee_cvr.{c,h}`, Compare menus and the report in `main.c`, smoke test, design doc; see Next steps).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -105,8 +104,8 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–7 (window, batches,
-  reports, filter, timeline / notable / users) done 2026-10-29:**
+- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–8 (window, batches,
+  reports, filter, timeline / notable / users, ballot reconciliation) done 2026-10-29:**
   `ElectionExplorer/docs/audit-log-design.md` ("Implementation status"). Implementation was started
   on the proposed decisions D1–D10.
   - **Data:** Electionware Election/Admin audit event PDFs in `Audit_Logs/` (gitignored): Travis,
@@ -135,7 +134,7 @@ Listing; all committed, lint 10/10. Run with `python -I`.
       Event, Module, User Id and Vote Type is / is not; Description contains / does not contain.
     - The shared rule window (`CvrFilterState`) gained optional hooks: `relations`,
       `relation_text`, `validate`, `relation_mask`.
-  - **Step 7 (done 2026-10-29, uncommitted):** Reports → L&A Testing Timeline / Notable Events /
+  - **Step 7 (done 2026-10-29):** Reports → L&A Testing Timeline / Notable Events /
     Users and Workstations; engine `EeAudit_Notable` / `EeAudit_Timeline`; smoke test `auditnote`.
     - **Red flag (the user's rule):** a results report printed, saved or exported before Election
       Day while ballots (not test decks, more than 0) were loaded.
@@ -144,12 +143,24 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     - Legal citations are to be confirmed by the user.
     - The PR26 timeline equals the design-doc trace.
     - Another election's history (a different dated name in "Election Opened:") is not checked.
-  - **Next:** step 8, Ballot Reconciliation (`EeCvr_CardCounts`, the Compare menus; Dallas G24
-    audit ↔ CVR ↔ results).
-    Scratch tools in the desktop session scratchpad: `audit_probe.c` (`-merge` mode) and
-    `uia/drive_audit.ps1`, which drives the app through UI Automation and saves screenshots. Its
-    `-Then` list takes command IDs, `click`/`dbl<x>:<y>` in the audit window, and `rep`,
-    `repclick`/`repdbl<x>:<y>` for report windows.
+  - **Step 8 (done 2026-10-29, uncommitted):** Compare → Check Ballot Counts with … in the audit,
+    CVR and results windows opens the Ballot Reconciliation report (EMS vs CVR ballots, or vs
+    results ballots cast plus per-vote-type lower bounds).
+    - `EeCvr_CardCounts` counts a multi-card CVR's first cards, so Results ↔ CVR compare now
+      gives ballots for those CVRs too.
+    - Dallas G24: 873,455 rows → 858,562 ballots.
+    - EMS = CVR = results for Dallas G24 and Travis G24 / P26 / PR26 / L26 / GR25.
+  - **Next:** step 9, Export (events, batches, reports) and the Events reload round trip.
+    Scratch tools in the desktop session scratchpad: `audit_probe.c` (`-merge` mode), `cards/`
+    (card-count probe) and `uia/drive_audit.ps1`, which drives the app through UI Automation and
+    saves screenshots. Its `-Then` list takes:
+    - command IDs;
+    - `click`/`dbl<x>:<y>` in the audit window;
+    - `rep`, `repclick`/`repdbl<x>:<y>` for report windows;
+    - `load;<cmd>;<folder>;<files>;<class>`;
+    - `cmp<n>` (the audit window's Compare menu) and `cmpw;<class>;<pos>;<n>` (another window's);
+    - `shot;<class>`.
+    `uia/recon_travis.ps1` runs the Travis reconciliations.
 - **Bastrop name fix:** committed 2026-10-28 (`fca8719`); candidate for 1.5.1.
 - **Candidates for the next version** (design doc "After step 9" and "Implementation plan" 11):
   - results PDFs still refused: scanned reports (~450), Electionware "Statement of Votes Cast"

@@ -3905,6 +3905,18 @@ static int test_cvr_multicard(void)
         EeCvr_Clear(&t);
         goto done;
     }
+    {
+        /* 7 rows: 6 ballots (the long ballot's page 2, style "S2 [2]", is a continuation) */
+        EeCvrCardCounts cc;
+        uint32_t two[2] = {5, 6}; /* the long ballot's two pages */
+        if (!EeCvr_CardCounts(&t, NULL, 0, &cc) || cc.rows != 7 || cc.ballots != 6 || cc.continuation != 1 ||
+            cc.method != EE_CVR_CARDS_PAGE_ONE || !EeCvr_CardCounts(&t, two, 2, &cc) || cc.ballots != 1)
+        {
+            wprintf(L"cvrmc: card counts %u rows %u ballots method %d\n", cc.rows, cc.ballots, cc.method);
+            EeCvr_Clear(&t);
+            goto done;
+        }
+    }
     EeCvr_Clear(&t);
 
     EeCvr_Init(&t);
@@ -3915,6 +3927,16 @@ static int test_cvr_multicard(void)
         wprintf(L"cvrmc: clean file wrongly flagged (s=%d)\n", (int)s);
         EeCvr_Clear(&t);
         goto done;
+    }
+    {
+        EeCvrCardCounts cc;
+        if (!EeCvr_CardCounts(&t, NULL, 0, &cc) || cc.ballots != 5 || cc.continuation != 0 ||
+            cc.method != EE_CVR_CARDS_ONE_PER_ROW)
+        {
+            wprintf(L"cvrmc: clean file card counts\n");
+            EeCvr_Clear(&t);
+            goto done;
+        }
     }
     EeCvr_Clear(&t);
 
@@ -4898,6 +4920,16 @@ static int test_hart_cvr(void)
     {
         wprintf(L"hart: multi-card not detected\n");
         goto done;
+    }
+    {
+        /* 3 sheets: 2 ballots (one sheet numbered 2) */
+        EeCvrCardCounts cc;
+        if (!EeCvr_CardCounts(&t, NULL, 0, &cc) || cc.rows != 3 || cc.ballots != 2 ||
+            cc.method != EE_CVR_CARDS_SHEET_COLUMN)
+        {
+            wprintf(L"hart: card counts %u rows %u ballots method %d\n", cc.rows, cc.ballots, cc.method);
+            goto done;
+        }
     }
     /* Primary: contests are party-prefixed; federal (President) sorts before state
      * (Governor) despite the XML order. */

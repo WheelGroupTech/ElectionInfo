@@ -2087,3 +2087,271 @@ BOOL EeCvr_HasMultiCard(const EeCvrTable *t)
      * ballot carries its own party's top race, so extra == 0.) */
     return (extra > 0 && (uint64_t)extra * 2u < (uint64_t)t->nrows);
 }
+
+/* The sheet / card column of a Hart or Dominion CVR, or -1. */
+static int cvr_sheet_column(const EeCvrTable *t)
+{
+    uint32_t c;
+    for (c = 0; c < t->frozen_count && c < t->ncols; c++)
+    {
+        const wchar_t *title = t->col_titles[c];
+        if (title != NULL && (wcs_contains_ci(title, L"sheet number") || wcs_contains_ci(title, L"sheetnumber") ||
+                              wcieq_trimmed_both(title, L"card")))
+        {
+            return (int)c;
+        }
+    }
+    return -1;
+}
+
+/* A row's ballot style without ES&S's " [2]" suffix (a style's other card variant), into @p out. */
+static void cvr_base_style(const EeCvrTable *t, uint32_t r, int col, wchar_t *out, size_t cch)
+{
+    size_t n;
+    out[0] = L'\0';
+    if (col < 0)
+    {
+        return;
+    }
+    EeCvr_GetCellW(t, r, (uint32_t)col, out, cch);
+    n = wcslen(out);
+    while (n > 0 && out[n - 1] == L' ')
+    {
+        out[--n] = L'\0';
+    }
+    if (n > 2 && out[n - 1] == L']')
+    {
+        size_t k = n - 1;
+        while (k > 0 && out[k - 1] >= L'0' && out[k - 1] <= L'9')
+        {
+            k--;
+        }
+        if (k > 0 && k < n - 1 && out[k - 1] == L'[')
+        {
+            k--;
+            while (k > 0 && out[k - 1] == L' ')
+            {
+                k--;
+            }
+            out[k] = L'\0';
+        }
+    }
+}
+
+/* Ballots among @p rows of an ES&S multi-card CVR (no sheet column). A row with an entry in a
+ * top-of-ballot contest (President, U.S. Senator, Governor; an "undervote" is an entry) is a
+ * ballot's first card. ES&S writes "undervote" for each contest on a card, so a ballot style's
+ * first-card contests are on (nearly) all of its first cards. Another row is a first card too
+ * (a ballot whose top races are empty) when it holds at least half of those common contests,
+ * and a continuation card otherwise. Ballot styles are compared without the " [2]" suffix.
+ * Dallas County's November 2024 CVR: 873,455 rows, 858,562 ballots (its second cards hold only
+ * the City of Dallas propositions G-U); Travis County's: 587,090 rows, each a ballot (235 of
+ * them without the top races). */
+static BOOL cvr_count_page_one(const EeCvrTable *t, const uint32_t *rows, uint32_t n, uint32_t *ballots)
+{
+    int style_col = -1;
+    uint32_t c, r, i, nstyles = 0, cap = 0, hcap;
+    char *isref = (char *)calloc(t->ncols ? t->ncols : 1, 1);
+    uint32_t *row_style = (uint32_t *)malloc(((size_t)t->nrows + 1) * sizeof(uint32_t));
+    wchar_t **keys = NULL;
+    uint32_t *hash = NULL;
+    uint32_t *nref = NULL;  /* per style: rows with a top-of-ballot contest */
+    uint32_t *cnt = NULL;   /* [style][col]: those rows with an entry in col */
+    uint32_t *nstrong = NULL; /* per style: its common contests */
+    BOOL ok = FALSE;
+    *ballots = 0;
+    if (isref == NULL || row_style == NULL)
+    {
+        goto done;
+    }
+    for (c = t->frozen_count; c < t->ncols; c++)
+    {
+        isref[c] = (char)cvr_is_reference_contest(t->col_titles[c]);
+    }
+    for (c = 0; c < t->frozen_count && c < t->ncols; c++)
+    {
+        if (t->col_titles[c] != NULL &&
+            (wcs_contains_ci(t->col_titles[c], L"ballot style") || wcs_contains_ci(t->col_titles[c], L"ballotstyle")))
+        {
+            style_col = (int)c;
+            break;
+        }
+    }
+    /* style ids, by an open-addressed hash of the base style names */
+    hcap = 1024;
+    while (hcap < t->nrows / 4 + 16 && hcap < (1u << 24))
+    {
+        hcap <<= 1;
+    }
+    hash = (uint32_t *)calloc(hcap, sizeof(uint32_t));
+    if (hash == NULL)
+    {
+        goto done;
+    }
+    for (r = 0; r < t->nrows; r++)
+    {
+        wchar_t st[128];
+        uint32_t h = 2166136261u, slot;
+        const wchar_t *p;
+        cvr_base_style(t, r, style_col, st, ARRAYSIZE(st));
+        for (p = st; *p != L'\0'; p++)
+        {
+            h = (h ^ (uint32_t)*p) * 16777619u;
+        }
+        for (slot = h & (hcap - 1); hash[slot] != 0; slot = (slot + 1) & (hcap - 1))
+        {
+            if (wcscmp(keys[hash[slot] - 1], st) == 0)
+            {
+                break;
+            }
+        }
+        if (hash[slot] == 0)
+        {
+            if (nstyles == cap)
+            {
+                uint32_t nc = cap ? cap * 2 : 64;
+                wchar_t **nk = (wchar_t **)realloc(keys, nc * sizeof(wchar_t *));
+                if (nk == NULL)
+                {
+                    goto done;
+                }
+                keys = nk;
+                cap = nc;
+            }
+            if (nstyles + 1 >= hcap / 2 || (keys[nstyles] = _wcsdup(st)) == NULL)
+            {
+                goto done; /* far more styles than any election has */
+            }
+            hash[slot] = ++nstyles;
+        }
+        row_style[r] = hash[slot] - 1;
+    }
+    nref = (uint32_t *)calloc(nstyles ? nstyles : 1, sizeof(uint32_t));
+    cnt = (uint32_t *)calloc((size_t)(nstyles ? nstyles : 1) * t->ncols, sizeof(uint32_t));
+    if (nref == NULL || cnt == NULL)
+    {
+        goto done;
+    }
+    for (r = 0; r < t->nrows; r++)
+    {
+        uint32_t e, s = row_style[r];
+        BOOL has = FALSE;
+        for (e = t->row_start[r]; e < t->row_start[r + 1] && !has; e++)
+        {
+            has = isref[t->ent_col[e]] != 0;
+        }
+        if (has)
+        {
+            nref[s]++;
+            for (e = t->row_start[r]; e < t->row_start[r + 1]; e++)
+            {
+                cnt[(size_t)s * t->ncols + t->ent_col[e]]++;
+            }
+        }
+    }
+    /* a style's common contests: on at least 99% of its first cards (not the top races) */
+    nstrong = (uint32_t *)calloc(nstyles ? nstyles : 1, sizeof(uint32_t));
+    if (nstrong == NULL)
+    {
+        goto done;
+    }
+    for (r = 0; r < nstyles; r++)
+    {
+        for (c = t->frozen_count; c < t->ncols; c++)
+        {
+            if (!isref[c] && nref[r] > 0 && (uint64_t)cnt[(size_t)r * t->ncols + c] * 100u >= (uint64_t)nref[r] * 99u)
+            {
+                nstrong[r]++;
+            }
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        uint32_t e, s, held = 0;
+        BOOL first;
+        r = rows != NULL ? rows[i] : i;
+        s = row_style[r];
+        first = nref[s] == 0; /* nothing known of this style's cards */
+        for (e = t->row_start[r]; e < t->row_start[r + 1] && !first; e++)
+        {
+            c = t->ent_col[e];
+            if (c < t->frozen_count) /* the key columns (record, precinct, style) are on every row */
+            {
+                continue;
+            }
+            if (isref[c])
+            {
+                first = TRUE;
+            }
+            else if ((uint64_t)cnt[(size_t)s * t->ncols + c] * 100u >= (uint64_t)nref[s] * 99u)
+            {
+                held++;
+            }
+        }
+        /* a first card whose top races are empty still holds most of the common contests; a
+         * continuation card holds few (or, where most first cards come from ballot-marking
+         * devices that print every contest, only the second card's) */
+        /* (a style whose first cards hold only the top races has no other first card) */
+        first = first || (nstrong[s] > 0 && held * 2u >= nstrong[s]);
+        *ballots += first ? 1u : 0u;
+    }
+    ok = TRUE;
+done:
+    for (i = 0; keys != NULL && i < nstyles; i++)
+    {
+        free(keys[i]);
+    }
+    free(keys);
+    free(hash);
+    free(nref);
+    free(cnt);
+    free(nstrong);
+    free(row_style);
+    free(isref);
+    return ok;
+}
+
+BOOL EeCvr_CardCounts(const EeCvrTable *t, const uint32_t *rows, uint32_t nrows, EeCvrCardCounts *out)
+{
+    uint32_t i, n;
+    int sheet;
+    if (t == NULL || out == NULL)
+    {
+        return FALSE;
+    }
+    n = rows != NULL ? nrows : t->nrows;
+    out->rows = n;
+    out->ballots = n;
+    out->continuation = 0;
+    out->method = EE_CVR_CARDS_ONE_PER_ROW;
+    if (n == 0)
+    {
+        return TRUE;
+    }
+    sheet = cvr_sheet_column(t);
+    if (sheet >= 0)
+    {
+        /* a row numbered 1 (or not numbered) starts a ballot: "1", "1,2" (a session) */
+        out->method = EE_CVR_CARDS_SHEET_COLUMN;
+        out->ballots = 0;
+        for (i = 0; i < n; i++)
+        {
+            wchar_t buf[32];
+            EeCvr_GetCellW(t, rows != NULL ? rows[i] : i, (uint32_t)sheet, buf, ARRAYSIZE(buf));
+            if (buf[0] == L'\0' || _wtoi(buf) <= 1)
+            {
+                out->ballots++;
+            }
+        }
+    }
+    else if (EeCvr_HasMultiCard(t))
+    {
+        out->method = EE_CVR_CARDS_PAGE_ONE;
+        if (!cvr_count_page_one(t, rows, n, &out->ballots))
+        {
+            return FALSE;
+        }
+    }
+    out->continuation = out->rows - out->ballots;
+    return TRUE;
+}

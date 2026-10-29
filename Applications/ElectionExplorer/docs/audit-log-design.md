@@ -235,7 +235,7 @@ Texas requires these tests, and the logs record them, so the window reports them
     a vote type ≥ the votes in any Vote-For-1 contest of that vote type, plus its over/under
     votes when reported.
   - Dallas G24 with the right media-clear rule: EV in-person 636,880 ≥ 633,355; mail 31,468 ≥
-    31,206; Election Day 188,811 ≥ 187,379; provisional 1,403 ≥ 1,396 (President votes).
+    31,206 (31,209 in U.S. Senator, which step 8 uses); Election Day 188,811 ≥ 187,379; provisional 1,403 ≥ 1,396 (President votes).
 - **Not possible:** batch-level or precinct-level checks against the Travis and Dallas CVRs.
   Travis redacts Batch and Precinct; Dallas's CVR has no Batch column.
 
@@ -637,6 +637,68 @@ status bar. Release x64 and ARM64 build with no warnings.
   - workstations the events name ("… on WORKSTATION-11.", "from machine …").
 - Every report row that stands for an event jumps to it (double-click or Go to Event). The Events
   view's filter is reported when it hides the event.
+
+### Step 8 — Ballot Reconciliation (done 2026-10-29)
+
+Engine (`ee_cvr.{c,h}`, smoke test `cvrmc` and the Hart test): `EeCvr_CardCounts`. Window: a sixth
+audit report and Compare menus in `main.c`. Release x64 and ARM64 build with no warnings.
+
+- **`EeCvr_CardCounts(t, rows, nrows, &out)`** gives rows, ballots (first cards), continuation
+  sheets and the method:
+  - **Sheet column** (Hart "Sheet Number", Dominion "Card"): a row is a ballot when the cell is empty
+    or ≤ 1.
+  - **Page one** (an ES&S CVR where `EeCvr_HasMultiCard` holds). Ballot styles are grouped without
+    their " [2]" suffix. A style's *common contests* are its non-key contests present on ≥ 99% of its
+    rows that have a top-of-ballot contest (President, U.S. Senator, Governor). A row is a first card
+    when:
+    - it has a top-of-ballot contest; or
+    - it holds at least half of its style's common contests; or
+    - its style has no row with a top-of-ballot contest (nothing is known of its cards).
+  - **One per row** otherwise.
+  - **Results** (scratchpad probe and the app):
+    - Dallas G24's 9 files: 873,455 rows → 858,562 ballots + 14,893 continuation sheets.
+    - Travis G24: 587,090 rows, 587,090 ballots. Dallas's BMD rows carry every contest, and its
+      continuation rows hold only City of Dallas Props G–U.
+    - Travis G20, GR25, L26, P26, PR26 and Dallas P24: one ballot per row.
+    - Earlier rules failed: page-one alone gave 858,171; a strict common-contest intersection was
+      exact for Dallas but 235 short for Travis.
+- **Results ↔ CVR compare** now counts a multi-card CVR's ballots as its first cards. Before, it
+  reported them as unknown. Dallas G24: Ballots Cast 858,562 = 858,562 (Match). The status bar notes
+  "multi-card CVR: ballots are its first cards", and the CVR window's status bar gives "multi-card:
+  N ballots on M sheets".
+- **Compare menus:**
+  - The audit window's Compare menu lists each open CVR and results window: "Check Ballot Counts
+    with …".
+  - The CVR and results windows' Compare menus list each audit window the same way, beside their
+    existing "Compare with …" items.
+  - All three open the same report.
+- **Ballot Reconciliation report** (one per audit window, refreshed by each check; title "Ballot
+  Reconciliation - <election> with <window>"):
+  - **Columns:** Measure, Audit Log (EMS), CVR or Results, Difference, Status, Note.
+  - **Statuses:** Match, Differs, Lower bound met, Lower bound not met, Not reported.
+  - The EMS figure is the selected session's ballots: the last session by default, or the one picked
+    with Reports → Select Session….
+  - **With a CVR:** Ballots (EMS vs the CVR's first cards), plus CVR rows and continuation sheets as
+    information.
+  - **With results:**
+    - Ballots cast, exact.
+    - Per EMS vote type, an exact row when the results give ballots by vote type. Otherwise a lower
+      bound: the EMS ballots of that type must be at least the votes of the Vote-For-1 contest with
+      the most votes in it. The note names that contest.
+  - The summary states each side's source and the overall verdict.
+- **Validated** (Release x64, all three windows):
+
+  | Election | EMS = CVR = results ballots | Lower bounds (EV / ED / Mail / Prov) |
+  |---|---|---|
+  | Dallas G24 | 858,562 | 636,880 ≥ 633,355; 188,811 ≥ 187,379; 31,468 ≥ 31,209 (U.S. Senator); 1,403 ≥ 1,396 |
+  | Travis G24 | 587,090 | 462,929 ≥ 460,832; 97,925 ≥ 97,089; 25,276 ≥ 25,079; 960 ≥ 956 |
+  | Travis P26 | 274,443 | met; weak, since each party's contest counts only its own voters |
+  | Travis PR26 | 97,460 | met; weak, as for P26 |
+  | Travis L26 | 12,710 | met; no contest is countywide |
+  | Travis GR25 | 7,212 | met; Provisional 2 ≥ 2 |
+
+- **Possible refinement:** in a joint primary, a vote type's lower bound could add up the parties'
+  top contests (DEM U.S. Senator + REP U.S. Senator), since no ballot votes in both.
 
 ## Implementation plan (proposed)
 

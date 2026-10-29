@@ -311,6 +311,8 @@ static void App_BeginOpenResults(AppState *app);
 static void App_BeginOpenAudit(AppState *app);
 static void Res_FillCompareMenu(HMENU popup, HWND self, BOOL with_cvr, HWND *targets, int max_targets);
 static void App_RunResultsCompare(HWND from, HWND other);
+static void App_RunBallotRecon(HWND audit, HWND other);
+static BOOL Aud_IsAuditWindow(HWND h);
 static void App_ShowResultsCompareHelp(AppState *app, HWND owner);
 static void App_FreeCvrUi(AppState *ui);
 static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -11341,6 +11343,7 @@ typedef struct CvrWindow
     int sort_col; /* -1 = unsorted */
     BOOL sort_asc;
     BOOL multi_card;         /* CVR looks like one row per ballot card/page */
+    EeCvrCardCounts cards;   /* its ballots and ballot sheets (EeCvr_CardCounts) */
     CvrReportWindow *report; /* tabulation report tied to this window, or NULL */
     CvrRcvWindow *rcv_report; /* ranked-choice rounds report, or NULL */
     uint32_t rcv_count;       /* ranked-choice contests in the table (set at load) */
@@ -11445,7 +11448,10 @@ static void Cvr_UpdateStatus(CvrWindow *cw)
     }
     if (cw->multi_card)
     {
-        StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  (multi-card ballots detected)");
+        wchar_t mc[96];
+        StringCchPrintfW(mc, ARRAYSIZE(mc), L"  \x2022  multi-card: %u ballots on %u sheets", cw->cards.ballots,
+                         cw->cards.rows);
+        StringCchCatW(buf, ARRAYSIZE(buf), mc);
     }
     SendMessageW(cw->status, SB_SETTEXTW, 0, (LPARAM)buf);
 }
@@ -12094,7 +12100,11 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 LOWORD(wParam) < IDM_COMPARE_WITH_FIRST + ARRAYSIZE(cw->cmp_targets))
             {
                 HWND target = cw->cmp_targets[LOWORD(wParam) - IDM_COMPARE_WITH_FIRST];
-                if (target != NULL && IsWindow(target))
+                if (target != NULL && IsWindow(target) && Aud_IsAuditWindow(target))
+                {
+                    App_RunBallotRecon(target, hwnd);
+                }
+                else if (target != NULL && IsWindow(target))
                 {
                     App_RunResultsCompare(hwnd, target);
                 }
@@ -12386,7 +12396,13 @@ static void App_CreateCvrWindow(AppState *app,
     EeCvr_Init(table);
     cw->sort_col = -1;
     cw->sort_asc = TRUE;
-    cw->multi_card = EeCvr_HasMultiCard(&cw->table);
+    if (!EeCvr_CardCounts(&cw->table, NULL, 0, &cw->cards))
+    {
+        cw->cards.rows = cw->cards.ballots = cw->table.nrows;
+        cw->cards.continuation = 0;
+        cw->cards.method = EE_CVR_CARDS_ONE_PER_ROW;
+    }
+    cw->multi_card = cw->cards.continuation > 0;
     cw->rcv_count = EeCvr_FindRcvContests(&cw->table, NULL, 0);
     App_BaseNameNoExt(first_path, cw->base_name, ARRAYSIZE(cw->base_name));
 
@@ -18924,6 +18940,22 @@ typedef struct CvrPrecinctGroup
     uint32_t n, cap;
 } CvrPrecinctGroup;
 
+/* Ballots among a CVR window's rows (all when @p rows is NULL): the rows, or for a multi-card
+ * CVR the first cards (EeCvr_CardCounts). */
+static int64_t Cvr_Ballots(const CvrWindow *cw, const uint32_t *rows, uint32_t nrows)
+{
+    EeCvrCardCounts cc;
+    if (!cw->multi_card)
+    {
+        return rows != NULL ? (int64_t)nrows : (int64_t)cw->table.nrows;
+    }
+    if (rows == NULL)
+    {
+        return (int64_t)cw->cards.ballots;
+    }
+    return EeCvr_CardCounts(&cw->table, rows, nrows, &cc) ? (int64_t)cc.ballots : EE_RES_UNKNOWN;
+}
+
 /* Results from a CVR window's tabulation (all ballots, or the filtered ones): per precinct
  * when the CVR has a real Precinct column, else totals. With @p names (the results being
  * compared), a precinct value is filed under the precinct of @p names it stands for
@@ -18933,7 +18965,7 @@ static BOOL Cvr_BuildResults(CvrWindow *cw, BOOL filtered, const EeResults *name
     const EeCvrTable *t = &cw->table;
     const uint32_t *rows = filtered ? cw->disp : NULL;
     uint32_t nrows = filtered ? cw->disp_count : t->nrows;
-    int64_t ballots = cw->multi_card ? EE_RES_UNKNOWN : (int64_t)nrows;
+    int64_t ballots = Cvr_Ballots(cw, rows, nrows);
     EeResultsTallyItem *items = NULL;
     size_t nitems = 0, cap = 0;
     BOOL ok = TRUE;
@@ -19217,8 +19249,8 @@ static void App_RunResultsCompare(HWND from, HWND other)
     if (cvr != NULL && cvr->multi_card)
     {
         StringCchCatW(note, ARRAYSIZE(note),
-                      note[0] != L'\0' ? L"; multi-card CVR: ballots not compared"
-                                       : L"multi-card CVR: ballots not compared");
+                      note[0] != L'\0' ? L"; multi-card CVR: ballots are its first cards"
+                                       : L"multi-card CVR: ballots are its first cards");
     }
     if (!EeResults_Compare(a, apm, avm, b, bpm, bvm, &d, &nd))
     {
@@ -19248,13 +19280,14 @@ static void Res_FillCompareMenu(HMENU popup, HWND self, BOOL with_cvr, HWND *tar
     {
         HWND h = g_cvr_windows[i];
         wchar_t t[300], item[340];
-        if (h == self || !(Res_IsResultsWindow(h) || (with_cvr && Res_IsCvrWindow(h))))
+        BOOL audit = Aud_IsAuditWindow(h);
+        if (h == self || !(Res_IsResultsWindow(h) || (with_cvr && Res_IsCvrWindow(h)) || audit))
         {
             continue;
         }
         t[0] = L'\0';
         GetWindowTextW(h, t, ARRAYSIZE(t));
-        StringCchPrintfW(item, ARRAYSIZE(item), L"Compare with %.200s", t);
+        StringCchPrintfW(item, ARRAYSIZE(item), audit ? L"Check Ballot Counts with %.200s" : L"Compare with %.200s", t);
         targets[n] = h;
         AppendMenuW(popup, MF_STRING, (UINT_PTR)(IDM_COMPARE_WITH_FIRST + n), item);
         n++;
@@ -19262,8 +19295,8 @@ static void Res_FillCompareMenu(HMENU popup, HWND self, BOOL with_cvr, HWND *tar
     if (n == 0)
     {
         AppendMenuW(popup, MF_STRING | MF_GRAYED, 0,
-                    with_cvr ? L"(open another results window or a CVR window to compare)"
-                             : L"(open a results window to compare)");
+                    with_cvr ? L"(open another results window, a CVR window or an audit log window to compare)"
+                             : L"(open a results window or an audit log window to compare)");
     }
 }
 
@@ -19879,7 +19912,11 @@ static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             LOWORD(wParam) < IDM_COMPARE_WITH_FIRST + ARRAYSIZE(rw->cmp_targets))
         {
             HWND target = rw->cmp_targets[LOWORD(wParam) - IDM_COMPARE_WITH_FIRST];
-            if (target != NULL && IsWindow(target))
+            if (target != NULL && IsWindow(target) && Aud_IsAuditWindow(target))
+            {
+                App_RunBallotRecon(target, hwnd);
+            }
+            else if (target != NULL && IsWindow(target))
             {
                 App_RunResultsCompare(hwnd, target);
             }
@@ -20422,7 +20459,8 @@ static void AudRep_Refresh(AudReportWindow *r);
 #define AUD_REP_TIMELINE 2
 #define AUD_REP_NOTABLE  3
 #define AUD_REP_USERS    4
-#define AUD_REP_COUNT    5
+#define AUD_REP_RECON    5
+#define AUD_REP_COUNT    6
 
 typedef struct AuditWindow
 {
@@ -20458,6 +20496,7 @@ typedef struct AuditWindow
     struct AudRule *rules;
     uint32_t nrules;
     wchar_t base_name[192]; /* first copy's file name without extension, for filter files */
+    HWND cmp_targets[32];   /* Compare menu: windows by command offset */
 } AuditWindow;
 
 /* Filter columns (EeFilterRule.column) of the audit window. */
@@ -20601,6 +20640,33 @@ static const wchar_t k_AudHelpFilters[] =
     L"Filter\x2026 reads them back, also in another audit window. Filter \x2192 Reset Filter "
     L"removes every rule.\r\n\r\n"
     L"The filter changes what the list shows; the reports always count every event and batch.";
+
+static const wchar_t k_AudHelpCompare[] =
+    L"Compare \x2192 Check Ballot Counts with\x2026 compares the ballots the Election log shows loaded "
+    L"into the EMS with an open Cast Vote Records or Election Results window, in the Ballot "
+    L"Reconciliation report. The CVR and results windows' Compare menus offer the same check.\r\n\r\n"
+    L"The EMS side is the election session (or the session chosen in Reports \x2192 Select "
+    L"Session\x2026): the Number of Ballots of each batch still loaded at its end. These are ballots, "
+    L"not ballot sheets.\r\n\r\n"
+    L"\x2022 A CVR records one row per ballot sheet (card). For a multi-card election (Dallas County's "
+    L"November 2024 ballots had two cards in some styles) its ballots are its first cards: a Hart or "
+    L"Dominion CVR numbers each row's sheet or card; for an ES&S CVR a first card is a row with a "
+    L"top-of-ballot contest (President, U.S. Senator, Governor) or with most of its ballot style's "
+    L"common contests. The report shows the rows, the ballots and the continuation sheets.\r\n"
+    L"\x2022 Election results: ballots cast is compared with the EMS ballots. When the results give "
+    L"ballots cast by vote type, each vote type is compared; when they give only votes by vote type, "
+    L"each vote type is a lower bound \x2014 the EMS ballots of that type must be at least the votes of "
+    L"the Vote-For-1 contest with the most votes of that type. The EMS vote type comes from each "
+    L"batch's poll place name (Early Vote Center, Vote Center, Mail, Provisional).\r\n\r\n"
+    L"Statuses: Match, Differs (red), Lower bound met, Lower bound not met (red), Not reported. The "
+    L"report is a snapshot taken when it is opened: open it again after loading other files. Filters "
+    L"in the other windows are not applied.";
+
+static BOOL Aud_IsAuditWindow(HWND h)
+{
+    wchar_t cls[64];
+    return h != NULL && GetClassNameW(h, cls, ARRAYSIZE(cls)) > 0 && wcscmp(cls, k_AuditClassName) == 0;
+}
 
 static const EeAuditLog *Aud_Log(const AuditWindow *aw, int li)
 {
@@ -22144,6 +22210,16 @@ enum
     NT_COUNT
 };
 
+/* A row of a Ballot Reconciliation (a snapshot taken when it was opened). */
+typedef struct AudReconRow
+{
+    wchar_t measure[96];
+    int64_t ems;   /* EE_RES_UNKNOWN when the audit log has no such figure */
+    int64_t other; /* EE_RES_UNKNOWN when the other window does not report it */
+    int status;    /* AUD_RS_* */
+    wchar_t note[200];
+} AudReconRow;
+
 struct AudReportWindow
 {
     AuditWindow *aw; /* the audit window it reports on */
@@ -22168,6 +22244,10 @@ struct AudReportWindow
     int sort_col; /* -1 = built order */
     BOOL sort_asc;
     wchar_t summary_text[4096];
+    AudReconRow *recon; /* Ballot Reconciliation: its snapshot */
+    uint32_t nrecon;
+    wchar_t recon_summary[2048];
+    wchar_t recon_other_title[32]; /* "CVR" or "Results" */
 };
 
 static const wchar_t k_AuditReportClassName[] = L"ElectionExplorerAuditReport";
@@ -23401,6 +23481,356 @@ static BOOL AudRep_BuildUsers(AudReportWindow *r)
     return TRUE;
 }
 
+/* --- Ballot Reconciliation ------------------------------------------------- */
+
+/* Status of a reconciliation row. */
+#define AUD_RS_MATCH         0
+#define AUD_RS_DIFFERS       1
+#define AUD_RS_BOUND_MET     2
+#define AUD_RS_BOUND_NOT_MET 3
+#define AUD_RS_NOT_REPORTED  4
+#define AUD_RS_INFO          5 /* shown, not compared */
+
+static const wchar_t *Aud_ReconStatusText(int st)
+{
+    switch (st)
+    {
+    case AUD_RS_MATCH:
+        return L"Match";
+    case AUD_RS_DIFFERS:
+        return L"Differs";
+    case AUD_RS_BOUND_MET:
+        return L"Lower bound met";
+    case AUD_RS_BOUND_NOT_MET:
+        return L"Lower bound not met";
+    case AUD_RS_NOT_REPORTED:
+        return L"Not reported";
+    default:
+        return L"";
+    }
+}
+
+static BOOL AudRep_BuildRecon(AudReportWindow *r)
+{
+    static const wchar_t *k_titles[6] = {L"Measure", L"Audit Log (EMS)", L"Other Window", L"Difference",
+                                         L"Status",  L"Note"};
+    static const int k_widths[6] = {300, 130, 130, 100, 140, 520};
+    static const BOOL k_right[6] = {FALSE, TRUE, TRUE, TRUE, FALSE, FALSE};
+    uint32_t i;
+    k_titles[2] = r->recon_other_title;
+    AudRep_Columns(r, 6, k_titles, k_widths, k_right);
+    for (i = 0; i < r->nrecon; i++)
+    {
+        const AudReconRow *x = &r->recon[i];
+        wchar_t cells[AUD_REP_MAX_COLS][AUD_CELL];
+        uint8_t fl = 0;
+        ZeroMemory(cells, sizeof(cells));
+        StringCchCopyW(cells[0], AUD_CELL, x->measure);
+        if (x->ems != EE_RES_UNKNOWN)
+        {
+            fmt_count_w(x->ems, cells[1], AUD_CELL);
+        }
+        if (x->other != EE_RES_UNKNOWN)
+        {
+            fmt_count_w(x->other, cells[2], AUD_CELL);
+        }
+        else if (x->status == AUD_RS_NOT_REPORTED)
+        {
+            StringCchCopyW(cells[2], AUD_CELL, L"not reported");
+        }
+        if (x->ems != EE_RES_UNKNOWN && x->other != EE_RES_UNKNOWN)
+        {
+            int64_t d = x->ems - x->other;
+            fmt_count_w(d < 0 ? -d : d, cells[3], AUD_CELL);
+            if (d != 0)
+            {
+                wchar_t tmp[AUD_CELL];
+                StringCchPrintfW(tmp, AUD_CELL, L"%s%s", d > 0 ? L"+" : L"\x2212", cells[3]);
+                StringCchCopyW(cells[3], AUD_CELL, tmp);
+            }
+        }
+        StringCchCopyW(cells[4], AUD_CELL, Aud_ReconStatusText(x->status));
+        StringCchCopyW(cells[5], AUD_CELL, x->note);
+        if (x->status == AUD_RS_DIFFERS || x->status == AUD_RS_BOUND_NOT_MET)
+        {
+            fl = AUD_RF_RED;
+        }
+        else if (x->status == AUD_RS_INFO || x->status == AUD_RS_NOT_REPORTED)
+        {
+            fl = AUD_RF_GREY;
+        }
+        else if (i == 0)
+        {
+            fl = AUD_RF_BOLD;
+        }
+        if (!AudRep_AddRow(r, fl, -1, cells))
+        {
+            return FALSE;
+        }
+    }
+    StringCchCopyW(r->summary_text, ARRAYSIZE(r->summary_text), r->recon_summary);
+    return TRUE;
+}
+
+/* Add a row to a reconciliation snapshot. */
+static BOOL Aud_ReconAdd(AudReconRow **rows, uint32_t *n, const wchar_t *measure, int64_t ems, int64_t other,
+                         int status, const wchar_t *note)
+{
+    AudReconRow *p = (AudReconRow *)realloc(*rows, ((size_t)*n + 1) * sizeof(AudReconRow));
+    if (p == NULL)
+    {
+        return FALSE;
+    }
+    *rows = p;
+    p = &p[(*n)++];
+    StringCchCopyW(p->measure, ARRAYSIZE(p->measure), measure);
+    p->ems = ems;
+    p->other = other;
+    p->status = status;
+    StringCchCopyW(p->note, ARRAYSIZE(p->note), note != NULL ? note : L"");
+    return TRUE;
+}
+
+/* The audit vote type (EE_AUDIT_VT_*) a results vote type's name points to. */
+static int Aud_ResultsVoteType(const wchar_t *name)
+{
+    char u8[160];
+    if (name == NULL || WideCharToMultiByte(CP_UTF8, 0, name, -1, u8, (int)sizeof(u8), NULL, NULL) <= 0)
+    {
+        return EE_AUDIT_VT_OTHER;
+    }
+    return EeAudit_VoteTypeOf(u8);
+}
+
+/* For audit vote type @p a: the most votes any Vote-For-1 contest got in the results' vote types
+ * that map to it (every ballot of that type that held the contest cast at most one), and that
+ * contest's title; -1 when no contest has vote-type detail. */
+static int64_t Aud_ResultsVtBound(const EeResults *res, const int *vt_map, int a, const wchar_t **title)
+{
+    int64_t best = -1;
+    uint32_t ci;
+    uint32_t nvt = EE_RESULTS_NVT(res);
+    *title = NULL;
+    if (res->nvt == 0)
+    {
+        return -1;
+    }
+    for (ci = 0; ci < res->ncontests; ci++)
+    {
+        const EeResultsContest *ct = &res->contests[ci];
+        int64_t sum = 0;
+        uint32_t k, p, v;
+        if (ct->vote_for != 1 || ct->counts == NULL || ct->npre == 0)
+        {
+            continue;
+        }
+        for (k = 0; k < ct->nchoices; k++)
+        {
+            for (p = 0; p < ct->npre; p++)
+            {
+                for (v = 0; v < res->nvt; v++)
+                {
+                    if (vt_map[v] == a)
+                    {
+                        sum += ct->counts[((size_t)k * ct->npre + p) * nvt + v];
+                    }
+                }
+            }
+        }
+        if (sum > best)
+        {
+            best = sum;
+            *title = ct->title;
+        }
+    }
+    return best;
+}
+
+/* Fill a reconciliation snapshot of audit window @p aw against CVR window @p cw or results
+ * window @p rw. */
+static BOOL Aud_BuildReconSnapshot(const AuditWindow *aw, CvrWindow *cw, ResultsWindow *rw, AudReconRow **rows,
+                                   uint32_t *n, wchar_t *summary, size_t scch)
+{
+    const EeAuditSession *s = &aw->acct.sessions[aw->session];
+    wchar_t line[900], lab[300], n1[32], n2[32], n3[32], note[200];
+    summary[0] = L'\0';
+    StringCchPrintfW(lab, ARRAYSIZE(lab), L"Session %d of %u (%s)", aw->session + 1, aw->acct.nsessions,
+                     Aud_SessionKind(aw, (uint32_t)aw->session));
+    fmt_count_w(s->ballots, n1, ARRAYSIZE(n1));
+    fmt_count_w((int64_t)s->counted, n2, ARRAYSIZE(n2));
+    StringCchPrintfW(line, ARRAYSIZE(line),
+                     L"Audit log: %s: %s ballots in %s batches still loaded into the EMS at its end (each commit's "
+                     L"Number of Ballots: ballots, not sheets). Reports \x2192 Select Session\x2026 picks another session.",
+                     lab, n1, n2);
+    StringCchCatW(summary, scch, line);
+    if (cw != NULL)
+    {
+        const EeCvrCardCounts *cc = &cw->cards;
+        const wchar_t *how = cc->method == EE_CVR_CARDS_SHEET_COLUMN
+                                 ? L"the rows its Sheet Number / Card column numbers 1"
+                             : cc->method == EE_CVR_CARDS_PAGE_ONE
+                                 ? L"its first cards: rows with a top-of-ballot contest (President, U.S. Senator, "
+                                   L"Governor), or with most of their ballot style's common contests"
+                                 : L"one row per ballot";
+        fmt_count_w((int64_t)cc->rows, n1, ARRAYSIZE(n1));
+        fmt_count_w((int64_t)cc->ballots, n2, ARRAYSIZE(n2));
+        StringCchPrintfW(line, ARRAYSIZE(line), L"\r\nCast vote records: %s rows; %s ballots, counted as %s.", n1, n2,
+                         how);
+        StringCchCatW(summary, scch, line);
+        if (cw->filt_active)
+        {
+            StringCchCatW(summary, scch, L" The CVR window's filter is not applied: every row is counted.");
+        }
+        StringCchCopyW(note, ARRAYSIZE(note),
+                       cc->continuation > 0 ? L"the CVR's first cards (ballots), not its rows" : L"one CVR row per ballot");
+        if (!Aud_ReconAdd(rows, n, L"Ballots", s->ballots, (int64_t)cc->ballots,
+                          s->ballots == (int64_t)cc->ballots ? AUD_RS_MATCH : AUD_RS_DIFFERS, note))
+        {
+            return FALSE;
+        }
+        fmt_count_w((int64_t)cc->continuation, n3, ARRAYSIZE(n3));
+        StringCchPrintfW(note, ARRAYSIZE(note),
+                         cc->continuation > 0 ? L"rows = ballots + %s continuation sheets (second and later cards)"
+                                              : L"each row is a ballot",
+                         n3);
+        if (!Aud_ReconAdd(rows, n, L"CVR rows (ballot sheets)", EE_RES_UNKNOWN, (int64_t)cc->rows, AUD_RS_INFO,
+                          note) ||
+            !Aud_ReconAdd(rows, n, L"Continuation sheets", EE_RES_UNKNOWN, (int64_t)cc->continuation, AUD_RS_INFO,
+                          L"second and later cards of multi-card ballots"))
+        {
+            return FALSE;
+        }
+        if (s->ballots == (int64_t)cc->ballots)
+        {
+            StringCchPrintfW(line, ARRAYSIZE(line), L"\r\nThe EMS ballots and the CVR ballots match.");
+        }
+        else
+        {
+            int64_t d = s->ballots - (int64_t)cc->ballots;
+            fmt_count_w(d < 0 ? -d : d, n1, ARRAYSIZE(n1));
+            StringCchPrintfW(line, ARRAYSIZE(line), L"\r\nThe EMS has %s %s ballot%s than the CVR.", n1,
+                             d > 0 ? L"more" : L"fewer", (d == 1 || d == -1) ? L"" : L"s");
+        }
+        StringCchCatW(summary, scch, line);
+        return TRUE;
+    }
+    {
+        const EeResults *res = &rw->res;
+        int vt_map[64];
+        uint32_t v;
+        int a;
+        BOOL bounds = FALSE, exact_vt = res->ballots_vt != NULL && res->nvt > 0;
+        for (v = 0; v < res->nvt && v < ARRAYSIZE(vt_map); v++)
+        {
+            vt_map[v] = Aud_ResultsVoteType(res->vote_types[v]);
+        }
+        if (res->ballots_total != EE_RES_UNKNOWN)
+        {
+            fmt_count_w(res->ballots_total, n1, ARRAYSIZE(n1));
+            StringCchPrintfW(line, ARRAYSIZE(line), L"\r\nElection results: ballots cast %s.", n1);
+        }
+        else
+        {
+            StringCchCopyW(line, ARRAYSIZE(line), L"\r\nElection results: the files do not report ballots cast.");
+        }
+        StringCchCatW(summary, scch, line);
+        if (rw->filt_active)
+        {
+            StringCchCatW(summary, scch, L" The results window's filter is not applied: the county totals are used.");
+        }
+        if (!Aud_ReconAdd(rows, n, L"Ballots cast", s->ballots, res->ballots_total,
+                          res->ballots_total == EE_RES_UNKNOWN ? AUD_RS_NOT_REPORTED
+                          : res->ballots_total == s->ballots   ? AUD_RS_MATCH
+                                                               : AUD_RS_DIFFERS,
+                          L"the results' ballots cast"))
+        {
+            return FALSE;
+        }
+        for (a = 1; a <= EE_AUDIT_VT_COUNT && res->nvt > 0 && res->nvt <= ARRAYSIZE(vt_map); a++)
+        {
+            int vt = a % EE_AUDIT_VT_COUNT; /* early, Election Day, mail, provisional, then other */
+            int64_t ems = s->ballots_vt[vt];
+            wchar_t measure[96];
+            BOOL mapped = FALSE;
+            for (v = 0; v < res->nvt; v++)
+            {
+                mapped = mapped || vt_map[v] == vt;
+            }
+            if (!mapped && ems == 0)
+            {
+                continue;
+            }
+            if (exact_vt)
+            {
+                int64_t sum = 0;
+                BOOL unknown = !mapped;
+                for (v = 0; v < res->nvt; v++)
+                {
+                    if (vt_map[v] == vt)
+                    {
+                        unknown = unknown || res->ballots_vt[v] == EE_RES_UNKNOWN;
+                        sum += res->ballots_vt[v] == EE_RES_UNKNOWN ? 0 : res->ballots_vt[v];
+                    }
+                }
+                StringCchPrintfW(measure, ARRAYSIZE(measure), L"Ballots cast: %s", EeAudit_VoteTypeName(vt));
+                if (!Aud_ReconAdd(rows, n, measure, ems, unknown ? EE_RES_UNKNOWN : sum,
+                                  unknown ? AUD_RS_NOT_REPORTED : sum == ems ? AUD_RS_MATCH : AUD_RS_DIFFERS,
+                                  L"EMS vote type from the batches' poll place names"))
+                {
+                    return FALSE;
+                }
+            }
+            else
+            {
+                const wchar_t *title = NULL;
+                int64_t bound = mapped ? Aud_ResultsVtBound(res, vt_map, vt, &title) : -1;
+                StringCchPrintfW(measure, ARRAYSIZE(measure), L"Ballots: %s (lower bound)", EeAudit_VoteTypeName(vt));
+                if (bound < 0)
+                {
+                    if (!Aud_ReconAdd(rows, n, measure, ems, EE_RES_UNKNOWN, AUD_RS_NOT_REPORTED,
+                                      L"no results vote type points to it"))
+                    {
+                        return FALSE;
+                    }
+                    continue;
+                }
+                StringCchPrintfW(note, ARRAYSIZE(note), L"votes in \"%.120s\" (Vote For 1) of this vote type",
+                                 title != NULL ? title : L"");
+                bounds = TRUE;
+                if (!Aud_ReconAdd(rows, n, measure, ems, bound, ems >= bound ? AUD_RS_BOUND_MET : AUD_RS_BOUND_NOT_MET,
+                                  note))
+                {
+                    return FALSE;
+                }
+            }
+        }
+        if (bounds)
+        {
+            StringCchCatW(summary, scch,
+                          L"\r\nThe results give votes by vote type but not ballots, so each vote type is a lower "
+                          L"bound: the EMS ballots of that type must be at least the votes of the Vote-For-1 contest "
+                          L"with the most votes of that type. EMS vote types come from the batches' poll place "
+                          L"names, results vote types from their names.");
+        }
+        if (res->ballots_total != EE_RES_UNKNOWN)
+        {
+            if (res->ballots_total == s->ballots)
+            {
+                StringCchCopyW(line, ARRAYSIZE(line), L"\r\nThe EMS ballots and the results' ballots cast match.");
+            }
+            else
+            {
+                int64_t d = s->ballots - res->ballots_total;
+                fmt_count_w(d < 0 ? -d : d, n1, ARRAYSIZE(n1));
+                StringCchPrintfW(line, ARRAYSIZE(line), L"\r\nThe EMS has %s %s ballot%s than the results report.",
+                                 n1, d > 0 ? L"more" : L"fewer", (d == 1 || d == -1) ? L"" : L"s");
+            }
+            StringCchCatW(summary, scch, line);
+        }
+    }
+    return TRUE;
+}
+
 /* --- Report window --------------------------------------------------------- */
 
 /* A number ("1,234", "12.5%") or a report time ("11/05/2024 09:25:36PM") as a sort key. */
@@ -23566,6 +23996,9 @@ static void AudRep_Refresh(AudReportWindow *r)
         break;
     case AUD_REP_USERS:
         ok = AudRep_BuildUsers(r);
+        break;
+    case AUD_REP_RECON:
+        ok = AudRep_BuildRecon(r);
         break;
     default:
         ok = AudRep_BuildAcct(r);
@@ -23998,6 +24431,7 @@ static LRESULT CALLBACK AudReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                 r->aw->reps[r->kind] = NULL;
             }
             AudRep_FreeRows(r);
+            free(r->recon);
             free(r);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         }
@@ -24014,8 +24448,8 @@ static void App_ShowAuditReport(AuditWindow *aw, int kind, int tab)
 {
     static const wchar_t *const k_titles[AUD_REP_COUNT] = {L"Copies Check", L"Ballot Accounting",
                                                            L"L&A Testing Timeline", L"Notable Events",
-                                                           L"Users and Workstations"};
-    static const int k_widths[AUD_REP_COUNT] = {1360, 1160, 1420, 1320, 1180};
+                                                           L"Users and Workstations", L"Ballot Reconciliation"};
+    static const int k_widths[AUD_REP_COUNT] = {1360, 1160, 1420, 1320, 1180, 1400};
     AudReportWindow **slot = &aw->reps[kind];
     AudReportWindow *r;
     wchar_t label[320], title[400];
@@ -24062,6 +24496,62 @@ static void App_ShowAuditReport(AuditWindow *aw, int kind, int tab)
     *slot = r;
     ShowWindow(r->hwnd, SW_SHOWNORMAL);
     UpdateWindow(r->hwnd);
+}
+
+
+/* Compare → Check Ballot Counts: reconcile audit window @p audit's EMS ballots with CVR or results
+ * window @p other, in its Ballot Reconciliation report. */
+static void App_RunBallotRecon(HWND audit, HWND other)
+{
+    AuditWindow *aw = Aud_IsAuditWindow(audit) ? (AuditWindow *)GetWindowLongPtrW(audit, GWLP_USERDATA) : NULL;
+    CvrWindow *cw = Res_IsCvrWindow(other) ? (CvrWindow *)GetWindowLongPtrW(other, GWLP_USERDATA) : NULL;
+    ResultsWindow *rw = Res_IsResultsWindow(other) ? (ResultsWindow *)GetWindowLongPtrW(other, GWLP_USERDATA) : NULL;
+    AudReconRow *rows = NULL;
+    uint32_t nrows = 0;
+    wchar_t summary[2048], title[300];
+    AudReportWindow *r;
+    if (aw == NULL || (cw == NULL && rw == NULL))
+    {
+        return;
+    }
+    if (!aw->have_acct || aw->session < 0)
+    {
+        MessageBoxW(other, L"The audit log window has no Election log ballots to compare (no ballot batches).",
+                    L"Check Ballot Counts", MB_ICONINFORMATION | MB_OK);
+        return;
+    }
+    if (!Aud_BuildReconSnapshot(aw, cw, rw, &rows, &nrows, summary, ARRAYSIZE(summary)))
+    {
+        free(rows);
+        MessageBoxW(other, L"Out of memory.", L"Check Ballot Counts", MB_ICONERROR | MB_OK);
+        return;
+    }
+    title[0] = L'\0';
+    GetWindowTextW(other, title, ARRAYSIZE(title));
+    if (aw->reps[AUD_REP_RECON] == NULL)
+    {
+        App_ShowAuditReport(aw, AUD_REP_RECON, -1); /* opens empty, then filled below */
+    }
+    r = aw->reps[AUD_REP_RECON];
+    if (r == NULL)
+    {
+        free(rows);
+        return;
+    }
+    free(r->recon);
+    r->recon = rows;
+    r->nrecon = nrows;
+    StringCchCopyW(r->recon_summary, ARRAYSIZE(r->recon_summary), summary);
+    StringCchCopyW(r->recon_other_title, ARRAYSIZE(r->recon_other_title), cw != NULL ? L"CVR" : L"Results");
+    {
+        wchar_t label[320], wt[700];
+        Aud_ElectionLabel(aw, label, ARRAYSIZE(label));
+        StringCchPrintfW(wt, ARRAYSIZE(wt), L"Ballot Reconciliation - %s with %.240s", label, title);
+        SetWindowTextW(r->hwnd, wt);
+    }
+    AudRep_Refresh(r);
+    ShowWindow(r->hwnd, SW_SHOWNORMAL);
+    SetForegroundWindow(r->hwnd);
 }
 
 /* --- Options (zoom) --------------------------------------------------------- */
@@ -24203,12 +24693,14 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     HMENU copy_menu = CreatePopupMenu();
     HMENU filter_menu = CreatePopupMenu();
     HMENU reports_menu = CreatePopupMenu();
+    HMENU compare_menu = CreatePopupMenu();
     HMENU help_menu = CreatePopupMenu();
     int li;
     if (menu == NULL || file_menu == NULL || edit_menu == NULL || view_menu == NULL || log_menu == NULL ||
-        copy_menu == NULL || filter_menu == NULL || reports_menu == NULL || help_menu == NULL)
+        copy_menu == NULL || filter_menu == NULL || reports_menu == NULL || compare_menu == NULL ||
+        help_menu == NULL)
     {
-        HMENU all[9];
+        HMENU all[10];
         int i;
         all[0] = file_menu;
         all[1] = edit_menu;
@@ -24217,9 +24709,10 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
         all[4] = copy_menu;
         all[5] = filter_menu;
         all[6] = reports_menu;
-        all[7] = help_menu;
-        all[8] = menu;
-        for (i = 0; i < 9; i++)
+        all[7] = compare_menu;
+        all[8] = help_menu;
+        all[9] = menu;
+        for (i = 0; i < 10; i++)
         {
             if (all[i] != NULL)
             {
@@ -24278,6 +24771,8 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Views and Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
+    AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(open a CVR or results window to check ballot counts)");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
@@ -24285,6 +24780,7 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"&View");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -24411,6 +24907,34 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             }
             EnableMenuItem(m, IDM_AUD_VIEW_RESET, MF_BYCOMMAND | (aw->sort_col >= 0 ? MF_ENABLED : MF_GRAYED));
             EnableMenuItem(m, IDM_FILTER_RESET, MF_BYCOMMAND | (aw->filters.count > 0 ? MF_ENABLED : MF_GRAYED));
+            /* Compare (File, Edit, View, Filter, Reports, Compare, Help) */
+            if (m == GetSubMenu(GetMenu(hwnd), 5))
+            {
+                int i, n = 0;
+                while (GetMenuItemCount(m) > 0)
+                {
+                    DeleteMenu(m, 0, MF_BYPOSITION);
+                }
+                for (i = 0; i < g_cvr_window_count && n < (int)ARRAYSIZE(aw->cmp_targets); i++)
+                {
+                    HWND h = g_cvr_windows[i];
+                    wchar_t t[300], item[340];
+                    if (!Res_IsCvrWindow(h) && !Res_IsResultsWindow(h))
+                    {
+                        continue;
+                    }
+                    t[0] = L'\0';
+                    GetWindowTextW(h, t, ARRAYSIZE(t));
+                    StringCchPrintfW(item, ARRAYSIZE(item), L"Check Ballot Counts with %.200s", t);
+                    aw->cmp_targets[n] = h;
+                    AppendMenuW(m, MF_STRING, (UINT_PTR)(IDM_COMPARE_WITH_FIRST + n), item);
+                    n++;
+                }
+                if (n == 0)
+                {
+                    AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"(open a CVR or results window to check ballot counts)");
+                }
+            }
         }
         break;
 
@@ -24418,6 +24942,16 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         if (aw == NULL)
         {
             break;
+        }
+        if (LOWORD(wParam) >= IDM_COMPARE_WITH_FIRST &&
+            LOWORD(wParam) < IDM_COMPARE_WITH_FIRST + ARRAYSIZE(aw->cmp_targets))
+        {
+            HWND target = aw->cmp_targets[LOWORD(wParam) - IDM_COMPARE_WITH_FIRST];
+            if (target != NULL && IsWindow(target))
+            {
+                App_RunBallotRecon(hwnd, target);
+            }
+            return 0;
         }
         if (LOWORD(wParam) >= IDM_AUD_COPY_FIRST && LOWORD(wParam) < IDM_AUD_COPY_FIRST + 2 * EE_AUDIT_MAX_COPIES)
         {
@@ -24496,6 +25030,9 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             return 0;
         case IDM_HELP_FILTERS:
             App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Filters", k_AudHelpFilters);
+            return 0;
+        case IDM_HELP_COMPARE:
+            App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Compare", k_AudHelpCompare);
             return 0;
         case IDM_HELP_REPORTS:
             App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Reports", k_AudHelpReports);

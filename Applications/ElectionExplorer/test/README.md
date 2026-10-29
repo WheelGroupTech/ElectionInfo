@@ -177,7 +177,9 @@ ordered by contest then count); `cvrmerge` covers the write-in merge option (ima
 `[write-in]`, text `Write-in`, and `No image found` collapse to one `write-in` row
 when on, separate when off); `cvrmc` covers multi-card detection (`EeCvr_HasMultiCard`: a long ballot split
 across two cards is flagged; a clean per-ballot CVR and a combined-party primary are
-not); `cvrfilt` covers the CVR filter primitives (`EeCvr_CollectColumnValues` distinct
+not) and card counts (`EeCvr_CardCounts`: 7 rows → 6 ballots + 1 continuation sheet by the
+page-one rule, including a style whose only page-one row holds just a top-of-ballot contest; a
+2-row subset → 1 ballot; a one-card CVR → one ballot per row); `cvrfilt` covers the CVR filter primitives (`EeCvr_CollectColumnValues` distinct
 sorted selections, blanks excluded; `EeCvr_GetCellW` physical-row access);
 `cvrcsv` covers delimited-text loading via `EeCsv_ReadSheet` (RFC-4180 quoted
 header/value with embedded commas, a blank contest cell, tab-delimited `.tsv`, a
@@ -197,7 +199,8 @@ columns export with blank headers so a re-import regroups the race unchanged);
 authors a zip of per-sheet XML files (two DEM sheets — one a continuation — and one
 REP sheet) and checks one row per sheet, the frozen key columns, category ordering
 (federal President sorts before state Governor despite XML order), vote-for-N
-expansion, write-in/overvote/undervote mapping, multi-card via `SheetNumber >= 2`,
+expansion, write-in/overvote/undervote mapping, multi-card via `SheetNumber >= 2`
+(`EeCvr_CardCounts`: 3 rows → 2 ballots by the sheet column),
 the primary per-party contest split (titles prefixed `DEM `/`REP `, so each party's
 race tallies separately), `EeCvr_ReorderTallyByParty` (REP-first vs DEM-first
 grouping of the tabulation output), and natural contest ordering (US Rep "District 6"

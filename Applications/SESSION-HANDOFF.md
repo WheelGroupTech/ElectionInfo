@@ -4,9 +4,9 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-28. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: 1.6 audit-log engine steps 1–3 (`src/ee_audit.{c,h}`, tests, docs;
-see Next steps).
+**Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
+Microsoft Store**. Uncommitted: the 1.6 Audit Log window, step 4 (`main.c`, `resource.h`, design
+doc; see Next steps).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -104,7 +104,8 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28, uncommitted:**
+- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; step 4 (window) done 2026-10-29,
+  uncommitted:**
   `ElectionExplorer/docs/audit-log-design.md` ("Implementation status"). Implementation was started
   on the proposed decisions D1–D10.
   - **Data:** Electionware Election/Admin audit event PDFs in `Audit_Logs/` (gitignored): Travis,
@@ -119,8 +120,13 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     - The replay equals the official ballots cast for 9 Travis elections, Dallas G24 (858,562,
       multi-sheet) and L24 (83,030).
     - Dallas P24 is one short (open).
-  - **Next:** step 4, the Audit Log window in `main.c` (File → Load Audit Logs… in every window).
-    Scratch probe: `audit_probe.c` (`-merge` mode) in the desktop session scratchpad.
+  - **Step 4:** the Audit Log window (`main.c` "Audit Log window (1.6)"): File → Load Audit Logs…
+    in every window, one window per election, merged Events view with Copies and bold red for events
+    the final copy lacks, View → Log / Copy, sort, Copy, zoom. Details in the design doc.
+  - **Next:** step 5, the Batches view and the Ballot Accounting and Copies Check reports.
+    Scratch tools in the desktop session scratchpad: `audit_probe.c` (`-merge` mode) and
+    `uia/drive_audit.ps1`, which drives the app's File → Load Audit Logs through UI Automation and
+    saves screenshots.
 - **Bastrop name fix:** committed 2026-10-28 (`fca8719`); candidate for 1.5.1.
 - **Candidates for the next version** (design doc "After step 9" and "Implementation plan" 11):
   - results PDFs still refused: scanned reports (~450), Electionware "Statement of Votes Cast"

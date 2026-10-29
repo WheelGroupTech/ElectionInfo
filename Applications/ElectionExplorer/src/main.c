@@ -10,6 +10,7 @@
 #include "xlsx.h"
 #include "ee_cvr.h"
 #include "ee_results.h"
+#include "ee_audit.h"
 #include "voter_roster.h"
 #include "settings.h"
 
@@ -48,6 +49,7 @@ static const wchar_t k_CvrRcvClassName[] = L"ElectionExplorerCvrRcv";
 static const wchar_t k_RosterTotalsClassName[] = L"ElectionExplorerRosterTotals";
 static const wchar_t k_CvrFilterClassName[] = L"ElectionExplorerCvrFilter";
 static const wchar_t k_ResultsClassName[] = L"ElectionExplorerResults";
+static const wchar_t k_AuditClassName[] = L"ElectionExplorerAudit";
 static const wchar_t k_ResTurnoutClassName[] = L"ElectionExplorerResultsTurnout";
 static const wchar_t k_ResCompareClassName[] = L"ElectionExplorerResultsCompare";
 
@@ -306,6 +308,7 @@ static void App_ExportVoterReport(ReportWindow *rw, BOOL selection_only);
 static LRESULT CALLBACK ReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static void App_BeginOpenCvr(AppState *app);
 static void App_BeginOpenResults(AppState *app);
+static void App_BeginOpenAudit(AppState *app);
 static void Res_FillCompareMenu(HMENU popup, HWND self, BOOL with_cvr, HWND *targets, int max_targets);
 static void App_RunResultsCompare(HWND from, HWND other);
 static void App_ShowResultsCompareHelp(AppState *app, HWND owner);
@@ -2798,6 +2801,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_AUDIT, L"Load &Audit Logs…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter List");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter List…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -10764,6 +10768,9 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 case IDM_FILE_OPEN_RESULTS:
                     App_BeginOpenResults(app);
                     return 0;
+                case IDM_FILE_OPEN_AUDIT:
+                    App_BeginOpenAudit(app);
+                    return 0;
                 case IDM_REPORT_LOAD_SUMMARY:
                     if (app->roster_info.note != NULL)
                     {
@@ -11511,6 +11518,7 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_AUDIT, L"Load &Audit Logs…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_CVR, L"&Close Cast Vote Records");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_CVR, L"&Export Cast Vote Records…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -12148,6 +12156,9 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     return 0;
                 case IDM_FILE_OPEN_RESULTS:
                     App_BeginOpenResults(cw->app);
+                    return 0;
+                case IDM_FILE_OPEN_AUDIT:
+                    App_BeginOpenAudit(cw->app);
                     return 0;
                 case IDM_FILE_CLOSE_CVR:
                     DestroyWindow(hwnd);
@@ -19654,6 +19665,7 @@ static HMENU App_CreateResultsMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_AUDIT, L"Load &Audit Logs…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_RESULTS, L"&Close Election Results");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_RESULTS, L"&Export Election Results…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -19885,6 +19897,9 @@ static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             return 0;
         case IDM_FILE_OPEN_RESULTS:
             App_BeginOpenResults(rw->app);
+            return 0;
+        case IDM_FILE_OPEN_AUDIT:
+            App_BeginOpenAudit(rw->app);
             return 0;
         case IDM_FILE_CLOSE_RESULTS:
             DestroyWindow(hwnd);
@@ -20303,6 +20318,1480 @@ static void App_BeginOpenResults(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Audit Log window (1.6)                                                     */
+/* -------------------------------------------------------------------------- */
+
+/* Columns of the Events view. */
+enum
+{
+    AC_TIMESTAMP = 0,
+    AC_LOG,
+    AC_EVENT,
+    AC_MODULE,
+    AC_USER,
+    AC_DESC,
+    AC_COPIES,
+    AC_COUNT
+};
+
+#define AUD_MERGED (-1) /* AuditWindow.show_copy: every copy merged */
+
+typedef struct AudRow
+{
+    uint32_t idx; /* merged event of the log, or the event of the copy shown */
+    uint32_t seq; /* position in display order, the sort's tie-break */
+    uint8_t log;  /* 0 = Election log, 1 = Admin log (EeAuditElection.logs) */
+} AudRow;
+
+typedef struct AuditWindow
+{
+    AppState *app; /* this window's own resource-only AppState */
+    HWND hwnd;
+    HWND list;
+    HWND status;
+    EeAuditElection *el; /* one election (an array of 1, freed with EeAudit_FreeElections) */
+    EeAuditAccounting acct; /* the Election log's ballot accounting */
+    BOOL have_acct;
+    int show_log;       /* View -> Log: 0 = both, else EE_AUDIT_ELECTION / EE_AUDIT_ADMIN */
+    int show_copy_log;  /* View -> Copy: the log (0 / 1) of the copy shown */
+    int show_copy;      /* the copy shown as printed, or AUD_MERGED */
+    AudRow *rows;
+    uint32_t nrows;
+    int sort_col; /* -1 = display order (newest first, as printed) */
+    BOOL sort_asc;
+    int ncols;
+    uint8_t col_kind[AC_COUNT];
+    uint32_t lacking[2]; /* merged events each log's final copy lacks */
+} AuditWindow;
+
+static WNDPROC g_old_audit_list_proc = NULL;
+
+static const wchar_t k_AudHelpLoading[] =
+    L"File \x2192 Load Audit Logs\x2026 opens ES&S Electionware audit log PDFs: the \"Election "
+    L"Audit Events Report\" (one election's database) and the \"Admin Audit Events Report\" (the "
+    L"whole system). Select every copy of an election's logs at once \x2014 counties print the "
+    L"logs several times during an election, and each copy is a separate PDF.\r\n\r\n"
+    L"The copies are grouped by county and election date: each election opens in its own "
+    L"window, holding both of its logs and all their copies. The copies of a log are put in the "
+    L"order they were printed (the print time in each report's header) and merged, so every "
+    L"event appears once, with the number of copies that hold it.\r\n\r\n"
+    L"The final copy of a log should hold every event of the copies printed before it. An "
+    L"event the final copy lacks is shown in bold red, and the status bar counts them. A copy "
+    L"printed with a start date lacks the earlier events on purpose.\r\n\r\n"
+    L"Other PDFs, including Hart Verity audit logs and Electionware machine (tabulator) logs, "
+    L"are not read; the message names the file. The logs hold county employees' user IDs, "
+    L"never voter data.";
+
+static const wchar_t k_AudHelpOptions[] =
+    L"The list shows one row per event, newest first, as the reports print them:\r\n"
+    L"\x2022 Timestamp, Event (Info, Warning, Error ...), Module, User Id and Description, as "
+    L"printed.\r\n"
+    L"\x2022 Log: Election or Admin.\r\n"
+    L"\x2022 Copies: how many of the log's copies hold the event (\"3 of 5\"). The status bar "
+    L"names the first copy that holds the selected event, and its page.\r\n\r\n"
+    L"View \x2192 Log shows both logs, or only the Election or the Admin log. View \x2192 Copy "
+    L"shows one copy exactly as printed instead of the merged log.\r\n\r\n"
+    L"The title bar shows the county, election and date. The status bar shows the copies "
+    L"loaded, the events shown, and the ballots the Election log shows loaded into the EMS in the election "
+    L"session (the last session after a full clear that loaded ballots other than logic and "
+    L"accuracy test decks).\r\n\r\n"
+    L"Edit \x2192 Options\x2026 sets the zoom (the size of the list text).\r\n\r\n"
+    L"Click a column title to sort by it; click again to reverse. View \x2192 Reset View puts "
+    L"the rows back in printed order. Edit \x2192 Copy (Ctrl+C) or right-click copies the "
+    L"selected rows as tab-separated text.";
+
+static const EeAuditLog *Aud_Log(const AuditWindow *aw, int li)
+{
+    return &aw->el->logs[li];
+}
+
+/* The event of row @p row and the copy whose strings it uses. */
+static const EeAuditEvent *Aud_RowEvent(const AuditWindow *aw, const AudRow *row, const EeAuditCopy **copy)
+{
+    const EeAuditLog *log = Aud_Log(aw, row->log);
+    if (aw->show_copy != AUD_MERGED)
+    {
+        *copy = &log->copies[aw->show_copy];
+        return &(*copy)->events[row->idx];
+    }
+    return EeAudit_MergedEvent(log, row->idx, copy);
+}
+
+static uint32_t Aud_PopCount(uint64_t v)
+{
+    uint32_t n = 0;
+    while (v != 0)
+    {
+        v &= v - 1;
+        n++;
+    }
+    return n;
+}
+
+/* Copies of its log that hold row @p row's event (merged view), else 0. */
+static uint32_t Aud_RowCopies(const AuditWindow *aw, const AudRow *row)
+{
+    return aw->show_copy == AUD_MERGED ? Aud_PopCount(Aud_Log(aw, row->log)->events[row->idx].copies) : 0;
+}
+
+/* TRUE when the final copy of its log lacks row @p row's event (merged view). */
+static BOOL Aud_RowLacking(const AuditWindow *aw, const AudRow *row)
+{
+    const EeAuditLog *log = Aud_Log(aw, row->log);
+    return aw->show_copy == AUD_MERGED && log->ncopies > 1 &&
+           (log->events[row->idx].copies & (1ull << (log->ncopies - 1))) == 0;
+}
+
+/* UTF-8 @p s into @p out, cut to fit. */
+static void Aud_Widen(const char *s, wchar_t *out, size_t cch)
+{
+    int n;
+    if (cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (s == NULL || *s == '\0')
+    {
+        return;
+    }
+    if (MultiByteToWideChar(CP_UTF8, 0, s, -1, out, (int)cch) > 0)
+    {
+        return;
+    }
+    n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (n > 0)
+    {
+        wchar_t *tmp = (wchar_t *)malloc((size_t)n * sizeof(wchar_t));
+        if (tmp != NULL && MultiByteToWideChar(CP_UTF8, 0, s, -1, tmp, n) > 0)
+        {
+            StringCchCopyW(out, cch, tmp); /* cut to fit */
+        }
+        free(tmp);
+    }
+}
+
+static const wchar_t *Aud_LogName(int kind)
+{
+    return kind == EE_AUDIT_ADMIN ? L"Admin" : L"Election";
+}
+
+static void Aud_CellText(const AuditWindow *aw, uint32_t ri, int col, wchar_t *out, size_t cch)
+{
+    const AudRow *row;
+    const EeAuditCopy *copy = NULL;
+    const EeAuditEvent *ev;
+    char t[48];
+    if (cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (ri >= aw->nrows || col < 0 || col >= aw->ncols)
+    {
+        return;
+    }
+    row = &aw->rows[ri];
+    ev = Aud_RowEvent(aw, row, &copy);
+    switch (aw->col_kind[col])
+    {
+    case AC_TIMESTAMP:
+        EeAudit_FormatTime(ev->ts, t, sizeof(t));
+        Aud_Widen(t, out, cch);
+        break;
+    case AC_LOG:
+        StringCchCopyW(out, cch, Aud_LogName(Aud_Log(aw, row->log)->kind));
+        break;
+    case AC_EVENT:
+        Aud_Widen(EeAudit_Str(copy, ev->level), out, cch);
+        break;
+    case AC_MODULE:
+        Aud_Widen(EeAudit_Str(copy, ev->module), out, cch);
+        break;
+    case AC_USER:
+        Aud_Widen(EeAudit_Str(copy, ev->user), out, cch);
+        break;
+    case AC_DESC:
+        Aud_Widen(EeAudit_Desc(copy, ev), out, cch);
+        break;
+    case AC_COPIES:
+        StringCchPrintfW(out, cch, L"%u of %u", Aud_RowCopies(aw, row), Aud_Log(aw, row->log)->ncopies);
+        break;
+    default:
+        break;
+    }
+}
+
+/* The UTF-8 text a text column sorts by. */
+static const char *Aud_SortText(const AuditWindow *aw, const AudRow *row, uint8_t kind)
+{
+    const EeAuditCopy *copy = NULL;
+    const EeAuditEvent *ev = Aud_RowEvent(aw, row, &copy);
+    switch (kind)
+    {
+    case AC_EVENT:
+        return EeAudit_Str(copy, ev->level);
+    case AC_MODULE:
+        return EeAudit_Str(copy, ev->module);
+    case AC_USER:
+        return EeAudit_Str(copy, ev->user);
+    case AC_DESC:
+        return EeAudit_Desc(copy, ev);
+    default:
+        return "";
+    }
+}
+
+typedef struct AudSortCtx
+{
+    const AuditWindow *aw;
+    uint8_t kind;
+    BOOL asc;
+} AudSortCtx;
+
+static int __cdecl Aud_SortCmp(void *ctx, const void *pa, const void *pb)
+{
+    const AudSortCtx *sc = (const AudSortCtx *)ctx;
+    const AudRow *a = (const AudRow *)pa;
+    const AudRow *b = (const AudRow *)pb;
+    int r = 0;
+    switch (sc->kind)
+    {
+    case AC_TIMESTAMP:
+    {
+        const EeAuditCopy *ca = NULL, *cb = NULL;
+        int64_t x = Aud_RowEvent(sc->aw, a, &ca)->ts;
+        int64_t y = Aud_RowEvent(sc->aw, b, &cb)->ts;
+        r = x < y ? -1 : (x > y ? 1 : 0);
+        if (r == 0)
+        {
+            /* one second: printed order is newest first */
+            r = a->seq > b->seq ? -1 : (a->seq < b->seq ? 1 : 0);
+        }
+        break;
+    }
+    case AC_LOG:
+        r = (int)a->log - (int)b->log;
+        break;
+    case AC_COPIES:
+    {
+        uint32_t x = Aud_RowCopies(sc->aw, a), y = Aud_RowCopies(sc->aw, b);
+        r = x < y ? -1 : (x > y ? 1 : 0);
+        break;
+    }
+    default:
+        r = _stricmp(Aud_SortText(sc->aw, a, sc->kind), Aud_SortText(sc->aw, b, sc->kind));
+        break;
+    }
+    if (!sc->asc)
+    {
+        r = -r;
+    }
+    if (r == 0)
+    {
+        r = a->seq < b->seq ? -1 : (a->seq > b->seq ? 1 : 0);
+    }
+    return r;
+}
+
+static int __cdecl Aud_SeqCmp(const void *pa, const void *pb)
+{
+    const AudRow *a = (const AudRow *)pa;
+    const AudRow *b = (const AudRow *)pb;
+    return a->seq < b->seq ? -1 : (a->seq > b->seq ? 1 : 0);
+}
+
+static void Aud_Sort(AuditWindow *aw)
+{
+    if (aw->nrows < 2)
+    {
+        return;
+    }
+    if (aw->sort_col < 0 || aw->sort_col >= aw->ncols)
+    {
+        qsort(aw->rows, aw->nrows, sizeof(AudRow), Aud_SeqCmp);
+    }
+    else
+    {
+        AudSortCtx sc;
+        sc.aw = aw;
+        sc.kind = aw->col_kind[aw->sort_col];
+        sc.asc = aw->sort_asc;
+        qsort_s(aw->rows, aw->nrows, sizeof(AudRow), Aud_SortCmp, &sc);
+    }
+}
+
+/* The rows of the view in printed order: one copy as printed, or the merged events of the
+ * logs shown, the two logs interleaved newest first. */
+static BOOL Aud_BuildRows(AuditWindow *aw)
+{
+    uint32_t n = 0, cap;
+    free(aw->rows);
+    aw->rows = NULL;
+    aw->nrows = 0;
+    if (aw->show_copy != AUD_MERGED)
+    {
+        const EeAuditCopy *c = &Aud_Log(aw, aw->show_copy_log)->copies[aw->show_copy];
+        uint32_t i;
+        cap = c->nevents;
+        aw->rows = (AudRow *)malloc(((size_t)cap + 1) * sizeof(AudRow));
+        if (aw->rows == NULL)
+        {
+            return FALSE;
+        }
+        for (i = 0; i < c->nevents; i++)
+        {
+            aw->rows[n].idx = i;
+            aw->rows[n].log = (uint8_t)aw->show_copy_log;
+            aw->rows[n].seq = n;
+            n++;
+        }
+    }
+    else
+    {
+        const EeAuditLog *le = Aud_Log(aw, 0);
+        const EeAuditLog *la = Aud_Log(aw, 1);
+        uint32_t ne = (aw->show_log == EE_AUDIT_ADMIN) ? 0 : le->nevents;
+        uint32_t na = (aw->show_log == EE_AUDIT_ELECTION) ? 0 : la->nevents;
+        uint32_t i = 0, j = 0;
+        cap = ne + na;
+        aw->rows = (AudRow *)malloc(((size_t)cap + 1) * sizeof(AudRow));
+        if (aw->rows == NULL)
+        {
+            return FALSE;
+        }
+        while (i < ne || j < na)
+        {
+            BOOL take_e = j >= na;
+            if (!take_e && i < ne)
+            {
+                const EeAuditCopy *c1 = NULL, *c2 = NULL;
+                take_e = EeAudit_MergedEvent(le, i, &c1)->ts >= EeAudit_MergedEvent(la, j, &c2)->ts;
+            }
+            aw->rows[n].idx = take_e ? i++ : j++;
+            aw->rows[n].log = (uint8_t)(take_e ? 0 : 1);
+            aw->rows[n].seq = n;
+            n++;
+        }
+    }
+    aw->nrows = n;
+    return TRUE;
+}
+
+static void Aud_BuildColumns(AuditWindow *aw)
+{
+    static const struct
+    {
+        uint8_t kind;
+        const wchar_t *title;
+        int width;
+    } k_cols[AC_COUNT] = {{AC_TIMESTAMP, L"Timestamp", 150}, {AC_LOG, L"Log", 64},
+                          {AC_EVENT, L"Event", 64},          {AC_MODULE, L"Module", 140},
+                          {AC_USER, L"User Id", 110},        {AC_DESC, L"Description", 480},
+                          {AC_COPIES, L"Copies", 70}};
+    HWND header;
+    int i, n = 0;
+    if (aw->list == NULL)
+    {
+        return;
+    }
+    header = ListView_GetHeader(aw->list);
+    while (header != NULL && Header_GetItemCount(header) > 0)
+    {
+        ListView_DeleteColumn(aw->list, 0);
+    }
+    for (i = 0; i < AC_COUNT; i++)
+    {
+        LVCOLUMNW col;
+        if (k_cols[i].kind == AC_COPIES && aw->show_copy != AUD_MERGED)
+        {
+            continue; /* one copy as printed */
+        }
+        if (k_cols[i].kind == AC_LOG && (aw->show_copy != AUD_MERGED || aw->show_log != 0 ||
+                                         Aud_Log(aw, 0)->ncopies == 0 || Aud_Log(aw, 1)->ncopies == 0))
+        {
+            continue; /* one log */
+        }
+        aw->col_kind[n] = k_cols[i].kind;
+        ZeroMemory(&col, sizeof(col));
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+        col.fmt = LVCFMT_LEFT;
+        col.pszText = (wchar_t *)k_cols[i].title;
+        col.cx = ScaleDisplay(aw->app, k_cols[i].width);
+        ListView_InsertColumn(aw->list, n, &col);
+        n++;
+    }
+    aw->ncols = n;
+}
+
+/* "05/26/2026" from yyyymmdd. */
+static void Aud_FormatDate(int yyyymmdd, wchar_t *out, size_t cch)
+{
+    if (yyyymmdd <= 0)
+    {
+        StringCchCopyW(out, cch, L"date unknown");
+        return;
+    }
+    StringCchPrintfW(out, cch, L"%02d/%02d/%04d", yyyymmdd / 100 % 100, yyyymmdd % 100, yyyymmdd / 10000);
+}
+
+/* The window's election, as "Travis County — 2026 Primary Runoff (05/26/2026)". */
+static void Aud_ElectionLabel(const AuditWindow *aw, wchar_t *out, size_t cch)
+{
+    wchar_t cust[128], name[160], date[32];
+    Aud_Widen(aw->el->customer, cust, ARRAYSIZE(cust));
+    Aud_Widen(aw->el->election, name, ARRAYSIZE(name));
+    Aud_FormatDate(aw->el->election_date, date, ARRAYSIZE(date));
+    StringCchPrintfW(out, cch, L"%s%s%s (%s)", cust, cust[0] != L'\0' && name[0] != L'\0' ? L" \x2014 " : L"",
+                     name, date);
+}
+
+/* A copy's label for the View -> Copy menu and the status bar: "Election log, copy 2 of 5,
+ * printed 05/27/2026 09:15AM (file.pdf)". */
+static void Aud_CopyLabel(const AuditWindow *aw, int li, uint32_t ci, wchar_t *out, size_t cch)
+{
+    const EeAuditLog *log = Aud_Log(aw, li);
+    const EeAuditCopy *c = &log->copies[ci];
+    wchar_t printed[48] = L"print time unknown";
+    if (c->printed != 0)
+    {
+        char t[48];
+        wchar_t w[48];
+        EeAudit_FormatTime(c->printed, t, sizeof(t));
+        Aud_Widen(t, w, ARRAYSIZE(w));
+        StringCchPrintfW(printed, ARRAYSIZE(printed), L"printed %s", w);
+    }
+    StringCchPrintfW(out, cch, L"%s log, copy %u of %u, %s (%s)", Aud_LogName(log->kind), ci + 1, log->ncopies,
+                     printed, App_PathBaseName(c->path));
+}
+
+static void Aud_UpdateStatus(AuditWindow *aw)
+{
+    wchar_t buf[900];
+    wchar_t part[320];
+    wchar_t n1[32], n2[32];
+    uint32_t total = 0;
+    int li;
+    if (aw->status == NULL)
+    {
+        return;
+    }
+    buf[0] = L'\0'; /* the county, election and date are in the title bar */
+    for (li = 0; li < 2; li++)
+    {
+        const EeAuditLog *log = Aud_Log(aw, li);
+        if (log->ncopies == 0)
+        {
+            continue;
+        }
+        total += log->nevents;
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %s log: %u cop%s", Aud_LogName(log->kind),
+                         log->ncopies, log->ncopies == 1 ? L"y" : L"ies");
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    if (aw->show_copy != AUD_MERGED)
+    {
+        const EeAuditLog *log = Aud_Log(aw, aw->show_copy_log);
+        fmt_count_w((int64_t)aw->nrows, n1, ARRAYSIZE(n1));
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  showing %s log copy %d of %u as printed: %s events",
+                         Aud_LogName(log->kind), aw->show_copy + 1, log->ncopies, n1);
+    }
+    else
+    {
+        fmt_count_w((int64_t)aw->nrows, n1, ARRAYSIZE(n1));
+        fmt_count_w((int64_t)total, n2, ARRAYSIZE(n2));
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %s of %s events", n1, n2);
+    }
+    StringCchCatW(buf, ARRAYSIZE(buf), part);
+    if (aw->have_acct && aw->acct.election_session >= 0)
+    {
+        fmt_count_w(aw->acct.sessions[aw->acct.election_session].ballots, n1, ARRAYSIZE(n1));
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  EMS ballots (election session): %s", n1);
+        StringCchCatW(buf, ARRAYSIZE(buf), part);
+    }
+    for (li = 0; li < 2; li++)
+    {
+        if (aw->lacking[li] > 0)
+        {
+            const EeAuditLog *log = Aud_Log(aw, li);
+            uint32_t outside = log->checks[log->ncopies - 1].lacks_outside;
+            fmt_count_w((int64_t)aw->lacking[li], n1, ARRAYSIZE(n1));
+            StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  final %s log copy lacks %s event%s",
+                             Aud_LogName(log->kind), n1, aw->lacking[li] == 1 ? L"" : L"s");
+            StringCchCatW(buf, ARRAYSIZE(buf), part);
+            if (outside > 0)
+            {
+                fmt_count_w((int64_t)outside, n2, ARRAYSIZE(n2));
+                StringCchPrintfW(part, ARRAYSIZE(part), L" (%s outside its date range)", n2);
+                StringCchCatW(buf, ARRAYSIZE(buf), part);
+            }
+        }
+    }
+    /* every part starts with a separator: drop the first */
+    SendMessageW(aw->status, SB_SETTEXTW, 0, (LPARAM)(wcsncmp(buf, L"  \x2022  ", 5) == 0 ? buf + 5 : buf));
+}
+
+/* Status bar part 2: where the focused event comes from. */
+static void Aud_UpdateSelectionStatus(AuditWindow *aw)
+{
+    wchar_t buf[400] = L"";
+    int item;
+    if (aw->status == NULL)
+    {
+        return;
+    }
+    item = ListView_GetNextItem(aw->list, -1, LVNI_FOCUSED);
+    if (item >= 0 && (uint32_t)item < aw->nrows)
+    {
+        const AudRow *row = &aw->rows[item];
+        const EeAuditCopy *copy = NULL;
+        const EeAuditEvent *ev = Aud_RowEvent(aw, row, &copy);
+        if (aw->show_copy != AUD_MERGED)
+        {
+            StringCchPrintfW(buf, ARRAYSIZE(buf), L"Page %u", ev->page);
+        }
+        else
+        {
+            const EeAuditLog *log = Aud_Log(aw, row->log);
+            uint32_t ci = log->events[row->idx].copy;
+            StringCchPrintfW(buf, ARRAYSIZE(buf), L"First in copy %u of %u: %s, page %u", ci + 1, log->ncopies,
+                             App_PathBaseName(copy->path), ev->page);
+        }
+    }
+    SendMessageW(aw->status, SB_SETTEXTW, 1, (LPARAM)buf);
+}
+
+static void Aud_Layout(AuditWindow *aw, int width, int height)
+{
+    int sb_h = 0;
+    if (aw->status != NULL)
+    {
+        RECT sb;
+        int parts[2];
+        parts[0] = width > Scale(aw->app, 600) ? width - Scale(aw->app, 300) : width / 2;
+        parts[1] = -1;
+        SendMessageW(aw->status, SB_SETPARTS, 2, (LPARAM)parts);
+        SendMessageW(aw->status, WM_SIZE, 0, 0);
+        if (GetWindowRect(aw->status, &sb))
+        {
+            sb_h = sb.bottom - sb.top;
+        }
+    }
+    if (aw->list != NULL)
+    {
+        MoveWindow(aw->list, 0, 0, width, height > sb_h ? height - sb_h : 0, TRUE);
+    }
+}
+
+/* Rebuild rows and columns after a view or option change; the sort is kept while its
+ * column is still shown. */
+static void Aud_Rebuild(AuditWindow *aw)
+{
+    uint8_t sort_kind = (aw->sort_col >= 0 && aw->sort_col < aw->ncols) ? aw->col_kind[aw->sort_col] : 0xFF;
+    int i;
+    if (!Aud_BuildRows(aw))
+    {
+        MessageBoxW(aw->hwnd, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        aw->nrows = 0;
+    }
+    SendMessageW(aw->list, WM_SETREDRAW, FALSE, 0);
+    ListView_SetItemState(aw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    Aud_BuildColumns(aw);
+    aw->sort_col = -1;
+    for (i = 0; i < aw->ncols && sort_kind != 0xFF; i++)
+    {
+        if (aw->col_kind[i] == sort_kind)
+        {
+            aw->sort_col = i;
+            break;
+        }
+    }
+    Aud_Sort(aw);
+    ListView_SetItemCountEx(aw->list, (int)aw->nrows, 0);
+    SendMessageW(aw->list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(aw->list, NULL, TRUE);
+    Aud_UpdateStatus(aw);
+    Aud_UpdateSelectionStatus(aw);
+}
+
+/* Copy the selected rows as tab-separated UTF-8, every column, CR/LF between rows. */
+static void Aud_CopySelected(AuditWindow *aw)
+{
+    wchar_t *buf = NULL;
+    size_t cap = 0, len = 0;
+    wchar_t cell[4096];
+    int i;
+    if (aw == NULL || aw->list == NULL)
+    {
+        return;
+    }
+    for (i = ListView_GetNextItem(aw->list, -1, LVNI_SELECTED); i >= 0;
+         i = ListView_GetNextItem(aw->list, i, LVNI_SELECTED))
+    {
+        int c;
+        for (c = 0; c < aw->ncols; c++)
+        {
+            size_t n;
+            Aud_CellText(aw, (uint32_t)i, c, cell, ARRAYSIZE(cell));
+            n = wcslen(cell);
+            if (!cvr_wbuf_reserve(&buf, &cap, len + n + 3))
+            {
+                free(buf);
+                return;
+            }
+            memcpy(buf + len, cell, n * sizeof(wchar_t));
+            len += n;
+            if (c + 1 < aw->ncols)
+            {
+                buf[len++] = L'\t';
+            }
+            else
+            {
+                buf[len++] = L'\r';
+                buf[len++] = L'\n';
+            }
+        }
+    }
+    if (buf != NULL && len > 0)
+    {
+        int u8len;
+        buf[len] = L'\0';
+        u8len = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+        if (u8len > 0)
+        {
+            char *utf8 = (char *)malloc((size_t)u8len);
+            if (utf8 != NULL && WideCharToMultiByte(CP_UTF8, 0, buf, -1, utf8, u8len, NULL, NULL) > 0)
+            {
+                App_SetClipboardUtf8(aw->hwnd, utf8);
+            }
+            free(utf8);
+        }
+    }
+    free(buf);
+}
+
+static void Aud_OnContextMenu(AuditWindow *aw, int item, POINT screen)
+{
+    HMENU m;
+    if (item >= 0 && !(ListView_GetItemState(aw->list, item, LVIS_SELECTED) & LVIS_SELECTED))
+    {
+        ListView_SetItemState(aw->list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(aw->list, item, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    m = CreatePopupMenu();
+    if (m == NULL)
+    {
+        return;
+    }
+    AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    if ((UINT)TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD, screen.x, screen.y, 0, aw->hwnd, NULL) ==
+        IDM_EDIT_COPY)
+    {
+        Aud_CopySelected(aw);
+    }
+    DestroyMenu(m);
+}
+
+/* An event the final copy of its log lacks: bold red. */
+static LRESULT Aud_CustomDraw(AuditWindow *aw, NMLVCUSTOMDRAW *cd)
+{
+    switch (cd->nmcd.dwDrawStage)
+    {
+    case CDDS_PREPAINT:
+        return CDRF_NOTIFYITEMDRAW;
+    case CDDS_ITEMPREPAINT:
+    {
+        uint32_t ri = (uint32_t)cd->nmcd.dwItemSpec;
+        if (ri < aw->nrows && Aud_RowLacking(aw, &aw->rows[ri]))
+        {
+            cd->clrText = RGB(192, 0, 0);
+            if (aw->app->font_header != NULL)
+            {
+                SelectObject(cd->nmcd.hdc, aw->app->font_header);
+                return CDRF_NEWFONT;
+            }
+        }
+        return CDRF_DODEFAULT;
+    }
+    default:
+        return CDRF_DODEFAULT;
+    }
+}
+
+/* --- Options (zoom) --------------------------------------------------------- */
+
+typedef struct AudOptData
+{
+    AppState *app;
+    int zoom;
+} AudOptData;
+
+static INT_PTR CALLBACK AudOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    AudOptData *d = (AudOptData *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        AppState *app;
+        RECT rc;
+        int margin, btn_w, btn_h, gap, y;
+        HWND ctl[6];
+        int nctl = 0, i;
+        wchar_t ztxt[16];
+        d = (AudOptData *)lParam;
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
+        app = d->app;
+        App_CenterModalClient(dlg, app, Scale(app, 300), Scale(app, 110));
+        GetClientRect(dlg, &rc);
+        margin = Scale(app, 14);
+        btn_w = Scale(app, 84);
+        btn_h = Scale(app, 26);
+        gap = Scale(app, 8);
+        y = margin;
+        ctl[nctl++] = CreateWindowExW(0, L"STATIC", L"Zoom (%):", WS_CHILD | WS_VISIBLE, margin, y + Scale(app, 3),
+                                      Scale(app, 80), Scale(app, 18), dlg, NULL, app->instance, NULL);
+        StringCchPrintfW(ztxt, ARRAYSIZE(ztxt), L"%d", d->zoom);
+        ctl[nctl++] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", ztxt, WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_NUMBER,
+                                      margin + Scale(app, 84), y, Scale(app, 64), Scale(app, 22), dlg,
+                                      (HMENU)(INT_PTR)IDC_AUD_ZOOM, app->instance, NULL);
+        ctl[nctl++] = CreateWindowExW(0, UPDOWN_CLASSW, NULL,
+                                      WS_CHILD | WS_VISIBLE | UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_ARROWKEYS |
+                                          UDS_NOTHOUSANDS,
+                                      0, 0, 0, 0, dlg, (HMENU)(INT_PTR)IDC_AUD_ZOOM_SPIN, app->instance, NULL);
+        SendMessageW(ctl[nctl - 1], UDM_SETBUDDY, (WPARAM)ctl[nctl - 2], 0);
+        SendMessageW(ctl[nctl - 1], UDM_SETRANGE32, (WPARAM)k_ZoomMin, (LPARAM)k_ZoomMax);
+        SendMessageW(ctl[nctl - 1], UDM_SETPOS32, 0, (LPARAM)d->zoom);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"OK",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_DEFPUSHBUTTON,
+                                      rc.right - margin - 2 * btn_w - gap, rc.bottom - margin - btn_h, btn_w, btn_h,
+                                      dlg, (HMENU)(INT_PTR)IDOK, app->instance, NULL);
+        ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                      rc.right - margin - btn_w, rc.bottom - margin - btn_h, btn_w, btn_h, dlg,
+                                      (HMENU)(INT_PTR)IDCANCEL, app->instance, NULL);
+        for (i = 0; i < nctl; i++)
+        {
+            if (ctl[i] != NULL && app->font_ui != NULL)
+            {
+                SendMessageW(ctl[i], WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            }
+        }
+        SetFocus(GetDlgItem(dlg, IDC_AUD_ZOOM));
+        SendMessageW(GetDlgItem(dlg, IDC_AUD_ZOOM), EM_SETSEL, 0, -1);
+        return (INT_PTR)FALSE;
+    }
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK && d != NULL)
+        {
+            BOOL parsed = FALSE;
+            UINT z = GetDlgItemInt(dlg, IDC_AUD_ZOOM, &parsed, FALSE);
+            if (!parsed || (int)z < k_ZoomMin || (int)z > k_ZoomMax)
+            {
+                wchar_t msg_text[96];
+                StringCchPrintfW(msg_text, ARRAYSIZE(msg_text), L"Zoom must be a number from %d to %d.", k_ZoomMin,
+                                 k_ZoomMax);
+                MessageBoxW(dlg, msg_text, k_WindowTitle, MB_ICONWARNING | MB_OK);
+                SetFocus(GetDlgItem(dlg, IDC_AUD_ZOOM));
+                return (INT_PTR)TRUE;
+            }
+            d->zoom = (int)z;
+            EndDialog(dlg, 1);
+            return (INT_PTR)TRUE;
+        }
+        if (LOWORD(wParam) == IDCANCEL)
+        {
+            EndDialog(dlg, 0);
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        EndDialog(dlg, 0);
+        return (INT_PTR)TRUE;
+
+    default:
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static void App_ShowAuditOptions(AuditWindow *aw)
+{
+    AudOptData d;
+    d.app = aw->app;
+    d.zoom = aw->app->zoom_percent > 0 ? aw->app->zoom_percent : k_ZoomDefault;
+    if (App_RunModalDialogOwned(aw->app, aw->hwnd, L"Audit Log Options", AudOptionsDlgProc, (LPARAM)&d) != 1 ||
+        d.zoom == aw->app->zoom_percent)
+    {
+        return;
+    }
+    aw->app->zoom_percent = App_ClampZoom(d.zoom);
+    App_UpdateDpiMetrics(aw->app, aw->app->dpi); /* rebuilds the zoomed grid font */
+    if (aw->app->font_grid != NULL)
+    {
+        SendMessageW(aw->list, WM_SETFONT, (WPARAM)aw->app->font_grid, TRUE);
+    }
+    g_settings.zoom_percent = aw->app->zoom_percent;
+    EeSettings_Save(&g_settings);
+    Aud_Rebuild(aw); /* column widths follow the zoom */
+}
+
+/* --- Window ---------------------------------------------------------------- */
+
+/* Menu bar of an audit window; View -> Copy lists the election's copies. */
+static HMENU App_CreateAuditMenu(const AuditWindow *aw)
+{
+    HMENU menu = CreateMenu();
+    HMENU file_menu = CreatePopupMenu();
+    HMENU edit_menu = CreatePopupMenu();
+    HMENU view_menu = CreatePopupMenu();
+    HMENU log_menu = CreatePopupMenu();
+    HMENU copy_menu = CreatePopupMenu();
+    HMENU help_menu = CreatePopupMenu();
+    int li;
+    if (menu == NULL || file_menu == NULL || edit_menu == NULL || view_menu == NULL || log_menu == NULL ||
+        copy_menu == NULL || help_menu == NULL)
+    {
+        HMENU all[7];
+        int i;
+        all[0] = file_menu;
+        all[1] = edit_menu;
+        all[2] = view_menu;
+        all[3] = log_menu;
+        all[4] = copy_menu;
+        all[5] = help_menu;
+        all[6] = menu;
+        for (i = 0; i < 7; i++)
+        {
+            if (all[i] != NULL)
+            {
+                DestroyMenu(all[i]);
+            }
+        }
+        return NULL;
+    }
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_VOTER_LIST, L"&Load Voter List…\tCtrl+O");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_AUDIT, L"Load &Audit Logs…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_AUDIT, L"&Close Audit Logs");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
+    AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
+    AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(edit_menu, MF_STRING, IDM_AUD_OPTIONS, L"&Options…");
+    AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ALL, L"&All");
+    AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ELECTION, L"&Election");
+    AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ADMIN, L"A&dmin");
+    AppendMenuW(copy_menu, MF_STRING, IDM_AUD_COPY_MERGED, L"All Copies &Merged");
+    for (li = 0; li < 2; li++)
+    {
+        const EeAuditLog *log = Aud_Log(aw, li);
+        uint32_t ci;
+        if (log->ncopies > 0)
+        {
+            AppendMenuW(copy_menu, MF_SEPARATOR, 0, NULL);
+        }
+        for (ci = 0; ci < log->ncopies; ci++)
+        {
+            wchar_t label[400];
+            Aud_CopyLabel(aw, li, ci, label, ARRAYSIZE(label));
+            AppendMenuW(copy_menu, MF_STRING, IDM_AUD_COPY_FIRST + li * EE_AUDIT_MAX_COPIES + ci, label);
+        }
+    }
+    AppendMenuW(view_menu, MF_POPUP, (UINT_PTR)log_menu, L"&Log");
+    AppendMenuW(view_menu, MF_POPUP, (UINT_PTR)copy_menu, L"&Copy");
+    AppendMenuW(view_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(view_menu, MF_STRING, IDM_AUD_VIEW_RESET, L"&Reset View");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Audit Logs");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Views and Options");
+    AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"&View");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
+    return menu;
+}
+
+/* Subclass so the list draws its header bold on the grey band, like the voter list. */
+static LRESULT CALLBACK AuditListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        AuditWindow *aw = (AuditWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (aw != NULL && nm != NULL && header != NULL && nm->hwndFrom == header && nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(aw->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_audit_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static void Aud_FreeWindowData(AuditWindow *aw)
+{
+    free(aw->rows);
+    if (aw->have_acct)
+    {
+        EeAudit_FreeAccounting(&aw->acct);
+    }
+    EeAudit_FreeElections(aw->el, 1);
+    App_FreeCvrUi(aw->app);
+    free(aw);
+}
+
+static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    AuditWindow *aw = (AuditWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+    case WM_CREATE:
+    {
+        CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+        RECT rc;
+        aw = (AuditWindow *)cs->lpCreateParams;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)aw);
+        aw->hwnd = hwnd;
+        GetClientRect(hwnd, &rc);
+        aw->list = CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                   WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_OWNERDATA | LVS_SHOWSELALWAYS, 0, 0,
+                                   rc.right, rc.bottom, hwnd, NULL, aw->app->instance, NULL);
+        if (aw->list == NULL)
+        {
+            return -1;
+        }
+        {
+            WNDPROC old = (WNDPROC)SetWindowLongPtrW(aw->list, GWLP_WNDPROC, (LONG_PTR)AuditListSubclass);
+            if (g_old_audit_list_proc == NULL)
+            {
+                g_old_audit_list_proc = old;
+            }
+        }
+        ListView_SetExtendedListViewStyle(aw->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES);
+        if (aw->app->font_grid != NULL)
+        {
+            SendMessageW(aw->list, WM_SETFONT, (WPARAM)aw->app->font_grid, TRUE);
+        }
+        aw->status = CreateWindowExW(0, STATUSCLASSNAMEW, NULL, WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP, 0, 0, 0, 0,
+                                     hwnd, NULL, aw->app->instance, NULL);
+        if (aw->status != NULL && aw->app->font_ui != NULL)
+        {
+            SendMessageW(aw->status, WM_SETFONT, (WPARAM)aw->app->font_ui, TRUE);
+        }
+        Aud_Layout(aw, rc.right, rc.bottom);
+        Aud_Rebuild(aw);
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (aw != NULL)
+        {
+            Aud_Layout(aw, LOWORD(lParam), HIWORD(lParam));
+        }
+        return 0;
+
+    case WM_SETFOCUS:
+        if (aw != NULL && aw->list != NULL)
+        {
+            SetFocus(aw->list);
+        }
+        return 0;
+
+    case WM_INITMENUPOPUP:
+        if (aw != NULL)
+        {
+            HMENU m = (HMENU)wParam;
+            int li;
+            BOOL merged = aw->show_copy == AUD_MERGED;
+            CheckMenuItem(m, IDM_AUD_LOG_ALL, MF_BYCOMMAND | (merged && aw->show_log == 0 ? MF_CHECKED : MF_UNCHECKED));
+            CheckMenuItem(m, IDM_AUD_LOG_ELECTION,
+                          MF_BYCOMMAND | (merged && aw->show_log == EE_AUDIT_ELECTION ? MF_CHECKED : MF_UNCHECKED));
+            CheckMenuItem(m, IDM_AUD_LOG_ADMIN,
+                          MF_BYCOMMAND | (merged && aw->show_log == EE_AUDIT_ADMIN ? MF_CHECKED : MF_UNCHECKED));
+            EnableMenuItem(m, IDM_AUD_LOG_ELECTION,
+                           MF_BYCOMMAND | (Aud_Log(aw, 0)->ncopies > 0 ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(m, IDM_AUD_LOG_ADMIN, MF_BYCOMMAND | (Aud_Log(aw, 1)->ncopies > 0 ? MF_ENABLED : MF_GRAYED));
+            CheckMenuItem(m, IDM_AUD_COPY_MERGED, MF_BYCOMMAND | (merged ? MF_CHECKED : MF_UNCHECKED));
+            for (li = 0; li < 2; li++)
+            {
+                uint32_t ci;
+                for (ci = 0; ci < Aud_Log(aw, li)->ncopies; ci++)
+                {
+                    BOOL on = !merged && aw->show_copy_log == li && aw->show_copy == (int)ci;
+                    CheckMenuItem(m, IDM_AUD_COPY_FIRST + li * EE_AUDIT_MAX_COPIES + ci,
+                                  MF_BYCOMMAND | (on ? MF_CHECKED : MF_UNCHECKED));
+                }
+            }
+            EnableMenuItem(m, IDM_AUD_VIEW_RESET, MF_BYCOMMAND | (aw->sort_col >= 0 ? MF_ENABLED : MF_GRAYED));
+        }
+        break;
+
+    case WM_COMMAND:
+        if (aw == NULL)
+        {
+            break;
+        }
+        if (LOWORD(wParam) >= IDM_AUD_COPY_FIRST && LOWORD(wParam) < IDM_AUD_COPY_FIRST + 2 * EE_AUDIT_MAX_COPIES)
+        {
+            int k = LOWORD(wParam) - IDM_AUD_COPY_FIRST;
+            int li = k / EE_AUDIT_MAX_COPIES;
+            int ci = k % EE_AUDIT_MAX_COPIES;
+            if ((uint32_t)ci < Aud_Log(aw, li)->ncopies)
+            {
+                aw->show_copy_log = li;
+                aw->show_copy = ci;
+                Aud_Rebuild(aw);
+            }
+            return 0;
+        }
+        switch (LOWORD(wParam))
+        {
+        case IDM_EDIT_COPY: /* also Ctrl+C */
+            Aud_CopySelected(aw);
+            return 0;
+        case IDM_AUD_OPTIONS:
+            App_ShowAuditOptions(aw);
+            return 0;
+        case IDM_AUD_LOG_ALL:
+        case IDM_AUD_LOG_ELECTION:
+        case IDM_AUD_LOG_ADMIN:
+            aw->show_log = LOWORD(wParam) == IDM_AUD_LOG_ELECTION ? EE_AUDIT_ELECTION
+                           : LOWORD(wParam) == IDM_AUD_LOG_ADMIN  ? EE_AUDIT_ADMIN
+                                                                  : 0;
+            aw->show_copy = AUD_MERGED;
+            Aud_Rebuild(aw);
+            return 0;
+        case IDM_AUD_COPY_MERGED:
+            if (aw->show_copy != AUD_MERGED)
+            {
+                aw->show_copy = AUD_MERGED;
+                Aud_Rebuild(aw);
+            }
+            return 0;
+        case IDM_AUD_VIEW_RESET:
+            if (aw->sort_col >= 0)
+            {
+                aw->sort_col = -1;
+                Aud_Sort(aw);
+                InvalidateRect(aw->list, NULL, FALSE);
+                Aud_UpdateSelectionStatus(aw);
+            }
+            return 0;
+        case IDM_FILE_OPEN_VOTER_LIST:
+            App_BeginOpenVoterList(aw->app);
+            return 0;
+        case IDM_FILE_OPEN_CVR:
+            App_BeginOpenCvr(aw->app);
+            return 0;
+        case IDM_FILE_OPEN_ROSTER:
+            App_BeginOpenRoster(aw->app);
+            return 0;
+        case IDM_FILE_OPEN_RESULTS:
+            App_BeginOpenResults(aw->app);
+            return 0;
+        case IDM_FILE_OPEN_AUDIT:
+            App_BeginOpenAudit(aw->app);
+            return 0;
+        case IDM_FILE_CLOSE_AUDIT:
+            DestroyWindow(hwnd);
+            return 0;
+        case IDM_FILE_EXIT:
+            App_ExitAll();
+            return 0;
+        case IDM_HELP_LOADING:
+            App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Loading Audit Logs", k_AudHelpLoading);
+            return 0;
+        case IDM_HELP_OPTIONS:
+            App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Views and Options", k_AudHelpOptions);
+            return 0;
+        case IDM_HELP_ABOUT:
+            App_ShowAboutOn(aw->app, hwnd);
+            return 0;
+        default:
+            break;
+        }
+        break;
+
+    case WM_NOTIFY:
+    {
+        NMHDR *hdr = (NMHDR *)lParam;
+        if (aw == NULL || hdr->hwndFrom != aw->list)
+        {
+            break;
+        }
+        if (hdr->code == LVN_GETDISPINFOW)
+        {
+            NMLVDISPINFOW *di = (NMLVDISPINFOW *)lParam;
+            if ((di->item.mask & LVIF_TEXT) && di->item.iItem >= 0 && di->item.cchTextMax > 0)
+            {
+                Aud_CellText(aw, (uint32_t)di->item.iItem, di->item.iSubItem, di->item.pszText,
+                             (size_t)di->item.cchTextMax);
+            }
+            return 0;
+        }
+        if (hdr->code == NM_CUSTOMDRAW)
+        {
+            return Aud_CustomDraw(aw, (NMLVCUSTOMDRAW *)lParam);
+        }
+        if (hdr->code == LVN_ITEMCHANGED)
+        {
+            NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+            if ((nlv->uChanged & LVIF_STATE) && ((nlv->uNewState ^ nlv->uOldState) & LVIS_FOCUSED))
+            {
+                Aud_UpdateSelectionStatus(aw);
+            }
+            return 0;
+        }
+        if (hdr->code == LVN_COLUMNCLICK)
+        {
+            NMLISTVIEW *nlv = (NMLISTVIEW *)lParam;
+            if (nlv->iSubItem == aw->sort_col)
+            {
+                aw->sort_asc = !aw->sort_asc;
+            }
+            else
+            {
+                aw->sort_col = nlv->iSubItem;
+                /* copy counts sort most first; times oldest first (printed order is newest
+                 * first, and Reset View returns to it) */
+                aw->sort_asc = aw->col_kind[aw->sort_col] != AC_COPIES;
+            }
+            Aud_Sort(aw);
+            InvalidateRect(aw->list, NULL, FALSE);
+            Aud_UpdateSelectionStatus(aw);
+            return 0;
+        }
+        if (hdr->code == NM_RCLICK)
+        {
+            LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+            POINT screen = ia->ptAction;
+            ClientToScreen(aw->list, &screen);
+            Aud_OnContextMenu(aw, ia->iItem, screen);
+            return 0;
+        }
+        break;
+    }
+
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+
+    case WM_DESTROY:
+        if (aw != NULL)
+        {
+            Aud_FreeWindowData(aw);
+            CvrWindow_Unregister(hwnd);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            App_MaybeQuit();
+        }
+        return 0;
+
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Create an audit window for one election, taking ownership of @p el (moved; the source is
+ * zeroed). Like a results window it is a first-class top-level window with its own
+ * resource-only AppState, so it outlives the window that loaded it. */
+static void App_CreateAuditWindow(AppState *app, EeAuditElection *el)
+{
+    AuditWindow *aw = (AuditWindow *)calloc(1, sizeof(AuditWindow));
+    EeAuditElection *mine = (EeAuditElection *)malloc(sizeof(EeAuditElection));
+    AppState *ui = NULL;
+    HWND h = NULL;
+    wchar_t label[320], title[360];
+    int li;
+    if (aw == NULL || mine == NULL ||
+        (ui = (AppState *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(AppState))) == NULL)
+    {
+        free(aw);
+        free(mine); /* @p el stays with the caller, who frees it */
+        MessageBoxW(app->hwnd_main, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    *mine = *el; /* move */
+    ZeroMemory(el, sizeof(*el));
+    App_InitViewerState(ui, app->instance, app); /* seed zoom from the launcher */
+    ui->is_cvr_ui = TRUE;                        /* resource-only, like a CVR window's */
+    App_UpdateDpiMetrics(ui, app->dpi ? app->dpi : 96u);
+    aw->app = ui;
+    aw->el = mine;
+    aw->show_copy = AUD_MERGED;
+    aw->sort_col = -1;
+    aw->sort_asc = TRUE;
+    for (li = 0; li < 2; li++)
+    {
+        const EeAuditLog *log = &mine->logs[li];
+        uint32_t i;
+        if (log->ncopies < 2)
+        {
+            continue;
+        }
+        for (i = 0; i < log->nevents; i++)
+        {
+            if ((log->events[i].copies & (1ull << (log->ncopies - 1))) == 0)
+            {
+                aw->lacking[li]++;
+            }
+        }
+    }
+    if (mine->logs[0].ncopies > 0)
+    {
+        aw->have_acct = EeAudit_Accounting(&mine->logs[0], &aw->acct);
+    }
+    Aud_ElectionLabel(aw, label, ARRAYSIZE(label));
+    StringCchPrintfW(title, ARRAYSIZE(title), L"%s \x2014 Audit Logs", label);
+    {
+        HMENU menu = App_CreateAuditMenu(aw);
+        h = CreateWindowExW(0, k_AuditClassName, title, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, CW_USEDEFAULT,
+                            CW_USEDEFAULT, Scale(ui, 1240), Scale(ui, 660), NULL, menu, ui->instance, aw);
+        if (h == NULL && menu != NULL)
+        {
+            DestroyMenu(menu);
+        }
+    }
+    if (h == NULL)
+    {
+        Aud_FreeWindowData(aw);
+        MessageBoxW(app->hwnd_main, L"Could not create the Audit Log window.", k_WindowTitle, MB_ICONERROR | MB_OK);
+        return;
+    }
+    ui->hwnd_main = h;
+    CvrWindow_Register(h); /* counts toward App_MaybeQuit and closes on Exit */
+    ShowWindow(h, SW_SHOWNORMAL);
+    UpdateWindow(h);
+}
+
+/* --- Loading (worker thread behind a modal progress dialog) --------------- */
+
+#define EEM_AUD_LOAD_DONE     (WM_APP + 17)
+#define EEM_AUD_LOAD_PROGRESS (WM_APP + 18)
+
+typedef struct AudLoadJob
+{
+    AppState *app;
+    const wchar_t *const *paths;
+    int count;
+    EeAuditElection *elections; /* out: one per election */
+    uint32_t nelections;
+    volatile LONG cancel;
+    EeLoadStatus status;
+    wchar_t err[512];
+    HWND dlg;
+    HWND bar;
+    HANDLE thread;
+} AudLoadJob;
+
+static BOOL AudLoadProgressCb(const EeLoadProgress *pr, void *user)
+{
+    AudLoadJob *j = (AudLoadJob *)user;
+    if (j != NULL && j->dlg != NULL)
+    {
+        PostMessageW(j->dlg, EEM_AUD_LOAD_PROGRESS, (WPARAM)(pr->percent > 100u ? 100u : pr->percent), 0);
+    }
+    return j == NULL || j->cancel == 0;
+}
+
+static DWORD WINAPI AudLoadThreadProc(void *param)
+{
+    AudLoadJob *j = (AudLoadJob *)param;
+    j->status = EeAudit_LoadFiles(j->paths, (uint32_t)j->count, &j->elections, &j->nelections, &j->cancel,
+                                  AudLoadProgressCb, j, j->err, ARRAYSIZE(j->err));
+    PostMessageW(j->dlg, EEM_AUD_LOAD_DONE, 0, 0);
+    return 0;
+}
+
+static INT_PTR CALLBACK AudLoadDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    AudLoadJob *j = (AudLoadJob *)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        AppState *app;
+        RECT rc;
+        int margin;
+        HWND label, cancel;
+        j = (AudLoadJob *)lParam;
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)j);
+        j->dlg = dlg;
+        app = j->app;
+        App_CenterModalClient(dlg, app, Scale(app, 340), Scale(app, 120));
+        GetClientRect(dlg, &rc);
+        margin = Scale(app, 14);
+        label = CreateWindowExW(0, L"STATIC", L"Loading audit logs…", WS_CHILD | WS_VISIBLE, margin, margin,
+                                rc.right - 2 * margin, Scale(app, 20), dlg, NULL, app->instance, NULL);
+        j->bar = CreateWindowExW(0, PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE, margin, margin + Scale(app, 26),
+                                 rc.right - 2 * margin, Scale(app, 16), dlg, NULL, app->instance, NULL);
+        cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                                 rc.right - margin - Scale(app, 84), rc.bottom - margin - Scale(app, 26),
+                                 Scale(app, 84), Scale(app, 26), dlg, (HMENU)(INT_PTR)IDCANCEL, app->instance, NULL);
+        if (app->font_ui != NULL)
+        {
+            SendMessageW(label, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+            SendMessageW(cancel, WM_SETFONT, (WPARAM)app->font_ui, TRUE);
+        }
+        if (j->bar != NULL)
+        {
+            SendMessageW(j->bar, PBM_SETRANGE32, 0, 100);
+        }
+        j->thread = CreateThread(NULL, 0, AudLoadThreadProc, j, 0, NULL);
+        if (j->thread == NULL)
+        {
+            j->status = EeLoadStatus_Error;
+            StringCchCopyW(j->err, ARRAYSIZE(j->err), L"Could not start loading.");
+            EndDialog(dlg, 0);
+        }
+        return (INT_PTR)TRUE;
+    }
+
+    case EEM_AUD_LOAD_PROGRESS:
+        if (j != NULL && j->bar != NULL)
+        {
+            SendMessageW(j->bar, PBM_SETPOS, wParam, 0);
+        }
+        return (INT_PTR)TRUE;
+
+    case EEM_AUD_LOAD_DONE:
+        if (j != NULL && j->thread != NULL)
+        {
+            WaitForSingleObject(j->thread, INFINITE);
+            CloseHandle(j->thread);
+            j->thread = NULL;
+        }
+        EndDialog(dlg, 1);
+        return (INT_PTR)TRUE;
+
+    case WM_COMMAND:
+        if (j != NULL && LOWORD(wParam) == IDCANCEL)
+        {
+            InterlockedExchange(&j->cancel, 1);
+            EnableWindow(GetDlgItem(dlg, IDCANCEL), FALSE);
+            return (INT_PTR)TRUE;
+        }
+        break;
+
+    case WM_CLOSE:
+        if (j != NULL)
+        {
+            InterlockedExchange(&j->cancel, 1);
+        }
+        return (INT_PTR)TRUE;
+
+    default:
+        break;
+    }
+    return (INT_PTR)FALSE;
+}
+
+static void App_BeginOpenAudit(AppState *app)
+{
+    OPENFILENAMEW ofn;
+    wchar_t *files;
+    wchar_t *paths[256];
+    int count = 0;
+    int i;
+    AudLoadJob job;
+    const DWORD files_cch = 65536;
+
+    if (app == NULL)
+    {
+        return;
+    }
+    files = (wchar_t *)malloc(files_cch * sizeof(wchar_t));
+    if (files == NULL)
+    {
+        return;
+    }
+    files[0] = L'\0';
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = app->hwnd_main;
+    ofn.lpstrFilter = L"Audit log PDFs (*.pdf)\0*.pdf\0All files (*.*)\0*.*\0";
+    ofn.lpstrFile = files;
+    ofn.nMaxFile = files_cch;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;
+    ofn.lpstrTitle = L"Load Audit Logs";
+    if (!GetOpenFileNameW(&ofn))
+    {
+        free(files);
+        return;
+    }
+    /* A single full path, or a directory followed by NUL-separated names. */
+    {
+        const wchar_t *dir = files;
+        size_t dlen = wcslen(dir);
+        const wchar_t *p = files + dlen + 1;
+        if (*p == L'\0')
+        {
+            paths[count] = _wcsdup(files);
+            if (paths[count] != NULL)
+            {
+                count++;
+            }
+        }
+        else
+        {
+            BOOL need_sep = (dlen > 0 && dir[dlen - 1] != L'\\');
+            while (*p != L'\0' && count < (int)ARRAYSIZE(paths))
+            {
+                size_t need = dlen + 1 + wcslen(p) + 1;
+                wchar_t *full = (wchar_t *)malloc(need * sizeof(wchar_t));
+                if (full == NULL)
+                {
+                    break;
+                }
+                StringCchCopyW(full, need, dir);
+                if (need_sep)
+                {
+                    StringCchCatW(full, need, L"\\");
+                }
+                StringCchCatW(full, need, p);
+                paths[count++] = full;
+                p += wcslen(p) + 1;
+            }
+        }
+    }
+    free(files);
+    if (count == 0)
+    {
+        return;
+    }
+
+    ZeroMemory(&job, sizeof(job));
+    job.app = app;
+    job.paths = (const wchar_t *const *)paths;
+    job.count = count;
+    job.status = EeLoadStatus_Error;
+    App_RunModalDialog(app, L"Loading Audit Logs", AudLoadDlgProc, (LPARAM)&job);
+    if (job.status == EeLoadStatus_Ok)
+    {
+        uint32_t g;
+        for (g = 0; g < job.nelections; g++)
+        {
+            App_CreateAuditWindow(app, &job.elections[g]);
+        }
+        EeAudit_FreeElections(job.elections, job.nelections);
+    }
+    else if (job.status == EeLoadStatus_Error)
+    {
+        MessageBoxW(app->hwnd_main, job.err[0] != L'\0' ? job.err : L"Could not load the audit logs.", k_WindowTitle,
+                    MB_ICONERROR | MB_OK);
+    }
+    for (i = 0; i < count; i++)
+    {
+        free(paths[i]);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Voter Roster loading (worker thread behind a modal progress dialog)        */
 /* -------------------------------------------------------------------------- */
 
@@ -20638,6 +22127,7 @@ static HMENU App_CreateRosterMenu(void)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_CVR, L"Load Cast &Vote Records…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_ROSTER, L"Load Voter &Roster…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_RESULTS, L"Load Election Re&sults…");
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_AUDIT, L"Load &Audit Logs…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_VOTER_LIST, L"&Close Voter Roster");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_VOTERS, L"&Export Voter Roster…");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
@@ -21913,6 +23403,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         rsc.hIcon = wc.hIcon;
         rsc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&rsc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW asc;
+        ZeroMemory(&asc, sizeof(asc));
+        asc.cbSize = sizeof(asc);
+        asc.lpfnWndProc = AuditWndProc;
+        asc.hInstance = hInstance;
+        asc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        asc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        asc.lpszClassName = k_AuditClassName;
+        asc.hIcon = wc.hIcon;
+        asc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&asc) == 0)
         {
             return 1;
         }

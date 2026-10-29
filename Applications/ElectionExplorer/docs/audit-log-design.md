@@ -424,6 +424,36 @@ x64 and ARM64 build with no warnings. An AddressSanitizer probe run over 23 PDFs
   - Dallas P24's Election Day batches are named by location ("Our Redeemer Lutheran Church") and
     read as vote type Other.
 
+### Step 4 — the Audit Log window (done 2026-10-29)
+
+`main.c`, section "Audit Log window (1.6)"; IDs in `resource.h`. Release x64 and ARM64 build with
+no warnings.
+
+- **Loading:** File → Load Audit Logs… in the voter list, roster, CVR, results and audit windows.
+  `EeAudit_LoadFiles` runs on a worker thread behind a progress dialog with Cancel (up to 256
+  files). Each election opens its own window. A file that is not an Electionware audit events
+  report is refused by name (checked with a Parker Hart report).
+- **Events view:** Timestamp, Log, Event, Module, User Id, Description, Copies ("3 of 5"), newest
+  first; the two logs are interleaved by time.
+  - Events the final copy lacks are drawn in bold red.
+  - View → Log (All / Election / Admin) and View → Copy (All Copies Merged, or one copy as
+    printed; the Log and Copies columns drop out there).
+  - Header click sorts: Timestamp oldest first on the first click (printed order is newest first,
+    and Reset View returns to it); Copies most first; text columns A–Z.
+  - Edit → Copy / Ctrl+C / right-click copies rows as tab-separated text. Edit → Options… sets
+    the zoom. Help: Loading Audit Logs, Views and Options, About.
+- **Status bar, changed from the plan:** the county, election and date moved to the title bar,
+  so the rest fits. Part 1 shows each log's copies, the events shown of the total, the election
+  session's EMS ballots, and "final Election log copy lacks N events (M outside its date range)".
+  Part 2 shows the focused event's first copy, file and page.
+- The Log column is also hidden when only one log is loaded.
+- **Checked in the app (driven through UI Automation, with screenshots):**
+  - Travis GR25 (6 files): 5,036 events, EMS ballots 7,212.
+  - Travis G25 + GR25 (12 files) open two windows.
+  - Dallas G24 "before EV" + the start-dated "After EV" copy: "lacks 38,920 events (38,920
+    outside its date range)", in red when sorted oldest first.
+- **Not in step 4:** Filter, Reports, Compare and Export menus (steps 5–9).
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**

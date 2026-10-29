@@ -83,6 +83,18 @@
 #define IDM_RESCMP_DIFFONLY     40119
 #define IDM_FILE_EXPORT_RESULTS 40120
 #define IDM_RES_VIEW_RESET      40121
+/* Audit Log window (1.6). */
+#define IDM_FILE_OPEN_AUDIT     40130
+#define IDM_FILE_CLOSE_AUDIT    40131
+#define IDM_AUD_OPTIONS         40132
+#define IDM_AUD_VIEW_RESET      40133
+#define IDM_AUD_LOG_ALL         40134
+#define IDM_AUD_LOG_ELECTION    40135
+#define IDM_AUD_LOG_ADMIN       40136
+#define IDM_AUD_COPY_MERGED     40137
+/* View -> Copy: one item per copy, IDM_AUD_COPY_FIRST + log * EE_AUDIT_MAX_COPIES + copy
+ * (two logs of up to 64 copies: 40200..40327). */
+#define IDM_AUD_COPY_FIRST      40200
 
 /* Election Results options dialog. */
 #define IDC_RES_ZOOM      41600
@@ -92,6 +104,10 @@
 #define IDC_RES_PARTY_DEM 41604
 #define IDC_RES_EXPORT_VIEW   41605
 #define IDC_RES_EXPORT_DETAIL 41606
+
+/* Audit Log options dialog. */
+#define IDC_AUD_ZOOM      41700
+#define IDC_AUD_ZOOM_SPIN 41701
 
 /* Help / About dialog child controls. */
 #define IDC_HELP_TEXT     41200

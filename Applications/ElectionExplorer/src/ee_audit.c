@@ -5,6 +5,7 @@
  */
 
 #include "ee_audit.h"
+#include "csv_sheet.h"
 #include "pdf_reader.h"
 
 #include <math.h>
@@ -1548,11 +1549,12 @@ EeLoadStatus EeAudit_LoadFiles(const wchar_t *const *paths,
     EeAuditCopy *copies;
     AuFilesProgress fp;
     uint32_t i, n = 0;
+    size_t cap = (size_t)count + 1;
     EeLoadStatus st = EeLoadStatus_Ok;
 
     *out = NULL;
     *out_count = 0;
-    copies = (EeAuditCopy *)calloc((size_t)count + 1, sizeof(EeAuditCopy));
+    copies = (EeAuditCopy *)calloc(cap, sizeof(EeAuditCopy));
     if (copies == NULL)
     {
         au_set_err(err, errcch, L"Out of memory.%s", L"");
@@ -1568,11 +1570,40 @@ EeLoadStatus EeAudit_LoadFiles(const wchar_t *const *paths,
     for (i = 0; i < count && st == EeLoadStatus_Ok; i++)
     {
         fp.size = au_file_size(paths[i]);
-        st = EeAudit_LoadCopy(paths[i], &copies[n], cancel_flag, progress_fn != NULL ? au_files_progress : NULL, &fp,
-                              err, errcch);
-        if (st == EeLoadStatus_Ok)
+        if (EeAudit_IsExportPath(paths[i]))
         {
-            n++;
+            /* a reloadable export: its copies join the PDFs' */
+            EeAuditCopy *more = NULL;
+            uint32_t nmore = 0, k;
+            st = EeAudit_LoadExport(paths[i], &more, &nmore, cancel_flag,
+                                    progress_fn != NULL ? au_files_progress : NULL, &fp, err, errcch);
+            if (st == EeLoadStatus_Ok &&
+                !au_grow((void **)&copies, &cap, (size_t)n + nmore + (count - i), sizeof(EeAuditCopy)))
+            {
+                au_set_err(err, errcch, L"Out of memory.%s", L"");
+                st = EeLoadStatus_Error;
+            }
+            for (k = 0; k < nmore; k++)
+            {
+                if (st == EeLoadStatus_Ok)
+                {
+                    copies[n++] = more[k];
+                }
+                else
+                {
+                    EeAudit_FreeCopy(&more[k]);
+                }
+            }
+            free(more);
+        }
+        else
+        {
+            st = EeAudit_LoadCopy(paths[i], &copies[n], cancel_flag, progress_fn != NULL ? au_files_progress : NULL,
+                                  &fp, err, errcch);
+            if (st == EeLoadStatus_Ok)
+            {
+                n++;
+            }
         }
         fp.done += fp.size;
     }
@@ -2974,4 +3005,779 @@ oom:
     au_names_free(&mine);
     EeAudit_FreeTimeline(out);
     return FALSE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* The reloadable Events export                                               */
+/* -------------------------------------------------------------------------- */
+
+enum
+{
+    AX_TYPE = 0,
+    AX_TIME,
+    AX_LOG,
+    AX_EVENT,
+    AX_MODULE,
+    AX_USER,
+    AX_DESC,
+    AX_COPIES,
+    AX_FIRST,
+    AX_PAGE,
+    AX_COUNTY,
+    AX_DATE,
+    AX_COUNT
+};
+
+static const char *const k_ax_cols[AX_COUNT] = {"Record Type", "Timestamp",   "Log",        "Event",
+                                                "Module",      "User Id",     "Description", "Copies",
+                                                "First Copy",  "Page",        "County",     "Election Date"};
+
+/* The export being built; ok turns FALSE when memory runs out. */
+typedef struct AuOut
+{
+    char *p;
+    size_t len;
+    size_t cap;
+    BOOL ok;
+} AuOut;
+
+static void ax_put(AuOut *o, const char *s, size_t n)
+{
+    if (!o->ok || n == 0)
+    {
+        return;
+    }
+    if (!au_grow((void **)&o->p, &o->cap, o->len + n + 1, 1))
+    {
+        o->ok = FALSE;
+        return;
+    }
+    memcpy(o->p + o->len, s, n);
+    o->len += n;
+    o->p[o->len] = '\0';
+}
+
+/* One RFC-4180 field: quoted when it holds the delimiter, a quote or a line break. */
+static void ax_field(AuOut *o, const char *s, char delim)
+{
+    const char *q;
+    BOOL quote = FALSE;
+    if (s == NULL)
+    {
+        return;
+    }
+    for (q = s; *q != '\0'; q++)
+    {
+        if (*q == delim || *q == '"' || *q == '\r' || *q == '\n')
+        {
+            quote = TRUE;
+            break;
+        }
+    }
+    if (!quote)
+    {
+        ax_put(o, s, strlen(s));
+        return;
+    }
+    ax_put(o, "\"", 1);
+    for (q = s; *q != '\0'; q++)
+    {
+        ax_put(o, q, 1);
+        if (*q == '"')
+        {
+            ax_put(o, "\"", 1);
+        }
+    }
+    ax_put(o, "\"", 1);
+}
+
+static void ax_record(AuOut *o, const char *const *f, char delim)
+{
+    int k;
+    for (k = 0; k < AX_COUNT; k++)
+    {
+        if (k > 0)
+        {
+            ax_put(o, &delim, 1);
+        }
+        ax_field(o, f[k], delim);
+    }
+    ax_put(o, "\r\n", 2);
+}
+
+/* A path's file name in UTF-8. */
+static void ax_file_name(const wchar_t *path, char *out, size_t cap)
+{
+    const wchar_t *name = L"";
+    out[0] = '\0';
+    if (path != NULL)
+    {
+        const wchar_t *b = wcsrchr(path, L'\\');
+        const wchar_t *f = wcsrchr(path, L'/');
+        name = b != NULL && (f == NULL || b > f) ? b + 1 : (f != NULL ? f + 1 : path);
+    }
+    if (WideCharToMultiByte(CP_UTF8, 0, name, -1, out, (int)cap, NULL, NULL) <= 0)
+    {
+        out[0] = '\0';
+    }
+}
+
+/* The copies of @p mask among @p n: "1-3,5 of 5". */
+static void ax_copies_text(uint64_t mask, uint32_t n, char *out, size_t cap)
+{
+    uint32_t i = 0;
+    size_t len = 0;
+    out[0] = '\0';
+    while (i < n)
+    {
+        uint32_t j = i;
+        if ((mask & ((uint64_t)1 << i)) == 0)
+        {
+            i++;
+            continue;
+        }
+        while (j + 1 < n && (mask & ((uint64_t)1 << (j + 1))) != 0)
+        {
+            j++;
+        }
+        if (len > 0)
+        {
+            StringCchCatA(out, cap, ",");
+            len = strlen(out);
+        }
+        if (j > i)
+        {
+            StringCchPrintfA(out + len, cap - len, "%u-%u", i + 1, j + 1);
+        }
+        else
+        {
+            StringCchPrintfA(out + len, cap - len, "%u", i + 1);
+        }
+        len = strlen(out);
+        i = j + 1;
+    }
+    StringCchPrintfA(out + len, cap - len, " of %u", n);
+}
+
+static void ax_copy_record(AuOut *o, const EeAuditCopy *c, int kind, uint32_t number, uint32_t of, char delim)
+{
+    const char *f[AX_COUNT];
+    char t[48] = "", num[32], name[MAX_PATH * 3], pages[16], date[16] = "";
+    memset((void *)f, 0, sizeof(f));
+    f[AX_TYPE] = "Copy";
+    if (c->printed != 0)
+    {
+        EeAudit_FormatTime(c->printed, t, sizeof(t));
+    }
+    f[AX_TIME] = t;
+    f[AX_LOG] = kind == EE_AUDIT_ADMIN ? "Admin" : "Election";
+    f[AX_DESC] = c->election;
+    StringCchPrintfA(num, sizeof(num), "%u of %u", number, of);
+    f[AX_COPIES] = num;
+    ax_file_name(c->path, name, sizeof(name));
+    f[AX_FIRST] = name;
+    StringCchPrintfA(pages, sizeof(pages), "%u", c->pages);
+    f[AX_PAGE] = pages;
+    f[AX_COUNTY] = c->customer;
+    if (c->election_date != 0)
+    {
+        StringCchPrintfA(date, sizeof(date), "%02d/%02d/%04d", c->election_date / 100 % 100, c->election_date % 100,
+                         c->election_date / 10000);
+    }
+    f[AX_DATE] = date;
+    ax_record(o, f, delim);
+}
+
+static void ax_event_record(AuOut *o, const EeAuditCopy *c, const EeAuditEvent *e, int kind, const char *copies,
+                            const char *first, char delim)
+{
+    const char *f[AX_COUNT];
+    char t[48], page[16] = "";
+    memset((void *)f, 0, sizeof(f));
+    f[AX_TYPE] = "Event";
+    EeAudit_FormatTime(e->ts, t, sizeof(t));
+    f[AX_TIME] = t;
+    f[AX_LOG] = kind == EE_AUDIT_ADMIN ? "Admin" : "Election";
+    f[AX_EVENT] = EeAudit_Str(c, e->level);
+    f[AX_MODULE] = EeAudit_Str(c, e->module);
+    f[AX_USER] = EeAudit_Str(c, e->user);
+    f[AX_DESC] = EeAudit_Desc(c, e);
+    f[AX_COPIES] = copies;
+    f[AX_FIRST] = first;
+    if (e->page > 0)
+    {
+        StringCchPrintfA(page, sizeof(page), "%u", e->page);
+    }
+    f[AX_PAGE] = page;
+    ax_record(o, f, delim);
+}
+
+#define AX_NAME (MAX_PATH * 3)
+
+BOOL EeAudit_FormatExportUtf8(const EeAuditElection *el,
+                              int copy_log,
+                              int copy,
+                              const EeAuditExportRow *rows,
+                              uint32_t nrows,
+                              char delim,
+                              char **out,
+                              size_t *out_len)
+{
+    AuOut o;
+    uint32_t i, k;
+
+    *out = NULL;
+    *out_len = 0;
+    memset(&o, 0, sizeof(o));
+    o.ok = TRUE;
+    for (k = 0; k < AX_COUNT; k++)
+    {
+        if (k > 0)
+        {
+            ax_put(&o, &delim, 1);
+        }
+        ax_field(&o, k_ax_cols[k], delim);
+    }
+    ax_put(&o, "\r\n", 2);
+    if (copy >= 0)
+    {
+        const EeAuditLog *log = &el->logs[copy_log != 0 ? 1 : 0];
+        const EeAuditCopy *c;
+        char name[AX_NAME];
+        if ((uint32_t)copy >= log->ncopies)
+        {
+            free(o.p);
+            return FALSE;
+        }
+        c = &log->copies[copy];
+        ax_copy_record(&o, c, log->kind, 1, 1, delim);
+        ax_file_name(c->path, name, sizeof(name));
+        for (i = 0; i < nrows && o.ok; i++)
+        {
+            if (rows[i].index < c->nevents)
+            {
+                ax_event_record(&o, c, &c->events[rows[i].index], log->kind, "1 of 1", name, delim);
+            }
+        }
+    }
+    else
+    {
+        BOOL used[2] = {FALSE, FALSE};
+        int li;
+        char *names = (char *)malloc((size_t)2 * EE_AUDIT_MAX_COPIES * AX_NAME); /* each copy's file name */
+        if (names == NULL)
+        {
+            free(o.p);
+            return FALSE;
+        }
+        for (i = 0; i < nrows; i++)
+        {
+            if (rows[i].log < 2)
+            {
+                used[rows[i].log] = TRUE;
+            }
+        }
+        for (li = 0; li < 2; li++)
+        {
+            const EeAuditLog *log = &el->logs[li];
+            for (k = 0; used[li] && k < log->ncopies && k < EE_AUDIT_MAX_COPIES; k++)
+            {
+                ax_copy_record(&o, &log->copies[k], log->kind, k + 1, log->ncopies, delim);
+                ax_file_name(log->copies[k].path, names + ((size_t)li * EE_AUDIT_MAX_COPIES + k) * AX_NAME, AX_NAME);
+            }
+        }
+        for (i = 0; i < nrows && o.ok; i++)
+        {
+            const EeAuditLog *log;
+            const EeAuditMerged *m;
+            const EeAuditCopy *c;
+            const EeAuditEvent *e;
+            char cp[256];
+            if (rows[i].log >= 2 || rows[i].index >= el->logs[rows[i].log].nevents)
+            {
+                continue;
+            }
+            log = &el->logs[rows[i].log];
+            m = &log->events[rows[i].index];
+            e = EeAudit_MergedEvent(log, rows[i].index, &c);
+            ax_copies_text(m->copies, log->ncopies, cp, sizeof(cp));
+            ax_event_record(&o, c, e, log->kind, cp,
+                            names + ((size_t)rows[i].log * EE_AUDIT_MAX_COPIES + m->copy) * AX_NAME, delim);
+        }
+        free(names);
+    }
+    if (!o.ok)
+    {
+        free(o.p);
+        return FALSE;
+    }
+    *out = o.p;
+    *out_len = o.len;
+    return TRUE;
+}
+
+BOOL EeAudit_IsExportPath(const wchar_t *path)
+{
+    const wchar_t *dot = path != NULL ? wcsrchr(path, L'.') : NULL;
+    return dot != NULL && (_wcsicmp(dot, L".csv") == 0 || _wcsicmp(dot, L".tsv") == 0 || _wcsicmp(dot, L".txt") == 0);
+}
+
+/* An export being read back. */
+typedef struct AuReload
+{
+    int col[AX_COUNT]; /* each column's cell, -1 when missing */
+    BOOL have_header;
+    uint32_t ncopies[2];
+    EeAuditCopy *copies[2];
+    uint64_t described[2]; /* bit k: copy k's Copy record was read */
+    uint64_t record;       /* records read, for messages */
+    wchar_t msg[300];      /* what went wrong (without the file name) */
+} AuReload;
+
+static const char *ax_cell(const AuReload *rl, const char *const *cells, uint32_t ncells, int k)
+{
+    int i = rl->col[k];
+    return i >= 0 && (uint32_t)i < ncells && cells[i] != NULL ? cells[i] : "";
+}
+
+static BOOL ax_uint(const char **pp, uint32_t *out)
+{
+    const char *p = *pp;
+    uint32_t v = 0;
+    int d = 0;
+    while (*p >= '0' && *p <= '9' && d < 9)
+    {
+        v = v * 10 + (uint32_t)(*p - '0');
+        p++;
+        d++;
+    }
+    if (d == 0)
+    {
+        return FALSE;
+    }
+    *pp = p;
+    *out = v;
+    return TRUE;
+}
+
+/* "1-3,5 of 5" -> mask 0x17 of 5. */
+static BOOL ax_parse_copies(const char *s, uint64_t *mask, uint32_t *of)
+{
+    const char *p = s;
+    uint64_t m = 0;
+    uint32_t n, k;
+    while (*p == ' ')
+    {
+        p++;
+    }
+    for (;;)
+    {
+        uint32_t a, b;
+        if (!ax_uint(&p, &a))
+        {
+            return FALSE;
+        }
+        b = a;
+        if (*p == '-')
+        {
+            p++;
+            if (!ax_uint(&p, &b))
+            {
+                return FALSE;
+            }
+        }
+        if (a < 1 || b < a || b > EE_AUDIT_MAX_COPIES)
+        {
+            return FALSE;
+        }
+        for (k = a; k <= b; k++)
+        {
+            m |= (uint64_t)1 << (k - 1);
+        }
+        if (*p != ',')
+        {
+            break;
+        }
+        p++;
+        while (*p == ' ')
+        {
+            p++;
+        }
+    }
+    if (strncmp(p, " of ", 4) != 0)
+    {
+        return FALSE;
+    }
+    p += 4;
+    if (!ax_uint(&p, &n))
+    {
+        return FALSE;
+    }
+    while (*p == ' ')
+    {
+        p++;
+    }
+    if (*p != '\0' || n < 1 || n > EE_AUDIT_MAX_COPIES || (n < 64 && (m >> n) != 0))
+    {
+        return FALSE;
+    }
+    *mask = m;
+    *of = n;
+    return TRUE;
+}
+
+/* "11/05/2024 09:25:36PM", "11/5/2024 21:25" or "11/05/2024" (midnight). */
+static BOOL ax_parse_time(const char *s, int64_t *out, int *yyyymmdd)
+{
+    uint32_t v[6] = {0, 0, 0, 0, 0, 0};
+    const char *p = s;
+    int k;
+    while (*p == ' ')
+    {
+        p++;
+    }
+    for (k = 0; k < 3; k++)
+    {
+        if (!ax_uint(&p, &v[k]))
+        {
+            return FALSE;
+        }
+        if (k < 2)
+        {
+            if (*p != '/')
+            {
+                return FALSE;
+            }
+            p++;
+        }
+    }
+    while (*p == ' ')
+    {
+        p++;
+    }
+    if (*p >= '0' && *p <= '9')
+    {
+        for (k = 3; k < 6; k++)
+        {
+            if (!ax_uint(&p, &v[k]))
+            {
+                return FALSE;
+            }
+            if (*p != ':' || k == 5)
+            {
+                break;
+            }
+            p++;
+        }
+        while (*p == ' ')
+        {
+            p++;
+        }
+        if ((p[0] == 'A' || p[0] == 'a' || p[0] == 'P' || p[0] == 'p') && (p[1] == 'M' || p[1] == 'm'))
+        {
+            if (v[3] < 1 || v[3] > 12)
+            {
+                return FALSE;
+            }
+            v[3] = v[3] % 12 + ((p[0] == 'P' || p[0] == 'p') ? 12 : 0);
+            p += 2;
+        }
+    }
+    while (*p == ' ')
+    {
+        p++;
+    }
+    if (*p != '\0' || v[0] < 1 || v[0] > 12 || v[1] < 1 || v[1] > 31 || v[2] < 1900 || v[2] > 2200 || v[3] > 23 ||
+        v[4] > 59 || v[5] > 59)
+    {
+        return FALSE;
+    }
+    if (out != NULL)
+    {
+        *out = EeAudit_MakeTime((int)v[2], (int)v[0], (int)v[1], (int)v[3], (int)v[4], (int)v[5]);
+    }
+    if (yyyymmdd != NULL)
+    {
+        *yyyymmdd = (int)(v[2] * 10000 + v[0] * 100 + v[1]);
+    }
+    return TRUE;
+}
+
+/* Room for log @p li's @p of copies (the first record naming the log sets their number). */
+static BOOL ax_log_copies(AuReload *rl, int li, uint32_t of)
+{
+    uint32_t k;
+    if (rl->ncopies[li] == of)
+    {
+        return TRUE;
+    }
+    if (rl->ncopies[li] != 0)
+    {
+        StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu gives the %s log %u copies, not %u.",
+                         (unsigned long long)rl->record, li == 1 ? L"Admin" : L"Election", of, rl->ncopies[li]);
+        return FALSE;
+    }
+    rl->copies[li] = (EeAuditCopy *)calloc(of, sizeof(EeAuditCopy));
+    if (rl->copies[li] == NULL)
+    {
+        StringCchCopyW(rl->msg, ARRAYSIZE(rl->msg), L"out of memory.");
+        return FALSE;
+    }
+    rl->ncopies[li] = of;
+    for (k = 0; k < of; k++)
+    {
+        rl->copies[li][k].kind = li == 1 ? EE_AUDIT_ADMIN : EE_AUDIT_ELECTION;
+    }
+    return TRUE;
+}
+
+static char *ax_dup(const char *s)
+{
+    return s[0] != '\0' ? au_strdup_n(s, strlen(s)) : NULL;
+}
+
+/* The header: find each column by its title (any order). */
+static BOOL ax_header(AuReload *rl, const char *const *cells, uint32_t ncells)
+{
+    uint32_t i;
+    int k;
+    for (k = 0; k < AX_COUNT; k++)
+    {
+        rl->col[k] = -1;
+        for (i = 0; i < ncells; i++)
+        {
+            if (cells[i] != NULL && _stricmp(cells[i], k_ax_cols[k]) == 0)
+            {
+                rl->col[k] = (int)i;
+                break;
+            }
+        }
+    }
+    if (rl->col[AX_TYPE] < 0)
+    {
+        StringCchCopyW(rl->msg, ARRAYSIZE(rl->msg),
+                       rl->col[AX_TIME] >= 0 && rl->col[AX_DESC] >= 0 && rl->col[AX_COPIES] >= 0
+                           ? L"this is a displayed-view export, which does not keep the copies that hold each "
+                             L"event. Export the Events view again, choosing Reloadable."
+                           : L"this is not an audit log export from Election Explorer (it has no \"Record Type\" "
+                             L"column).");
+        return FALSE;
+    }
+    for (k = 0; k <= AX_COPIES; k++)
+    {
+        if (rl->col[k] < 0)
+        {
+            StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"the \"%S\" column is missing.", k_ax_cols[k]);
+            return FALSE;
+        }
+    }
+    rl->have_header = TRUE;
+    return TRUE;
+}
+
+/* A Copy record: copy k of log li's header fields. */
+static void ax_copy_fields(AuReload *rl, EeAuditCopy *c, const char *const *cells, uint32_t ncells)
+{
+    const char *s;
+    int64_t ts;
+    int date;
+    if (ax_parse_time(ax_cell(rl, cells, ncells, AX_TIME), &ts, NULL))
+    {
+        c->printed = ts;
+    }
+    if (ax_parse_time(ax_cell(rl, cells, ncells, AX_DATE), NULL, &date))
+    {
+        c->election_date = date;
+    }
+    c->election = ax_dup(ax_cell(rl, cells, ncells, AX_DESC));
+    c->customer = ax_dup(ax_cell(rl, cells, ncells, AX_COUNTY));
+    c->pages = (uint32_t)strtoul(ax_cell(rl, cells, ncells, AX_PAGE), NULL, 10);
+    s = ax_cell(rl, cells, ncells, AX_FIRST);
+    if (s[0] != '\0')
+    {
+        int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+        if (n > 0 && (c->path = (wchar_t *)malloc((size_t)n * sizeof(wchar_t))) != NULL)
+        {
+            MultiByteToWideChar(CP_UTF8, 0, s, -1, c->path, n);
+        }
+    }
+}
+
+static BOOL ax_sink(void *ctx, const char *const *cells, uint32_t ncells)
+{
+    AuReload *rl = (AuReload *)ctx;
+    const char *type, *logname;
+    uint64_t mask = 0;
+    uint32_t of = 0, k;
+    int li;
+    rl->record++;
+    if (!rl->have_header)
+    {
+        return ax_header(rl, cells, ncells);
+    }
+    type = ax_cell(rl, cells, ncells, AX_TYPE);
+    if (type[0] == '\0' && ncells <= 1)
+    {
+        return TRUE; /* a blank line */
+    }
+    logname = ax_cell(rl, cells, ncells, AX_LOG);
+    if (_stricmp(logname, "Election") == 0)
+    {
+        li = 0;
+    }
+    else if (_stricmp(logname, "Admin") == 0)
+    {
+        li = 1;
+    }
+    else
+    {
+        StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu: the Log is neither Election nor Admin.",
+                         (unsigned long long)rl->record);
+        return FALSE;
+    }
+    if (!ax_parse_copies(ax_cell(rl, cells, ncells, AX_COPIES), &mask, &of))
+    {
+        StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu: Copies does not list the copies (\"1-3,5 of 5\").",
+                         (unsigned long long)rl->record);
+        return FALSE;
+    }
+    if (!ax_log_copies(rl, li, of))
+    {
+        return FALSE;
+    }
+    if (_stricmp(type, "Copy") == 0)
+    {
+        for (k = 0; k + 1 < of && (mask & ((uint64_t)1 << k)) == 0; k++)
+        {
+        }
+        if (mask != (uint64_t)1 << k || (rl->described[li] & mask) != 0)
+        {
+            StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu: a Copy record must name one copy, once.",
+                             (unsigned long long)rl->record);
+            return FALSE;
+        }
+        rl->described[li] |= mask;
+        ax_copy_fields(rl, &rl->copies[li][k], cells, ncells);
+        return TRUE;
+    }
+    if (_stricmp(type, "Event") == 0)
+    {
+        int64_t ts;
+        uint32_t page = (uint32_t)strtoul(ax_cell(rl, cells, ncells, AX_PAGE), NULL, 10);
+        BOOL first = TRUE;
+        if (!ax_parse_time(ax_cell(rl, cells, ncells, AX_TIME), &ts, NULL))
+        {
+            StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu: the Timestamp is not a date and time.",
+                             (unsigned long long)rl->record);
+            return FALSE;
+        }
+        for (k = 0; k < of; k++)
+        {
+            if ((mask & ((uint64_t)1 << k)) == 0)
+            {
+                continue;
+            }
+            /* the page is the first holder's: the copy whose strings the merge keeps */
+            if (!EeAudit_AddEvent(&rl->copies[li][k], ts, ax_cell(rl, cells, ncells, AX_EVENT),
+                                  ax_cell(rl, cells, ncells, AX_DESC), ax_cell(rl, cells, ncells, AX_USER),
+                                  ax_cell(rl, cells, ncells, AX_MODULE), first ? page : 0))
+            {
+                StringCchCopyW(rl->msg, ARRAYSIZE(rl->msg), L"out of memory.");
+                return FALSE;
+            }
+            first = FALSE;
+        }
+        return TRUE;
+    }
+    StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu: the Record Type is neither Copy nor Event.",
+                     (unsigned long long)rl->record);
+    return FALSE;
+}
+
+EeLoadStatus EeAudit_LoadExport(const wchar_t *path,
+                                EeAuditCopy **out,
+                                uint32_t *out_count,
+                                volatile LONG *cancel_flag,
+                                EeLoadProgressFn progress_fn,
+                                void *progress_user,
+                                wchar_t *err,
+                                size_t errcch)
+{
+    AuReload rl;
+    wchar_t csv_err[256];
+    EeLoadStatus st;
+    EeAuditCopy *arr = NULL;
+    uint32_t li, k, n = 0;
+
+    *out = NULL;
+    *out_count = 0;
+    memset(&rl, 0, sizeof(rl));
+    csv_err[0] = L'\0';
+    st = EeCsv_ReadSheet(path, ax_sink, &rl, cancel_flag, progress_fn, progress_user, csv_err, ARRAYSIZE(csv_err));
+    if (st == EeLoadStatus_Ok && rl.ncopies[0] == 0 && rl.ncopies[1] == 0)
+    {
+        StringCchCopyW(rl.msg, ARRAYSIZE(rl.msg), rl.have_header ? L"the export holds no copies." : L"the file is empty.");
+        st = EeLoadStatus_Error;
+    }
+    for (li = 0; li < 2 && st == EeLoadStatus_Ok; li++)
+    {
+        for (k = 0; k < rl.ncopies[li]; k++)
+        {
+            if ((rl.described[li] & ((uint64_t)1 << k)) == 0)
+            {
+                StringCchPrintfW(rl.msg, ARRAYSIZE(rl.msg), L"there is no Copy record for copy %u of %u of the %s log.",
+                                 k + 1, rl.ncopies[li], li == 1 ? L"Admin" : L"Election");
+                st = EeLoadStatus_Error;
+                break;
+            }
+        }
+    }
+    if (st == EeLoadStatus_Ok)
+    {
+        arr = (EeAuditCopy *)calloc((size_t)rl.ncopies[0] + rl.ncopies[1] + 1, sizeof(EeAuditCopy));
+        if (arr == NULL)
+        {
+            StringCchCopyW(rl.msg, ARRAYSIZE(rl.msg), L"out of memory.");
+            st = EeLoadStatus_Error;
+        }
+    }
+    for (li = 0; li < 2; li++)
+    {
+        for (k = 0; k < rl.ncopies[li]; k++)
+        {
+            if (arr != NULL)
+            {
+                arr[n++] = rl.copies[li][k];
+            }
+            else
+            {
+                EeAudit_FreeCopy(&rl.copies[li][k]);
+            }
+        }
+        free(rl.copies[li]);
+    }
+    if (st != EeLoadStatus_Ok)
+    {
+        if (st == EeLoadStatus_Error && err != NULL && errcch > 0)
+        {
+            const wchar_t *name = wcsrchr(path, L'\\');
+            name = name != NULL ? name + 1 : path;
+            if (rl.msg[0] != L'\0')
+            {
+                StringCchPrintfW(err, errcch, L"%s: %s", name, rl.msg);
+            }
+            else if (csv_err[0] != L'\0')
+            {
+                StringCchPrintfW(err, errcch, L"%s: %s", name, csv_err);
+            }
+            else
+            {
+                StringCchPrintfW(err, errcch, L"Could not read %s.", name);
+            }
+        }
+        return st;
+    }
+    *out = arr;
+    *out_count = n;
+    return EeLoadStatus_Ok;
 }

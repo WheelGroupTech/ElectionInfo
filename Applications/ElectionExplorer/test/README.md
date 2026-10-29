@@ -136,6 +136,11 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
   reload notice, sheet load errors
   (three, two sheet IDs), a batch ID loaded again (replacing the first), and an L&A test after
   counting: three sessions, the middle one the election's, 1,394 ballots by vote type.
+`auditexp` covers the reloadable Events export (`EeAudit_FormatExportUtf8`, reloaded through
+`EeAudit_LoadFiles`): three Election copies and one Admin copy merged, exported and reloaded with
+the same merged events, copy masks, pages and checks. It also checks the quoting of a description
+holding quotes, a comma and a line break, the copies lists ("1-3 of 3", "\"1,3 of 3\"",
+"2-3 of 3"), a one-copy TSV export, and that a displayed-view export is refused, saying so.
 `auditnote` covers notable events and the L&A timeline (`EeAudit_Notable`, `EeAudit_Timeline`):
 - every category once. A results report saved the day before Election Day with ballots loaded is
   the red flag; one with only a test deck, or only a manual-entry batch of 0 ballots, is testing;

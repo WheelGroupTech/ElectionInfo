@@ -13259,6 +13259,188 @@ done:
     return rc;
 }
 
+/* Write @p len bytes to @p path with a UTF-8 BOM. */
+static BOOL aud_write_file(const wchar_t *path, const char *data, size_t len)
+{
+    FILE *f = NULL;
+    BOOL ok;
+    if (_wfopen_s(&f, path, L"wb") != 0 || f == NULL)
+    {
+        return FALSE;
+    }
+    ok = fwrite("\xEF\xBB\xBF", 1, 3, f) == 3 && fwrite(data, 1, len, f) == len;
+    fclose(f);
+    return ok;
+}
+
+/* TRUE when two elections' logs hold the same merged events, copies and checks. */
+static BOOL aud_same_logs(const EeAuditElection *a, const EeAuditElection *b)
+{
+    int li;
+    for (li = 0; li < 2; li++)
+    {
+        const EeAuditLog *x = &a->logs[li], *y = &b->logs[li];
+        uint32_t i;
+        if (x->ncopies != y->ncopies || x->nevents != y->nevents ||
+            (x->ncopies > 0 && memcmp(x->checks, y->checks, x->ncopies * sizeof(EeAuditCopyCheck)) != 0))
+        {
+            return FALSE;
+        }
+        for (i = 0; i < x->ncopies; i++)
+        {
+            if (x->copies[i].printed != y->copies[i].printed || x->copies[i].election_date != y->copies[i].election_date ||
+                strcmp(x->copies[i].customer, y->copies[i].customer) != 0 ||
+                strcmp(x->copies[i].election, y->copies[i].election) != 0 ||
+                wcscmp(wcsrchr(x->copies[i].path, L'\\') + 1, y->copies[i].path) != 0) /* the file name is kept */
+            {
+                return FALSE;
+            }
+        }
+        for (i = 0; i < x->nevents; i++)
+        {
+            const EeAuditCopy *cx, *cy;
+            const EeAuditEvent *ex = EeAudit_MergedEvent(x, i, &cx), *ey = EeAudit_MergedEvent(y, i, &cy);
+            if (ex->ts != ey->ts || ex->page != ey->page || x->events[i].copies != y->events[i].copies ||
+                x->events[i].copy != y->events[i].copy || strcmp(EeAudit_Desc(cx, ex), EeAudit_Desc(cy, ey)) != 0 ||
+                strcmp(EeAudit_Str(cx, ex->level), EeAudit_Str(cy, ey->level)) != 0)
+            {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
+/* The reloadable Events export (tag: auditexp): merged and one-copy exports load back the
+ * same; quoting; the copies list; a displayed-view export is refused. */
+static int test_audit_export(void)
+{
+    static const AudRow k_a[] = {{30, "Info", "Saved \"Canvass, Final\" to C:\\Reports."},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {10, "Info", "e1 Home module activated."}};
+    static const AudRow k_b[] = {{50, "Info", "e5 Results successfully cleared"},
+                                 {40, "Warning", "e4 There are pending  changes.\nDo you want to save?"},
+                                 {30, "Info", "Saved \"Canvass, Final\" to C:\\Reports."},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {20, "Info", "e2 Election Opened: G24"}};
+    static const AudRow k_c[] = {{60, "Info", "e6 Election Closed: G24"},
+                                 {50, "Info", "e5 Results successfully cleared"},
+                                 {30, "Info", "Saved \"Canvass, Final\" to C:\\Reports."},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {20, "Info", "e2 Election Opened: G24"},
+                                 {10, "Info", "e1 Home module activated."}};
+    static const AudRow k_admin[] = {{5, "Info", "LeverE logged in."}};
+    static const char k_view[] = "Timestamp,Log,Event,Module,User Id,Description,Copies\r\n"
+                                 "11/05/2024 08:00:05AM,Admin,Info,Reporting,LeverE,LeverE logged in.,1 of 1\r\n";
+    EeAuditCopy copies[4];
+    EeAuditElection *els = NULL, *back = NULL;
+    uint32_t nels = 0, nback = 0, i, n = 0;
+    EeAuditExportRow rows[16];
+    char *buf = NULL;
+    size_t len = 0;
+    wchar_t dir[MAX_PATH], path[MAX_PATH], err[512];
+    const wchar_t *paths[1];
+    int li, rc = 1;
+
+    memset(copies, 0, sizeof(copies));
+    GetTempPathW(ARRAYSIZE(dir), dir);
+    StringCchPrintfW(path, ARRAYSIZE(path), L"%sEeAuditExp_%lu.csv", dir, GetCurrentProcessId());
+    paths[0] = path;
+    if (!aud_copy(&copies[0], EE_AUDIT_ELECTION, "Travis County", 20241105, 20, k_c, ARRAYSIZE(k_c)) ||
+        !aud_copy(&copies[1], EE_AUDIT_ELECTION, "Travis County", 20241105, 9, k_a, ARRAYSIZE(k_a)) ||
+        !aud_copy(&copies[2], EE_AUDIT_ELECTION, "Travis County", 20241105, 12, k_b, ARRAYSIZE(k_b)) ||
+        !aud_copy(&copies[3], EE_AUDIT_ADMIN, "Travis County", 20241105, 9, k_admin, ARRAYSIZE(k_admin)))
+    {
+        wprintf(L"auditexp: setup\n");
+        goto done;
+    }
+    copies[0].path = _wcsdup(L"C:\\logs\\G24_Election Final.pdf");
+    copies[1].path = _wcsdup(L"C:\\logs\\G24_Election 1.pdf");
+    copies[2].path = _wcsdup(L"C:\\logs\\G24_Election 2.pdf");
+    copies[3].path = _wcsdup(L"C:\\logs\\G24_Admin.pdf");
+    if (!EeAudit_GroupCopies(copies, 4, &els, &nels) || nels != 1)
+    {
+        wprintf(L"auditexp: grouping\n");
+        goto done;
+    }
+    for (li = 0; li < 2; li++)
+    {
+        for (i = 0; i < els[0].logs[li].nevents && n < ARRAYSIZE(rows); i++)
+        {
+            rows[n].log = (uint32_t)li;
+            rows[n].index = i;
+            n++;
+        }
+    }
+    /* merged: both logs */
+    if (!EeAudit_FormatExportUtf8(&els[0], 0, -1, rows, n, ',', &buf, &len) || !aud_write_file(path, buf, len))
+    {
+        wprintf(L"auditexp: export\n");
+        goto done;
+    }
+    if (strstr(buf, "\"Saved \"\"Canvass, Final\"\" to C:\\Reports.\",1-3 of 3,G24_Election 1.pdf,1") == NULL ||
+        strstr(buf, "Copy,11/13/2024 09:00:00AM,Election,,,,November 5, 2024 Joint") != NULL ||
+        strstr(buf, "Copy,11/13/2024 09:00:00AM,Election,,,,\"November 5, 2024 Joint\",1 of 3,G24_Election 1.pdf,0,"
+                    "Travis County,11/05/2024") == NULL ||
+        strstr(buf, "\"e4 There are pending  changes.\nDo you want to save?\",2 of 3,") == NULL ||
+        strstr(buf, ",\"1,3 of 3\",") == NULL || strstr(buf, ",2-3 of 3,") == NULL)
+    {
+        printf("auditexp: export text\n%s\n", buf);
+        goto done;
+    }
+    if (EeAudit_LoadFiles(paths, 1, &back, &nback, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        nback != 1 || !aud_same_logs(&els[0], &back[0]))
+    {
+        wprintf(L"auditexp: merged round trip (%s)\n", err);
+        goto done;
+    }
+    EeAudit_FreeElections(back, nback);
+    back = NULL;
+    free(buf);
+    buf = NULL;
+    /* one copy as printed, as TSV */
+    for (i = 0; i < els[0].logs[0].copies[1].nevents; i++)
+    {
+        rows[i].log = 0;
+        rows[i].index = i;
+    }
+    StringCchPrintfW(path, ARRAYSIZE(path), L"%sEeAuditExp_%lu.tsv", dir, GetCurrentProcessId());
+    if (!EeAudit_FormatExportUtf8(&els[0], 0, 1, rows, els[0].logs[0].copies[1].nevents, '\t', &buf, &len) ||
+        !aud_write_file(path, buf, len) ||
+        EeAudit_LoadFiles(paths, 1, &back, &nback, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        nback != 1 || back[0].logs[0].ncopies != 1 || back[0].logs[1].ncopies != 0 ||
+        back[0].logs[0].nevents != els[0].logs[0].copies[1].nevents ||
+        strcmp(EeAudit_Desc(&back[0].logs[0].copies[0], &back[0].logs[0].copies[0].events[0]),
+               EeAudit_Desc(&els[0].logs[0].copies[1], &els[0].logs[0].copies[1].events[0])) != 0)
+    {
+        wprintf(L"auditexp: one-copy round trip (%s)\n", err);
+        goto done;
+    }
+    DeleteFileW(path);
+    /* a displayed-view export is refused, saying so */
+    StringCchPrintfW(path, ARRAYSIZE(path), L"%sEeAuditExp_%lu.csv", dir, GetCurrentProcessId());
+    err[0] = L'\0';
+    if (!aud_write_file(path, k_view, sizeof(k_view) - 1) ||
+        EeAudit_LoadFiles(paths, 1, &back, &nback, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Error ||
+        wcsstr(err, L"displayed-view") == NULL)
+    {
+        wprintf(L"auditexp: displayed view not refused (%s)\n", err);
+        goto done;
+    }
+    rc = 0;
+done:
+    DeleteFileW(path);
+    free(buf);
+    if (back != NULL)
+    {
+        EeAudit_FreeElections(back, nback);
+    }
+    EeAudit_FreeElections(els, nels);
+    wprintf(L"auditexp: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -13344,5 +13526,6 @@ int wmain(void)
     failed |= test_audit_merge();
     failed |= test_audit_accounting();
     failed |= test_audit_notable();
+    failed |= test_audit_export();
     return failed == 0 ? 0 : 1;
 }

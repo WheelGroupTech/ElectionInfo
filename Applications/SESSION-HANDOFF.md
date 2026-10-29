@@ -5,8 +5,8 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: 1.6 audit log step 8: Ballot Reconciliation (`EeCvr_CardCounts`
-in `ee_cvr.{c,h}`, Compare menus and the report in `main.c`, smoke test, design doc; see Next steps).
+Microsoft Store**. Uncommitted: 1.6 audit log step 9: Export and the reloadable Events export
+(`ee_audit.{c,h}`, `main.c`, `resource.h`, smoke test `auditexp`, design doc; see Next steps).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -104,8 +104,8 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–8 (window, batches,
-  reports, filter, timeline / notable / users, ballot reconciliation) done 2026-10-29:**
+- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–9 (window, batches,
+  reports, filter, timeline / notable / users, ballot reconciliation, export) done 2026-10-29:**
   `ElectionExplorer/docs/audit-log-design.md` ("Implementation status"). Implementation was started
   on the proposed decisions D1–D10.
   - **Data:** Electionware Election/Admin audit event PDFs in `Audit_Logs/` (gitignored): Travis,
@@ -143,14 +143,20 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     - Legal citations are to be confirmed by the user.
     - The PR26 timeline equals the design-doc trace.
     - Another election's history (a different dated name in "Election Opened:") is not checked.
-  - **Step 8 (done 2026-10-29, uncommitted):** Compare → Check Ballot Counts with … in the audit,
+  - **Step 9 (done 2026-10-29, uncommitted):** File → Export… (Events: Displayed view or Reloadable;
+    Batches: plus Session), Export Selected…, and report windows' Export Selected / All….
+    - The reloadable file ("Record Type" Copy / Event records, copies as "1-3,5 of 5") loads back
+      through File → Load Audit Logs….
+    - Round trip exact for all 12 Travis and Dallas elections (scratchpad `exp/roundtrip.exe`).
+      Dallas G24 reloads in 0.2 s instead of 6.2 s.
+  - **Step 8 (done 2026-10-29):** Compare → Check Ballot Counts with … in the audit,
     CVR and results windows opens the Ballot Reconciliation report (EMS vs CVR ballots, or vs
     results ballots cast plus per-vote-type lower bounds).
     - `EeCvr_CardCounts` counts a multi-card CVR's first cards, so Results ↔ CVR compare now
       gives ballots for those CVRs too.
     - Dallas G24: 873,455 rows → 858,562 ballots.
     - EMS = CVR = results for Dallas G24 and Travis G24 / P26 / PR26 / L26 / GR25.
-  - **Next:** step 9, Export (events, batches, reports) and the Events reload round trip.
+  - **Next:** step 10, help topics, version 1.6.0.0, RELEASES.md, STORE-LISTING.txt, README.
     Scratch tools in the desktop session scratchpad: `audit_probe.c` (`-merge` mode), `cards/`
     (card-count probe) and `uia/drive_audit.ps1`, which drives the app through UI Automation and
     saves screenshots. Its `-Then` list takes:
@@ -159,7 +165,11 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     - `rep`, `repclick`/`repdbl<x>:<y>` for report windows;
     - `load;<cmd>;<folder>;<files>;<class>`;
     - `cmp<n>` (the audit window's Compare menu) and `cmpw;<class>;<pos>;<n>` (another window's);
-    - `shot;<class>`.
+    - `shot;<class>`;
+    - `exp;<0|1|b>;<path>` (File → Export…), `repexp;<x>:<y>;<path>` (a report's Export All),
+      `newest`, `wait<s>`.
+    The new-style Save dialog's file name box is found by UIA AutomationId 1001; set it with
+    WM_SETTEXT.
     `uia/recon_travis.ps1` runs the Travis reconciliations.
 - **Bastrop name fix:** committed 2026-10-28 (`fca8719`); candidate for 1.5.1.
 - **Candidates for the next version** (design doc "After step 9" and "Implementation plan" 11):

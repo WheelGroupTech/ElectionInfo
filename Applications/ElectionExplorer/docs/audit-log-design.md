@@ -364,6 +364,7 @@ toward `App_MaybeQuit`, File → Close.
 - UTF-8 CSV (default) or TSV with BOM, like every export, in the current view and filter.
 - Events export columns:
   `Timestamp, Log, Event, Module, User Id, Description, Copies, First Copy, Page`.
+  As built (step 9) the reloadable layout adds `Record Type`, `County` and `Election Date`.
 - Batches export columns:
   `Committed, Batch ID, Poll Place, Media, Vote Type, Ballots, User Id, Status, Session`.
 - Every report window exports its rows (Export Selected / Export All).
@@ -699,6 +700,60 @@ audit report and Compare menus in `main.c`. Release x64 and ARM64 build with no 
 
 - **Possible refinement:** in a joint primary, a vote type's lower bound could add up the parties'
   top contests (DEM U.S. Senator + REP U.S. Senator), since no ballot votes in both.
+
+### Step 9 — Export and the Events reload round trip (done 2026-10-29)
+
+Engine (`ee_audit.{c,h}`, smoke test `auditexp`): `EeAudit_FormatExportUtf8`,
+`EeAudit_LoadExport`, `EeAudit_IsExportPath`; `EeAudit_LoadFiles` takes exports beside PDFs.
+Window: File → Export…, right-click Export Selected… in the audit window, and Export Selected… /
+Export All… in every report window. Release x64 and ARM64 build with no warnings.
+
+- **File → Export…, Events view:** a dialog offers two layouts, as the results window's export
+  does (`ResExportDlgProc` now takes its texts).
+  - **Displayed view:** the columns and rows shown (filter, log, copy, sort). Copies reads
+    "3 of 5".
+  - **Reloadable:** the events the filter shows, always in printed order (newest first, whatever
+    the sort), with these columns:
+    `Record Type, Timestamp, Log, Event, Module, User Id, Description, Copies, First Copy, Page,
+    County, Election Date`.
+    - **"Copy" records** come first, one per copy of each log exported: the print time, the log,
+      the election in its header (Description), "2 of 5", the file name, its pages, the county
+      and the election date.
+    - **"Event" records:** the copies that hold the event ("1-3,5 of 5", quoted, since it holds
+      a comma), the first of them, and its page there.
+    - From a single copy (View → Copy) the file holds that copy alone, "1 of 1".
+- **Ballot Batches view:** File → Export… saves the displayed view plus a last `Session` column.
+- **Report windows:** the rows of the tab shown, in display order. The file is named
+  `<first copy>-<report>-<tab>.csv`.
+- **Reload:** File → Load Audit Logs… accepts `.csv` / `.tsv` beside PDFs.
+  - Columns are found by title, so their order does not matter.
+  - Each copy is built back from the events that list it. The event's page goes to its first
+    holder, the copy whose strings the merge keeps.
+  - The copies are then grouped and merged as if read from the PDFs.
+  - **Refused, with the reason:**
+    - a displayed-view export (it has no Record Type; the message says to export again choosing
+      Reloadable);
+    - a missing Copy record;
+    - a Copies field that lists no copies;
+    - a copy count that differs between records.
+- **Validated (scratchpad `exp/roundtrip.exe`):** load the PDFs, export every merged event of
+  both logs, reload, compare. All 12 Travis and Dallas elections come back with 0 differences:
+  - merged events, their copy masks, first copies and pages;
+  - every copy's check, print time, pages and event count;
+  - the election session's ballots and the session count;
+  - the notable events, red flags included;
+  - the election name and date.
+  - Dallas G24: 103,827 events, 17.0 MB. Reading the PDFs takes 6.2 s; reloading the export
+    takes 0.2 s.
+- **In the app:** Dallas G24 reloadable export (17,033,733 bytes, the probe's plus the BOM),
+  displayed-view export, Batches export (TSV), then a reload into a second window.
+  - The reloaded window shows the same status bar (5 + 5 copies, 103,827 events, 858,562 EMS
+    ballots).
+  - Its Copies Check is the same (38,920 outside the span, 0 missing).
+  - Its Ballot Accounting is the same (alternative readings 906,179 / 857,597).
+  - Travis L26's Notable Events exported from the report window.
+- **Not kept:** a page for copies other than an event's first holder (it reloads as 0). The
+  status bar shows only the first holder's page, so nothing visible changes.
 
 ## Implementation plan (proposed)
 

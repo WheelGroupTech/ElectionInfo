@@ -19342,6 +19342,10 @@ typedef struct ResExportOpt
 {
     AppState *app;
     BOOL detail; /* TRUE = All detail (reloadable) */
+    /* the texts, when not the results window's own (the audit log window's export) */
+    const wchar_t *prompt;
+    const wchar_t *view_text;
+    const wchar_t *detail_text;
 } ResExportOpt;
 
 static INT_PTR CALLBACK ResExportDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -19364,17 +19368,19 @@ static INT_PTR CALLBACK ResExportDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPAR
         btn_w = Scale(app, 84);
         btn_h = Scale(app, 26);
         gap = Scale(app, 8);
-        ctl[n++] = CreateWindowExW(0, L"STATIC", L"Export the election results as:",
+        ctl[n++] = CreateWindowExW(0, L"STATIC", d->prompt != NULL ? d->prompt : L"Export the election results as:",
                                    WS_CHILD | WS_VISIBLE, margin, margin, rc.right - 2 * margin,
                                    Scale(app, 18), dlg, NULL, app->instance, NULL);
         ctl[n++] = CreateWindowExW(0, L"BUTTON",
-                                   L"Displayed view: the rows and columns shown (filter, view, sort)",
+                                   d->view_text != NULL ? d->view_text
+                                                        : L"Displayed view: the rows and columns shown (filter, view, sort)",
                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
                                    margin + Scale(app, 8), margin + Scale(app, 26),
                                    rc.right - 2 * margin, Scale(app, 22), dlg,
                                    (HMENU)(INT_PTR)IDC_RES_EXPORT_VIEW, app->instance, NULL);
         ctl[n++] = CreateWindowExW(0, L"BUTTON",
-                                   L"All detail (reloadable): every precinct and vote type",
+                                   d->detail_text != NULL ? d->detail_text
+                                                          : L"All detail (reloadable): every precinct and vote type",
                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
                                    margin + Scale(app, 8), margin + Scale(app, 52),
                                    rc.right - 2 * margin, Scale(app, 22), dlg,
@@ -19435,6 +19441,7 @@ static void App_ExportResults(ResultsWindow *rw, BOOL selection_only)
     if (!selection_only)
     {
         ResExportOpt opt;
+        ZeroMemory(&opt, sizeof(opt));
         opt.app = rw->app;
         opt.detail = s_detail;
         if (App_RunModalDialogOwned(rw->app, rw->hwnd, L"Export Election Results", ResExportDlgProc,
@@ -20462,6 +20469,10 @@ static void AudRep_Refresh(AudReportWindow *r);
 #define AUD_REP_RECON    5
 #define AUD_REP_COUNT    6
 
+static const wchar_t *const k_AudRepTitles[AUD_REP_COUNT] = {L"Copies Check",         L"Ballot Accounting",
+                                                             L"L&A Testing Timeline", L"Notable Events",
+                                                             L"Users and Workstations", L"Ballot Reconciliation"};
+
 typedef struct AuditWindow
 {
     AppState *app; /* this window's own resource-only AppState */
@@ -20539,6 +20550,8 @@ static const wchar_t k_AudHelpLoading[] =
     L"The final copy of a log should hold every event of the copies printed before it. An "
     L"event the final copy lacks is shown in bold red, and the status bar counts them. A copy "
     L"printed with a start date lacks the earlier events on purpose.\r\n\r\n"
+    L"A reloadable export (File \x2192 Export\x2026, Reloadable) loads back the same way, without "
+    L"the PDFs, and can be selected with them.\r\n\r\n"
     L"Other PDFs, including Hart Verity audit logs and Electionware machine (tabulator) logs, "
     L"are not read; the message names the file. The logs hold county employees' user IDs, "
     L"never voter data.";
@@ -20661,6 +20674,24 @@ static const wchar_t k_AudHelpCompare[] =
     L"Statuses: Match, Differs (red), Lower bound met, Lower bound not met (red), Not reported. The "
     L"report is a snapshot taken when it is opened: open it again after loading other files. Filters "
     L"in the other windows are not applied.";
+
+static const wchar_t k_AudHelpExport[] =
+    L"File \x2192 Export\x2026 saves the list as UTF-8 CSV (or TSV, chosen in the Save dialog). In "
+    L"the Events view choose:\r\n"
+    L"\x2022 Displayed view: the rows and columns shown \x2014 the filter, the log, the copy and the "
+    L"sort.\r\n"
+    L"\x2022 Reloadable: every event the filter shows, in printed order (newest first), with a Record "
+    L"Type column. \"Copy\" records describe each copy (print time, election, file, pages, county and "
+    L"election date); each \"Event\" record lists the copies that hold it (\"1-3,5 of 5\"), the first "
+    L"of them and its page there. File \x2192 Load Audit Logs\x2026 loads the file back without the "
+    L"PDFs, and the merged log, the Copies Check, the ballot accounting and the reports come out as "
+    L"before. A filtered file holds only the events it shows. Keep its rows in order if you edit it "
+    L"in a spreadsheet.\r\n\r\n"
+    L"In the Ballot Batches view, File \x2192 Export\x2026 saves the batches shown, with their session "
+    L"as the last column.\r\n\r\n"
+    L"Right-click \x2192 Export Selected\x2026 saves the selected rows as displayed. In a report "
+    L"window, right-click \x2192 Export Selected\x2026 or Export All\x2026 saves its rows (of the tab "
+    L"shown).";
 
 static BOOL Aud_IsAuditWindow(HWND h)
 {
@@ -21826,6 +21857,129 @@ static void Aud_CopySelected(AuditWindow *aw)
     free(buf);
 }
 
+/* Export the view: the selected rows, or all of them after asking (Events view) for the
+ * displayed view or the reloadable export. The Ballot Batches view adds the session. */
+static void App_ExportAudit(AuditWindow *aw, BOOL selection_only)
+{
+    static BOOL s_reload = FALSE; /* the last layout chosen in this session */
+    wchar_t suggested[300], path[MAX_PATH];
+    char delim = ',';
+    uint32_t *idx = NULL;
+    uint32_t n = aw->nrows, i;
+    BOOL reload = FALSE, batches = aw->view == AUD_VIEW_BATCHES, ok = TRUE;
+    char *buf = NULL;
+    size_t len = 0;
+    HCURSOR old;
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(aw->list, aw->nrows, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    else if (!batches)
+    {
+        ResExportOpt opt;
+        ZeroMemory(&opt, sizeof(opt));
+        opt.app = aw->app;
+        opt.detail = s_reload;
+        opt.prompt = L"Export the events as:";
+        opt.view_text = L"Displayed view: the rows and columns shown (filter, log, copy, sort)";
+        opt.detail_text = L"Reloadable: every column, in printed order (loads back as audit logs)";
+        if (App_RunModalDialogOwned(aw->app, aw->hwnd, L"Export Audit Log", ResExportDlgProc, (LPARAM)&opt) != 1)
+        {
+            return;
+        }
+        s_reload = reload = opt.detail;
+    }
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%s%s", aw->base_name,
+                     selection_only ? L"Selected_" : (aw->filt_active ? L"Filtered_" : L""),
+                     batches ? L"Ballot_Batches" : (reload ? L"Events_Reloadable" : L"Events"));
+    if (!App_PromptExportPath(aw->hwnd, suggested, path, ARRAYSIZE(path), &delim))
+    {
+        free(idx);
+        return;
+    }
+    old = SetCursor(LoadCursorW(NULL, IDC_WAIT));
+    if (reload)
+    {
+        /* in printed order, whatever the sort */
+        AudRow *ord = (AudRow *)malloc(((size_t)n + 1) * sizeof(AudRow));
+        EeAuditExportRow *rows = (EeAuditExportRow *)malloc(((size_t)n + 1) * sizeof(EeAuditExportRow));
+        ok = ord != NULL && rows != NULL;
+        if (ok)
+        {
+            memcpy(ord, aw->rows, (size_t)n * sizeof(AudRow));
+            qsort(ord, n, sizeof(AudRow), Aud_SeqCmp);
+            for (i = 0; i < n; i++)
+            {
+                rows[i].log = ord[i].log;
+                rows[i].index = ord[i].idx;
+            }
+            ok = EeAudit_FormatExportUtf8(aw->el, aw->show_copy_log, aw->show_copy, rows, n, delim, &buf, &len);
+        }
+        free(ord);
+        free(rows);
+    }
+    else
+    {
+        Utf8Export ex;
+        wchar_t cell[4096], session[300];
+        int c;
+        ZeroMemory(&ex, sizeof(ex));
+        session[0] = L'\0';
+        if (batches && aw->session >= 0)
+        {
+            Aud_SessionLabel(aw, (uint32_t)aw->session, session, ARRAYSIZE(session));
+        }
+        for (c = 0; c < aw->ncols && ok; c++)
+        {
+            LVCOLUMNW lc;
+            ZeroMemory(&lc, sizeof(lc));
+            lc.mask = LVCF_TEXT;
+            lc.pszText = cell;
+            lc.cchTextMax = ARRAYSIZE(cell);
+            cell[0] = L'\0';
+            ListView_GetColumn(aw->list, c, &lc);
+            ok = (c == 0 || Utf8Export_AppendChar(&ex, delim)) && Utf8Export_AppendFieldW(&ex, cell, delim);
+        }
+        if (batches && ok)
+        {
+            ok = Utf8Export_AppendChar(&ex, delim) && Utf8Export_AppendFieldW(&ex, L"Session", delim);
+        }
+        ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+        for (i = 0; i < n && ok; i++)
+        {
+            uint32_t ri = idx != NULL ? idx[i] : i;
+            for (c = 0; c < aw->ncols && ok; c++)
+            {
+                Aud_CellText(aw, ri, c, cell, ARRAYSIZE(cell));
+                ok = (c == 0 || Utf8Export_AppendChar(&ex, delim)) && Utf8Export_AppendFieldW(&ex, cell, delim);
+            }
+            if (batches && ok)
+            {
+                ok = Utf8Export_AppendChar(&ex, delim) && Utf8Export_AppendFieldW(&ex, session, delim);
+            }
+            ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
+        }
+        buf = ex.data;
+        len = ex.len;
+    }
+    SetCursor(old);
+    if (!ok)
+    {
+        MessageBoxW(aw->hwnd, L"Out of memory building the export.", L"Export", MB_ICONERROR | MB_OK);
+    }
+    else
+    {
+        App_WriteExportUtf8(aw->hwnd, path, buf != NULL ? buf : "", len);
+    }
+    free(buf);
+    free(idx);
+}
+
 /* Show merged event @p ev of log @p li (0 Election, 1 Admin) in the merged Events view,
  * selected, and bring the window forward. */
 static void Aud_GotoEvent(AuditWindow *aw, int li, uint32_t ev)
@@ -21895,6 +22049,8 @@ static void Aud_OnContextMenu(AuditWindow *aw, int item, POINT screen)
         return;
     }
     AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
     if (aw->view == AUD_VIEW_BATCHES && item >= 0)
     {
         AppendMenuW(m, MF_SEPARATOR, 0, NULL);
@@ -21905,6 +22061,10 @@ static void Aud_OnContextMenu(AuditWindow *aw, int item, POINT screen)
     if (cmd == IDM_EDIT_COPY)
     {
         Aud_CopySelected(aw);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED)
+    {
+        App_ExportAudit(aw, TRUE);
     }
     else if (cmd == IDM_AUD_GOTO_EVENT && item >= 0 && (uint32_t)item < aw->nrows)
     {
@@ -24083,6 +24243,62 @@ static void AudRep_CopySelected(AudReportWindow *r)
     free(buf);
 }
 
+typedef struct AudRepExportCtx
+{
+    const AudReportWindow *r;
+    const uint32_t *idx; /* selected display rows, or NULL for all */
+} AudRepExportCtx;
+
+static void AudRep_ExportCell(void *user, uint32_t row, uint32_t col, wchar_t *buf, size_t cch)
+{
+    const AudRepExportCtx *x = (const AudRepExportCtx *)user;
+    uint32_t item = x->idx != NULL ? x->idx[row] : row;
+    StringCchCopyW(buf, cch, AudRep_Cell(x->r, x->r->order[item], (int)col));
+}
+
+/* Export a report's rows (the tab shown), in display order: the selected ones or all. */
+static void AudRep_Export(AudReportWindow *r, BOOL selection_only)
+{
+    wchar_t suggested[400], tabname[64];
+    AudRepExportCtx ctx;
+    uint32_t *idx = NULL;
+    uint32_t n = r->nrows;
+    wchar_t *p;
+    if (selection_only)
+    {
+        idx = App_CollectSelectedIndices(r->list, r->nrows, &n);
+        if (n == 0)
+        {
+            free(idx);
+            return;
+        }
+    }
+    tabname[0] = L'\0';
+    if (r->tab != NULL)
+    {
+        TCITEMW ti;
+        ZeroMemory(&ti, sizeof(ti));
+        ti.mask = TCIF_TEXT;
+        ti.pszText = tabname;
+        ti.cchTextMax = ARRAYSIZE(tabname);
+        TabCtrl_GetItem(r->tab, r->tab_sel, &ti);
+    }
+    StringCchPrintfW(suggested, ARRAYSIZE(suggested), L"%s-%s%s%s%s", r->aw->base_name,
+                     selection_only ? L"Selected_" : L"", k_AudRepTitles[r->kind], tabname[0] != L'\0' ? L"-" : L"",
+                     tabname);
+    for (p = suggested + wcslen(r->aw->base_name); *p != L'\0'; p++)
+    {
+        if (*p == L' ' || *p == L'&')
+        {
+            *p = L'_';
+        }
+    }
+    ctx.r = r;
+    ctx.idx = idx;
+    App_ExportReportModel(r->hwnd, suggested, (uint32_t)r->ncols, r->col_title, n, AudRep_ExportCell, &ctx);
+    free(idx);
+}
+
 /* The session of display row @p item on the Sessions tab, or -1. */
 static int AudRep_RowSession(const AudReportWindow *r, int item)
 {
@@ -24166,6 +24382,9 @@ static void AudRep_OnContextMenu(AudReportWindow *r, int item, POINT screen)
         return;
     }
     AppendMenuW(m, MF_STRING, IDM_EDIT_COPY, L"&Copy");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_SELECTED, L"Export &Selected…");
+    AppendMenuW(m, MF_STRING, IDM_EXPORT_ALL, L"Export &All…");
     if (si >= 0)
     {
         AppendMenuW(m, MF_SEPARATOR, 0, NULL);
@@ -24187,6 +24406,10 @@ static void AudRep_OnContextMenu(AudReportWindow *r, int item, POINT screen)
     if (cmd == IDM_EDIT_COPY)
     {
         AudRep_CopySelected(r);
+    }
+    else if (cmd == IDM_EXPORT_SELECTED || cmd == IDM_EXPORT_ALL)
+    {
+        AudRep_Export(r, cmd == IDM_EXPORT_SELECTED);
     }
     else if (cmd == IDM_AUD_USE_SESSION || cmd == IDM_AUD_GOTO_EVENT || cmd == IDM_AUD_SHOW_EVENTS)
     {
@@ -24446,9 +24669,7 @@ static LRESULT CALLBACK AudReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 /* Open (or bring forward) report @p kind of @p aw; a report with tabs opens on tab @p tab. */
 static void App_ShowAuditReport(AuditWindow *aw, int kind, int tab)
 {
-    static const wchar_t *const k_titles[AUD_REP_COUNT] = {L"Copies Check", L"Ballot Accounting",
-                                                           L"L&A Testing Timeline", L"Notable Events",
-                                                           L"Users and Workstations", L"Ballot Reconciliation"};
+    const wchar_t *const *k_titles = k_AudRepTitles;
     static const int k_widths[AUD_REP_COUNT] = {1360, 1160, 1420, 1320, 1180, 1400};
     AudReportWindow **slot = &aw->reps[kind];
     AudReportWindow *r;
@@ -24728,6 +24949,8 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_OPEN_AUDIT, L"Load &Audit Logs…");
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_CLOSE_AUDIT, L"&Close Audit Logs");
     AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXPORT_AUDIT, L"&Export…");
+    AppendMenuW(file_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(file_menu, MF_STRING, IDM_FILE_EXIT, L"E&xit");
     AppendMenuW(edit_menu, MF_STRING, IDM_EDIT_COPY, L"&Copy\tCtrl+C");
     AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
@@ -24772,6 +24995,7 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
     AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(open a CVR or results window to check ballot counts)");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
@@ -24971,6 +25195,12 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         {
         case IDM_EDIT_COPY: /* also Ctrl+C */
             Aud_CopySelected(aw);
+            return 0;
+        case IDM_FILE_EXPORT_AUDIT:
+            App_ExportAudit(aw, FALSE);
+            return 0;
+        case IDM_HELP_EXPORT:
+            App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Export", k_AudHelpExport);
             return 0;
         case IDM_AUD_OPTIONS:
             App_ShowAuditOptions(aw);
@@ -25412,7 +25642,8 @@ static void App_BeginOpenAudit(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Audit log PDFs (*.pdf)\0*.pdf\0All files (*.*)\0*.*\0";
+    ofn.lpstrFilter = L"Audit logs and exports (*.pdf;*.csv;*.tsv)\0*.pdf;*.csv;*.tsv\0Audit log PDFs (*.pdf)\0*.pdf\0"
+                      L"Audit log exports (*.csv;*.tsv)\0*.csv;*.tsv\0All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = files_cch;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT;

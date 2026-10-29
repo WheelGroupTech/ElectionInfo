@@ -103,6 +103,7 @@
 #define IDM_AUD_REP_NOTABLE     40146
 #define IDM_AUD_REP_USERS       40147
 #define IDM_AUD_SHOW_EVENTS     40148
+#define IDM_FILE_EXPORT_AUDIT   40149
 /* View -> Copy: one item per copy, IDM_AUD_COPY_FIRST + log * EE_AUDIT_MAX_COPIES + copy
  * (two logs of up to 64 copies: 40200..40327). */
 #define IDM_AUD_COPY_FIRST      40200

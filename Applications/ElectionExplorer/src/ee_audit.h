@@ -458,6 +458,77 @@ extern "C"
     /** Format @p ts as "MM/DD/YYYY hh:mm:ssAM", the report's own form. */
     void EeAudit_FormatTime(int64_t ts, char *buf, size_t cap);
 
+    /* ---------------------------------------------------------------------- */
+    /* The reloadable Events export                                            */
+    /* ---------------------------------------------------------------------- */
+
+    /*
+     * A delimited file with a header row:
+     *   Record Type, Timestamp, Log, Event, Module, User Id, Description, Copies, First Copy,
+     *   Page, County, Election Date
+     * "Copy" records come first, one per copy of each log exported: its print time, log, the
+     * election its header names (Description), its number ("2 of 5"), file name, pages,
+     * county and election date. "Event" records follow in printed order (newest first), each
+     * with the copies that hold it ("1-3,5 of 5"), the file name of the first of them, and its
+     * page there. Reloading builds each copy back from the events it holds, so the merge, the
+     * Copies Check and the ballot accounting come out as before.
+     */
+
+    /** An event to export: a merged event of a log, or an event of the one copy exported. */
+    typedef struct EeAuditExportRow
+    {
+        uint32_t log;   /* 0 = Election log, 1 = Admin log (EeAuditElection.logs) */
+        uint32_t index; /* merged event, or the event in the copy exported */
+    } EeAuditExportRow;
+
+    /**
+     * Build the reloadable export of @p rows (in printed order) as UTF-8 without a BOM.
+     *
+     * @param el       The election.
+     * @param copy_log With @p copy >= 0: the log of the one copy exported.
+     * @param copy     A copy of log @p copy_log exported as printed (rows index its events), or
+     *                 -1 for merged events (rows index EeAuditLog.events).
+     * @param rows     The events, in printed order.
+     * @param nrows    Their number.
+     * @param delim    ',' or '\t'.
+     * @param out      Receives a malloc'd buffer (free with free()).
+     * @param out_len  Receives its length.
+     * @return FALSE out of memory.
+     */
+    BOOL EeAudit_FormatExportUtf8(const EeAuditElection *el,
+                                  int copy_log,
+                                  int copy,
+                                  const EeAuditExportRow *rows,
+                                  uint32_t nrows,
+                                  char delim,
+                                  char **out,
+                                  size_t *out_len);
+
+    /** TRUE when @p path names a delimited-text file (.csv, .tsv, .txt): a possible export. */
+    BOOL EeAudit_IsExportPath(const wchar_t *path);
+
+    /**
+     * Read a reloadable export back into copies (newest event first in each).
+     *
+     * @param path          The .csv / .tsv file.
+     * @param out           Receives a malloc'd array of copies (each freed with
+     *                      EeAudit_FreeCopy, then the array with free()).
+     * @param out_count     Receives the number of copies.
+     * @param cancel_flag   Optional; non-zero requests cancel.
+     * @param progress_fn   Optional progress callback.
+     * @param progress_user Passed to @p progress_fn.
+     * @param err           Optional; receives a message naming the file on failure.
+     * @param errcch        Capacity of @p err.
+     */
+    EeLoadStatus EeAudit_LoadExport(const wchar_t *path,
+                                    EeAuditCopy **out,
+                                    uint32_t *out_count,
+                                    volatile LONG *cancel_flag,
+                                    EeLoadProgressFn progress_fn,
+                                    void *progress_user,
+                                    wchar_t *err,
+                                    size_t errcch);
+
 #ifdef __cplusplus
 }
 #endif

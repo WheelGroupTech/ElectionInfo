@@ -13077,6 +13077,156 @@ done:
     return rc;
 }
 
+/* Notable events and the L&A timeline (tag: auditnote): Election Day is November 5, 2024
+ * (times are seconds from 08:00 that day). */
+static int test_audit_notable(void)
+{
+#define D 86400
+    /* oldest first here; reversed into report order below */
+    static const AudRow k_el[] = {
+        /* the database's earlier life as a copy of another election: not checked */
+        {-60 * D, "Info", "Election Opened: March 3, 2024 Joint Primary Election"},
+        {-60 * D + 10, "Info", "Committing new Batch A0009-EV Mail - 9 ID 9 Number of Ballots 5"},
+        {-60 * D + 20, "Info", "Election Summary was printed successfully."},
+        {-50 * D, "Warning", "All Electionware election results will be cleared. Do you want to continue?"},
+        {-50 * D + 1, "Warning", "User Response: Yes"},
+        {-50 * D + 2, "Info", "Results successfully cleared"},
+        /* the same database while it was set up: checked */
+        {-45 * D, "Info", "Election Opened: G24 Setup Election"},
+        {-45 * D + 5, "Info", "Election Summary was printed successfully."},
+        {-41 * D, "Info", "Election Opened: November 5, 2024 Joint General and Special Elections"},
+        {-40 * D, "Info", "Committing new Batch F0001-Logic EV - 1 ID 1 Number of Ballots 10"},
+        {-40 * D + 60, "Info", "Election Summary was printed successfully."},
+        {-40 * D + 70, "Warning", "All Electionware election results will be cleared. Do you want to continue?"},
+        {-40 * D + 71, "Warning", "User Response: Yes"},
+        {-40 * D + 72, "Info", "Results successfully cleared"},
+        /* a manual-entry batch of 0 ballots: a zero report, not results */
+        {-20 * D, "Info", "Committing new Batch MRE-2844-477 ID 8 Number of Ballots 0"},
+        {-20 * D + 10, "Info", "Election Summary was printed successfully."},
+        {-10 * D, "Info", "Committing new Batch A0001-EV Mail - 1 ID 2 Number of Ballots 50"},
+        {-2 * D, "Info", "Committing new Batch A0002-EV Vote Center - 3 ID 3 Number of Ballots 0"},
+        {-1 * D, "Info", "City of Austin Canvass was saved successfully."},
+        {0, "Info", "Election Summary was printed successfully."},
+        {100, "Error", "Internal processing error."},
+        {200, "Error", "Results validation error. Verify poll closed correctly. You may need to recollect these ballots."},
+        {400, "Info", "Starting Acquire Server."},
+        {250, "Info", "Stopping Acquire Server."},
+        {3600, "Info", "Committing new Batch ED Vote Center - 7 ID 4 Number of Ballots 100"},
+        {14400, "Info", "Committing new Batch ED Vote Center - 8 ID 5 Number of Ballots 20"}};
+    static const AudRow k_admin[] = {
+        /* another election's test copy (no backup of this election before it): left out */
+        {-6 * D, "Info", "Election Opened: L24 EV CC Tab Test"},
+        {-6 * D + 60, "Info", "Election Closed: L24 EV CC Tab Test"},
+        {-5 * D - 600, "Info", "Election backup file created: C:\\Electionware\\November 5, 2024 Joint General\\G24.ezip"},
+        {-5 * D, "Info", "Restored election G24 EV CC 3rd Tab Test from machine WORKSTATION-11"},
+        {-5 * D + 10, "Info", "Election Opened: G24 EV CC 3rd Tab Test"},
+        {-5 * D + 300, "Info", "Election Closed: G24 EV CC 3rd Tab Test"},
+        {-4 * D, "Info", "Invalid code. Unable to decrypt restore package. Please provide a valid code."},
+        {-3 * D, "Info", "Election Deleted: Old Test Election"},
+        {-3 * D + 5, "Info", "Created user with ID 12. Username: jdoe, Name: jdoe[J Doe]."},
+        {10, "Info", "Election backup file created: C:\\Electionware\\November 5, 2024 Joint General\\G24_2.ezip"},
+        {20, "Info", "Restored election G24 ED Tab Test from machine WORKSTATION-11"},
+        {30, "Info", "Election Opened: G24 ED Tab Test"},
+        {90, "Info", "Election Closed: G24 ED Tab Test"},
+        {5000, "Info", "Election Closed: November 5, 2024 Joint General and Special Elections"}};
+    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 2, 0, 3, 2, 1};
+#undef D
+    AudRow el_rows[ARRAYSIZE(k_el)], admin_rows[ARRAYSIZE(k_admin)];
+    EeAuditCopy copies[2];
+    EeAuditElection *els = NULL;
+    uint32_t nels = 0, i;
+    EeAuditAccounting a;
+    EeAuditNotes notes;
+    EeAuditTimeline tl;
+    int rc = 1;
+
+    memset(&a, 0, sizeof(a));
+    memset(&notes, 0, sizeof(notes));
+    memset(&tl, 0, sizeof(tl));
+    for (i = 0; i < ARRAYSIZE(k_el); i++)
+    {
+        el_rows[i] = k_el[ARRAYSIZE(k_el) - 1 - i];
+    }
+    for (i = 0; i < ARRAYSIZE(k_admin); i++)
+    {
+        admin_rows[i] = k_admin[ARRAYSIZE(k_admin) - 1 - i];
+    }
+    if (!aud_copy(&copies[0], EE_AUDIT_ELECTION, "Dallas", 20241105, 9, el_rows, ARRAYSIZE(el_rows)) ||
+        !aud_copy(&copies[1], EE_AUDIT_ADMIN, "Dallas", 20241105, 9, admin_rows, ARRAYSIZE(admin_rows)) ||
+        !EeAudit_GroupCopies(copies, 2, &els, &nels) || nels != 1 ||
+        !EeAudit_Accounting(EeAudit_Log(&els[0], EE_AUDIT_ELECTION), &a) || !EeAudit_Notable(&els[0], &notes) ||
+        !EeAudit_Timeline(&els[0], &a, &tl))
+    {
+        wprintf(L"auditnote: setup\n");
+        goto done;
+    }
+    for (i = 0; i < EE_AUDIT_N_COUNT; i++)
+    {
+        if (notes.per_category[i] != k_expect[i])
+        {
+            wprintf(L"auditnote: %s: %u, not %u\n", EeAudit_NoteName((int)i), notes.per_category[i], k_expect[i]);
+            goto done;
+        }
+    }
+    for (i = 0; i < notes.count; i++)
+    {
+        const EeAuditNote *n = &notes.notes[i];
+        if ((n->category == EE_AUDIT_N_RESULTS_EARLY && (n->batches != 3 || n->value != 50)) ||
+            (n->category == EE_AUDIT_N_RESULTS_TEST && n->batches > 1) ||
+            (n->category == EE_AUDIT_N_CLOCK && n->value != 150) ||
+            (n->category == EE_AUDIT_N_LOADED_EARLY && n->value != 50))
+        {
+            wprintf(L"auditnote: %s: %u batches, value %lld\n", EeAudit_NoteName(n->category), n->batches,
+                    (long long)n->value);
+            goto done;
+        }
+    }
+    if (EeAudit_NoteSeverity(EE_AUDIT_N_RESULTS_EARLY) != EE_AUDIT_SEV_RED ||
+        EeAudit_NoteSeverity(EE_AUDIT_N_RESULTS_TEST) != EE_AUDIT_SEV_INFO || !EeAudit_IsTestCopyName("PR26 ED CC 3rd Tab Test") ||
+        EeAudit_IsTestCopyName("May 26, 2026 Joint Primary Runoff Election"))
+    {
+        wprintf(L"auditnote: severities / test copy names\n");
+        goto done;
+    }
+    /* tests: the Election log's test session, the restored-and-opened EV copy, the ED copy */
+    if (tl.ntests != 3 || tl.tests[0].kind != EE_AUDIT_TEST_SESSION || tl.tests[0].batches != 1 ||
+        tl.tests[1].kind != EE_AUDIT_TEST_RESTORED || strcmp(tl.tests[1].name, "G24 EV CC 3rd Tab Test") != 0 ||
+        tl.tests[1].end - tl.tests[1].start != 300 || tl.tests[2].kind != EE_AUDIT_TEST_RESTORED ||
+        tl.tests[2].end - tl.tests[2].start != 70 || tl.other_copies != 1 || tl.other_copy == NULL ||
+        strcmp(tl.other_copy, "L24 EV CC Tab Test") != 0 || tl.other_loads != 1)
+    {
+        wprintf(L"auditnote: %u tests, %u other copies, %u other loads\n", tl.ntests, tl.other_copies,
+                tl.other_loads);
+        goto done;
+    }
+    if (notes.other_events != 6 || notes.other_election == NULL ||
+        strcmp(notes.other_election, "March 3, 2024 Joint Primary Election") != 0)
+    {
+        wprintf(L"auditnote: %u events of another election\n", notes.other_events);
+        goto done;
+    }
+    /* periods: the mail load, the EV load, the two Election Day loads with a 3-hour pause */
+    if (tl.nperiods != 3 || tl.periods[0].test_before != 0 || tl.periods[0].test_after != 1 ||
+        tl.periods[1].test_before != 1 || tl.periods[1].test_after != 2 || tl.periods[2].test_before != 2 ||
+        tl.periods[2].test_after != -1 || tl.periods[2].batches != 2 || tl.periods[2].ballots != 120 ||
+        tl.periods[0].batches != 2 || tl.periods[0].npauses != 1 || tl.periods[2].npauses != 1 || tl.npauses != 2 ||
+        tl.pauses[0].closed || !tl.pauses[tl.periods[2].first_pause].closed ||
+        tl.pauses[tl.periods[2].first_pause].to - tl.pauses[tl.periods[2].first_pause].from != 10800)
+    {
+        wprintf(L"auditnote: %u periods\n", tl.nperiods);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeAudit_FreeTimeline(&tl);
+    EeAudit_FreeNotes(&notes);
+    EeAudit_FreeAccounting(&a);
+    EeAudit_FreeElections(els, nels);
+    wprintf(L"auditnote: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -13161,5 +13311,6 @@ int wmain(void)
     failed |= test_audit();
     failed |= test_audit_merge();
     failed |= test_audit_accounting();
+    failed |= test_audit_notable();
     return failed == 0 ? 0 : 1;
 }

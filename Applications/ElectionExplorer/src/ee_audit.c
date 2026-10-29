@@ -2168,3 +2168,810 @@ BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out)
     au_finish_sessions(out);
     return TRUE;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Notable events                                                             */
+/* -------------------------------------------------------------------------- */
+
+static const struct
+{
+    int severity;
+    const wchar_t *name;
+    const wchar_t *meaning;
+} k_au_notes[EE_AUDIT_N_COUNT] = {
+    {EE_AUDIT_SEV_RED, L"Results output before Election Day",
+     L"A results report was printed, saved to a file or exported before Election Day while ballots "
+     L"(not test decks) were loaded. Ballots may be tabulated early, but results are not to be printed "
+     L"or released before Election Day."},
+    {EE_AUDIT_SEV_REVIEW, L"Ballots loaded early",
+     L"Ballots (not test decks) were loaded more than 3 days before Election Day, earlier than "
+     L"tabulation may start in a county of 100,000 or more. Test batches not named as test decks "
+     L"also appear here."},
+    {EE_AUDIT_SEV_REVIEW, L"Elections deleted",
+     L"An election was deleted; its own audit log is deleted with it."},
+    {EE_AUDIT_SEV_REVIEW, L"Failed restores and backups", L"A restore or a backup did not succeed."},
+    {EE_AUDIT_SEV_REVIEW, L"Results validation errors",
+     L"A results or media validation error while loading results (for example \"Results validation "
+     L"error. Verify poll closed correctly\")."},
+    {EE_AUDIT_SEV_REVIEW, L"Errors", L"Other events logged as Error or Fatal."},
+    {EE_AUDIT_SEV_REVIEW, L"Ballot sheet load errors", L"A ballot sheet could not be loaded."},
+    {EE_AUDIT_SEV_REVIEW, L"Media clears",
+     L"The results of one media were cleared (see Ballot Accounting \x2192 Media Clears)."},
+    {EE_AUDIT_SEV_REVIEW, L"Clock anomalies",
+     L"An event's time is later than the event printed above it (the log is newest first): the "
+     L"workstation's clock was set ahead, or the next one's behind."},
+    {EE_AUDIT_SEV_INFO, L"Full clears",
+     L"All results were cleared: a new session starts (see Ballot Accounting \x2192 Sessions)."},
+    {EE_AUDIT_SEV_INFO, L"Zero-ballot batches", L"A batch (not a test deck) was committed with 0 ballots."},
+    {EE_AUDIT_SEV_INFO, L"Previously loaded batches",
+     L"A batch was reported as previously loaded and was not loaded again."},
+    {EE_AUDIT_SEV_INFO, L"Results output before Election Day (testing)",
+     L"A results report was printed, saved or exported before Election Day with only test decks "
+     L"loaded (a logic and accuracy test) or no ballots counted (a zero report)."},
+    {EE_AUDIT_SEV_INFO, L"Elections restored", L"An election was restored from a backup."},
+    {EE_AUDIT_SEV_INFO, L"User accounts", L"A user account was created or updated, or passwords were viewed."}};
+
+const wchar_t *EeAudit_NoteName(int category)
+{
+    return category >= 0 && category < EE_AUDIT_N_COUNT ? k_au_notes[category].name : L"";
+}
+
+const wchar_t *EeAudit_NoteMeaning(int category)
+{
+    return category >= 0 && category < EE_AUDIT_N_COUNT ? k_au_notes[category].meaning : L"";
+}
+
+int EeAudit_NoteSeverity(int category)
+{
+    return category >= 0 && category < EE_AUDIT_N_COUNT ? k_au_notes[category].severity : EE_AUDIT_SEV_INFO;
+}
+
+void EeAudit_FreeNotes(EeAuditNotes *n)
+{
+    if (n != NULL)
+    {
+        free(n->notes);
+        free(n->other_election);
+        memset(n, 0, sizeof(*n));
+    }
+}
+
+static BOOL au_add_note(EeAuditNotes *n, size_t *cap, int category, int log, uint32_t event, uint32_t batches,
+                        int64_t value)
+{
+    EeAuditNote *x;
+    if (!au_grow((void **)&n->notes, cap, (size_t)n->count + 1, sizeof(EeAuditNote)))
+    {
+        return FALSE;
+    }
+    x = &n->notes[n->count++];
+    x->category = category;
+    x->log = log;
+    x->event = event;
+    x->batches = batches;
+    x->value = value;
+    n->per_category[category]++;
+    return TRUE;
+}
+
+static BOOL au_ends_with(const char *s, const char *tail)
+{
+    size_t n = strlen(s), k = strlen(tail);
+    return n >= k && strcmp(s + n - k, tail) == 0;
+}
+
+/* A results report printed, saved to a file or exported by the Reporting module. */
+static BOOL au_is_results_output(const char *module, const char *d)
+{
+    return strcmp(module, "Reporting") == 0 &&
+           (au_ends_with(d, " was printed successfully.") || au_ends_with(d, " was saved successfully.") ||
+            strncmp(d, "Updated Plain Text Export Results", 33) == 0 ||
+            strncmp(d, "Exporting Cast Vote Record 1 of", 31) == 0);
+}
+
+/* Midnight starting Election Day, or 0 when the header gave no date. */
+static int64_t au_election_day(const EeAuditElection *el)
+{
+    int d = el->election_date;
+    return d > 0 ? EeAudit_MakeTime(d / 10000, d / 100 % 100, d % 100, 0, 0, 0) : 0;
+}
+
+/* A clock anomaly: an event (newest first) later than the one printed above it by more than this. */
+#define AU_CLOCK_SLACK 60
+
+/* The election open at an Election log event. */
+#define AU_ERA_THIS  0
+#define AU_ERA_TEST  1 /* a test copy of the election (restored from it: same log) */
+#define AU_ERA_OTHER 2 /* another election: the database's earlier life as a copy of it */
+
+/* The date an election name gives ("March 3, 2026 Joint Primary Election" -> 20260303), or 0. */
+static int au_name_date(const char *name)
+{
+    static const char *const months[] = {"January", "February", "March",     "April",   "May",      "June",
+                                         "July",    "August",   "September", "October", "November", "December"};
+    const char *s;
+    for (s = name; *s != '\0'; s++)
+    {
+        int m;
+        if (s != name && au_is_alpha(s[-1]))
+        {
+            continue;
+        }
+        for (m = 0; m < 12; m++)
+        {
+            size_t k = strlen(months[m]);
+            if (strncmp(s, months[m], k) == 0 && s[k] == ' ')
+            {
+                const char *p = s + k + 1;
+                int d = 0, y = 0, nd = 0;
+                while (*p >= '0' && *p <= '9' && nd < 2)
+                {
+                    d = d * 10 + (*p++ - '0');
+                    nd++;
+                }
+                if (nd == 0 || p[0] != ',' || p[1] != ' ')
+                {
+                    break;
+                }
+                p += 2;
+                for (nd = 0; *p >= '0' && *p <= '9' && nd < 4; nd++)
+                {
+                    y = y * 10 + (*p++ - '0');
+                }
+                if (nd == 4 && d >= 1 && d <= 31 && y >= 1990 && y <= 2100)
+                {
+                    return y * 10000 + (m + 1) * 100 + d;
+                }
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* @p name is this election's: its name ("Election Opened: May 26, 2026 Joint Primary Runoff
+ * Election" for a header cut to "May 26, 2026 Joint"), or a name without another election's
+ * date (the same database while it was set up: "L26 Setup Election", "PR26 Prep Election"). */
+static BOOL au_is_this_election(const EeAuditElection *el, const char *name)
+{
+    size_t n = el->election != NULL ? strlen(el->election) : 0;
+    int date;
+    if (n == 0 || strncmp(name, el->election, n) == 0)
+    {
+        return TRUE;
+    }
+    date = au_name_date(name);
+    return date == 0 || el->election_date == 0 || date == el->election_date;
+}
+
+/* The election open at each merged Election log event (AU_ERA_*), from its "Election Opened:"
+ * events; events before the first take its election. @p other_name receives the first other
+ * election's name. NULL when out of memory. */
+static uint8_t *au_election_eras(const EeAuditElection *el, char **other_name)
+{
+    const EeAuditLog *log = &el->logs[0];
+    uint8_t *era = (uint8_t *)malloc((size_t)log->nevents + 1);
+    BOOL known = FALSE;
+    uint8_t cur = AU_ERA_THIS;
+    uint32_t i, k;
+    if (era == NULL)
+    {
+        return NULL;
+    }
+    for (i = log->nevents; i-- > 0;) /* oldest first */
+    {
+        const EeAuditCopy *c = NULL;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d = EeAudit_Desc(c, e);
+        if (strncmp(d, "Election Opened: ", 17) == 0)
+        {
+            const char *nm = d + 17;
+            cur = au_is_this_election(el, nm) ? AU_ERA_THIS : EeAudit_IsTestCopyName(nm) ? AU_ERA_TEST : AU_ERA_OTHER;
+            if (cur == AU_ERA_OTHER && other_name != NULL && *other_name == NULL)
+            {
+                *other_name = au_strdup_n(nm, strlen(nm));
+            }
+            if (!known)
+            {
+                for (k = i + 1; k < log->nevents; k++)
+                {
+                    era[k] = cur; /* the older events before the first open */
+                }
+                known = TRUE;
+            }
+        }
+        era[i] = cur;
+    }
+    return era;
+}
+
+static BOOL au_notes_election(const EeAuditElection *el, EeAuditNotes *n, size_t *cap)
+{
+    const EeAuditLog *log = &el->logs[0];
+    int64_t eday = au_election_day(el);
+    uint32_t i, real = 0, test = 0;
+    int64_t real_ballots = 0;
+    BOOL pending_full = FALSE, pending_media = FALSE;
+    uint8_t *era = au_election_eras(el, &n->other_election);
+    if (era == NULL)
+    {
+        return FALSE;
+    }
+    for (i = log->nevents; i-- > 0;) /* oldest first */
+    {
+        const EeAuditCopy *c;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d = EeAudit_Desc(c, e);
+        const char *level = EeAudit_Str(c, e->level);
+        const char *module = EeAudit_Str(c, e->module);
+        int cat = -1;
+        uint32_t batches = 0;
+        int64_t value = 0;
+        char *name = NULL;
+        uint32_t id, rev;
+        int64_t ballots;
+        if (strncmp(d, "Committing new Batch ", 21) == 0 &&
+            au_parse_batch(d, "Committing new Batch ", &name, &id, &ballots, &rev))
+        {
+            if (EeAudit_IsTestDeck(name))
+            {
+                test++;
+            }
+            else
+            {
+                real++;
+                real_ballots += ballots;
+                if (eday != 0 && ballots > 0 && e->ts < eday - (int64_t)EE_AUDIT_EARLY_COUNT_DAYS * 86400)
+                {
+                    cat = EE_AUDIT_N_LOADED_EARLY;
+                    value = ballots;
+                }
+                else if (ballots == 0)
+                {
+                    cat = EE_AUDIT_N_ZERO_BATCHES;
+                }
+            }
+            free(name);
+        }
+        else if (au_is_results_output(module, d))
+        {
+            if (eday != 0 && e->ts < eday)
+            {
+                /* zero totals (batches of 0 ballots, as a manual-entry test leaves) are no results */
+                BOOL results = real > 0 && real_ballots > 0;
+                cat = results ? EE_AUDIT_N_RESULTS_EARLY : EE_AUDIT_N_RESULTS_TEST;
+                batches = results ? real : test;
+                value = results ? real_ballots : 0;
+            }
+        }
+        else if (strncmp(d, "All Electionware election results will be cleared", 50) == 0)
+        {
+            pending_full = TRUE;
+            pending_media = FALSE;
+        }
+        else if (strncmp(d, "Electionware election results for ", 34) == 0 && strstr(d, " will be cleared") != NULL)
+        {
+            pending_media = TRUE;
+            pending_full = FALSE;
+        }
+        else if (strncmp(d, "User Response: No", 17) == 0)
+        {
+            pending_full = pending_media = FALSE;
+        }
+        else if (strncmp(d, "Results successfully cleared", 28) == 0)
+        {
+            if (pending_media)
+            {
+                cat = EE_AUDIT_N_MEDIA_CLEARS;
+            }
+            else
+            {
+                cat = EE_AUDIT_N_FULL_CLEARS;
+                real = test = 0;
+                real_ballots = 0;
+            }
+            pending_full = pending_media = FALSE;
+        }
+        else if (strstr(d, "previously loaded") != NULL)
+        {
+            cat = EE_AUDIT_N_PREV_LOADED;
+        }
+        else if (strncmp(d, "An error occurred while loading Ballot Sheet ID ", 48) == 0)
+        {
+            cat = EE_AUDIT_N_SHEET_ERRORS;
+        }
+        else if (strcmp(module, "Reporting") == 0 &&
+                 (au_find_ci(d, "validation error") != NULL || au_find_ci(d, "validation unsuccessful") != NULL ||
+                  au_find_ci(d, "failed externally packaged media") != NULL ||
+                  au_find_ci(d, "not closed or missing Poll Place collection") != NULL))
+        {
+            cat = EE_AUDIT_N_VALIDATION;
+        }
+        else if (_stricmp(level, "Error") == 0 || _stricmp(level, "Fatal") == 0)
+        {
+            cat = EE_AUDIT_N_ERRORS;
+        }
+        if (cat < 0 && i > 0)
+        {
+            /* the event printed above this one (i - 1) is newer: this one must not be later */
+            const EeAuditCopy *cn;
+            int64_t newer = EeAudit_MergedEvent(log, i - 1, &cn)->ts;
+            if (e->ts > newer + AU_CLOCK_SLACK)
+            {
+                cat = EE_AUDIT_N_CLOCK;
+                value = e->ts - newer;
+            }
+        }
+        if (era[i] == AU_ERA_OTHER)
+        {
+            n->other_events++; /* another election's history: counted above, not noted */
+            continue;
+        }
+        if (cat >= 0 && !au_add_note(n, cap, cat, 0, i, batches, value))
+        {
+            free(era);
+            return FALSE;
+        }
+    }
+    free(era);
+    return TRUE;
+}
+
+static BOOL au_notes_admin(const EeAuditElection *el, EeAuditNotes *n, size_t *cap)
+{
+    const EeAuditLog *log = &el->logs[1];
+    uint32_t i;
+    for (i = log->nevents; i-- > 0;) /* oldest first */
+    {
+        const EeAuditCopy *c;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d = EeAudit_Desc(c, e);
+        const char *level = EeAudit_Str(c, e->level);
+        int cat = -1;
+        int64_t value = 0;
+        if (strncmp(d, "Election Deleted:", 17) == 0)
+        {
+            cat = EE_AUDIT_N_DELETED;
+        }
+        else if (strncmp(d, "Invalid code. Unable to decrypt restore package", 47) == 0 ||
+                 strncmp(d, "An error occurred while creating backup", 39) == 0 ||
+                 strncmp(d, "Unable to backup election", 25) == 0 ||
+                 (au_find_ci(d, "restore") != NULL && au_find_ci(d, "fail") != NULL))
+        {
+            cat = EE_AUDIT_N_RESTORE_FAILED;
+        }
+        else if (_stricmp(level, "Error") == 0 || _stricmp(level, "Fatal") == 0)
+        {
+            cat = EE_AUDIT_N_ERRORS;
+        }
+        else if (strncmp(d, "Restored election ", 18) == 0)
+        {
+            cat = EE_AUDIT_N_RESTORES;
+        }
+        else if (strncmp(d, "Created user with ID", 20) == 0 || strncmp(d, "Updated user with ID", 20) == 0 ||
+                 strncmp(d, "Deleted user", 12) == 0 || strstr(d, "viewed password information") != NULL)
+        {
+            cat = EE_AUDIT_N_USERS;
+        }
+        else if (i > 0)
+        {
+            const EeAuditCopy *cn;
+            int64_t newer = EeAudit_MergedEvent(log, i - 1, &cn)->ts;
+            if (e->ts > newer + AU_CLOCK_SLACK)
+            {
+                cat = EE_AUDIT_N_CLOCK;
+                value = e->ts - newer;
+            }
+        }
+        if (cat >= 0 && !au_add_note(n, cap, cat, 1, i, 0, value))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+BOOL EeAudit_Notable(const EeAuditElection *el, EeAuditNotes *out)
+{
+    size_t cap = 0;
+    memset(out, 0, sizeof(*out));
+    if (el == NULL)
+    {
+        return FALSE;
+    }
+    if (!au_notes_election(el, out, &cap) || !au_notes_admin(el, out, &cap))
+    {
+        EeAudit_FreeNotes(out);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Logic and accuracy testing timeline                                        */
+/* -------------------------------------------------------------------------- */
+
+BOOL EeAudit_IsTestCopyName(const char *name)
+{
+    return name != NULL && (au_has_token(name, "test") || au_find_ci(name, "L&A") != NULL ||
+                            au_find_ci(name, "logic") != NULL);
+}
+
+void EeAudit_FreeTimeline(EeAuditTimeline *t)
+{
+    uint32_t i;
+    if (t == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < t->ntests; i++)
+    {
+        free(t->tests[i].name);
+    }
+    free(t->tests);
+    free(t->periods);
+    free(t->pauses);
+    free(t->other_copy);
+    memset(t, 0, sizeof(*t));
+}
+
+/* A list of names (test copies). */
+typedef struct AuNames
+{
+    char **v;
+    uint32_t n;
+    size_t cap;
+} AuNames;
+
+static BOOL au_names_has(const AuNames *s, const char *name)
+{
+    uint32_t i;
+    for (i = 0; i < s->n; i++)
+    {
+        if (strcmp(s->v[i], name) == 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Add a copy of @p name unless present. */
+static BOOL au_names_add(AuNames *s, const char *name)
+{
+    if (au_names_has(s, name))
+    {
+        return TRUE;
+    }
+    if (!au_grow((void **)&s->v, &s->cap, (size_t)s->n + 1, sizeof(char *)) ||
+        (s->v[s->n] = au_strdup_n(name, strlen(name))) == NULL)
+    {
+        return FALSE;
+    }
+    s->n++;
+    return TRUE;
+}
+
+static void au_names_free(AuNames *s)
+{
+    uint32_t i;
+    for (i = 0; i < s->n; i++)
+    {
+        free(s->v[i]);
+    }
+    free(s->v);
+    memset(s, 0, sizeof(*s));
+}
+
+/* The test copy a "Restored election <name> from machine ..." event names, or NULL. */
+static char *au_restored_name(const char *d)
+{
+    const char *nm, *from;
+    if (strncmp(d, "Restored election ", 18) != 0)
+    {
+        return NULL;
+    }
+    nm = d + 18;
+    from = strstr(nm, " from machine");
+    return au_strdup_n(nm, from != NULL ? (size_t)(from - nm) : strlen(nm));
+}
+
+/* This election's test copies: those restored within two hours after a backup of this
+ * election ("Election backup file created: C:\Electionware\May 26, 2026 Joint ...\..."). */
+static BOOL au_this_copies(const EeAuditElection *el, AuNames *out)
+{
+    const EeAuditLog *log = &el->logs[1];
+    int64_t backup_ts = 0;
+    BOOL backup_this = FALSE;
+    uint32_t i;
+    for (i = log->nevents; i-- > 0;) /* oldest first */
+    {
+        const EeAuditCopy *c = NULL;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d = EeAudit_Desc(c, e);
+        char *name;
+        if (strncmp(d, "Election backup file created:", 29) == 0)
+        {
+            backup_this = el->election != NULL && el->election[0] != '\0' && strstr(d, el->election) != NULL;
+            backup_ts = e->ts;
+        }
+        else if ((name = au_restored_name(d)) != NULL)
+        {
+            BOOL ok = TRUE;
+            if (backup_this && e->ts - backup_ts <= 7200 && EeAudit_IsTestCopyName(name))
+            {
+                ok = au_names_add(out, name);
+            }
+            free(name);
+            if (!ok)
+            {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
+static int au_cmp_test(const void *pa, const void *pb)
+{
+    const EeAuditTest *a = (const EeAuditTest *)pa;
+    const EeAuditTest *b = (const EeAuditTest *)pb;
+    return a->start < b->start ? -1 : (a->start > b->start ? 1 : 0);
+}
+
+/* The Admin log's test copies: "Restored election <name> from machine ..." and
+ * "Election Opened: <name>", closed by "Election Closed: <name>". A restore and the open
+ * that follows it within 10 minutes are one test. */
+static BOOL au_admin_tests(const EeAuditLog *log, const AuNames *mine, EeAuditTimeline *t, size_t *cap)
+{
+    uint32_t i;
+    int open_test = -1; /* the test copy open now */
+    AuNames others;
+    memset(&others, 0, sizeof(others));
+    for (i = log->nevents; i-- > 0;)
+    {
+        const EeAuditCopy *c;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d = EeAudit_Desc(c, e);
+        const char *nm = NULL;
+        size_t nlen = 0;
+        int kind = 0;
+        if (strncmp(d, "Restored election ", 18) == 0)
+        {
+            const char *from = strstr(d + 18, " from machine");
+            nm = d + 18;
+            nlen = from != NULL ? (size_t)(from - nm) : strlen(nm);
+            kind = EE_AUDIT_TEST_RESTORED;
+        }
+        else if (strncmp(d, "Election Opened: ", 17) == 0)
+        {
+            nm = d + 17;
+            nlen = strlen(nm);
+            kind = EE_AUDIT_TEST_OPENED;
+        }
+        else if (strncmp(d, "Election Closed: ", 17) == 0 && open_test >= 0)
+        {
+            if (t->tests[open_test].name != NULL && strcmp(d + 17, t->tests[open_test].name) == 0)
+            {
+                t->tests[open_test].end = e->ts;
+                open_test = -1;
+            }
+            continue;
+        }
+        if (kind == 0)
+        {
+            continue;
+        }
+        {
+            char *name = au_strdup_n(nm, nlen);
+            EeAuditTest *x;
+            if (name == NULL)
+            {
+                return FALSE;
+            }
+            if (!EeAudit_IsTestCopyName(name) || !au_names_has(mine, name))
+            {
+                if (EeAudit_IsTestCopyName(name) && !au_names_add(&others, name))
+                {
+                    free(name);
+                    au_names_free(&others);
+                    return FALSE;
+                }
+                free(name);
+                if (kind == EE_AUDIT_TEST_OPENED)
+                {
+                    open_test = -1; /* another election opened */
+                }
+                continue;
+            }
+            if (kind == EE_AUDIT_TEST_OPENED && t->ntests > 0)
+            {
+                EeAuditTest *last = &t->tests[t->ntests - 1];
+                if (last->kind == EE_AUDIT_TEST_RESTORED && last->log == 1 && strcmp(last->name, name) == 0 &&
+                    e->ts - last->start <= 600)
+                {
+                    free(name);
+                    last->end = e->ts;
+                    open_test = (int)(t->ntests - 1);
+                    continue;
+                }
+            }
+            if (!au_grow((void **)&t->tests, cap, (size_t)t->ntests + 1, sizeof(EeAuditTest)))
+            {
+                free(name);
+                au_names_free(&others);
+                return FALSE;
+            }
+            x = &t->tests[t->ntests];
+            memset(x, 0, sizeof(*x));
+            x->start = x->end = e->ts;
+            x->kind = kind;
+            x->log = 1;
+            x->event = i;
+            x->name = name;
+            open_test = (int)t->ntests;
+            t->ntests++;
+        }
+    }
+    t->other_copies = others.n;
+    if (others.n > 0)
+    {
+        t->other_copy = au_strdup_n(others.v[0], strlen(others.v[0]));
+    }
+    au_names_free(&others);
+    return TRUE;
+}
+
+/* The Admin log shows the election (not a test copy) closed between @p from and @p to. */
+static BOOL au_closed_between(const EeAuditElection *el, int64_t from, int64_t to)
+{
+    const EeAuditLog *log = &el->logs[1];
+    size_t nlen = el->election != NULL ? strlen(el->election) : 0;
+    uint32_t i;
+    for (i = 0; i < log->nevents; i++)
+    {
+        const EeAuditCopy *c;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d;
+        if (e->ts <= from || e->ts >= to)
+        {
+            continue;
+        }
+        d = EeAudit_Desc(c, e);
+        if (strncmp(d, "Election Closed: ", 17) == 0 && !EeAudit_IsTestCopyName(d + 17) &&
+            (nlen == 0 || strncmp(d + 17, el->election, nlen) == 0))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, EeAuditTimeline *out)
+{
+    size_t cap_tests = 0, cap_periods = 0, cap_pauses = 0;
+    uint32_t si, b;
+    uint32_t next_test = 0; /* tests that started at or before the current load */
+    EeAuditPeriod *cur = NULL;
+    int64_t prev_ts = 0;
+    uint8_t *era = NULL;
+    AuNames mine;
+    memset(out, 0, sizeof(*out));
+    memset(&mine, 0, sizeof(mine));
+    if (el == NULL || acct == NULL)
+    {
+        return FALSE;
+    }
+    if ((era = au_election_eras(el, NULL)) == NULL || !au_this_copies(el, &mine))
+    {
+        goto oom;
+    }
+    /* tests: the Election log's test sessions, then the Admin log's test copies */
+    for (si = 0; si < acct->nsessions; si++)
+    {
+        const EeAuditSession *s = &acct->sessions[si];
+        EeAuditTest *x;
+        if (!s->test || s->nbatches == 0 || era[acct->batches[s->first_batch].event] == AU_ERA_OTHER)
+        {
+            continue;
+        }
+        if (!au_grow((void **)&out->tests, &cap_tests, (size_t)out->ntests + 1, sizeof(EeAuditTest)))
+        {
+            goto oom;
+        }
+        x = &out->tests[out->ntests++];
+        memset(x, 0, sizeof(*x));
+        x->start = acct->batches[s->first_batch].ts;
+        x->end = s->end;
+        x->kind = EE_AUDIT_TEST_SESSION;
+        x->log = 0;
+        x->event = acct->batches[s->first_batch].event;
+        x->session = si;
+        for (b = s->first_batch; b < s->first_batch + s->nbatches; b++)
+        {
+            x->batches++;
+            x->ballots += acct->batches[b].ballots;
+        }
+    }
+    if (!au_admin_tests(&el->logs[1], &mine, out, &cap_tests))
+    {
+        goto oom;
+    }
+    if (out->ntests > 1)
+    {
+        qsort(out->tests, out->ntests, sizeof(EeAuditTest), au_cmp_test);
+    }
+    /* counting periods: loads of ballots (not test decks) in load order, split at each test */
+    for (b = 0; b < acct->nbatches; b++)
+    {
+        const EeAuditBatch *x = &acct->batches[b];
+        uint32_t nt = next_test;
+        if (x->test)
+        {
+            continue;
+        }
+        if (era[x->event] == AU_ERA_OTHER)
+        {
+            out->other_loads++; /* another election's history */
+            continue;
+        }
+        while (nt < out->ntests && out->tests[nt].start <= x->ts)
+        {
+            nt++;
+        }
+        if (cur == NULL || nt != next_test)
+        {
+            if (!au_grow((void **)&out->periods, &cap_periods, (size_t)out->nperiods + 1, sizeof(EeAuditPeriod)))
+            {
+                goto oom;
+            }
+            cur = &out->periods[out->nperiods++];
+            memset(cur, 0, sizeof(*cur));
+            cur->first = x->ts;
+            cur->first_event = x->event;
+            cur->test_before = nt > 0 ? (int)nt - 1 : -1;
+            cur->test_after = -1;
+            cur->first_pause = out->npauses;
+        }
+        else if (x->ts - prev_ts >= EE_AUDIT_PAUSE_SECS)
+        {
+            EeAuditPause *p;
+            if (!au_grow((void **)&out->pauses, &cap_pauses, (size_t)out->npauses + 1, sizeof(EeAuditPause)))
+            {
+                goto oom;
+            }
+            p = &out->pauses[out->npauses++];
+            p->from = prev_ts;
+            p->to = x->ts;
+            p->closed = au_closed_between(el, prev_ts, x->ts);
+            cur->npauses++;
+        }
+        next_test = nt;
+        cur->last = x->ts;
+        cur->last_event = x->event;
+        cur->batches++;
+        cur->ballots += x->ballots;
+        prev_ts = x->ts;
+    }
+    for (b = 0; b < out->nperiods; b++)
+    {
+        EeAuditPeriod *p = &out->periods[b];
+        uint32_t k;
+        for (k = 0; k < out->ntests; k++)
+        {
+            if (out->tests[k].start >= p->last)
+            {
+                p->test_after = (int)k;
+                break;
+            }
+        }
+    }
+    free(era);
+    au_names_free(&mine);
+    return TRUE;
+oom:
+    free(era);
+    au_names_free(&mine);
+    EeAudit_FreeTimeline(out);
+    return FALSE;
+}

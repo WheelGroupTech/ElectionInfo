@@ -551,6 +551,93 @@ no warnings.
   - The time "notadate" is refused with the message.
   - **Batches view:** Vote Type is Mail plus Exclude User Id is not dgrant leaves 1,137 batches.
 
+### Step 7 — L&A Testing Timeline, Notable Events, Users and Workstations (done 2026-10-29)
+
+Engine (`ee_audit.{c,h}`, smoke test `auditnote`): `EeAudit_Notable`, `EeAudit_Timeline`,
+`EeAudit_IsTestCopyName`. Window: three more report windows in `main.c`, plus a red-flag lead in the
+status bar. Release x64 and ARM64 build with no warnings.
+
+- **Red flag: results output before Election Day.** Added at the user's direction (2026-10-29),
+  changing D10's "does not judge" for this one case.
+  - **The user's account:** a county of 100,000 or more may start tabulating 3 days before Election
+    Day, but results may not be printed before Election Day. On Election Day they may be printed,
+    and the presiding judge keeps them confidential until the polls close. The legal citations are
+    still to be confirmed.
+  - **Rule:** an Election log event of the Reporting module before midnight starting Election Day,
+    when the session since the last full clear holds batches (not test decks) with more than 0
+    ballots. The events are:
+    - "<report> was printed successfully.";
+    - "<report or file> was saved successfully.";
+    - "Updated Plain Text Export Results";
+    - "Exporting Cast Vote Record 1 of …".
+  - The same output with only test decks, or 0 ballots, loaded is information: L&A tests and zero
+    reports, such as Travis P24's January manual-entry batches of 0 ballots.
+  - **Found:**
+    - **Travis L26:** 36. Early ballots (8,310) were tabulated 04/29; on 05/01, the day before
+      Election Day, a canvass and a cumulative report were saved for every city, ISD and MUD
+      (KlaasE).
+    - **Dallas P24:** 1. An Election Summary was saved 03/04 with 12,187 ballots loaded.
+    - **Dallas L24:** 1. Saved 05/03 with 786 ballots loaded.
+    - **Travis L25:** 5. Two "EV Provisional" batches of 6 ballots, 04/11; probably a test deck not
+      named as one.
+    - **No red flag:** the other Travis elections and Dallas G24.
+- **Another election's history.** The Election log records "Election Opened: <name>". Events while
+  a name with a different election date was open are not checked.
+  - Example: Travis's PR26 database began as a copy of P26 ("March 3, 2026 Joint Primary
+    Election"), and its P26 canvass printouts of 03/11 would otherwise be 26 false red flags.
+  - Undated names ("L26 Setup Election", "PR26 Prep Election") are the same database being set up,
+    and are checked.
+- **Notable Events window:**
+  - Categories tab (severity, count, first, last, meaning). Double-click a category to see its
+    events.
+  - Events tab (severity, category, time, log, user, description, detail). Double-click an event to
+    see it, selected, in the Events view.
+  - Categories, in order:
+    - **red flag:** results output before Election Day;
+    - **review:**
+      - ballots loaded more than 3 days early;
+      - elections deleted;
+      - failed restores and backups;
+      - results validation errors;
+      - other Error and Fatal events;
+      - ballot sheet load errors;
+      - media clears;
+      - clock anomalies (an event later than the one printed above it, by more than 60 s);
+    - **information:**
+      - full clears;
+      - zero-ballot batches;
+      - previously loaded batches;
+      - results output during testing;
+      - restores;
+      - user accounts.
+- **L&A Testing Timeline window (D10):** the tests and the counting periods in time order.
+  - **Tests:**
+    - Election log test sessions (test decks only).
+    - Admin log test copies restored or opened ("Test", "L&A", "Logic" in the name).
+    - The Admin log covers the whole system, so a test copy counts only when one of its restores
+      follows a backup of this election within 2 hours. The backup's path names the election.
+    - A restore and the open that follows it within 10 minutes are one test.
+  - **Counting periods:** loads (not test decks) split at each test.
+    - Each lists its pauses of 2 hours or more, marked "(election closed)" when the Admin log closes
+      the election during one.
+    - It also gives the nearest test before and after it, and is red when one is missing.
+  - The summary gives the first test and its days before Election Day, and what was left out.
+  - **Travis PR26 gives exactly the trace in step 7 of the plan:**
+    - 05/23 mail loads 13:33–14:02, between the 10:49 test session and the 14:13 restore.
+    - 05/26 12:25 to 05/27 00:11, with the 13:11–18:45 pause (election closed), between the 12:15
+      open and the 00:21 restore.
+    - 06/03 canvass 11:29, between the 10:48 open and the 11:40 restore.
+    - 32 other elections' test copies and the 5 P26 loads are left out.
+  - **Dallas:** in-database tests. One counting period runs 11/02–11/14 (G24), with the
+    post-canvass test after it.
+- **Users and Workstations window:** per user:
+  - events in both logs;
+  - first and last event;
+  - modules;
+  - workstations the events name ("… on WORKSTATION-11.", "from machine …").
+- Every report row that stands for an event jumps to it (double-click or Go to Event). The Events
+  view's filter is reported when it hides the event.
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**

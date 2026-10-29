@@ -136,6 +136,18 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
   reload notice, sheet load errors
   (three, two sheet IDs), a batch ID loaded again (replacing the first), and an L&A test after
   counting: three sessions, the middle one the election's, 1,394 ballots by vote type.
+`auditnote` covers notable events and the L&A timeline (`EeAudit_Notable`, `EeAudit_Timeline`):
+- every category once. A results report saved the day before Election Day with ballots loaded is
+  the red flag; one with only a test deck, or only a manual-entry batch of 0 ballots, is testing;
+  one on Election Day is not noted. Ballots loaded 10 days early, a 0-ballot batch, an error, a
+  validation error, a clock anomaly, a full clear, an election deleted, a failed restore, a restore
+  and a user account are noted.
+- the log's earlier life as another election ("Election Opened: March 3, 2024 ...": not checked)
+  and its setup name ("G24 Setup Election": checked).
+- tests: the test session, a test copy restored right after a backup of this election and opened
+  (one test), and another election's test copy (left out).
+- three counting periods with their tests before and after, and a 3-hour pause during which the
+  election was closed.
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
 wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt),
 plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).

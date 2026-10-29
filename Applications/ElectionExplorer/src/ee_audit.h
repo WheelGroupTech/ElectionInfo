@@ -294,6 +294,157 @@ extern "C"
     /** TRUE for a logic and accuracy test deck's poll place or batch name. */
     BOOL EeAudit_IsTestDeck(const char *name);
 
+    /* ---------------------------------------------------------------------- */
+    /* Notable events                                                          */
+    /* ---------------------------------------------------------------------- */
+
+/** Notable event categories (EeAuditNote.category), most serious first. */
+#define EE_AUDIT_N_RESULTS_EARLY  0  /* a results report printed, saved or exported before Election Day
+                                      * while ballots (not test decks; more than 0) were loaded */
+#define EE_AUDIT_N_LOADED_EARLY   1  /* ballots (not test decks; more than 0) committed more than 3 days
+                                      * before Election Day */
+#define EE_AUDIT_N_DELETED        2  /* an election deleted (its audit log goes with it) */
+#define EE_AUDIT_N_RESTORE_FAILED 3  /* a restore or backup that failed */
+#define EE_AUDIT_N_VALIDATION     4  /* a results or media validation error */
+#define EE_AUDIT_N_ERRORS         5  /* other Error and Fatal events */
+#define EE_AUDIT_N_SHEET_ERRORS   6  /* "An error occurred while loading Ballot Sheet ID n" */
+#define EE_AUDIT_N_MEDIA_CLEARS   7  /* a media clear */
+#define EE_AUDIT_N_CLOCK          8  /* a time later than the event printed above it: a clock off */
+#define EE_AUDIT_N_FULL_CLEARS    9  /* a full clear */
+#define EE_AUDIT_N_ZERO_BATCHES   10 /* a batch (not a test deck) of 0 ballots */
+#define EE_AUDIT_N_PREV_LOADED    11 /* "This batch was previously loaded" */
+#define EE_AUDIT_N_RESULTS_TEST   12 /* a results report before Election Day with only test decks or
+                                      * no ballots loaded (L&A tests, zero reports) */
+#define EE_AUDIT_N_RESTORES       13 /* an election restored */
+#define EE_AUDIT_N_USERS          14 /* a user account created or changed, or passwords viewed */
+#define EE_AUDIT_N_COUNT          15
+
+/** Severity of a category (EeAudit_NoteSeverity). */
+#define EE_AUDIT_SEV_INFO   0
+#define EE_AUDIT_SEV_REVIEW 1
+#define EE_AUDIT_SEV_RED    2
+
+/** Tabulation may start this many days before Election Day (Texas, counties of 100,000 or more). */
+#define EE_AUDIT_EARLY_COUNT_DAYS 3
+
+    /** One notable event. */
+    typedef struct EeAuditNote
+    {
+        int category;  /* EE_AUDIT_N_* */
+        int log;       /* 0 = Election log, 1 = Admin log (EeAuditElection.logs) */
+        uint32_t event; /* merged event of that log */
+        uint32_t batches; /* results categories: batches loaded at the time (not test decks for
+                           * RESULTS_EARLY, test decks for RESULTS_TEST) */
+        int64_t value;    /* RESULTS_EARLY: their ballots; CLOCK: seconds ahead of the event
+                           * printed above it */
+    } EeAuditNote;
+
+    typedef struct EeAuditNotes
+    {
+        EeAuditNote *notes; /* by log, then oldest first */
+        uint32_t count;
+        uint32_t per_category[EE_AUDIT_N_COUNT];
+        uint32_t other_events; /* Election log events while another election was open (a database
+                                * copied from an earlier election keeps its log): not checked */
+        char *other_election;  /* the first such election's name, or NULL */
+    } EeAuditNotes;
+
+    /**
+     * Find the notable events of an election's logs. Each event is given at most one category
+     * (the first that applies, in the order above). Results reports before Election Day are
+     * told apart by what the Election log shows loaded at the time since the last full clear.
+     * Election log events while the log shows another election open ("Election Opened: March
+     * 3, 2026 Joint Primary Election" in a copy of that database) are not checked; events in
+     * a test copy of the election are.
+     */
+    BOOL EeAudit_Notable(const EeAuditElection *el, EeAuditNotes *out);
+
+    void EeAudit_FreeNotes(EeAuditNotes *n);
+
+    /** "Results printed before Election Day", ... */
+    const wchar_t *EeAudit_NoteName(int category);
+
+    /** What a category means, a sentence. */
+    const wchar_t *EeAudit_NoteMeaning(int category);
+
+    /** EE_AUDIT_SEV_* */
+    int EeAudit_NoteSeverity(int category);
+
+    /* ---------------------------------------------------------------------- */
+    /* Logic and accuracy testing timeline                                     */
+    /* ---------------------------------------------------------------------- */
+
+/** EeAuditTest.kind */
+#define EE_AUDIT_TEST_SESSION  1 /* an Election log session of test decks only */
+#define EE_AUDIT_TEST_OPENED   2 /* a test copy of the election opened (Admin log) */
+#define EE_AUDIT_TEST_RESTORED 3 /* a test copy restored (and opened) (Admin log) */
+
+/** A gap between loads this long or longer is a pause. */
+#define EE_AUDIT_PAUSE_SECS 7200
+
+    typedef struct EeAuditTest
+    {
+        int64_t start;
+        int64_t end;
+        int kind;       /* EE_AUDIT_TEST_* */
+        int log;        /* 0 = Election log, 1 = Admin log */
+        uint32_t event; /* its first event: the first test batch, or the restore / open */
+        char *name;     /* the test copy's name; NULL for a session */
+        uint32_t session; /* EE_AUDIT_TEST_SESSION: the accounting session */
+        uint32_t batches; /* EE_AUDIT_TEST_SESSION: its test batches and their ballots */
+        int64_t ballots;
+    } EeAuditTest;
+
+    typedef struct EeAuditPause
+    {
+        int64_t from; /* the last load before it and the first after */
+        int64_t to;
+        BOOL closed; /* the Admin log shows the election closed during it */
+    } EeAuditPause;
+
+    /** Loads of ballots (not test decks) between two tests. */
+    typedef struct EeAuditPeriod
+    {
+        int64_t first;
+        int64_t last;
+        uint32_t first_event; /* merged Election log events of its first and last load */
+        uint32_t last_event;
+        uint32_t batches;
+        int64_t ballots;
+        int test_before; /* the last test that started before its first load (index in tests), -1 */
+        int test_after;  /* the first test that started after its last load, -1 */
+        uint32_t first_pause; /* its pauses: pauses[first_pause .. + npauses) */
+        uint32_t npauses;
+    } EeAuditPeriod;
+
+    typedef struct EeAuditTimeline
+    {
+        EeAuditTest *tests; /* by start time */
+        uint32_t ntests;
+        EeAuditPeriod *periods;
+        uint32_t nperiods;
+        EeAuditPause *pauses;
+        uint32_t npauses;
+        uint32_t other_copies; /* Admin log test copies left out as another election's */
+        char *other_copy;      /* one of their names, or NULL */
+        uint32_t other_loads;  /* loads while the Election log shows another election open */
+    } EeAuditTimeline;
+
+    /**
+     * The tests and counting periods the logs show: the Election log's test sessions, the
+     * Admin log's test copies of this election restored or opened (EeAudit_IsTestCopyName), and
+     * the loads of ballots (not test decks), split into periods at each test. The Admin log
+     * covers the whole system, so a test copy counts as this election's when one of its
+     * restores follows a backup of this election (the backup's path names it) within two hours.
+     * Loads and test sessions while the Election log shows another election open are left out.
+     */
+    BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, EeAuditTimeline *out);
+
+    void EeAudit_FreeTimeline(EeAuditTimeline *t);
+
+    /** TRUE for a test copy's name: "PR26 EV CC 3rd Tab Test", "... Tabulation Test", "L&A", "Logic". */
+    BOOL EeAudit_IsTestCopyName(const char *name);
+
     /**
      * Append an event to @p c (events are kept in report order: add the newest first). For
      * copies read from somewhere other than a PDF, such as a reloaded export.

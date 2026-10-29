@@ -99,6 +99,10 @@
 #define IDM_AUD_SELECT_SESSION  40142
 #define IDM_AUD_GOTO_EVENT      40143
 #define IDM_AUD_USE_SESSION     40144
+#define IDM_AUD_REP_TIMELINE    40145
+#define IDM_AUD_REP_NOTABLE     40146
+#define IDM_AUD_REP_USERS       40147
+#define IDM_AUD_SHOW_EVENTS     40148
 /* View -> Copy: one item per copy, IDM_AUD_COPY_FIRST + log * EE_AUDIT_MAX_COPIES + copy
  * (two logs of up to 64 copies: 40200..40327). */
 #define IDM_AUD_COPY_FIRST      40200

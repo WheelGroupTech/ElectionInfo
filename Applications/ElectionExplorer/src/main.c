@@ -14919,6 +14919,13 @@ typedef struct CvrFilterState
     BOOL (*collect)(void *ctx, uint32_t column, wchar_t ***vals, uint32_t *n);
     void (*apply)(void *ctx);
     void *ctx;
+    /* Optional, for hosts with more than "is" / "is not" (the Audit Log window): the
+     * relations a column offers (1u << EeRel_*), their labels, and a check of a rule
+     * before it is added. A column without "is" takes a typed value. */
+    uint32_t (*relations)(void *ctx, uint32_t column);
+    const wchar_t *(*relation_text)(void *ctx, uint32_t column, EeFilterRelation rel);
+    BOOL (*validate)(void *ctx, const EeFilterRule *r, wchar_t *msg, size_t cch);
+    uint32_t relation_mask; /* relations a loaded filter file may use; 0 = is / is not */
     EeFilterSet draft;
     int edit_index;
     BOOL refreshing;
@@ -15013,15 +15020,33 @@ static void CvrFilt_PopulateColumns(HWND combo, const CvrFilterState *st)
     SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
-/* CVR relations are limited to "is" / "is not". */
-static void CvrFilt_PopulateRelations(HWND combo)
+/* The relations column @p column offers: "is" / "is not" unless the host says otherwise. */
+static uint32_t CvrFilt_ColumnRelations(const CvrFilterState *st, uint32_t column)
 {
-    int idx;
+    return st->relations != NULL ? st->relations(st->ctx, column) : EE_FILTER_REL_EQUALITY;
+}
+
+static const wchar_t *CvrFilt_RelText(const CvrFilterState *st, uint32_t column, EeFilterRelation rel)
+{
+    return st->relation_text != NULL ? st->relation_text(st->ctx, column, rel) : EeFilter_RelationText(rel);
+}
+
+/* Fill the relation combo with what @p column offers (CVR and results: "is" / "is not"). */
+static void CvrFilt_PopulateRelations(HWND combo, const CvrFilterState *st, uint32_t column)
+{
+    static const EeFilterRelation k_order[] = {EeRel_Is,       EeRel_IsNot,    EeRel_Contains, EeRel_Excludes,
+                                               EeRel_MoreThan, EeRel_LessThan, EeRel_BeginsWith, EeRel_EndsWith};
+    uint32_t mask = CvrFilt_ColumnRelations(st, column);
+    size_t k;
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
-    idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)EeFilter_RelationText(EeRel_Is));
-    SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)EeRel_Is);
-    idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)EeFilter_RelationText(EeRel_IsNot));
-    SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)EeRel_IsNot);
+    for (k = 0; k < ARRAYSIZE(k_order); k++)
+    {
+        if (mask & (1u << k_order[k]))
+        {
+            int idx = (int)SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)CvrFilt_RelText(st, column, k_order[k]));
+            SendMessageW(combo, CB_SETITEMDATA, (WPARAM)idx, (LPARAM)k_order[k]);
+        }
+    }
     SendMessageW(combo, CB_SETCURSEL, 0, 0);
 }
 
@@ -15137,6 +15162,10 @@ static void CvrFilt_FillValues(HWND hwnd, CvrFilterState *st, BOOL force)
             break;
         }
     }
+    if (!(CvrFilt_ColumnRelations(st, column) & (1u << EeRel_Is)))
+    {
+        numeric = TRUE; /* typed: "contains" text or a date (suggestions only) */
+    }
     combo = CvrFilt_EnsureValueCombo(hwnd, st, numeric);
     if (combo == NULL)
     {
@@ -15189,7 +15218,7 @@ static void CvrFilt_RefreshList(HWND list, CvrFilterState *st)
         it.pszText = (LPWSTR)colname;
         it.lParam = (LPARAM)i;
         ListView_InsertItem(list, &it);
-        ListView_SetItemText(list, (int)i, 1, (LPWSTR)EeFilter_RelationText(r->relation));
+        ListView_SetItemText(list, (int)i, 1, (LPWSTR)CvrFilt_RelText(st, r->column, r->relation));
         ListView_SetItemText(list, (int)i, 2, (LPWSTR)r->value);
         ListView_SetItemText(list, (int)i, 3, (LPWSTR)EeFilter_ActionText(r->action));
         ListView_SetCheckState(list, (int)i, r->enabled);
@@ -15216,7 +15245,16 @@ static void CvrFilt_LoadRuleToControls(HWND hwnd, CvrFilterState *st, const EeFi
     }
     st->values_ready = FALSE;
     CvrFilt_FillValues(hwnd, st, TRUE); /* may swap the value combo's editability */
-    SendMessageW(rel, CB_SETCURSEL, (WPARAM)(r->relation == EeRel_IsNot ? 1 : 0), 0);
+    CvrFilt_PopulateRelations(rel, st, r->column);
+    n = (int)SendMessageW(rel, CB_GETCOUNT, 0, 0);
+    for (i = 0; i < n; i++)
+    {
+        if ((EeFilterRelation)SendMessageW(rel, CB_GETITEMDATA, (WPARAM)i, 0) == r->relation)
+        {
+            SendMessageW(rel, CB_SETCURSEL, (WPARAM)i, 0);
+            break;
+        }
+    }
     {
         HWND val = GetDlgItem(hwnd, IDC_FLT_VALUE);
         if (CvrFilt_ValueComboEditable(hwnd))
@@ -15351,6 +15389,8 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                     if (HIWORD(wParam) == CBN_SELCHANGE)
                     {
                         st->values_ready = FALSE;
+                        CvrFilt_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION), st,
+                                                  FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0));
                         CvrFilt_FillValues(hwnd, st, TRUE);
                     }
                     return 0;
@@ -15370,6 +15410,15 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                             MessageBoxW(hwnd, L"Choose a value to filter on.", st->caption,
                                         MB_ICONINFORMATION | MB_OK);
                             return 0;
+                        }
+                        if (st->validate != NULL)
+                        {
+                            wchar_t why[256] = L"";
+                            if (!st->validate(st->ctx, &r, why, ARRAYSIZE(why)))
+                            {
+                                MessageBoxW(hwnd, why, st->caption, MB_ICONINFORMATION | MB_OK);
+                                return 0;
+                            }
                         }
                         if (st->edit_index >= 0 && (uint32_t)st->edit_index < st->draft.count)
                         {
@@ -15438,7 +15487,9 @@ static LRESULT CALLBACK CvrFilterWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
                     {
                         FilterFile_Export(hwnd, &st->draft, cols, ncols, st->base_name, st->file_noun);
                     }
-                    else if (FilterFile_Load(hwnd, &st->draft, cols, ncols, EE_FILTER_REL_EQUALITY, NULL))
+                    else if (FilterFile_Load(hwnd, &st->draft, cols, ncols,
+                                             st->relation_mask != 0 ? st->relation_mask : EE_FILTER_REL_EQUALITY,
+                                             NULL))
                     {
                         st->edit_index = -1;
                         SetWindowTextW(GetDlgItem(hwnd, IDC_FLT_ADD), L"Add");
@@ -15677,7 +15728,8 @@ static BOOL Filter_ShowRuleWindow(CvrFilterState *st, const wchar_t *prompt)
 
     CvrFilt_PopulateColumns(GetDlgItem(hwnd, IDC_FLT_COLUMN), st);
     Combo_AutosizeDropdown(GetDlgItem(hwnd, IDC_FLT_COLUMN), app->font_ui, Scale(app, 900));
-    CvrFilt_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION));
+    CvrFilt_PopulateRelations(GetDlgItem(hwnd, IDC_FLT_RELATION), st,
+                              FilterDlg_ComboData(GetDlgItem(hwnd, IDC_FLT_COLUMN), 0));
     FilterDlg_PopulateActions(GetDlgItem(hwnd, IDC_FLT_ACTION));
     CvrFilt_FillValues(hwnd, st, TRUE);
     CvrFilt_RefreshList(list, st);
@@ -20380,6 +20432,7 @@ typedef struct AuditWindow
     int session;        /* the accounting session the Ballot Batches view shows; -1 none */
     AudRow *rows;
     uint32_t nrows;
+    uint32_t nrows_all; /* rows of the view before the filter */
     int sort_col; /* -1 = display order (newest first, as printed; batches in load order) */
     BOOL sort_asc;
     int ncols;
@@ -20387,7 +20440,40 @@ typedef struct AuditWindow
     uint32_t lacking[2]; /* merged events each log's final copy lacks */
     AudReportWindow *rep_copies; /* open Copies Check report, or NULL */
     AudReportWindow *rep_acct;   /* open Ballot Accounting report, or NULL */
+    /* Filter: the rules (EeFilterRule.column is an AF_* column), compiled for matching. */
+    EeFilterSet filters;
+    HWND hwnd_filter;
+    BOOL filt_active;
+    struct AudRule *rules;
+    uint32_t nrules;
+    wchar_t base_name[192]; /* first copy's file name without extension, for filter files */
 } AuditWindow;
+
+/* Filter columns (EeFilterRule.column) of the audit window. */
+enum
+{
+    AF_TIMESTAMP = 0,
+    AF_LOG,
+    AF_EVENT,
+    AF_MODULE,
+    AF_USER,
+    AF_DESC,
+    AF_VOTETYPE, /* Ballot Batches view */
+    AF_COUNT
+};
+
+static const wchar_t *const k_AudFilterTitles[AF_COUNT] = {L"Timestamp", L"Log",         L"Event",    L"Module",
+                                                           L"User Id",   L"Description", L"Vote Type"};
+
+/* An enabled rule, ready to match: its value in UTF-8 (text) or as a time. */
+typedef struct AudRule
+{
+    uint32_t column;
+    EeFilterRelation relation;
+    EeFilterAction action;
+    char u8[EE_FILTER_VALUE_CCH * 3];
+    int64_t ts;
+} AudRule;
 
 static WNDPROC g_old_audit_list_proc = NULL;
 
@@ -20458,6 +20544,25 @@ static const wchar_t k_AudHelpReports[] =
     L"poll place was meant, nothing is removed; the last two columns give the session's total "
     L"had the clear removed nothing, or every poll place's batches on that media.\r\n\r\n"
     L"Right-click a report to copy its rows; Ctrl+C copies the selected rows.";
+
+static const wchar_t k_AudHelpFilters[] =
+    L"Filter \x2192 Filter\x2026 (Ctrl+L) chooses which events and ballot batches the window "
+    L"shows. Each rule is a column, a relation, a value, and Include or Exclude:\r\n"
+    L"\x2022 Log, Event, Module, User Id: is / is not one of the values in the logs.\r\n"
+    L"\x2022 Description: contains / does not contain the text typed (capital letters do not "
+    L"matter), for example \"Committing new Batch\", \"cleared\" or \"error\".\r\n"
+    L"\x2022 Timestamp: on or after / before a date (MM/DD/YYYY) or a date and time "
+    L"(11/05/2024 7:00 PM, or 19:00). A date alone means midnight at its start.\r\n"
+    L"\x2022 Vote Type: is / is not, in the Ballot Batches view only.\r\n\r\n"
+    L"In the Ballot Batches view a batch is matched by its commit event (its time, user and "
+    L"description) and its vote type.\r\n\r\n"
+    L"Rules on the same column are alternatives (any included value passes), except Timestamp "
+    L"rules, which all apply: \"on or after 11/05/2024\" and \"before 11/06/2024\" show that "
+    L"day. Rules on different columns all apply, and a matching Exclude always hides the row. "
+    L"Check boxes turn rules on and off. Export Filter\x2026 saves the rules to a file and Load "
+    L"Filter\x2026 reads them back, also in another audit window. Filter \x2192 Reset Filter "
+    L"removes every rule.\r\n\r\n"
+    L"The filter changes what the list shows; the reports always count every event and batch.";
 
 static const EeAuditLog *Aud_Log(const AuditWindow *aw, int li)
 {
@@ -20854,6 +20959,248 @@ static int __cdecl Aud_BatchSortCmp(void *ctx, const void *pa, const void *pb)
     return r;
 }
 
+/* --- Filter: matching --------------------------------------------------- */
+
+/* A typed time: "MM/DD/YYYY", optionally followed by "hh:mm[:ss]" and AM / PM (24-hour without),
+ * or "YYYY-MM-DD[ hh:mm[:ss]]". FALSE when it is not one. */
+static BOOL Aud_ParseTime(const wchar_t *s, int64_t *out)
+{
+    unsigned y = 0, mo = 0, d = 0, h = 0, mi = 0, sec = 0;
+    int used = 0, n;
+    const wchar_t *p;
+    while (*s == L' ')
+    {
+        s++;
+    }
+    if (swscanf_s(s, L"%4u-%2u-%2u%n", &y, &mo, &d, &used) == 3 ||
+        swscanf_s(s, L"%2u/%2u/%4u%n", &mo, &d, &y, &used) == 3)
+    {
+        p = s + used;
+    }
+    else
+    {
+        return FALSE;
+    }
+    if (y < 1900 || y > 2199 || mo < 1 || mo > 12 || d < 1 || d > 31)
+    {
+        return FALSE;
+    }
+    while (*p == L' ')
+    {
+        p++;
+    }
+    if (*p != L'\0')
+    {
+        used = 0;
+        n = swscanf_s(p, L"%2u:%2u%n", &h, &mi, &used);
+        if (n != 2)
+        {
+            return FALSE;
+        }
+        p += used;
+        if (*p == L':')
+        {
+            used = 0;
+            if (swscanf_s(p + 1, L"%2u%n", &sec, &used) != 1)
+            {
+                return FALSE;
+            }
+            p += 1 + used;
+        }
+        while (*p == L' ')
+        {
+            p++;
+        }
+        if ((p[0] == L'A' || p[0] == L'a' || p[0] == L'P' || p[0] == L'p') && (p[1] == L'M' || p[1] == L'm'))
+        {
+            if (h < 1 || h > 12)
+            {
+                return FALSE;
+            }
+            h = (h % 12) + ((p[0] == L'P' || p[0] == L'p') ? 12u : 0u);
+            p += 2;
+        }
+        while (*p == L' ')
+        {
+            p++;
+        }
+        if (*p != L'\0' || h > 23 || mi > 59 || sec > 59)
+        {
+            return FALSE;
+        }
+    }
+    *out = EeAudit_MakeTime((int)y, (int)mo, (int)d, (int)h, (int)mi, (int)sec);
+    return TRUE;
+}
+
+static char Aud_Lower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+/* @p needle in @p hay, ASCII letters compared without case. */
+static BOOL Aud_ContainsI(const char *hay, const char *needle)
+{
+    size_t i, k;
+    if (needle[0] == '\0')
+    {
+        return TRUE;
+    }
+    for (i = 0; hay[i] != '\0'; i++)
+    {
+        for (k = 0; needle[k] != '\0' && hay[i + k] != '\0' && Aud_Lower(hay[i + k]) == Aud_Lower(needle[k]); k++)
+        {
+        }
+        if (needle[k] == '\0')
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static BOOL Aud_RuleMatches(const AudRule *r, const char *text, int64_t ts)
+{
+    switch (r->relation)
+    {
+    case EeRel_IsNot:
+        return _stricmp(text, r->u8) != 0;
+    case EeRel_Contains:
+        return Aud_ContainsI(text, r->u8);
+    case EeRel_Excludes:
+        return !Aud_ContainsI(text, r->u8);
+    case EeRel_MoreThan: /* on or after */
+        return ts >= r->ts;
+    case EeRel_LessThan: /* before */
+        return ts < r->ts;
+    default:
+        return _stricmp(text, r->u8) == 0;
+    }
+}
+
+/* A row's fields (@p text indexed by AF_*; NULL = not in this view) pass the rules: a matching
+ * Exclude hides it; Include rules on one column are alternatives, except Timestamp rules,
+ * which all apply (so "on or after" and "before" give a range); columns all apply. */
+static BOOL Aud_FieldsPass(const AuditWindow *aw, const char *const *text, int64_t ts)
+{
+    BOOL any_inc[AF_COUNT] = {FALSE}, inc[AF_COUNT] = {FALSE};
+    uint32_t i;
+    int c;
+    for (i = 0; i < aw->nrules; i++)
+    {
+        const AudRule *r = &aw->rules[i];
+        BOOL m;
+        if (r->column >= AF_COUNT || text[r->column] == NULL)
+        {
+            continue; /* a rule for the other view */
+        }
+        m = Aud_RuleMatches(r, text[r->column], ts);
+        if (r->action == EeFilt_Exclude)
+        {
+            if (m)
+            {
+                return FALSE;
+            }
+        }
+        else if (r->column == AF_TIMESTAMP)
+        {
+            if (!m)
+            {
+                return FALSE;
+            }
+        }
+        else
+        {
+            any_inc[r->column] = TRUE;
+            inc[r->column] = inc[r->column] || m;
+        }
+    }
+    for (c = 0; c < AF_COUNT; c++)
+    {
+        if (any_inc[c] && !inc[c])
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+static BOOL Aud_EventPasses(const AuditWindow *aw, int li, const EeAuditCopy *copy, const EeAuditEvent *ev)
+{
+    const char *text[AF_COUNT];
+    text[AF_TIMESTAMP] = "";
+    text[AF_LOG] = Aud_Log(aw, li)->kind == EE_AUDIT_ADMIN ? "Admin" : "Election";
+    text[AF_EVENT] = EeAudit_Str(copy, ev->level);
+    text[AF_MODULE] = EeAudit_Str(copy, ev->module);
+    text[AF_USER] = EeAudit_Str(copy, ev->user);
+    text[AF_DESC] = EeAudit_Desc(copy, ev);
+    text[AF_VOTETYPE] = NULL;
+    return Aud_FieldsPass(aw, text, ev->ts);
+}
+
+/* A batch passes by its commit event's fields and its vote type. */
+static BOOL Aud_BatchPasses(const AuditWindow *aw, const EeAuditBatch *b)
+{
+    static const char *const k_vt[EE_AUDIT_VT_COUNT] = {"Other", "Early voting", "Election Day", "Mail",
+                                                        "Provisional"};
+    const EeAuditCopy *copy = NULL;
+    const EeAuditEvent *ev = Aud_BatchEvent(aw, b, &copy);
+    const char *text[AF_COUNT];
+    text[AF_TIMESTAMP] = "";
+    text[AF_LOG] = "Election";
+    text[AF_EVENT] = EeAudit_Str(copy, ev->level);
+    text[AF_MODULE] = EeAudit_Str(copy, ev->module);
+    text[AF_USER] = EeAudit_Str(copy, ev->user);
+    text[AF_DESC] = EeAudit_Desc(copy, ev);
+    text[AF_VOTETYPE] = (b->vote_type >= 0 && b->vote_type < EE_AUDIT_VT_COUNT) ? k_vt[b->vote_type] : "Other";
+    return Aud_FieldsPass(aw, text, b->ts);
+}
+
+/* Compile the enabled rules of aw->filters into aw->rules. */
+static BOOL Aud_CompileFilter(AuditWindow *aw)
+{
+    uint32_t i;
+    free(aw->rules);
+    aw->rules = NULL;
+    aw->nrules = 0;
+    aw->filt_active = EeFilter_HasEnabled(&aw->filters);
+    if (!aw->filt_active)
+    {
+        return TRUE;
+    }
+    aw->rules = (AudRule *)calloc(aw->filters.count, sizeof(AudRule));
+    if (aw->rules == NULL)
+    {
+        aw->filt_active = FALSE;
+        return FALSE;
+    }
+    for (i = 0; i < aw->filters.count; i++)
+    {
+        const EeFilterRule *f = &aw->filters.rules[i];
+        AudRule *r = &aw->rules[aw->nrules];
+        if (!f->enabled || f->column >= AF_COUNT)
+        {
+            continue;
+        }
+        r->column = f->column;
+        r->relation = f->relation;
+        r->action = f->action;
+        if (f->column == AF_TIMESTAMP)
+        {
+            if (!Aud_ParseTime(f->value, &r->ts))
+            {
+                continue; /* refused when added; a loaded file's bad time is skipped */
+            }
+        }
+        else if (WideCharToMultiByte(CP_UTF8, 0, f->value, -1, r->u8, (int)sizeof(r->u8), NULL, NULL) <= 0)
+        {
+            continue;
+        }
+        aw->nrules++;
+    }
+    return TRUE;
+}
+
 static int __cdecl Aud_SeqCmp(const void *pa, const void *pb)
 {
     const AudRow *a = (const AudRow *)pa;
@@ -20890,6 +21237,7 @@ static BOOL Aud_BuildRows(AuditWindow *aw)
     free(aw->rows);
     aw->rows = NULL;
     aw->nrows = 0;
+    aw->nrows_all = 0;
     if (aw->view == AUD_VIEW_BATCHES)
     {
         const EeAuditSession *s;
@@ -20956,6 +21304,32 @@ static BOOL Aud_BuildRows(AuditWindow *aw)
             aw->rows[n].seq = n;
             n++;
         }
+    }
+    aw->nrows_all = n;
+    if (aw->filt_active)
+    {
+        /* keep the rows that pass the filter, in order */
+        uint32_t i, k = 0;
+        for (i = 0; i < n; i++)
+        {
+            const AudRow *row = &aw->rows[i];
+            BOOL pass;
+            if (aw->view == AUD_VIEW_BATCHES)
+            {
+                pass = Aud_BatchPasses(aw, &aw->acct.batches[row->idx]);
+            }
+            else
+            {
+                const EeAuditCopy *copy = NULL;
+                const EeAuditEvent *ev = Aud_RowEvent(aw, row, &copy);
+                pass = Aud_EventPasses(aw, row->log, copy, ev);
+            }
+            if (pass)
+            {
+                aw->rows[k++] = *row;
+            }
+        }
+        n = k;
     }
     aw->nrows = n;
     return TRUE;
@@ -21087,7 +21461,9 @@ static void Aud_UpdateBatchStatus(AuditWindow *aw)
     else
     {
         s = &aw->acct.sessions[aw->session];
-        Aud_SessionLabel(aw, (uint32_t)aw->session, buf, ARRAYSIZE(buf));
+        /* the session's times are in Ballot Accounting, so the rest fits */
+        StringCchPrintfW(buf, ARRAYSIZE(buf), L"Session %d of %u (%s)", aw->session + 1, aw->acct.nsessions,
+                         Aud_SessionKind(aw, (uint32_t)aw->session));
         fmt_count_w((int64_t)s->nbatches, n1, ARRAYSIZE(n1));
         fmt_count_w((int64_t)s->counted, n2, ARRAYSIZE(n2));
         fmt_count_w(s->ballots, n3, ARRAYSIZE(n3));
@@ -21101,6 +21477,13 @@ static void Aud_UpdateBatchStatus(AuditWindow *aw)
         {
             StringCchPrintfW(n1, ARRAYSIZE(n1), L"  \x2022  %u media clear%s", s->nclears, s->nclears == 1 ? L"" : L"s");
             StringCchCatW(buf, ARRAYSIZE(buf), n1);
+        }
+        if (aw->filt_active)
+        {
+            fmt_count_w((int64_t)aw->nrows, n1, ARRAYSIZE(n1));
+            StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  filtered: ");
+            StringCchCatW(buf, ARRAYSIZE(buf), n1);
+            StringCchCatW(buf, ARRAYSIZE(buf), L" shown");
         }
     }
     SendMessageW(aw->status, SB_SETTEXTW, 0, (LPARAM)buf);
@@ -21139,8 +21522,9 @@ static void Aud_UpdateStatus(AuditWindow *aw)
     {
         const EeAuditLog *log = Aud_Log(aw, aw->show_copy_log);
         fmt_count_w((int64_t)aw->nrows, n1, ARRAYSIZE(n1));
-        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  showing %s log copy %d of %u as printed: %s events",
-                         Aud_LogName(log->kind), aw->show_copy + 1, log->ncopies, n1);
+        fmt_count_w((int64_t)aw->nrows_all, n2, ARRAYSIZE(n2));
+        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  showing %s log copy %d of %u as printed: %s of %s events",
+                         Aud_LogName(log->kind), aw->show_copy + 1, log->ncopies, n1, n2);
     }
     else
     {
@@ -21149,6 +21533,10 @@ static void Aud_UpdateStatus(AuditWindow *aw)
         StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  %s of %s events", n1, n2);
     }
     StringCchCatW(buf, ARRAYSIZE(buf), part);
+    if (aw->filt_active)
+    {
+        StringCchCatW(buf, ARRAYSIZE(buf), L" (filtered)");
+    }
     if (aw->have_acct && aw->acct.election_session >= 0)
     {
         fmt_count_w(aw->acct.sessions[aw->acct.election_session].ballots, n1, ARRAYSIZE(n1));
@@ -21431,6 +21819,241 @@ static LRESULT Aud_CustomDraw(AuditWindow *aw, NMLVCUSTOMDRAW *cd)
     default:
         return CDRF_DODEFAULT;
     }
+}
+
+/* --- Filter: the rule window's host -------------------------------------- */
+
+/* "05/26/2026" for day @p day (days since 1970). */
+static void Aud_DayText(int64_t day, wchar_t *out, size_t cch)
+{
+    wchar_t t[48];
+    Aud_TimeText(day * 86400, t, ARRAYSIZE(t));
+    t[10] = L'\0'; /* the date part of "MM/DD/YYYY hh:mm:ssAM" */
+    StringCchCopyW(out, cch, t);
+}
+
+static int __cdecl Aud_I64Cmp(const void *pa, const void *pb)
+{
+    return Aud_CmpI64(*(const int64_t *)pa, *(const int64_t *)pb);
+}
+
+static BOOL Aud_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint32_t *n)
+{
+    static const wchar_t *const k_vt[EE_AUDIT_VT_COUNT] = {L"Early voting", L"Election Day", L"Mail",
+                                                           L"Provisional", L"Other"};
+    AuditWindow *aw = (AuditWindow *)ctx;
+    size_t cap = 0;
+    BOOL ok = TRUE;
+    int li;
+    *vals = NULL;
+    *n = 0;
+    switch (column)
+    {
+    case AF_LOG:
+        for (li = 0; li < 2 && ok; li++)
+        {
+            if (Aud_Log(aw, li)->ncopies > 0)
+            {
+                ok = Res_AddValue(vals, n, &cap, Aud_LogName(Aud_Log(aw, li)->kind));
+            }
+        }
+        return ok;
+    case AF_VOTETYPE:
+        for (li = 0; li < EE_AUDIT_VT_COUNT && ok; li++)
+        {
+            ok = Res_AddValue(vals, n, &cap, k_vt[li]);
+        }
+        return ok;
+    case AF_DESC:
+        return TRUE; /* typed: "contains" */
+    case AF_TIMESTAMP:
+    {
+        /* the days that have events, newest first: suggestions for a typed date */
+        int64_t *days = NULL;
+        uint32_t nd = 0, total = Aud_Log(aw, 0)->nevents + Aud_Log(aw, 1)->nevents, i, k;
+        if (total == 0)
+        {
+            return TRUE;
+        }
+        days = (int64_t *)malloc((size_t)total * sizeof(int64_t));
+        if (days == NULL)
+        {
+            return FALSE;
+        }
+        for (li = 0; li < 2; li++)
+        {
+            const EeAuditLog *log = Aud_Log(aw, li);
+            for (i = 0; i < log->nevents; i++)
+            {
+                const EeAuditCopy *c = NULL;
+                int64_t ts = EeAudit_MergedEvent(log, i, &c)->ts;
+                days[nd++] = ts >= 0 ? ts / 86400 : (ts - 86399) / 86400;
+            }
+        }
+        qsort(days, nd, sizeof(int64_t), Aud_I64Cmp);
+        for (k = nd; k-- > 0 && ok;)
+        {
+            if (k + 1 == nd || days[k] != days[k + 1])
+            {
+                wchar_t d[16];
+                Aud_DayText(days[k], d, ARRAYSIZE(d));
+                ok = Res_AddValue(vals, n, &cap, d);
+            }
+        }
+        free(days);
+        return ok;
+    }
+    default:
+        break;
+    }
+    /* Event, Module, User Id: the distinct strings of both logs' merged events */
+    {
+        const char **uniq = NULL;
+        uint32_t nu = 0, capu = 0, i, k;
+        const char *last = NULL;
+        for (li = 0; li < 2 && ok; li++)
+        {
+            const EeAuditLog *log = Aud_Log(aw, li);
+            for (i = 0; i < log->nevents && ok; i++)
+            {
+                const EeAuditCopy *c = NULL;
+                const EeAuditEvent *ev = EeAudit_MergedEvent(log, i, &c);
+                const char *s = EeAudit_Str(c, column == AF_EVENT ? ev->level : column == AF_MODULE ? ev->module
+                                                                                                     : ev->user);
+                if (s == last || s[0] == '\0')
+                {
+                    continue;
+                }
+                last = s;
+                for (k = 0; k < nu && strcmp(uniq[k], s) != 0; k++)
+                {
+                }
+                if (k < nu)
+                {
+                    continue;
+                }
+                if (nu == capu)
+                {
+                    uint32_t nc = capu ? capu * 2 : 64;
+                    const char **p = (const char **)realloc((void *)uniq, nc * sizeof(char *));
+                    if (p == NULL)
+                    {
+                        ok = FALSE;
+                        break;
+                    }
+                    uniq = p;
+                    capu = nc;
+                }
+                uniq[nu++] = s;
+            }
+        }
+        for (k = 0; k < nu && ok; k++)
+        {
+            wchar_t w[EE_FILTER_VALUE_CCH];
+            Aud_Widen(uniq[k], w, ARRAYSIZE(w));
+            ok = Res_AddValue(vals, n, &cap, w);
+        }
+        free((void *)uniq);
+        if (*n > 1)
+        {
+            qsort(*vals, *n, sizeof(wchar_t *), Res_ValueCmp);
+        }
+    }
+    return ok;
+}
+
+static uint32_t Aud_FilterRelations(void *ctx, uint32_t column)
+{
+    (void)ctx;
+    if (column == AF_DESC)
+    {
+        return (1u << EeRel_Contains) | (1u << EeRel_Excludes);
+    }
+    if (column == AF_TIMESTAMP)
+    {
+        return (1u << EeRel_MoreThan) | (1u << EeRel_LessThan);
+    }
+    return EE_FILTER_REL_EQUALITY;
+}
+
+static const wchar_t *Aud_FilterRelText(void *ctx, uint32_t column, EeFilterRelation rel)
+{
+    (void)ctx;
+    (void)column;
+    switch (rel)
+    {
+    case EeRel_Excludes:
+        return L"does not contain";
+    case EeRel_MoreThan:
+        return L"on or after";
+    case EeRel_LessThan:
+        return L"before";
+    default:
+        return EeFilter_RelationText(rel);
+    }
+}
+
+static BOOL Aud_FilterValidate(void *ctx, const EeFilterRule *r, wchar_t *msg, size_t cch)
+{
+    int64_t ts;
+    (void)ctx;
+    if (r->column == AF_TIMESTAMP && !Aud_ParseTime(r->value, &ts))
+    {
+        StringCchCopyW(msg, cch,
+                       L"Enter a date as MM/DD/YYYY, or a date and time such as 11/05/2024 7:00 PM "
+                       L"(or 19:00).");
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void Aud_ApplyFilter(AuditWindow *aw)
+{
+    if (!Aud_CompileFilter(aw))
+    {
+        MessageBoxW(aw->hwnd, L"Out of memory.", k_WindowTitle, MB_ICONERROR | MB_OK);
+    }
+    Aud_Rebuild(aw);
+}
+
+static void Aud_FilterApplyCb(void *ctx)
+{
+    Aud_ApplyFilter((AuditWindow *)ctx);
+}
+
+static void Aud_ResetFilter(AuditWindow *aw)
+{
+    EeFilter_Clear(&aw->filters);
+    Aud_ApplyFilter(aw);
+}
+
+static BOOL App_ShowAuditFilter(AuditWindow *aw)
+{
+    CvrFilterState *st;
+    if (aw->hwnd_filter != NULL)
+    {
+        SetForegroundWindow(aw->hwnd_filter);
+        return TRUE;
+    }
+    st = Filter_NewState(aw->app, aw->hwnd, &aw->filters, &aw->hwnd_filter);
+    if (st == NULL)
+    {
+        return FALSE;
+    }
+    st->titles = k_AudFilterTitles;
+    st->ncols = AF_COUNT;
+    st->base_name = aw->base_name;
+    st->file_noun = L"Audit Log";
+    st->caption = L"Election Explorer Audit Log Filter";
+    st->collect = Aud_FilterCollect;
+    st->apply = Aud_FilterApplyCb;
+    st->relations = Aud_FilterRelations;
+    st->relation_text = Aud_FilterRelText;
+    st->validate = Aud_FilterValidate;
+    st->relation_mask = EE_FILTER_REL_EQUALITY | (1u << EeRel_Contains) | (1u << EeRel_Excludes) |
+                        (1u << EeRel_MoreThan) | (1u << EeRel_LessThan);
+    st->ctx = aw;
+    return Filter_ShowRuleWindow(st, L"Show events (and ballot batches) matching these conditions:");
 }
 
 /* --- Reports: Copies Check and Ballot Accounting -------------------------- */
@@ -22730,23 +23353,25 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     HMENU view_menu = CreatePopupMenu();
     HMENU log_menu = CreatePopupMenu();
     HMENU copy_menu = CreatePopupMenu();
+    HMENU filter_menu = CreatePopupMenu();
     HMENU reports_menu = CreatePopupMenu();
     HMENU help_menu = CreatePopupMenu();
     int li;
     if (menu == NULL || file_menu == NULL || edit_menu == NULL || view_menu == NULL || log_menu == NULL ||
-        copy_menu == NULL || reports_menu == NULL || help_menu == NULL)
+        copy_menu == NULL || filter_menu == NULL || reports_menu == NULL || help_menu == NULL)
     {
-        HMENU all[8];
+        HMENU all[9];
         int i;
         all[0] = file_menu;
         all[1] = edit_menu;
         all[2] = view_menu;
         all[3] = log_menu;
         all[4] = copy_menu;
-        all[5] = reports_menu;
-        all[6] = help_menu;
-        all[7] = menu;
-        for (i = 0; i < 8; i++)
+        all[5] = filter_menu;
+        all[6] = reports_menu;
+        all[7] = help_menu;
+        all[8] = menu;
+        for (i = 0; i < 9; i++)
         {
             if (all[i] != NULL)
             {
@@ -22792,18 +23417,22 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(view_menu, MF_POPUP, (UINT_PTR)copy_menu, L"&Copy");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(view_menu, MF_STRING, IDM_AUD_VIEW_RESET, L"&Reset View");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_EDIT, L"&Filter…\tCtrl+L");
+    AppendMenuW(filter_menu, MF_STRING, IDM_FILTER_RESET, L"&Reset Filter");
     AppendMenuW(reports_menu, MF_STRING, IDM_AUD_REP_COPIES, L"&Copies Check…");
     AppendMenuW(reports_menu, MF_STRING, IDM_AUD_REP_ACCT, L"Ballot &Accounting…");
     AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(reports_menu, MF_STRING, IDM_AUD_SELECT_SESSION, L"&Select Session…");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Audit Logs");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Views and Options");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"&View");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
@@ -22828,6 +23457,8 @@ static LRESULT CALLBACK AuditListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LP
 static void Aud_FreeWindowData(AuditWindow *aw)
 {
     free(aw->rows);
+    free(aw->rules);
+    EeFilter_Clear(&aw->filters);
     if (aw->have_acct)
     {
         EeAudit_FreeAccounting(&aw->acct);
@@ -22926,6 +23557,7 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 }
             }
             EnableMenuItem(m, IDM_AUD_VIEW_RESET, MF_BYCOMMAND | (aw->sort_col >= 0 ? MF_ENABLED : MF_GRAYED));
+            EnableMenuItem(m, IDM_FILTER_RESET, MF_BYCOMMAND | (aw->filters.count > 0 ? MF_ENABLED : MF_GRAYED));
         }
         break;
 
@@ -22993,6 +23625,15 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             return 0;
         case IDM_AUD_SELECT_SESSION:
             App_ShowAuditReport(aw, AUD_REP_ACCT, AT_SESSIONS);
+            return 0;
+        case IDM_FILTER_EDIT: /* also Ctrl+L */
+            App_ShowAuditFilter(aw);
+            return 0;
+        case IDM_FILTER_RESET:
+            Aud_ResetFilter(aw);
+            return 0;
+        case IDM_HELP_FILTERS:
+            App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Filters", k_AudHelpFilters);
             return 0;
         case IDM_HELP_REPORTS:
             App_ShowHelpTopicOn(aw->app, hwnd, L"Help — Reports", k_AudHelpReports);
@@ -23117,6 +23758,10 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_DESTROY:
         if (aw != NULL)
         {
+            if (aw->hwnd_filter != NULL)
+            {
+                DestroyWindow(aw->hwnd_filter); /* clears aw->hwnd_filter */
+            }
             if (aw->rep_copies != NULL)
             {
                 DestroyWindow(aw->rep_copies->hwnd); /* clears aw->rep_copies */
@@ -23167,6 +23812,14 @@ static void App_CreateAuditWindow(AppState *app, EeAuditElection *el)
     aw->show_copy = AUD_MERGED;
     aw->sort_col = -1;
     aw->sort_asc = TRUE;
+    EeFilter_Init(&aw->filters);
+    for (li = 0; li < 2; li++)
+    {
+        if (mine->logs[li].ncopies > 0 && aw->base_name[0] == L'\0')
+        {
+            App_BaseNameNoExt(mine->logs[li].copies[0].path, aw->base_name, ARRAYSIZE(aw->base_name));
+        }
+    }
     for (li = 0; li < 2; li++)
     {
         const EeAuditLog *log = &mine->logs[li];

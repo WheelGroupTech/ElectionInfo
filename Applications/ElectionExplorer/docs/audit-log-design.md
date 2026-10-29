@@ -511,6 +511,46 @@ no warnings.
       copy.
   - File → Exit closes the report windows with the audit window.
 
+### Step 6 — Filter (done 2026-10-29)
+
+`main.c`. Release x64 and ARM64 build with no warnings.
+
+- **Filter → Filter… (Ctrl+L) / Reset Filter.** It uses the rule window shared with the CVR and
+  results windows. That window gained optional host hooks in `CvrFilterState`:
+  - `relations`: the relations a column offers;
+  - `relation_text`: their labels;
+  - `validate`: a check of a rule before it is added;
+  - `relation_mask`: what a loaded filter file may use.
+  - A column without "is" takes a typed value; any listed values are only suggestions.
+  - The CVR and results windows pass no hooks and keep "is / is not". The Results filter was
+    checked in the app.
+- **Columns and relations (D8):**
+  - Timestamp: on or after / before. A typed date (MM/DD/YYYY) or date and time (12- or 24-hour);
+    also YYYY-MM-DD. The suggestions are the days that have events.
+  - Log, Event, Module, User Id: is / is not.
+  - Description: contains / does not contain (ASCII letters without case).
+  - Vote Type: is / is not, in the Batches view only.
+  - A bad time is refused with a message.
+- **Semantics, changed from the plan:**
+  - The CVR filter's rules hold for every column except Timestamp: Include rules on one column are
+    alternatives; a matching Exclude hides the row; different columns all apply.
+  - Timestamp Include rules all apply together, so "on or after 11/05/2024" plus "before
+    11/06/2024" is one day. Treated as alternatives, they would match everything.
+  - In the Batches view a batch is matched by its commit event (time, user, description) and its
+    vote type. Vote Type rules are ignored in the Events view.
+  - The reports always count everything.
+- **Filter files:** Export / Load Filter in the rule window. The relations are saved under their
+  standard names ("excludes", "more than", "less than"), so an audit filter file loads into
+  another audit window.
+- **Status bar:** "N of M events (filtered)"; in the Batches view, "filtered: N shown". The
+  Batches status no longer shows the session's times; Ballot Accounting has them.
+- **Checked in the app (UI Automation):**
+  - **Dallas G24:** Description contains "cleared" with Timestamp on or after 11/14/2024 and
+    before 11/15/2024 leaves 8 of 103,827 events, the four media clears' warnings and
+    confirmations.
+  - The time "notadate" is refused with the message.
+  - **Batches view:** Vote Type is Mail plus Exclude User Id is not dgrant leaves 1,137 batches.
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**

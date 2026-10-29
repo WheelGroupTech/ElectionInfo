@@ -5,8 +5,8 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: 1.6 audit log step 5, Ballot Batches and the two reports
-(`main.c`, `resource.h`, `ee_audit.{c,h}`, tests, design doc; see Next steps).
+Microsoft Store**. Uncommitted: 1.6 audit log step 6, the Filter (`main.c`, design doc; see Next
+steps).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -104,8 +104,8 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–5 (window, batches,
-  reports) done 2026-10-29:**
+- **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–6 (window, batches,
+  reports, filter) done 2026-10-29:**
   `ElectionExplorer/docs/audit-log-design.md` ("Implementation status"). Implementation was started
   on the proposed decisions D1–D10.
   - **Data:** Electionware Election/Admin audit event PDFs in `Audit_Logs/` (gitignored): Travis,
@@ -129,8 +129,13 @@ Listing; all committed, lint 10/10. Run with `python -I`.
       Session; Select Session…) and Reports → Copies Check….
     - Engine: `EeAuditBatch.clear`.
     - Dallas G24 shows 858,562 with the alternative readings 906,179 / 857,597.
-  - **Next:** step 6, the Filter (CVR-style rules plus contains / does not contain and date
-    relations; save/load filter files).
+  - **Step 6 (done 2026-10-29, uncommitted):** Filter → Filter… (Ctrl+L) / Reset Filter.
+    - Rules: Timestamp on or after / before (these all apply together, giving a range); Log,
+      Event, Module, User Id and Vote Type is / is not; Description contains / does not contain.
+    - The shared rule window (`CvrFilterState`) gained optional hooks: `relations`,
+      `relation_text`, `validate`, `relation_mask`.
+  - **Next:** step 7, the L&A Testing Timeline, Notable Events and Users and Workstations reports
+    (validate the timeline on Travis PR26 as traced in the design doc).
     Scratch tools in the desktop session scratchpad: `audit_probe.c` (`-merge` mode) and
     `uia/drive_audit.ps1`, which drives the app through UI Automation and saves screenshots. Its
     `-Then` list takes command IDs, `click`/`dbl<x>:<y>` in the audit window, and `rep`,

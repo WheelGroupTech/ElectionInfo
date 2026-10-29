@@ -33,6 +33,7 @@
  */
 
 #include "ee_results_pdf.h"
+#include "ee_results_dom.h"
 #include "ee_glyph_ocr.h"
 #include "pdf_reader.h"
 
@@ -3943,6 +3944,16 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
         rp_set_err(err, errcch, msg);
         return FALSE;
     }
+    {
+        /* a Dominion report (Microsoft Reporting Services, like Hart's): ee_results_dom.c */
+        int dk = EeRdom_PdfKind(pdf);
+        if (dk != 0)
+        {
+            ok = EeRdom_ParsePdf(pdf, dk, out, err, errcch);
+            EePdf_Close(pdf);
+            return ok;
+        }
+    }
     ZeroMemory(&cx, sizeof(cx));
     cx.d = out;
     cx.pre = UINT32_MAX;
@@ -4035,8 +4046,9 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
     {
         rp_set_err(err, errcch,
                    L"It is not a results report this version can read. Summary and precinct "
-                   L"results reports from ES&S Electionware, and cumulative, precinct and "
-                   L"canvass reports from Hart, can be loaded.");
+                   L"results reports from ES&S Electionware, cumulative, precinct and canvass "
+                   L"reports from Hart, and Election Summary and Statement of Votes Cast reports "
+                   L"from Dominion can be loaded.");
     }
     else if (cx.hart_old && (out->election_date == NULL || !rp_is_date(out->election_date)))
     {

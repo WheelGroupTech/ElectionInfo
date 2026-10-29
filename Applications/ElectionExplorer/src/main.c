@@ -9167,7 +9167,7 @@ static const wchar_t k_HelpLoading[] =
     L"it.\r\n\r\n"
     L"To see who has voted in an election, use File → Load Voter Roster… instead; a roster "
     L"opens in its own window (see Help → Loading Voter Rosters there). An election's results "
-    L"(Clarity Elections files, or ES&S and Hart results reports) open with File → Load "
+    L"(Clarity Elections files, or ES&S, Hart and Dominion results reports) open with File → Load "
     L"Election Results…, also in a window of their own, and ES&S Electionware audit logs with "
     L"File → Load Audit Logs… (see Help → Loading Audit Logs there).";
 
@@ -16392,6 +16392,12 @@ static const wchar_t k_ResHelpLoading[] =
     L"no vote-type breakdown.\r\n"
     L"\x2022 Hart reports from before Verity (2020\x2013" L"2022): the cumulative report, the "
     L"precinct report (by vote type) and the canvass.\r\n"
+    L"\x2022 Dominion Democracy Suite: the Election Summary Report, saved as XML, XLSX or PDF "
+    L"(county-wide totals with ballots cast by counting group; a ranked-choice contest shows "
+    L"its first choices; qualified write-in candidates are listed by name), and the Statement of "
+    L"Votes Cast PDF, which gives every precinct by vote type. Where it prints \"****\" for a "
+    L"count too small to keep the votes private, the precinct's Total still gives the whole "
+    L"count, and the votes whose vote type is not printed are under the vote type \"Withheld\".\r\n"
     L"Not read: scanned (image-only) results PDFs, ES&S \"Statement of Votes Cast\" and custom "
     L"table reports, and password-protected PDFs.\r\n"
     L"A summary report gives totals only; the precinct report or canvass gives each "

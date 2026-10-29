@@ -5174,6 +5174,8 @@ static BOOL tpdf_row(TBuf *c, double *y_top, const char *t1, const char *t2,
 
 /* The Info Producer tpdf_write writes; NULL = Microsoft Reporting Services (Hart). */
 static const char *g_tpdf_producer = NULL;
+/* The Info Title tpdf_write writes; NULL = "Count_CvrReport" (a Hart CVR Report). */
+static const char *g_tpdf_title = NULL;
 /* The Info Creator tpdf_write writes (PDF string syntax); NULL = none. */
 static const char *g_tpdf_creator = NULL;
 
@@ -5226,7 +5228,8 @@ static BOOL tpdf_write(const wchar_t *path, TBuf *pages, int npages, BOOL break_
     ok = ok && tb_add(&b, k_Cmap, strlen(k_Cmap));
     ok = ok && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
     OBJ(6);
-    ok = ok && tb_printf(&b, "<< /Title (Count_CvrReport) /Producer (%s)%s%s%s >>\r\nendobj\r\n",
+    ok = ok && tb_printf(&b, "<< /Title (%s) /Producer (%s)%s%s%s >>\r\nendobj\r\n",
+                         g_tpdf_title != NULL ? g_tpdf_title : "Count_CvrReport",
                          g_tpdf_producer != NULL ? g_tpdf_producer
                                                  : "Microsoft Reporting Services PDF Rendering Extension 2019.11.0.0",
                          g_tpdf_creator != NULL ? " /Creator (" : "", g_tpdf_creator != NULL ? g_tpdf_creator : "",
@@ -12598,6 +12601,277 @@ done:
     return rc;
 }
 
+/* A Dominion report's heading cell at @p x and the right edge numbers line up with under it. */
+static double dom_head(TBuf *c, double x, double y, const char *text)
+{
+    return rpdf_text(c, x, y, 8.0, text) ? x + rpdf_w(text, 8.0) : -1.0;
+}
+
+/* The choice @p name of contest @p ct, or NULL. */
+static const EeResultsChoice *dom_choice(const EeResults *r, const EeResultsContest *ct, const wchar_t *name)
+{
+    uint32_t k;
+    for (k = 0; k < ct->nchoices; k++)
+    {
+        if (wcscmp(r->choices[ct->first_choice + k].name, name) == 0)
+        {
+            return &r->choices[ct->first_choice + k];
+        }
+    }
+    return NULL;
+}
+
+/* Dominion Democracy Suite results (tag: resdom):
+ * - an Election Summary Report saved as XML: the party on the title's second line dropped,
+ *   Vote For worked out from the contest's figures, a qualified write-in listed by name (the
+ *   Write-in row keeps the rest: none), turnout by counting group;
+ * - the same report as a PDF (a candidate's name wrapped around its numbers, the write-in
+ *   table), loaded with the XML as one election with nothing to report between them;
+ * - a Statement of Votes Cast PDF: the turnout pages by precinct and vote type, and a contest
+ *   page of two panels with turned headings, where counts printed "****" come from the
+ *   precinct's Total row into the vote type "Withheld". */
+static int test_results_dominion(void)
+{
+    static const char k_xml[] =
+        "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<Report Name=\"ElectionSummaryReportRPT\" xmlns=\"ElectionSummaryReportRPT\">"
+        "<Title><Report Name=\"Title\" Textbox3=\"Primary Election\" Textbox2=\"Test\" "
+        "Textbox9=\"2026-06-02T00:00:00\" Textbox8=\"City of Test&#xA;June 2, 2026 Consolidated Primary "
+        "Election&#xA;Final Summary Report\" /></Title>"
+        "<RegistrationAndTurnout><Report Name=\"RegistrationAndTurnout\"><Tablix10><electorGroupId2_Collection>"
+        "<electorGroupId2 electorGroupId2=\"Total\" ballots2=\"40\" ballots3=\"10\" Textbox32=\"20\"><Details1_Collection>"
+        "<Details1 countingGroup1=\"Election Day\" ballots1=\"8\" Textbox171=\"2\" />"
+        "<Details1 countingGroup1=\"Vote by Mail\" ballots1=\"32\" Textbox171=\"8\" />"
+        "</Details1_Collection></electorGroupId2></electorGroupId2_Collection></Tablix10></Report>"
+        "</RegistrationAndTurnout><contestList><ContestIdGroup_Collection>"
+        "<ContestIdGroup contestId=\"DEM CCC DISTRICT 17  &#xD;&#xA;DEM \"><ContestStatistics>"
+        "<Report Name=\"ContestStatisticsRPT\"><Tablix1><Textbox7><Textbox9 ballots2=\"10 / 20 \" /></Textbox7>"
+        "<Textbox33><Textbox9 undervotes3=\"3\" /></Textbox33><Textbox37><Textbox9 overvotes2=\"1\" />"
+        "</Textbox37></Tablix1></Report></ContestStatistics><CandidateResults>"
+        "<Report Name=\"CandidateResultsRPT\"><Tablix1><chGroup_Collection>"
+        "<chGroup><candidateNameTextBox4 candidateNameTextBox4=\"ANN LEE \"><Textbox13 vot8=\"9\" />"
+        "</candidateNameTextBox4></chGroup>"
+        "<chGroup><candidateNameTextBox4 candidateNameTextBox4=\"BO DIAZ \"><Textbox13 vot8=\"6\" />"
+        "</candidateNameTextBox4></chGroup>"
+        "<chGroup><candidateNameTextBox4 candidateNameTextBox4=\"Write-in \"><Textbox13 vot8=\"1\" />"
+        "</candidateNameTextBox4></chGroup>"
+        "</chGroup_Collection><Textbox5><Textbox13 votes3=\"16\" /></Textbox5></Tablix1><Tablix2>"
+        "<writeinGroup2_Collection><writeinGroup2 name=\"CY ROE \"><Textbox3><Textbox1 votes2=\"1\" />"
+        "</Textbox3></writeinGroup2></writeinGroup2_Collection></Tablix2></Report></CandidateResults>"
+        "</ContestIdGroup></ContestIdGroup_Collection></contestList></Report>";
+    wchar_t dir[MAX_PATH], p_xml[MAX_PATH], p_sum[MAX_PATH], p_sovc[MAX_PATH], err[512] = L"";
+    TBuf sum = {0}, sovc[2] = {{0}, {0}};
+    EeResults *res = NULL;
+    uint32_t nres = 0, i;
+    const wchar_t *paths[2];
+    const EeResultsContest *ct;
+    const EeResultsChoice *ann, *bo, *cy;
+    FILE *f = NULL;
+    BOOL ok;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_xml, MAX_PATH, L"%sRDOM_summary.xml", dir);
+    StringCchPrintfW(p_sum, MAX_PATH, L"%sRDOM_summary.pdf", dir);
+    StringCchPrintfW(p_sovc, MAX_PATH, L"%sRDOM_sovc.pdf", dir);
+    ok = _wfopen_s(&f, p_xml, L"wb") == 0 && f != NULL && fwrite(k_xml, 1, sizeof(k_xml) - 1, f) == sizeof(k_xml) - 1;
+    if (f != NULL)
+    {
+        fclose(f);
+    }
+
+    /* the summary report as a PDF */
+    {
+        double vc, rg, tot;
+        ok = ok && rpdf_text(&sum, 20.0, 763.3, 8.0, "Page: 1 of 1") &&
+             rpdf_text(&sum, 514.5, 763.3, 8.0, "6/5/2026 1:00:00 PM") &&
+             rpdf_text(&sum, 200.0, 736.6, 14.0, "City of Test") &&
+             rpdf_text(&sum, 150.0, 720.6, 14.0, "June 2, 2026 Consolidated Primary Election") &&
+             rpdf_text(&sum, 235.2, 704.7, 14.0, "Final Summary Report") &&
+             dom_head(&sum, 20.0, 682.1, "Elector Group") > 0 && dom_head(&sum, 117.5, 682.1, "Counting Group") > 0;
+        vc = dom_head(&sum, 210.5, 682.1, "Voters Cast");
+        rg = dom_head(&sum, 278.2, 682.1, "Registered Voters");
+        ok = ok && vc > 0 && rg > 0 && rpdf_text(&sum, 20.0, 667.4, 8.0, "Total") &&
+             rpdf_text(&sum, 117.5, 665.1, 8.0, "Election Day") && rpdf_right(&sum, vc, 665.1, 8.0, "2") &&
+             rpdf_text(&sum, 117.5, 650.5, 8.0, "Vote by Mail") && rpdf_right(&sum, vc, 650.5, 8.0, "8") &&
+             rpdf_text(&sum, 117.5, 635.8, 8.0, "Total") && rpdf_right(&sum, vc, 635.8, 8.0, "10") &&
+             rpdf_right(&sum, rg, 635.8, 8.0, "20") &&
+             rpdf_text(&sum, 20.0, 598.5, 8.0, "Precincts Reported: 1 of 1 (100.00%)") &&
+             rpdf_text(&sum, 20.0, 559.9, 14.0, "DEM CCC DISTRICT 17") && rpdf_text(&sum, 20.0, 544.0, 14.0, "DEM") &&
+             rpdf_text(&sum, 20.0, 527.0, 8.0, "Precincts Reported: 1 of 1 (100.00%)");
+        tot = dom_head(&sum, 252.6, 510.0, "Total");
+        ok = ok && tot > 0 && rpdf_text(&sum, 20.0, 495.6, 8.0, "Undervotes") && rpdf_right(&sum, tot, 495.6, 8.0, "3") &&
+             rpdf_text(&sum, 20.0, 481.0, 8.0, "Overvotes") && rpdf_right(&sum, tot, 481.0, 8.0, "1") &&
+             rpdf_text(&sum, 20.0, 460.0, 8.0, "Candidate") && rpdf_text(&sum, 252.6, 460.0, 8.0, "Total") &&
+             rpdf_text(&sum, 20.0, 445.0, 8.0, "ANN LEE") && rpdf_right(&sum, tot, 445.0, 8.0, "9") &&
+             rpdf_text(&sum, 296.4, 445.0, 8.0, "56.25%") &&
+             /* a name wrapped around its numbers */
+             rpdf_text(&sum, 20.0, 425.3, 8.0, "BO") && rpdf_right(&sum, tot, 420.0, 8.0, "6") &&
+             rpdf_text(&sum, 296.4, 420.0, 8.0, "37.50%") && rpdf_text(&sum, 20.0, 414.6, 8.0, "DIAZ") &&
+             rpdf_text(&sum, 20.0, 400.0, 8.0, "Write-in") && rpdf_right(&sum, tot, 400.0, 8.0, "1") &&
+             rpdf_text(&sum, 20.0, 385.0, 8.0, "Total Votes") && rpdf_right(&sum, tot, 385.0, 8.0, "16") &&
+             /* the write-in table */
+             rpdf_text(&sum, 252.6, 365.0, 8.0, "Total") && rpdf_text(&sum, 20.0, 350.3, 8.0, "CY") &&
+             rpdf_text(&sum, 145.1, 350.3, 8.0, "WRITE-IN") && rpdf_right(&sum, tot, 345.0, 8.0, "1") &&
+             rpdf_text(&sum, 20.0, 339.6, 8.0, "ROE");
+    }
+
+    /* a Statement of Votes Cast: the turnout page, then a contest's page */
+    {
+        double rg, cc, vc;
+        TBuf *c = &sovc[0];
+        ok = ok && rpdf_text(c, 20.0, 584.0, 8.0, "Page: 1 of 2") &&
+             rpdf_text(c, 692.2, 584.0, 8.0, "3/13/2026 3:57:10 PM") &&
+             rpdf_text(c, 310.2, 561.1, 18.0, "Statement of Votes Cast") &&
+             rpdf_text(c, 368.2, 537.0, 14.0, "General Election") && rpdf_text(c, 396.9, 516.1, 14.0, "Test County") &&
+             rpdf_text(c, 371.0, 495.1, 14.0, "March 10, 2026");
+        rg = dom_head(c, 140.4, 432.7, "Registered");
+        ok = ok && rg > 0 && rpdf_text(c, 58.0, 427.4, 8.0, "Precinct");
+        cc = dom_head(c, 194.8, 427.4, "Cards Cast");
+        vc = dom_head(c, 248.3, 427.4, "Voters Cast");
+        ok = ok && cc > 0 && vc > 0 && rpdf_text(c, 301.0, 427.4, 8.0, "% Turnout") &&
+             rpdf_text(c, 155.2, 422.1, 8.0, "Voters") && rpdf_text(c, 20.0, 371.5, 8.0, "P1") &&
+             rpdf_right(c, 124.0, 356.8, 8.0, "Election Day") && rpdf_right(c, rg, 356.8, 8.0, "100") &&
+             rpdf_right(c, cc, 356.8, 8.0, "6") && rpdf_right(c, vc, 356.8, 8.0, "6") &&
+             rpdf_right(c, 124.0, 342.2, 8.0, "Vote by Mail") && rpdf_right(c, rg, 342.2, 8.0, "100") &&
+             rpdf_right(c, cc, 342.2, 8.0, "4") && rpdf_right(c, vc, 342.2, 8.0, "4") &&
+             rpdf_right(c, 124.0, 327.5, 8.0, "Total") && rpdf_right(c, rg, 327.5, 8.0, "100") &&
+             rpdf_right(c, cc, 327.5, 8.0, "10") && rpdf_right(c, vc, 327.5, 8.0, "10") &&
+             rpdf_text(c, 20.0, 312.8, 8.0, "P2") && rpdf_right(c, 124.0, 298.2, 8.0, "Election Day") &&
+             rpdf_right(c, rg, 298.2, 8.0, "50") && rpdf_right(c, cc, 298.2, 8.0, "3") &&
+             rpdf_right(c, vc, 298.2, 8.0, "3") && rpdf_right(c, 124.0, 283.5, 8.0, "Vote by Mail") &&
+             rpdf_right(c, rg, 283.5, 8.0, "50") && rpdf_right(c, cc, 283.5, 8.0, "2") &&
+             rpdf_right(c, vc, 283.5, 8.0, "2") && rpdf_right(c, 124.0, 268.9, 8.0, "Total") &&
+             rpdf_right(c, rg, 268.9, 8.0, "50") && rpdf_right(c, cc, 268.9, 8.0, "5") &&
+             rpdf_right(c, vc, 268.9, 8.0, "5") && rpdf_text(c, 20.0, 254.2, 8.0, "County - Total") &&
+             rpdf_right(c, rg, 254.2, 8.0, "150") && rpdf_right(c, cc, 254.2, 8.0, "15") &&
+             rpdf_right(c, vc, 254.2, 8.0, "15");
+    }
+    {
+        /* rows: P1 (Election Day: ANN withheld; Vote by Mail: BO withheld), P2 */
+        static const struct
+        {
+            const char *label;
+            double y;
+            const char *times, *ann, *ann_pct, *bo, *bo_pct;
+        } k_rows[] = {{"P1", 435.5, NULL, NULL, NULL, NULL, NULL},
+                      {"Election Day", 420.8, "6", "****", "****", "4", "66.67%"},
+                      {"Vote by Mail", 406.2, "4", "3", "75.00%", "****", "****"},
+                      {"Total", 391.5, "10", "5", "50.00%", "5", "50.00%"},
+                      {"P2", 376.8, NULL, NULL, NULL, NULL, NULL},
+                      {"Election Day", 362.2, "3", "2", "66.67%", "1", "33.33%"},
+                      {"Vote by Mail", 347.5, "2", "1", "50.00%", "1", "50.00%"},
+                      {"Total", 332.9, "5", "3", "60.00%", "2", "40.00%"}};
+        TBuf *c = &sovc[1];
+        ok = ok && rpdf_text(c, 20.0, 584.0, 8.0, "Page: 2 of 2") &&
+             rpdf_text(c, 692.2, 584.0, 8.0, "3/13/2026 3:57:10 PM") && rpdf_text(c, 20.0, 554.3, 14.0, "Mayor") &&
+             rpdf_text(c, 80.0, 554.3, 14.0, "(Vote for  1)") &&
+             rpdf_text(c, 431.8, 554.3, 8.0, "**** - Insufficient Turnout to Protect Voter Privacy") &&
+             rpdf_text(c, 20.0, 479.4, 8.0, "Precinct") && rpdf_text(c, 399.2, 479.4, 8.0, "Precinct") &&
+             rpdf_text_at(c, 176.0, 430.0, 8.0, "Times Cast", TRUE) &&
+             rpdf_text_at(c, 224.6, 430.0, 8.0, "Registered", TRUE) && rpdf_text_at(c, 235.2, 430.0, 8.0, "Voters", TRUE) &&
+             rpdf_text_at(c, 548.2, 430.0, 8.0, "ANN LEE", TRUE) && rpdf_text_at(c, 632.9, 430.0, 8.0, "BO DIAZ", TRUE);
+        for (i = 0; i < ARRAYSIZE(k_rows) && ok; i++)
+        {
+            double y = k_rows[i].y;
+            if (k_rows[i].times == NULL)
+            {
+                ok = rpdf_text(c, 20.0, y, 8.0, k_rows[i].label) && rpdf_text(c, 399.2, y, 8.0, k_rows[i].label);
+                continue;
+            }
+            ok = rpdf_right(c, 124.0, y, 8.0, k_rows[i].label) && rpdf_right(c, 177.9, y, 8.0, k_rows[i].times) &&
+                 rpdf_right(c, 237.2, y, 8.0, i < 4 ? "100" : "50") && rpdf_right(c, 503.1, y, 8.0, k_rows[i].label) &&
+                 rpdf_right(c, 557.2, y, 8.0, k_rows[i].ann) && rpdf_right(c, 593.1, y, 8.0, k_rows[i].ann_pct) &&
+                 rpdf_right(c, 647.2, y, 8.0, k_rows[i].bo) && rpdf_right(c, 683.1, y, 8.0, k_rows[i].bo_pct);
+        }
+    }
+    g_tpdf_title = "ElectionSummaryReportRPT";
+    ok = ok && tpdf_write(p_sum, &sum, 1, FALSE);
+    g_tpdf_title = "StatementOfVotesCastRPT";
+    ok = ok && tpdf_write(p_sovc, sovc, 2, FALSE);
+    g_tpdf_title = NULL;
+    if (!ok)
+    {
+        wprintf(L"resdom: fixtures\n");
+        goto done;
+    }
+
+    /* the summary: XML and PDF, one election */
+    paths[0] = p_xml;
+    paths[1] = p_sum;
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1 || res[0].nsources != 2 ||
+        res[0].sources[0].format != EE_RES_FMT_DOM_SUMMARY_XML || res[0].sources[1].format != EE_RES_FMT_DOM_SUMMARY_PDF)
+    {
+        wprintf(L"resdom: summary load (%s, %u)\n", err, nres);
+        goto done;
+    }
+    for (i = 0; i < res[0].nissues; i++)
+    {
+        /* the window counts notes about the other file as differences: there must be none */
+        if (res[0].issues[i].source != 0 ||
+            (wcsstr(res[0].issues[i].text, L"listed by name") == NULL && wcsstr(res[0].issues[i].text, L"second line") == NULL))
+        {
+            wprintf(L"resdom: summary issue %s\n", res[0].issues[i].text);
+            goto done;
+        }
+    }
+    ct = &res[0].contests[0];
+    ann = dom_choice(&res[0], ct, L"ANN LEE");
+    bo = dom_choice(&res[0], ct, L"BO DIAZ");
+    cy = dom_choice(&res[0], ct, L"CY ROE");
+    if (res[0].ncontests != 1 || wcscmp(ct->title, L"DEM CCC DISTRICT 17") != 0 || ct->vote_for != 2 ||
+        ct->nchoices != 3 || ann == NULL || ann->total != 9 || bo == NULL || bo->total != 6 || cy == NULL ||
+        cy->total != 1 || cy->party == NULL || wcscmp(cy->party, L"WRITE-IN") != 0 || ct->over_total != 1 ||
+        ct->under_total != 3 || res[0].ballots_total != 10 || res[0].registered_total != 20 || res[0].nvt != 2 ||
+        res[0].ballots_vt == NULL || res[0].ballots_vt[0] != 2 || res[0].ballots_vt[1] != 8 ||
+        wcscmp(res[0].election_date, L"6/2/2026") != 0)
+    {
+        wprintf(L"resdom: summary contents (%u contests, vote for %u, %u choices)\n", res[0].ncontests, ct->vote_for,
+                ct->nchoices);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* the Statement of Votes Cast */
+    paths[0] = p_sovc;
+    if (!res_load(paths, 1, &res, &nres, err) || nres != 1 || res[0].sources[0].format != EE_RES_FMT_DOM_SOVC)
+    {
+        wprintf(L"resdom: sovc load (%s)\n", err);
+        goto done;
+    }
+    {
+        int64_t tot[2], vt[2 * 3];
+        uint8_t vmask[3] = {0, 0, 1};
+        ct = &res[0].contests[0];
+        if (res[0].nprecincts != 2 || res[0].nvt != 3 || wcscmp(res[0].vote_types[2], L"Withheld") != 0 ||
+            res[0].precincts[0].registered != 100 || res[0].precincts[0].ballots != 10 || res[0].ballots_total != 15 ||
+            res[0].registered_total != 150 || wcscmp(ct->title, L"Mayor") != 0 || ct->vote_for != 1 ||
+            ct->nchoices != 2 || ct->nprotected != 0 || wcscmp(res[0].region, L"Test County") != 0 ||
+            !EeResults_Tabulate(&res[0], NULL, NULL, tot, vt, NULL, NULL) || tot[0] != 8 || tot[1] != 7 ||
+            vt[0 * 3 + 0] != 2 || vt[0 * 3 + 1] != 4 || vt[0 * 3 + 2] != 2 || vt[1 * 3 + 0] != 5 || vt[1 * 3 + 1] != 1 ||
+            vt[1 * 3 + 2] != 1 || !EeResults_Tabulate(&res[0], NULL, vmask, tot, NULL, NULL, NULL) || tot[0] != 2 ||
+            tot[1] != 1)
+        {
+            wprintf(L"resdom: sovc contents (%u precincts, %u vote types, %u choices)\n", res[0].nprecincts, res[0].nvt,
+                    ct->nchoices);
+            goto done;
+        }
+    }
+    rc = 0;
+done:
+    EeResults_FreeArray(res, nres);
+    free(sum.p);
+    free(sovc[0].p);
+    free(sovc[1].p);
+    DeleteFileW(p_xml);
+    DeleteFileW(p_sum);
+    DeleteFileW(p_sovc);
+    wprintf(L"resdom: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* A displayed-view export (the results window's Totals view and By Precinct view, as its
  * Export writes them) loads back: the two same-named Council contests are told apart, Over /
  * Under Votes rows attach to their contest, and comparing with the XML finds no difference
@@ -13518,6 +13792,7 @@ int wmain(void)
     failed |= test_results();
     failed |= test_results_cumulative();
     failed |= test_results_pdf();
+    failed |= test_results_dominion();
     failed |= test_results_hart_old();
     failed |= test_results_glyphs();
     failed |= test_results_compare();

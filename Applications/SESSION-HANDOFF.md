@@ -5,9 +5,10 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: 1.6 step 10 (help, version 1.6.0.0, RELEASES.md,
-STORE-LISTING.txt, README). **1.6.0.0 is not final:** the user has more changes first; then update
-the notes and rebuild the bundle.
+Microsoft Store**. Uncommitted: Dominion election results for 1.6 (San Francisco summary
+XML/XLSX/PDF, DeKalb Statement of Votes Cast; `src/ee_results_dom.{c,h}`, smoke test `resdom`,
+election-results design doc "Dominion results"). **1.6.0.0 is not final:** the user has more
+changes first; then rebuild the Store bundle (the one built on 2026-10-29 predates Dominion).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -144,7 +145,20 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     - Legal citations are to be confirmed by the user.
     - The PR26 timeline equals the design-doc trace.
     - Another election's history (a different dated name in "Election Opened:") is not checked.
-  - **Step 10 (done 2026-10-29, uncommitted):** help topics (voter list, CVR and results topics
+  - **Dominion results (done 2026-10-29, uncommitted; for 1.6.0.0):** `src/ee_results_dom.{c,h}`
+    reads the Dominion Election Summary Report (XML, XLSX, PDF) and the Statement of Votes Cast
+    PDF into `EeRpdfDoc`. Details and validation are in `docs/election-results-design.md`
+    ("Dominion results").
+    - San Francisco: 12 elections, three formats each, agree. Results ↔ CVR is exact for 8 of 10
+      (G25: 15 CVR redactions; G19: the 2019 CVR has no card numbers, so its ballots can't be
+      counted).
+    - DeKalb: 6 elections. "****" counts are filled from each precinct's Total into the vote type
+      "Withheld".
+    - Also: a CVR's "(Rank 1)" column compares as the contest (`EeResults_FromTally`), and the
+      merge no longer repeats a note another file of the election gave.
+    - The RELEASES.md 1.6 note and STORE-LISTING.txt mention Dominion results. The Store bundle
+      must be rebuilt.
+  - **Step 10 (done 2026-10-29):** help topics (voter list, CVR and results topics
     point to audit logs), version 1.6.0.0 in the three files, RELEASES.md note (1,190
     characters), STORE-LISTING.txt section, README.
     - A pre-release bundle `Build/msix/ElectionExplorer.Package_1.6.0.0_x64_arm64_bundle.msixupload`

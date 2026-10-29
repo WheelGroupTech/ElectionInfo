@@ -7,6 +7,7 @@
 #include "ee_results.h"
 #include "csv_sheet.h"
 #include "ee_results_pdf.h"
+#include "ee_results_dom.h"
 #include "xlsx.h"
 
 #include "third_party/miniz/miniz.h"
@@ -4252,23 +4253,20 @@ typedef struct Parsed
 /* sniff_format: a PDF, whose report kind (and so its EE_RES_FMT_*) the parser decides */
 #define RES_FMT_PDF 0x80000000u
 
-/* An ES&S Electionware or Hart Verity results report PDF, read by ee_results_pdf.c. Returns
- * its format (EE_RES_FMT_ESS_* / EE_RES_FMT_HART_*), or 0 after b_fail. */
-static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
+/* Build the results from a report read into the intermediate model (an ES&S, Hart or
+ * Dominion report: ee_results_pdf.c, ee_results_dom.c), which is freed. Returns the report's
+ * format (EE_RES_FMT_*), with @p dom_summary_fmt for a Dominion Election Summary Report (it
+ * comes as XML, XLSX or PDF), or 0 out of memory. */
+static uint32_t res_from_rpdf(ResBuilder *b, EeRpdfDoc *pdoc, uint32_t dom_summary_fmt)
 {
     EeResults *r = b->r;
-    EeRpdfDoc doc;
-    wchar_t err[400] = L"";
+    EeRpdfDoc doc = *pdoc;
     uint32_t *vtmap = NULL, *pmap = NULL;
     uint32_t c, k;
     size_t i;
     uint32_t fmt = 0;
 
-    if (!EeRpdf_Parse(d, n, &doc, err, ARRAYSIZE(err)))
-    {
-        b_fail(b, err);
-        return 0;
-    }
+    ZeroMemory(pdoc, sizeof(*pdoc));
     vtmap = (uint32_t *)malloc(((size_t)doc.nvt + 1) * sizeof(uint32_t));
     pmap = (uint32_t *)malloc(((size_t)doc.nprecincts + 1) * sizeof(uint32_t));
     if (vtmap == NULL || pmap == NULL)
@@ -4321,7 +4319,8 @@ static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
         uint32_t choice = e->choice == EE_RPDF_OVER    ? RES_OVER
                           : e->choice == EE_RPDF_UNDER ? RES_UNDER
                                                        : e->choice;
-        b_count(b, e->contest, choice, pmap[e->pre], e->vt == EE_RPDF_NO_VT ? 0 : vtmap[e->vt], e->votes);
+        b_count(b, e->contest, choice, pmap[e->pre], e->vt == EE_RPDF_NO_VT ? 0 : vtmap[e->vt],
+                e->votes == EE_RPDF_PROTECTED ? RES_PROTECTED : e->votes);
     }
     for (i = 0; i < doc.nturnout && !b->oom; i++)
     {
@@ -4369,6 +4368,12 @@ static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
         case EE_RPDF_HART_PCT_REPORT:
             fmt = EE_RES_FMT_HART_PCT_REPORT;
             break;
+        case EE_RPDF_DOM_SUMMARY:
+            fmt = dom_summary_fmt;
+            break;
+        case EE_RPDF_DOM_SOVC:
+            fmt = EE_RES_FMT_DOM_SOVC;
+            break;
         default:
             fmt = EE_RES_FMT_ESS_SUMMARY;
             break;
@@ -4378,7 +4383,37 @@ done:
     free(vtmap);
     free(pmap);
     EeRpdf_Free(&doc);
-    return fmt;
+    return b->oom ? 0 : fmt;
+}
+
+/* A results report PDF (ES&S Electionware, Hart, Dominion), read by ee_results_pdf.c.
+ * Returns its format (EE_RES_FMT_*), or 0 after b_fail. */
+static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
+{
+    EeRpdfDoc doc;
+    wchar_t err[400] = L"";
+    if (!EeRpdf_Parse(d, n, &doc, err, ARRAYSIZE(err)))
+    {
+        b_fail(b, err);
+        return 0;
+    }
+    return res_from_rpdf(b, &doc, EE_RES_FMT_DOM_SUMMARY_PDF);
+}
+
+/* A Dominion Election Summary Report saved as XML or as a workbook (@p fmt). Returns @p fmt,
+ * or 0 after b_fail. */
+static uint32_t parse_dom_summary(ResBuilder *b, const uint8_t *d, size_t n, uint32_t fmt)
+{
+    EeRpdfDoc doc;
+    wchar_t err[400] = L"";
+    BOOL ok = fmt == EE_RES_FMT_DOM_SUMMARY_XML ? EeRdom_ParseSummaryXml(d, n, &doc, err, ARRAYSIZE(err))
+                                                : EeRdom_ParseSummaryXlsx(d, n, &doc, err, ARRAYSIZE(err));
+    if (!ok)
+    {
+        b_fail(b, err);
+        return 0;
+    }
+    return res_from_rpdf(b, &doc, fmt);
 }
 
 static uint32_t sniff_format(const uint8_t *d, size_t n)
@@ -4414,6 +4449,10 @@ static uint32_t sniff_format(const uint8_t *d, size_t n)
         if (wcsstr(w, L"<ElectionResult") != NULL)
         {
             fmt = EE_RES_FMT_CLARITY_XML;
+        }
+        else if (EeRdom_IsSummaryXml(d, head))
+        {
+            fmt = EE_RES_FMT_DOM_SUMMARY_XML;
         }
         else if (wcsstr(w, L"urn:schemas-microsoft-com:office:spreadsheet") != NULL)
         {
@@ -4491,6 +4530,14 @@ static const wchar_t *format_label(uint32_t fmt)
             return L"Hart canvass report (PDF)";
         case EE_RES_FMT_HART_PCT_REPORT:
             return L"Hart precinct report (PDF)";
+        case EE_RES_FMT_DOM_SUMMARY_XML:
+            return L"Dominion summary report (XML)";
+        case EE_RES_FMT_DOM_SUMMARY_XLSX:
+            return L"Dominion summary report (XLSX)";
+        case EE_RES_FMT_DOM_SUMMARY_PDF:
+            return L"Dominion summary report (PDF)";
+        case EE_RES_FMT_DOM_SOVC:
+            return L"Dominion Statement of Votes Cast (PDF)";
         default:
             return L"results";
     }
@@ -4517,7 +4564,17 @@ static BOOL parse_buffer(const uint8_t *d,
             parse_clarity_xml(&b, (const char *)d, n);
             break;
         case EE_RES_FMT_CLARITY_XLS:
-            parse_clarity_xls(&b, d, n);
+            if (EeRdom_IsSummaryXlsx(d, n))
+            {
+                out->format = parse_dom_summary(&b, d, n, EE_RES_FMT_DOM_SUMMARY_XLSX);
+            }
+            else
+            {
+                parse_clarity_xls(&b, d, n);
+            }
+            break;
+        case EE_RES_FMT_DOM_SUMMARY_XML:
+            out->format = parse_dom_summary(&b, d, n, EE_RES_FMT_DOM_SUMMARY_XML);
             break;
         case EE_RES_FMT_EE_EXPORT:
             parse_ee_export(&b, d, n, name);
@@ -4546,8 +4603,8 @@ static BOOL parse_buffer(const uint8_t *d,
         default:
             b_fail(&b,
                    L"It is not a recognized election results file (Clarity summary.csv, "
-                   L"detail.txt, detail.xls, detail.xlsx or detail.xml, an ES&S Electionware "
-                   L"or Hart Verity results report PDF, or an Election Explorer results export).");
+                   L"detail.txt, detail.xls, detail.xlsx or detail.xml, an ES&S Electionware, "
+                   L"Hart or Dominion results report, or an Election Explorer results export).");
             break;
     }
     if (!b.bad && !b.oom)
@@ -5023,9 +5080,11 @@ static int format_rank(uint32_t fmt)
         case EE_RES_FMT_ESS_PRECINCT:
         case EE_RES_FMT_HART_PRECINCT:
         case EE_RES_FMT_HART_PCT_REPORT:
+        case EE_RES_FMT_DOM_SOVC:
             return 3;
         case EE_RES_FMT_CLARITY_TXT:
         case EE_RES_FMT_EE_VIEW:
+        case EE_RES_FMT_DOM_SUMMARY_XML: /* totals, ballots by vote type and Vote For */
             return 2;
         default:
             return 1;
@@ -6367,9 +6426,19 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
                 res_set_err(error_message, error_cch, L"Out of memory loading the results.");
                 goto cleanup;
             }
-            /* The other file's own load notes, then the cross-check. */
+            /* The other file's own load notes (one another file of the election already gave,
+             * such as the same report saved in another format, is not repeated), then the
+             * cross-check. */
             for (k = 0; k < p->r.nissues; k++)
             {
+                uint32_t e;
+                for (e = 0; e < dst->nissues && wcscmp(dst->issues[e].text, p->r.issues[k].text) != 0; e++)
+                {
+                }
+                if (e < dst->nissues)
+                {
+                    continue;
+                }
                 if (res_grow((void **)&dst->issues,
                              &issue_cap,
                              (size_t)dst->nissues + 1,
@@ -6540,6 +6609,23 @@ const wchar_t *EeResults_FormatLabel(uint32_t format)
 /* -------------------------------------------------------------------------- */
 
 /* "Mayor (45918)" -> "Mayor": drop a trailing " (digits)" (a CVR contest id). */
+/* N for a ranked-choice contest's rank column "MAYOR (Rank N)" (dominion_cvr.c), else 0. */
+static int tally_rank(const wchar_t *s)
+{
+    const wchar_t *p = wcsstr(s, L" (Rank ");
+    const wchar_t *q;
+    int n = 0;
+    if (p == NULL)
+    {
+        return 0;
+    }
+    for (q = p + 7; *q >= L'0' && *q <= L'9'; q++)
+    {
+        n = n * 10 + (*q - L'0');
+    }
+    return q > p + 7 && q[0] == L')' && q[1] == L'\0' ? n : 0;
+}
+
 static wchar_t *tally_contest_name(const wchar_t *s)
 {
     wchar_t *d = wdup_norm(s);
@@ -6547,6 +6633,10 @@ static wchar_t *tally_contest_name(const wchar_t *s)
     if (d == NULL)
     {
         return NULL;
+    }
+    if (tally_rank(d) == 1)
+    {
+        *wcsstr(d, L" (Rank ") = L'\0'; /* first choices: results report these */
     }
     n = wcslen(d);
     if (n >= 4 && d[n - 1] == L')')
@@ -6683,6 +6773,11 @@ BOOL EeResults_FromTally(const EeResultsTallyItem *items,
         const EeResultsTallyItem *it = &items[i];
         TallyContest *c;
         int sp;
+        if (it->contest != NULL && tally_rank(it->contest) >= 2)
+        {
+            ic[i] = UINT32_MAX; /* a later choice of a ranked-choice contest: results report the first */
+            continue;
+        }
         if (last == UINT32_MAX || tc[last].key != it->contest_key)
         {
             for (last = 0; last < ntc && tc[last].key != it->contest_key; last++)
@@ -6783,7 +6878,7 @@ BOOL EeResults_FromTally(const EeResultsTallyItem *items,
         {
             for (i = 0; i < n && !b.oom; i++)
             {
-                if (items[i].precinct != NULL)
+                if (items[i].precinct != NULL && ic[i] != UINT32_MAX)
                 {
                     b_count(&b, ic[i], ich[i], b_pre(&b, items[i].precinct), 0, items[i].votes);
                 }

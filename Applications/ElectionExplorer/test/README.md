@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_glyph_ocr.c src\ee_audit.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
+  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_results_dom.c src\ee_glyph_ocr.c src\ee_audit.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -61,6 +61,16 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
 - an older detail.xls with the sums in the candidate's own group, followed by bare "Ballot Oval
   Selection N" groups;
 - each alone and both together give each candidate the sum of its ovals, with no notes.
+`resdom` covers Dominion Democracy Suite results (`src\ee_results_dom.c`):
+- an Election Summary Report saved as XML: the party on the title's second line is dropped, Vote
+  For is worked out from the contest's figures ((votes + undervotes + overvotes) / ballots = 2), the
+  qualified write-in is listed by name (party WRITE-IN) and the Write-in row, left with nothing,
+  goes, and the turnout comes by counting group;
+- the same report as a PDF, with a candidate's name wrapped around its numbers and a wrapped
+  write-in name, loads with the XML as one election with no note about either file;
+- a Statement of Votes Cast PDF (a turnout page by precinct and vote type, then a contest page of two
+  panels with turned headings): counts printed "****" come from the precinct's Total row into the
+  vote type "Withheld", so each choice's precinct and county totals are exact.
 `respdf` covers results report PDFs (`src\ee_results_pdf.c`):
 - an ES&S Electionware summary report and a two-precinct report load as one result with no
   differences. The fixtures have two-line column headings, a party code before the name, write-in

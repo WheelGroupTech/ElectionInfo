@@ -4,7 +4,9 @@
  *        and vote type, loaded from Clarity Elections exports (summary.csv, detail.txt,
  *        detail.xls / detail.xlsx, detail.xml, or their ZIPs), from ES&S Electionware
  *        results report PDFs (summary and precinct reports), from Hart Verity cumulative
- *        and canvass report PDFs, and from Election Explorer's own results export.
+ *        and canvass report PDFs, from Dominion Democracy Suite Election Summary Reports
+ *        (XML, XLSX, PDF) and Statement of Votes Cast PDFs, and from Election Explorer's own
+ *        results export.
  *
  * Several files of one election are loaded together: the richest file supplies the data
  * (XML > XLS/XLSX > TXT > summary) and every other file is cross-checked against it,
@@ -37,6 +39,10 @@ extern "C"
 #define EE_RES_FMT_HART_SUMMARY    0x100u /* Hart Verity cumulative results report (PDF) */
 #define EE_RES_FMT_HART_PRECINCT   0x200u /* Hart canvass results report (PDF) */
 #define EE_RES_FMT_HART_PCT_REPORT 0x400u /* Hart precinct report, before Verity (PDF) */
+#define EE_RES_FMT_DOM_SUMMARY_XML  0x800u  /* Dominion Election Summary Report (XML) */
+#define EE_RES_FMT_DOM_SUMMARY_XLSX 0x1000u /* Dominion Election Summary Report (XLSX) */
+#define EE_RES_FMT_DOM_SUMMARY_PDF  0x2000u /* Dominion Election Summary Report (PDF) */
+#define EE_RES_FMT_DOM_SOVC         0x4000u /* Dominion Statement of Votes Cast (PDF) */
 
 /** Unknown count (registered voters, ballots cast, precinct counts). */
 #define EE_RES_UNKNOWN (-1)
@@ -249,7 +255,9 @@ extern "C"
     /**
      * Build results from a tabulation so they can be compared with loaded results. Contests
      * and choices keep their first-seen order. Items with a precinct give precinct detail
-     * (no vote types); choice totals are then the precinct sums.
+     * (no vote types); choice totals are then the precinct sums. A ranked-choice contest's
+     * "(Rank 1)" column stands for the contest (results report first choices); its later
+     * ranks are left out.
      *
      * @param items   Tabulated selections (all totals, or all per precinct).
      * @param n       Number of items.

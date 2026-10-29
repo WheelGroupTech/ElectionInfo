@@ -29,6 +29,12 @@ extern "C"
 #define EE_RPDF_HART_PRECINCT 4 /* Hart canvass: precinct x choice grids, no vote types */
 #define EE_RPDF_HART_PCT_REPORT 5 /* Hart precinct report (before Verity): the cumulative
                                    * tables repeated for each precinct, by vote type */
+#define EE_RPDF_DOM_SUMMARY 6 /* Dominion Election Summary Report (ee_results_dom.c) */
+#define EE_RPDF_DOM_SOVC    7 /* Dominion Statement of Votes Cast: precinct x vote type */
+
+/** EeRpdfCount.votes for a count the report withholds ("****", too few voters to keep the
+ *  vote secret): the same value as ee_results.c's RES_PROTECTED. */
+#define EE_RPDF_PROTECTED ((int64_t)INT32_MIN)
 
 /** Unknown figure (the same value as EE_RES_UNKNOWN). */
 #define EE_RPDF_UNKNOWN (-1)

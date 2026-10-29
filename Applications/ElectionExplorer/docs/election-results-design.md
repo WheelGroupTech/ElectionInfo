@@ -1019,6 +1019,89 @@ one rerun the full sweep and record the counts. Expected result: about 1,300 loa
   - each package has 19 logo images and only the runFullTrust capability.
 - **Checks:** the smoke suite passes, and Release x64 and ARM64 build clean.
 
+### Dominion results: San Francisco and DeKalb (1.6, done 2026-10-29)
+
+Added at the user's request for 1.6.0.0 (D8 had left Dominion for later). The engine is
+`src/ee_results_dom.{c,h}`, with smoke test `resdom`. Each report is read into the PDF readers'
+intermediate model (`EeRpdfDoc`), and `ee_results.c` (`res_from_rpdf`) turns it into
+`EeResults`. Release x64 and ARM64 build with no warnings.
+
+- **Files:**
+  - **San Francisco** (`CA_San_Francisco_County/`): 12 elections, each an Election Summary Report
+    (`ElectionSummaryReportRPT`) saved three ways: XML, XLSX and PDF.
+  - **DeKalb County, GA** (`GA_DeKalb_County/`): 6 elections, each an Election Summary Report PDF
+    and a Statement of Votes Cast PDF (`StatementOfVotesCastRPT`, precinct x vote type; P26 is
+    3,084 pages).
+  - Both come from Results Tally and Reporting through Microsoft Reporting Services. They are told
+    apart from Hart's SSRS reports by the PDF's Title (`EeRdom_PdfKind`, checked first in
+    `EeRpdf_Parse`), the XML by `ElectionSummaryReportRPT`, and the workbook by its sheet's name.
+- **New formats:** `EE_RES_FMT_DOM_SUMMARY_XML`, `_XLSX`, `_PDF` and `EE_RES_FMT_DOM_SOVC`.
+  - The Statement of Votes Cast ranks with the precinct reports. The XML ranks above the XLSX and
+    PDF, since it alone gives each contest's ballots, so Vote For.
+- **The summary (XML / XLSX / PDF):**
+  - county-wide totals, under and over votes, registered voters and ballots cast;
+  - ballots cast by counting group (Election Day, Vote by Mail, Advance Voting, ...), taken from the
+    elector group "Total" (a primary lists each party's group first);
+  - the per-vote-type candidate totals are not kept, because the model keeps totals only for a
+    summary-only contest (as for ES&S summaries);
+  - G19 has no turnout table: its "Registered Voters: 206,122 of 495,050" line gives ballots and
+    registered voters.
+- **Contest titles and Vote For:**
+  - A primary's title has its party on a second line ("DEM CCC DISTRICT 17" / "DEM"); that line
+    is dropped.
+  - A long PDF title wraps onto a second line, which is joined. G22 has two contests whose first
+    lines are the same.
+  - Vote For is not printed in San Francisco's reports. The XML's contest ballots give it exactly:
+    (votes + undervotes + overvotes) / ballots, for example 4 for the Board of Education and up to
+    16 for the primary party committees. DeKalb prints "(Vote for N)".
+- **Names:**
+  - A PDF name wraps onto lines above and below its numbers; parts within 12 pt attach to the
+    nearest row.
+  - A hyphen at a line end joins without a space ("MOYOWASIFZA-CURRY"). The Statement of Votes
+    Cast's turned headings wrap the same way ("Katherine E. Juhan-Arnold").
+- **Write-ins:**
+  - Qualified write-in candidates are listed by name, with party WRITE-IN, as the report's write-in
+    table and the CVR name them.
+  - The "Write-in" row counts them too, so it keeps the rest, and goes when nothing is left
+    (G24 Mayor: 4 = 3 + 1).
+- **Ranked-choice contests:**
+  - The summary gives first choices only.
+  - `EeResults_FromTally` takes a CVR's "<contest> (Rank 1)" column as the contest and leaves out
+    its later ranks, so Results ↔ CVR compares first choices.
+- **Statement of Votes Cast:**
+  - Turnout pages: each precinct's registered voters and voters cast by vote type.
+  - Contest pages: two panels side by side, each with its own Precinct column. Their column
+    headings are turned 90 degrees, and a heading's band of x runs to the midpoint with the next.
+  - A contest's choices continue on the next pages for the same precincts.
+  - Counts printed "****" ("Insufficient Turnout to Protect Voter Privacy") are not lost. The
+    precinct's Total row prints the whole count, and the votes not printed by vote type (Total
+    minus the printed vote types) go to a vote type "Withheld". Precinct and county totals stay
+    exact. P26 has 20,851 such counts.
+- **Notes:** the merge no longer repeats a load note another file of the election already gave
+  (the same report in another format). The window counts notes about the other files as
+  "differences", so DeKalb P26 shows "2 notes", not "2 differences".
+- **Validated:**
+  - **San Francisco, each election's three files together:** one window, no disagreements, and an
+    exact export round trip (CSV and TSV) for all 12.
+  - **DeKalb, Statement of Votes Cast with its summary:** one window, no disagreements; the
+    precinct sums equal the summary for all 6. P26 loads in 1.7 s.
+  - **San Francisco results ↔ its Dominion CVR (10 elections):** 8 match on every figure,
+    ballots cast included (G24: 281 of 281, also in the app's Compare window). G25's Proposition
+    50 is 14 Yes and 1 No short in the CVR, which has exactly 15 "<Redacted>" votes. G19's
+    ballots cast differs (206,122 vs 408,274): its 2019 CVR export has a record per card with no
+    card numbers (no "Cards" array), so its ballots cannot be told from its cards. Every G19 contest
+    matches.
+  - Every reading is unchanged by giving width-less fonts Helvetica widths (needed for the test
+    fixtures) and by `std_widths`.
+  - **Sweep of `Election_Results/`, one file at a time:** 3,332 of 3,993 files load, against
+    3,284 before. The 48 more are San Francisco's 36 and DeKalb's 12; none was lost and nothing
+    crashed.
+    - ZIPs: 1,944 of 1,951.
+    - PDFs: 1,364 of 1,941.
+    - XML: 12 of 12.
+    - XLSX: 12 of 39 (the rest are Collin's own exports).
+    - CSV, TXT and HTML: 0 of 50 (Collin's and Bexar's own exports).
+
 ## Implementation plan (proposed)
 
 1. **Engine `src/ee_results.{c,h}`** (no UI):

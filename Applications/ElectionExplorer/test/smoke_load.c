@@ -5483,6 +5483,148 @@ static BOOL tpdf_redacted_fixture(const wchar_t *path)
     return ok;
 }
 
+/* One line of text at (@p x, @p y) in font F5 (no /Widths: the reader estimates its width). */
+static BOOL hvs_run(TBuf *b, double x, double y, double size, const char *text)
+{
+    return tb_printf(b, "BT /F5 %.1f Tf 1 0 0 1 %.1f %.1f Tm (%s) Tj ET\n", size, x, y, text);
+}
+
+/* The page header of a Hart HVS "Votes by Precinct" report. The title is drawn in two touching
+ * pieces as PostScript copies draw it; @p at_label draws the precinct and party values at their
+ * labels' own position (Burnet County's PR24 Democratic copies). */
+static BOOL hvs_header(TBuf *b, const char *precinct, BOOL at_label, int page, int pages)
+{
+    char foot[32];
+    StringCchPrintfA(foot, ARRAYSIZE(foot), "Page %d of %d", page, pages);
+    return hvs_run(b, 245.0, 766.0, 14.0, "V") && hvs_run(b, 252.7, 766.0, 14.0, "otes by Precinct") &&
+           hvs_run(b, 220.0, 752.0, 12.0, "November 2026 Early Voting") &&
+           hvs_run(b, 26.0, 729.0, 10.5, "Precinct: ") && hvs_run(b, at_label ? 26.0 : 74.0, 729.0, 10.5, precinct) &&
+           hvs_run(b, 26.0, 715.0, 10.5, "Party: ") && hvs_run(b, at_label ? 26.0 : 59.0, 715.0, 10.5, "NP") &&
+           hvs_run(b, 26.0, 688.0, 10.5, "Contest Title") && hvs_run(b, 317.0, 688.0, 10.5, "Candidate/Option") &&
+           hvs_run(b, 26.0, 19.5, 9.0, "10/30/2026  1:51:31PM") && hvs_run(b, 519.0, 19.5, 9.0, foot);
+}
+
+/* One contest row (title, choice, and a write-in's name beside "Write-in") at line @p *y. */
+static BOOL hvs_row(TBuf *b, double *y, const char *title, const char *choice, const char *writein)
+{
+    BOOL ok = hvs_run(b, 26.0, *y, 8.8, title) && hvs_run(b, 317.0, *y, 8.9, choice) &&
+              (writein == NULL || hvs_run(b, 435.5, *y, 8.9, writein));
+    *y -= 13.0;
+    return ok;
+}
+
+/* Hart HVS "Votes by Precinct" CVR report (tag: hvspdf; needs src\hart_hvs.c): one ballot per
+ * page, read with the Hart loader. Page 2 is printed with two contest titles cut short to the
+ * same text (completed by ballot order: the first is Place 2, the second Place 3), its precinct
+ * value drawn at the label, and a written-in name wrapped onto a second line; "PROPOSITION 1"
+ * beside "PROPOSITION 10" on every ballot is not a cut title. */
+static int test_hvs_pdf(void)
+{
+    TBuf pg[3];
+    wchar_t pdf[MAX_PATH];
+    wchar_t err[512] = L"";
+    wchar_t buf[256];
+    const wchar_t *paths[1];
+    EeCvrTable t;
+    EeCvrTally *items = NULL;
+    uint32_t nt = 0, col = 0;
+    double y;
+    BOOL ok;
+    int rc = 1;
+
+    ZeroMemory(pg, sizeof(pg));
+    EeCvr_Init(&t);
+    ok = cvr_temp_path(pdf, ARRAYSIZE(pdf), L"G26_Early Voting CVRs.pdf");
+    y = 674.0;
+    ok = ok && hvs_header(&pg[0], "7", FALSE, 1, 3) &&
+         hvs_row(&pg[0], &y, "PRESIDENT / VICE-PRESIDENT", "Write-in", "SOME BODY") &&
+         hvs_row(&pg[0], &y, "JUSTICE, COURT OF APPEALS, PLACE 2", "Ann", NULL) &&
+         hvs_row(&pg[0], &y, "JUSTICE, COURT OF APPEALS, PLACE 3", "No Selection", NULL) &&
+         hvs_row(&pg[0], &y, "PROPOSITION 1", "YES", NULL) && hvs_row(&pg[0], &y, "PROPOSITION 10", "NO", NULL);
+    y = 674.0;
+    ok = ok && hvs_header(&pg[1], "7", TRUE, 2, 3) &&
+         hvs_row(&pg[1], &y, "PRESIDENT / VICE-PRESIDENT", "Write-in", "A NAME TOO LONG TO F") &&
+         hvs_run(&pg[1], 435.5, y + 6.5, 8.9, "IT") && /* the name's wrapped end, between the rows */
+         hvs_row(&pg[1], &y, "JUSTICE, COURT OF APPEALS, P", "Bea", NULL) &&
+         hvs_row(&pg[1], &y, "JUSTICE, COURT OF APPEALS, P", "Cy", NULL) &&
+         hvs_row(&pg[1], &y, "PROPOSITION 1", "NO", NULL) && hvs_row(&pg[1], &y, "PROPOSITION 10", "YES", NULL);
+    y = 674.0;
+    ok = ok && hvs_header(&pg[2], "8", FALSE, 3, 3) &&
+         hvs_row(&pg[2], &y, "PRESIDENT / VICE-PRESIDENT", "Zed/Ann Smith", NULL) &&
+         hvs_row(&pg[2], &y, "JUSTICE, COURT OF APPEALS, PLACE 2", "Dan", NULL) &&
+         hvs_row(&pg[2], &y, "JUSTICE, COURT OF APPEALS, PLACE 3", "Eve", NULL) &&
+         hvs_row(&pg[2], &y, "PROPOSITION 1", "YES", NULL) && hvs_row(&pg[2], &y, "PROPOSITION 10", "NO", NULL);
+    if (!ok || !tpdf_write(pdf, pg, 3, FALSE))
+    {
+        wprintf(L"hvspdf: write pdf failed\n");
+        goto done;
+    }
+    if (!EeCvr_IsHartCvrPdf(pdf, err, ARRAYSIZE(err)))
+    {
+        wprintf(L"hvspdf: not detected: %s\n", err);
+        goto done;
+    }
+    paths[0] = pdf;
+    if (EeCvr_LoadFromHartFiles(paths, 1, &t, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        t.nrows != 3)
+    {
+        wprintf(L"hvspdf: load rows=%u err=%s\n", t.nrows, err);
+        goto done;
+    }
+    EeCvr_GetCellW(&t, 1, 0, buf, ARRAYSIZE(buf));
+    if (!EeCvr_FindColumnByTitle(&t, L"Report Page", &col) || col != 0 || wcscmp(buf, L"G26_Early Voting CVRs p.2") != 0)
+    {
+        wprintf(L"hvspdf: report page column (%s)\n", buf);
+        goto done;
+    }
+    if (!EeCvr_FindColumnByTitle(&t, L"Precinct", &col) ||
+        (EeCvr_GetCellW(&t, 1, col, buf, ARRAYSIZE(buf)), wcscmp(buf, L"7") != 0) ||
+        !EeCvr_FindColumnByTitle(&t, L"Voting Type", &col) ||
+        (EeCvr_GetCellW(&t, 2, col, buf, ARRAYSIZE(buf)), wcscmp(buf, L"Early Voting") != 0) ||
+        EeCvr_FindColumnByTitle(&t, L"JUSTICE, COURT OF APPEALS, P", &col))
+    {
+        wprintf(L"hvspdf: precinct / voting type / cut title (%s)\n", buf);
+        goto done;
+    }
+    if (!EeCvr_Tabulate(&t, TRUE, &items, &nt) ||
+        hart_find_count(items, nt, L"JUSTICE, COURT OF APPEALS, PLACE 2", L"Bea") != 1 ||
+        hart_find_count(items, nt, L"JUSTICE, COURT OF APPEALS, PLACE 3", L"Cy") != 1 ||
+        hart_find_count(items, nt, L"JUSTICE, COURT OF APPEALS, PLACE 3", L"undervote") != 1 ||
+        hart_find_count(items, nt, L"PRESIDENT / VICE-PRESIDENT", L"write-in") != 2 ||
+        hart_find_count(items, nt, L"PRESIDENT / VICE-PRESIDENT", L"Zed/Ann Smith") != 1 ||
+        hart_find_count(items, nt, L"PROPOSITION 1", L"NO") != 1 ||
+        hart_find_count(items, nt, L"PROPOSITION 10", L"YES") != 1)
+    {
+        uint32_t k;
+        wprintf(L"hvspdf: tally mismatch\n");
+        for (k = 0; k < nt; k++)
+        {
+            wprintf(L"   %s | %s | %u\n", items[k].contest, items[k].selection, items[k].count);
+        }
+        goto done;
+    }
+    if (t.load_note == NULL || wcsstr(t.load_note, L"Votes by Precinct") == NULL ||
+        wcsstr(t.load_note, L"2 were completed") == NULL || wcsstr(t.load_note, L"without a choice") != NULL)
+    {
+        wprintf(L"hvspdf: note: %s\n", t.load_note ? t.load_note : L"(none)");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"hvspdf ok\n");
+done:
+    EeCvr_FreeTally(items, nt);
+    EeCvr_Clear(&t);
+    DeleteFileW(pdf);
+    free(pg[0].p);
+    free(pg[1].p);
+    free(pg[2].p);
+    if (rc != 0)
+    {
+        wprintf(L"hvspdf test failed\n");
+    }
+    return rc;
+}
+
 /* Hart PDF CVR Report loading (tag: hartpdf): PDF-only rows/keys/tallies (incl. a
  * record continued across pages, a wrapped title, vote-for-2, overvote, undervote,
  * write-in, and a ToUnicode-mapped accented name); object-index rebuild after a bogus
@@ -12276,6 +12418,136 @@ done:
     return rc;
 }
 
+/* A primary runoff's Hart reports before Verity whose headings name no party (Burnet County
+ * 2024): the cumulative report's Party column gives "REP", the canvass titles a contest
+ * "Sheriff -", and the files are named "... Official Republican ...". The three load as one
+ * election of REP contests with no differences, and the precinct report alone takes the
+ * party from its file name (tag: reshart1). */
+static int test_results_hart_runoff(void)
+{
+    static const char k_elec[] = "Test County  \x97  PRIMARY RUNOFF ELECTION  \x97  May 28, 2024";
+    wchar_t dir[MAX_PATH], p_cum[MAX_PATH], p_pre[MAX_PATH], p_can[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf cum = {0}, pre = {0}, can = {0};
+    EeResults *res = NULL;
+    uint32_t nres = 0;
+    const wchar_t *paths[3];
+    const EeResultsContest *ct;
+    BOOL ok;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_cum, MAX_PATH, L"%sPR_Official Republican Cumulative (PDF).pdf", dir);
+    StringCchPrintfW(p_pre, MAX_PATH, L"%sPR_Official Republican Precinct (PDF).pdf", dir);
+    StringCchPrintfW(p_can, MAX_PATH, L"%sPR_Official Republican Canvas (PDF).pdf", dir);
+
+#define HL_HEAD(c, title)                                                                                      \
+    (rpdf_text(c, 244.1, 585.0, 12.2, title) && rpdf_text(c, 189.6, 570.8, 11.4, k_elec) &&                   \
+     rpdf_text(c, 371.4, 557.0, 8.8, "Page 1 of 1") && rpdf_text(c, 691.3, 556.1, 8.8, "06/04/2024 10:48 AM") && \
+     rpdf_text(c, 14.9, 539.0, 8.9, "Total Number of Voters : 260 of 700 = 37.14%") &&                      \
+     rpdf_text(c, 620.8, 539.0, 8.9, "Precincts Reporting 2 of 2 = 100.00%"))
+    /* cumulative: the Party column gives REP */
+    ok = HL_HEAD(&cum, " Cumulative Report  \x97  Official ") && hl_table_head(&cum, 513.6) &&
+         rpdf_text(&cum, 21.2, 494.4, 6.9, "Sheriff, Vote For 1") && rpdf_text(&cum, 28.8, 479.4, 7.2, "REP") &&
+         hl_row(&cum, 479.4, 74.2, "Ann Lee", "10", "100", "50", "160") && rpdf_text(&cum, 28.8, 467.9, 7.2, "REP") &&
+         hl_row(&cum, 467.9, 74.2, "Bob Ray", "5", "60", "30", "95") &&
+         hl_row(&cum, 450.1, 189.9, "Cast Votes:", "15", "160", "80", "255") &&
+         hl_row(&cum, 434.5, 189.1, "Over Votes:", "0", "0", "0", "0") &&
+         hl_row(&cum, 422.6, 184.8, "Under Votes:", "1", "2", "2", "5");
+    /* precinct report: no party anywhere */
+    ok = ok && HL_HEAD(&pre, " Precinct Report  \x97  Official ") && hl_table_head(&pre, 511.9) &&
+         rpdf_text(&pre, 19.7, 484.7, 7.8, "Precinct 101  (Ballots Cast: 120)") &&
+         rpdf_text(&pre, 29.5, 468.0, 6.9, "Sheriff, Vote For 1") &&
+         hl_row(&pre, 459.6, 66.9, "Ann Lee", "6", "60", "30", "96") &&
+         hl_row(&pre, 450.4, 66.9, "Bob Ray", "3", "36", "18", "57") &&
+         hl_row(&pre, 437.4, 151.6, "Cast Votes:", "9", "96", "48", "153") &&
+         hl_row(&pre, 424.4, 150.8, "Over Votes:", "0", "0", "0", "0") &&
+         hl_row(&pre, 411.4, 146.5, "Under Votes:", "1", "1", "1", "3") &&
+         rpdf_text(&pre, 19.7, 390.0, 7.8, "Precinct 102  (Ballots Cast: 140)") &&
+         rpdf_text(&pre, 29.5, 373.3, 6.9, "Sheriff, Vote For 1") &&
+         hl_row(&pre, 364.9, 66.9, "Ann Lee", "4", "40", "20", "64") &&
+         hl_row(&pre, 355.7, 66.9, "Bob Ray", "2", "24", "12", "38") &&
+         hl_row(&pre, 342.7, 151.6, "Cast Votes:", "6", "64", "32", "102") &&
+         hl_row(&pre, 329.7, 150.8, "Over Votes:", "0", "0", "0", "0") &&
+         hl_row(&pre, 316.7, 146.5, "Under Votes:", "0", "1", "1", "2");
+    /* canvass: "Sheriff -", the dash with no party after it */
+    ok = ok && HL_HEAD(&can, " Canvass Report  \x97  Total Voters  \x97  Official ") &&
+         rpdf_text(&can, 285.8, 523.5, 10.5, "Sheriff -") && rpdf_text(&can, 53.0, 501.2, 7.8, "Precinct") &&
+         rpdf_text(&can, 130.1, 501.2, 7.8, "Absentee ") && rpdf_text(&can, 188.2, 501.2, 7.8, "Early ") &&
+         rpdf_text(&can, 233.4, 501.2, 7.8, "Election ") && rpdf_text(&can, 292.0, 501.2, 7.8, "Total ") &&
+         rpdf_text(&can, 333.9, 501.2, 7.8, "Registered ") && rpdf_text(&can, 392.5, 501.2, 7.8, "Percent ") &&
+         rpdf_text_at(&can, 442.0, 461.6, 7.8, "REP ", TRUE) && rpdf_text_at(&can, 452.8, 445.0, 7.8, "Ann Lee", TRUE) &&
+         rpdf_text_at(&can, 490.0, 461.6, 7.8, "REP ", TRUE) && rpdf_text_at(&can, 500.8, 445.0, 7.8, "Bob Ray", TRUE) &&
+         rpdf_text_at(&can, 539.0, 447.4, 7.8, "Totals", TRUE);
+#undef HL_HEAD
+    {
+        static const char *const k_rows[][9] = {{"101", "9", "96", "15", "120", "300", "96", "57", "153"},
+                                                {"102", "6", "64", "70", "140", "400", "64", "38", "102"},
+                                                {"Totals", "15", "160", "85", "260", "700", "160", "95", "255"}};
+        static const double k_right[] = {172.8, 223.8, 274.6, 325.3, 379.0, 480.8, 528.8, 576.8};
+        int r, k;
+        for (r = 0; r < 3 && ok; r++)
+        {
+            double y = 415.2 - 9.9 * r;
+            ok = rpdf_text(&can, 12.9, y, 7.2, k_rows[r][0]) && rpdf_text(&can, 407.9, y, 7.2, "37.14%");
+            for (k = 0; k < 8 && ok; k++)
+            {
+                ok = rpdf_right(&can, k_right[k], y, 7.2, k_rows[r][k + 1]);
+            }
+        }
+    }
+    g_tpdf_producer = "";
+    ok = ok && tpdf_write(p_cum, &cum, 1, FALSE) && tpdf_write(p_pre, &pre, 1, FALSE) && tpdf_write(p_can, &can, 1, FALSE);
+    g_tpdf_producer = NULL;
+    if (!ok)
+    {
+        wprintf(L"reshart1: fixtures\n");
+        goto done;
+    }
+
+    paths[0] = p_can;
+    paths[1] = p_cum;
+    paths[2] = p_pre;
+    if (!res_load(paths, 3, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"reshart1: load (%u groups) %s\n", nres, err);
+        goto done;
+    }
+    ct = rpdf_contest(&res[0], L"REP Sheriff");
+    if (ct == NULL || res[0].nsources != 3 || ct->party == NULL || wcscmp(ct->party, L"REP") != 0 ||
+        res[0].choices[ct->first_choice].total != 160 || res[0].election_name == NULL ||
+        wcscmp(res[0].election_name, L"PRIMARY RUNOFF ELECTION (Republican Party)") != 0 || !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"reshart1: result (contests %u, sources %u, issues %u, election %s)\n", res[0].ncontests,
+                res[0].nsources, res[0].nissues, res[0].election_name ? res[0].election_name : L"-");
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* the precinct report alone: the party from its file name */
+    paths[0] = p_pre;
+    if (!res_load(paths, 1, &res, &nres, err) || nres != 1 || rpdf_contest(&res[0], L"REP Sheriff") == NULL)
+    {
+        wprintf(L"reshart1: precinct report alone (%u) %s\n", nres, err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_tpdf_producer = NULL;
+    EeResults_FreeArray(res, nres);
+    free(cum.p);
+    free(pre.p);
+    free(can.p);
+    DeleteFileW(p_cum);
+    DeleteFileW(p_pre);
+    DeleteFileW(p_can);
+    wprintf(L"reshart1: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* PScript5's two cells in one string: the last digit of @p a (right edge @p ra) and the
  * first of @p b (right edge @p rb) shown together, spread by a character spacing set before
  * a q ... Q that sets it to 0 inside (the Q restores it, as in Travis's L22 report). */
@@ -13940,6 +14212,7 @@ int wmain(void)
     failed |= test_cvr_roundtrip();
     failed |= test_hart_cvr();
     failed |= test_hart_pdf();
+    failed |= test_hvs_pdf();
     failed |= test_hart_ocr();
     failed |= test_cvr_whitespace();
     failed |= test_xlsx_writein();
@@ -13950,6 +14223,7 @@ int wmain(void)
     failed |= test_results_pdf();
     failed |= test_results_dominion();
     failed |= test_results_hart_old();
+    failed |= test_results_hart_runoff();
     failed |= test_results_glyphs();
     failed |= test_results_compare();
     failed |= test_results_view();

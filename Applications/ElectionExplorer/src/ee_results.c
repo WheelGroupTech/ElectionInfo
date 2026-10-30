@@ -445,6 +445,7 @@ static BOOL is_quote(wchar_t c)
 
 BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b)
 {
+    wchar_t prev = L'\0'; /* the last character compared */
     if (a == NULL || b == NULL)
     {
         return a == b;
@@ -474,9 +475,10 @@ BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b)
         {
             return *a == *b;
         }
-        if (sa != sb)
+        if (sa != sb && prev != L'/' && !(*a == L'/' && *b == L'/'))
         {
-            /* a word break on one side only */
+            /* a word break on one side only (spaces around a slash do not count: an HVS CVR
+             * writes "Donald J. Trump/JD Vance", the results "Donald J. Trump / JD Vance") */
             return FALSE;
         }
         if (*a == L'?' || *b == L'?')
@@ -495,6 +497,7 @@ BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b)
         {
             return FALSE;
         }
+        prev = *a;
         a++;
         b++;
     }
@@ -4422,9 +4425,92 @@ static BOOL res_pdf_page(uint32_t done, uint32_t total, void *user)
     return TRUE;
 }
 
+/* A Hart primary report whose heading names no party (Burnet County's 2024 runoff: "Cumulative
+ * Report", "Precinct Report", "Canvass Report"): its contests take the party code every candidate
+ * carries (the cumulative report's Party column), else the party its file name gives ("...
+ * Official Republican Precinct (PDF).pdf"), as a primary's titles do ("REP Sheriff"). */
+static void hart_primary_party(EeRpdfDoc *doc, const wchar_t *name)
+{
+    const wchar_t *code = NULL;
+    const wchar_t *leaf = name;
+    uint32_t c, k;
+    if ((doc->kind != EE_RPDF_HART_SUMMARY && doc->kind != EE_RPDF_HART_PRECINCT &&
+         doc->kind != EE_RPDF_HART_PCT_REPORT) ||
+        doc->election_name == NULL || wcsistr(doc->election_name, L"PRIMARY") == NULL ||
+        wcsistr(doc->election_name, L" Party)") != NULL)
+    {
+        return;
+    }
+    for (c = 0; c < doc->ncontests; c++)
+    {
+        const wchar_t *t = doc->contests[c].title;
+        const wchar_t *sp = t != NULL ? wcschr(t, L' ') : NULL;
+        if (sp != NULL && known_party_prefix(t, (size_t)(sp - t)))
+        {
+            return; /* the titles already name it */
+        }
+        for (k = 0; k < doc->contests[c].nchoices; k++)
+        {
+            const wchar_t *p = doc->contests[c].choices[k].party;
+            if (p == NULL)
+            {
+                continue;
+            }
+            if (code != NULL && wcscmp(code, p) != 0)
+            {
+                return; /* candidates of more than one party: not one party's primary */
+            }
+            code = p;
+        }
+    }
+    if (code == NULL && name != NULL)
+    {
+        const wchar_t *p;
+        for (p = name; *p != L'\0'; p++)
+        {
+            if (*p == L'\\' || *p == L'/')
+            {
+                leaf = p + 1;
+            }
+        }
+        code = wcsistr(leaf, L"Republican") != NULL ? L"REP" : wcsistr(leaf, L"Democrat") != NULL ? L"DEM" : NULL;
+    }
+    if (code == NULL || !known_party_prefix(code, wcslen(code)))
+    {
+        return;
+    }
+    for (c = 0; c < doc->ncontests; c++)
+    {
+        EeRpdfContest *ct = &doc->contests[c];
+        size_t len = (ct->title != NULL ? wcslen(ct->title) : 0) + wcslen(code) + 2;
+        wchar_t *t = (wchar_t *)malloc(len * sizeof(wchar_t));
+        if (t == NULL)
+        {
+            return;
+        }
+        StringCchPrintfW(t, len, L"%s %s", code, ct->title != NULL ? ct->title : L"");
+        free(ct->title);
+        ct->title = t;
+    }
+    {
+        const wchar_t *pn = wcscmp(code, L"REP") == 0   ? L"Republican Party"
+                            : wcscmp(code, L"DEM") == 0 ? L"Democratic Party"
+                            : wcscmp(code, L"LIB") == 0 ? L"Libertarian Party"
+                                                        : L"Green Party";
+        size_t len = wcslen(doc->election_name) + wcslen(pn) + 4;
+        wchar_t *e = (wchar_t *)malloc(len * sizeof(wchar_t));
+        if (e != NULL)
+        {
+            StringCchPrintfW(e, len, L"%s (%s)", doc->election_name, pn);
+            free(doc->election_name);
+            doc->election_name = e;
+        }
+    }
+}
+
 /* A results report PDF (ES&S Electionware, Hart, Dominion; a scanned ES&S report by OCR),
  * read by ee_results_pdf.c. Returns its format (EE_RES_FMT_*), or 0 after b_fail. */
-static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
+static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n, const wchar_t *name)
 {
     EeRpdfDoc doc;
     wchar_t err[400] = L"";
@@ -4433,6 +4519,7 @@ static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
         b_fail(b, err);
         return 0;
     }
+    hart_primary_party(&doc, name);
     return res_from_rpdf(b, &doc, EE_RES_FMT_DOM_SUMMARY_PDF);
 }
 
@@ -4619,7 +4706,7 @@ static BOOL parse_buffer(const uint8_t *d,
             parse_ee_view(&b, d, n);
             break;
         case RES_FMT_PDF:
-            out->format = parse_results_pdf(&b, d, n);
+            out->format = parse_results_pdf(&b, d, n, name);
             break;
         case EE_RES_FMT_CLARITY_TXT:
         {
@@ -6759,6 +6846,47 @@ typedef struct TallyContest
     int64_t over, under;
 } TallyContest;
 
+/* The same precinct name, ignoring case and spaces beside a hyphen ("9-MFISD" in a Hart HVS
+ * CVR, "9 - MFISD" in its results). */
+static BOOL pct_name_eq(const wchar_t *a, const wchar_t *b)
+{
+    for (;;)
+    {
+        if (*a == L' ' && (a[1] == L'-' || (a[1] == L' ' && a[2] == L'-')))
+        {
+            a++;
+            continue;
+        }
+        if (*b == L' ' && (b[1] == L'-' || (b[1] == L' ' && b[2] == L'-')))
+        {
+            b++;
+            continue;
+        }
+        if (towupper(*a) != towupper(*b))
+        {
+            return FALSE;
+        }
+        if (*a == L'\0')
+        {
+            return TRUE;
+        }
+        if (*a == L'-')
+        {
+            do
+            {
+                a++;
+            } while (*a == L' ');
+            do
+            {
+                b++;
+            } while (*b == L' ');
+            continue;
+        }
+        a++;
+        b++;
+    }
+}
+
 const wchar_t *EeResults_MatchPrecinctName(const EeResults *r, const wchar_t *name)
 {
     const wchar_t *best = NULL;
@@ -6771,14 +6899,18 @@ const wchar_t *EeResults_MatchPrecinctName(const EeResults *r, const wchar_t *na
     for (p = 0; p < r->nprecincts; p++)
     {
         const wchar_t *pn = r->precincts[p].name;
+        if (pn != NULL && pn[0] != L'\0' && (wcscmp(pn, name) == 0 || pct_name_eq(pn, name)))
+        {
+            return pn;
+        }
+    }
+    for (p = 0; p < r->nprecincts; p++)
+    {
+        const wchar_t *pn = r->precincts[p].name;
         size_t len;
         if (pn == NULL || pn[0] == L'\0')
         {
             continue;
-        }
-        if (wcscmp(pn, name) == 0)
-        {
-            return pn;
         }
         len = wcslen(pn);
         if (len > best_len && wcsncmp(name, pn, len) == 0 && !iswdigit(name[len]))

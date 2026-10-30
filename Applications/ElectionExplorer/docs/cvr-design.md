@@ -626,6 +626,61 @@ pages the county blacked out — with no text objects at all). Such a PDF is rea
   page 1, one continued under a repeated header, vote-for-2, undervote, OCR Status, load
   note; skipped when the machine has no OCR language).
 
+### Hart HVS "Votes by Precinct" report (`hart_hvs.c`, added 2026-10-30)
+
+Before Verity, Texas counties on the Hart Voting System (HVS 6.x; Burnet County used HVS 6.2.1
+through the November 2024 election and then switched to Verity 2.7; the Texas SOS "Voting Systems
+by County" lists each county's version) published CVRs as a "Votes by Precinct" report. Burnet's
+2024 files: `G24_Early Voting CVRs.pdf` (21,815 pages), `G24_Election Day CVRs.pdf`, the March
+primary `P24_* CVRs_2.pdf` (both parties in one file) and the May runoff `PR24_* CVRs.pdf`.
+
+- **Layout:** one ballot per page. Title "Votes by Precinct", then the election and voting type
+  ("November 2024 Early Voting"); `Precinct:` and `Party:` (`NP`, `REP`, `DEM`); a `Contest
+  Title` / `Candidate/Option` table, one row per contest. `No Selection` = undervote; a write-in
+  reads `Write-in` with the written name in a third column (a long name wraps onto a second
+  line). No ballot id, device, batch or overvote marker. Footer: print time + `Page N of M`.
+- **Three printings, one reader** (lines rebuilt from run positions, baselines within 2 pt):
+  the report as rendered (G24, PR24 DEM); printed through PostScript / Acrobat Distiller (P24,
+  PR24 REP: words in touching pieces, `Contest Title  Candidate/Option` as one run, 1-pt and
+  no-break-space runs at the table edges, cells padded with spaces); and the PR24 DEM copy that
+  draws each header value at its label's own x (`5Precinct:`). The choice column starts at the
+  `Candidate/Option` title (else x 312).
+- **Cut-short titles:** some G24 print runs cut long titles at a fixed width, at several font
+  sizes (`JUSTICE, 3RD COURT OF APPEALS DIST`, `…DISTRICT,`, `…DISTRICT, PLACE` for Places 2, 3,
+  5 and 6; `JUDGE, COURT OF CRIMINAL APPEALS` for Places 7 and 8). After the whole file is read,
+  a title is *cut* when a longer title starts with it, is printed for one of its (precinct,
+  party) pairs, and never shares a ballot with it (`PROPOSITION 1` / `PROPOSITION 10` share every
+  ballot, so neither is cut; `Precinct Chair, Precinct 1` / `…13` share no precinct). Its
+  candidates are the uncut such titles, sorted by mean row position; on each ballot the k-th
+  occurrence becomes the k-th candidate when the ballot has as many occurrences as candidates
+  (or there is one candidate), else it is kept as printed and counted. G24 early voting: 47,164
+  rows completed, none left.
+- **Into the table:** records go into a `HartOcrStore` (strings interned) and through the same
+  passes as a scanned report. Key columns: **Report Page** (`<file> p.<page>`, replacing CvrGuid
+  when every PDF is HVS), Precinct, Party, Voting Type (from the title). Party codes `REP`/`DEM`
+  prefix primary contests like Verity's party names. An HVS PDF cannot be combined with ZIPs (no
+  Cvr Id). The load note gives pages/ballots, completed titles and unread lines.
+- **Compare with results** (Burnet's HVS results reports already loaded): precinct names match
+  ignoring spaces beside a hyphen (`9-MFISD` in the CVR, `9 - MFISD` in the results;
+  `EeResults_MatchPrecinctName` had folded it into precinct 9), and choice names ignoring spaces
+  beside a slash (`Donald J. Trump/JD Vance` vs `Donald J. Trump / JD Vance`,
+  `EeResults_NamesMatch`).
+- **Validated** (results' Absentee column left out; no absentee CVRs were published): G24 every
+  contest and choice pairs up, 23 of 23 precincts; each precinct × choice cell is 1-7 votes
+  *below* the results (never above), per precinct 0-7 early and 0-3 Election Day ballots fewer
+  than the canvass (17,657 vs 17,705 early, 3,901 vs 3,919 Election Day in precincts 1-20):
+  ballots counted after the CVR report was printed (likely provisional), not misreads. P24 the
+  same for both parties (1-6 votes per cell). PR24 (88 + 88 DEM, 931 + 874 REP ballots) against
+  its precinct reports: REP 4 cells 1 vote below, DEM 9 cells 1-2 below, the rest equal. Burnet's
+  runoff reports name no party in their headings, so `hart_primary_party` (ee_results.c) gives a
+  primary's contests the code every candidate carries (the cumulative Party column), else the
+  party in the file name ("... Official Republican Precinct (PDF).pdf"); and the primary canvass
+  titles a contest "Sheriff -" (the trailing dash is dropped). With both, each party's three
+  reports group as one election (they formed two before, P24 included). Load ≈ 4.5 s for G24
+  early voting.
+
+  Test `hvspdf`.
+
 ## Dominion voting-system CVRs (`dominion_cvr.c`)
 
 Dominion Voting Systems (Democracy Suite; the company is now **Liberty Vote**) exports

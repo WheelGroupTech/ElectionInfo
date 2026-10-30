@@ -26,7 +26,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 ```bat
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
-  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
+  test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\hart_hvs.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
   src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_results_dom.c src\ee_results_ocr.c src\ee_glyph_ocr.c src\ee_audit.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
@@ -99,6 +99,11 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
   name wrapped onto the next;
 - a second entity's cumulative report of the same election combines with the first into one
   election (`combine_split`).
+`reshart1` covers a primary runoff's reports of that kind whose headings name no party (Burnet
+County 2024): the cumulative report's Party column gives `REP`, the canvass titles a contest
+`Sheriff -`, and the files are named `... Official Republican ...`. The three load as one election
+of `REP` contests with no differences, and the precinct report alone takes the party from its
+file name.
 `resglyph` covers reports printed to PDF through PScript5 (Travis L22, LR22, PR22;
 `src\ee_glyph_ocr.c`, needs an OCR language and is skipped without one):
 - an Electionware summary whose text is a Type 3 font of unnamed glyph outlines (Arial's, each
@@ -242,6 +247,13 @@ for a zip with batches, not for a PDF with a blank Central Batch Id), and the er
 a ZIP and PDF share no Cvr Id, and a county-redacted report (only Precinct + Cvr Id in
 the header -> 2 key columns; a vote-for-3 contest printed as repeated title rows merges
 into one grouped contest);
+`hvspdf` covers the older Hart HVS "Votes by Precinct" CVR report (needs
+`src\hart_hvs.c`): one ballot per page with no Cvr Id (a `Report Page` key column,
+`<file> p.<page>`), a title drawn in two touching pieces, a precinct value drawn at its
+label, two contest titles printed cut short to the same text and completed by ballot order
+(Place 2, then Place 3), `PROPOSITION 1` beside `PROPOSITION 10` left alone, "No
+Selection" as an undervote, write-ins (one name wrapped onto a second line), Voting Type
+from the report title, and the load note;
 `cvrws` covers whitespace normalization of selection values (`John   Cornyn`
 -> `John Cornyn`, trimmed ends, merged tally);
 `hartocr` covers scanned (image-only) Hart CVR Reports read through Windows OCR

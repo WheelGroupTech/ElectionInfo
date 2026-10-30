@@ -3167,6 +3167,12 @@ static void hl_title(RpCtx *cx, const wchar_t *raw, wchar_t *title, size_t cch, 
                 break;
             }
         }
+        /* Burnet's primary canvass prints the dash with no party after it: "President -" */
+        tl = wcslen(t);
+        if (tl > 2 && t[tl - 1] == L'-' && t[tl - 2] == L' ')
+        {
+            t[tl - 2] = L'\0';
+        }
     }
     if (cx->hl_party[0] != L'\0')
     {

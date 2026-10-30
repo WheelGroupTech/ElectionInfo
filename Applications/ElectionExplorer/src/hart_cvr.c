@@ -32,6 +32,11 @@
  * once into memory, then fed through the same passes; an "OCR Status" key column
  * (OK / Corrected / Review) and a load note summarize what OCR had to repair.
  *
+ * The older Hart Voting System (HVS 6.x) prints a "Votes by Precinct" report instead: one
+ * ballot per page with Precinct, Party and the voting type, but no ballot id (hart_hvs.c).
+ * It is read once into memory like a scanned report; its records are identified by file and
+ * page ("Report Page") and cannot be combined with ZIP files.
+ *
  * A Hart CVR ZIP export is one or more ZIP files, each containing one XML file per
  * scanned ballot SHEET (the first/only sheet is named `1_<guid>.xml`; later sheets
  * of a multi-sheet ballot are `<guid>.xml`). There is not enough information to link
@@ -71,6 +76,7 @@
  */
 
 #include "ee_cvr.h"
+#include "hart_hvs.h"
 #include "hart_ocr.h"
 #include "pdf_reader.h"
 
@@ -767,9 +773,18 @@ static BOOL sheet_add_selection(HartSheet *s, int idx, const char *v, size_t len
  * contest name (ES&S-style "REP United States Senator") to keep them separate. */
 static const char *party_abbr(const char *party_name)
 {
+    static const char *const k_Codes[] = {"REP", "DEM", "LIB", "GRN"};
+    size_t i;
     if (party_name == NULL || party_name[0] == '\0')
     {
         return NULL;
+    }
+    for (i = 0; i < ARRAYSIZE(k_Codes); i++)
+    {
+        if (_stricmp(party_name, k_Codes[i]) == 0)
+        {
+            return k_Codes[i]; /* HVS reports print the code ("Party: REP") */
+        }
     }
     if (contains_ci(party_name, "Republican"))
         return "REP";
@@ -1498,6 +1513,7 @@ typedef struct HartPdfCtx
     uint32_t *order; /* scratch index array */
     uint32_t cap_order;
     int image_only; /* pages are images: read through OCR (hart_ocr.c) */
+    int hvs;        /* an HVS "Votes by Precinct" report (hart_hvs.c) */
 } HartPdfCtx;
 
 static void pdfctx_free(HartPdfCtx *c)
@@ -1962,6 +1978,11 @@ static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, EeOcr **ocr, wchar
     {
         return TRUE;
     }
+    if (c->pt.nruns > 0 && HartHvs_IsReportPage(&c->pt))
+    {
+        c->hvs = 1;
+        return TRUE;
+    }
     if (c->pt.nruns == 0 && HartOcr_PageIsImageOnly(c->pdf, 0))
     {
         wchar_t msg[512];
@@ -1987,7 +2008,8 @@ static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, EeOcr **ocr, wchar
     }
     set_pdf_err(err, errcch, path,
                 L"not a Hart Cast Vote Record report (expected the Hart \"CVR Report\" "
-                L"with a Cvr Id and Contest Title / Option columns).");
+                L"with a Cvr Id and Contest Title / Option columns, or the older HVS \"Votes by "
+                L"Precinct\" report).");
     pdfctx_free(c);
     return FALSE;
 }
@@ -2448,9 +2470,12 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     int keys[HK_COUNT];
     uint64_t pdf_pages = 0, img_pages = 0;
     EeOcr *ocr = NULL;
-    HartOcrStore *stores = NULL; /* per PDF; used when that PDF is scanned images */
+    HartOcrStore *stores = NULL; /* per PDF; used when that PDF is scanned images or HVS */
     BOOL *is_img = NULL;
+    BOOL *is_hvs = NULL;
+    HartHvsStats *hvs_stats = NULL;
     BOOL any_img = FALSE;
+    int nhvs = 0;
     Pass1Ctx p1;
     Pass2Ctx p2;
 
@@ -2470,7 +2495,9 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     pdfs = (const wchar_t **)calloc((size_t)count, sizeof(wchar_t *));
     stores = (HartOcrStore *)calloc((size_t)count, sizeof(HartOcrStore));
     is_img = (BOOL *)calloc((size_t)count, sizeof(BOOL));
-    if (zips == NULL || pdfs == NULL || stores == NULL || is_img == NULL)
+    is_hvs = (BOOL *)calloc((size_t)count, sizeof(BOOL));
+    hvs_stats = (HartHvsStats *)calloc((size_t)count, sizeof(HartHvsStats));
+    if (zips == NULL || pdfs == NULL || stores == NULL || is_img == NULL || is_hvs == NULL || hvs_stats == NULL)
     {
         hart_set_err(error_message, error_cch, L"Out of memory.");
         s = EeLoadStatus_Error;
@@ -2506,16 +2533,30 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
             goto cleanup;
         }
         is_img[f] = (c.image_only != 0);
+        is_hvs[f] = (c.hvs != 0);
         if (is_img[f])
         {
             img_pages += EePdf_PageCount(c.pdf);
             any_img = TRUE;
+        }
+        else if (is_hvs[f])
+        {
+            img_pages += EePdf_PageCount(c.pdf); /* read once, like a scanned report */
+            nhvs++;
         }
         else
         {
             pdf_pages += EePdf_PageCount(c.pdf);
         }
         pdfctx_free(&c);
+    }
+    if (nhvs > 0 && nzip > 0)
+    {
+        hart_set_err(error_message, error_cch,
+                     L"An HVS \"Votes by Precinct\" report has no Cvr Id, so it cannot be combined with "
+                     L"Hart CVR zip files. Load the report on its own.");
+        s = EeLoadStatus_Error;
+        goto cleanup;
     }
 
     pg.cancel_flag = cancel_flag;
@@ -2534,13 +2575,15 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
         EePdf *doc = NULL;
         BOOL cancelled = FALSE;
         wchar_t oerr[256] = L"";
-        if (!is_img[f])
+        if (!is_img[f] && !is_hvs[f])
         {
             continue;
         }
         if (!EePdf_Open(pdfs[f], &doc, oerr, ARRAYSIZE(oerr)) ||
-            !HartOcr_ReadPdf(ocr, doc, &stores[f], ocr_tick, &pg, &cancelled, oerr,
-                             ARRAYSIZE(oerr)))
+            (is_hvs[f] ? !HartHvs_ReadPdf(doc, path_leaf(pdfs[f]), &stores[f], ocr_tick, &pg, &cancelled,
+                                          &hvs_stats[f], oerr, ARRAYSIZE(oerr))
+                       : !HartOcr_ReadPdf(ocr, doc, &stores[f], ocr_tick, &pg, &cancelled, oerr,
+                                          ARRAYSIZE(oerr))))
         {
             if (cancelled)
             {
@@ -2566,7 +2609,7 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
         pg.rows = NULL;
         for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
         {
-            s = hart_iterate_pdf(pdfs[f], is_img[f] ? &stores[f] : NULL, &sheet, meta_sheet,
+            s = hart_iterate_pdf(pdfs[f], (is_img[f] || is_hvs[f]) ? &stores[f] : NULL, &sheet, meta_sheet,
                                  &meta, FALSE, &pg, error_message, error_cch);
         }
         if (s != EeLoadStatus_Ok)
@@ -2593,7 +2636,7 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     {
         for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
         {
-            s = hart_iterate_pdf(pdfs[f], is_img[f] ? &stores[f] : NULL, &sheet, pass1_sheet,
+            s = hart_iterate_pdf(pdfs[f], (is_img[f] || is_hvs[f]) ? &stores[f] : NULL, &sheet, pass1_sheet,
                                  &p1, TRUE, &pg, error_message, error_cch);
         }
     }
@@ -2663,6 +2706,10 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     {
         header[i] = k_HartKeyNames[keys[i]];
     }
+    if (nhvs > 0 && nhvs == npdf)
+    {
+        header[0] = "Report Page"; /* HVS records have no Cvr Id: "<file> p.<page>" */
+    }
     for (i = frozen; i < ncols; i++)
     {
         header[i] = ""; /* continuation columns default to blank */
@@ -2707,7 +2754,7 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
     {
         for (f = 0; f < npdf && s == EeLoadStatus_Ok; f++)
         {
-            s = hart_iterate_pdf(pdfs[f], is_img[f] ? &stores[f] : NULL, &sheet, pass2_sheet,
+            s = hart_iterate_pdf(pdfs[f], (is_img[f] || is_hvs[f]) ? &stores[f] : NULL, &sheet, pass2_sheet,
                                  &p2, TRUE, &pg, error_message, error_cch);
         }
     }
@@ -2721,16 +2768,44 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
         hart_set_err(error_message, error_cch, L"No Cast Vote Records were found.");
         s = EeLoadStatus_Error;
     }
-    if (s == EeLoadStatus_Ok && any_img)
+    if (s == EeLoadStatus_Ok && (any_img || nhvs > 0))
     {
-        /* Tell the user what OCR had to repair or could not resolve. */
-        size_t cap = 512 * (size_t)npdf + 512;
+        /* Tell the user what OCR had to repair or could not resolve, and how the HVS reports
+         * were read. */
+        size_t cap = 768 * (size_t)npdf + 1024;
         wchar_t *note = (wchar_t *)calloc(cap, sizeof(wchar_t));
         if (note != NULL)
         {
             for (f = 0; f < npdf; f++)
             {
-                wchar_t line[512];
+                wchar_t line[768];
+                if (is_hvs[f])
+                {
+                    const HartHvsStats *hs = &hvs_stats[f];
+                    StringCchPrintfW(line, ARRAYSIZE(line),
+                                     L"%s: Hart HVS \"Votes by Precinct\" report, %u pages read as %u ballots "
+                                     L"(one per page%s).",
+                                     path_leaf(pdfs[f]), hs->pages, hs->ballots,
+                                     hs->continued > 0 ? L"; longer ballots continue on the next page" : L"");
+                    StringCchCatW(note, cap, line);
+                    if (hs->cut_titles > 0 || hs->cut_unresolved > 0)
+                    {
+                        StringCchPrintfW(line, ARRAYSIZE(line),
+                                         L" The report printed %u contest titles cut short; %u were completed "
+                                         L"from the full titles by ballot order%s.",
+                                         hs->cut_titles + hs->cut_unresolved, hs->cut_titles,
+                                         hs->cut_unresolved > 0 ? L", the rest are kept as printed" : L"");
+                        StringCchCatW(note, cap, line);
+                    }
+                    if (hs->stray_lines > 0)
+                    {
+                        StringCchPrintfW(line, ARRAYSIZE(line),
+                                         L" %u table lines without a choice were not read.", hs->stray_lines);
+                        StringCchCatW(note, cap, line);
+                    }
+                    StringCchCatW(note, cap, L"\r\n");
+                    continue;
+                }
                 if (!is_img[f])
                 {
                     continue;
@@ -2744,13 +2819,23 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
                                  stores[f].review_records);
                 StringCchCatW(note, cap, line);
             }
-            StringCchCatW(note, cap,
-                          (nzip == 0)
-                              ? L"\r\nOCR can misread text. Filter on OCR Status = Review to "
-                                L"check those records against the PDF; Corrected records had a "
-                                L"misread Cvr Id or spelling repaired."
-                              : L"\r\nThe votes come from the ZIP files; OCR supplied only the "
-                                L"PDF header fields (Voting Type, Polling Place, devices).");
+            if (any_img)
+            {
+                StringCchCatW(note, cap,
+                              (nzip == 0)
+                                  ? L"\r\nOCR can misread text. Filter on OCR Status = Review to "
+                                    L"check those records against the PDF; Corrected records had a "
+                                    L"misread Cvr Id or spelling repaired."
+                                  : L"\r\nThe votes come from the ZIP files; OCR supplied only the "
+                                    L"PDF header fields (Voting Type, Polling Place, devices).");
+            }
+            if (nhvs > 0)
+            {
+                StringCchCatW(note, cap,
+                              L"\r\nAn HVS report gives no ballot id, device or batch: each ballot is named by "
+                              L"its file and page (Report Page). \"No Selection\" is an undervote; a write-in's "
+                              L"written name is not kept.");
+            }
             out->load_note = note;
         }
     }
@@ -2775,6 +2860,8 @@ cleanup:
         free(stores);
     }
     free(is_img);
+    free(is_hvs);
+    free(hvs_stats);
     EeOcr_Destroy(ocr);
     sheet_free(&sheet);
     dict_free(&dict);

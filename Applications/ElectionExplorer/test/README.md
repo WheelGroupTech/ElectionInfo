@@ -27,7 +27,7 @@ From a VS 2026 x64 developer prompt, with cwd `ElectionExplorer/`:
 cl /nologo /W4 /std:c11 /TC /utf-8 /DWIN32_LEAN_AND_MEAN /DUNICODE /D_UNICODE ^
   /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /I src ^
   test\smoke_load.c src\voter_table.c src\filter.c src\settings.c src\xlsx.c src\xls.c src\csv_sheet.c src\ee_cvr.c src\hart_cvr.c src\hart_hvs.c src\pdf_reader.c src\ocr_win.c src\hart_ocr.c ^
-  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_results_dom.c src\ee_results_ocr.c src\ee_glyph_ocr.c src\ee_audit.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
+  src\dominion_cvr.c src\ee_rcv.c src\voter_roster.c src\ee_results.c src\ee_results_pdf.c src\ee_results_dom.c src\ee_results_ocr.c src\ee_glyph_ocr.c src\ee_audit.c src\ee_audit_hart.c src\third_party\miniz\miniz.c /Fe:test\smoke_load.exe /link /SUBSYSTEM:CONSOLE user32.lib advapi32.lib gdi32.lib ole32.lib runtimeobject.lib
 test\smoke_load.exe
 ```
 
@@ -170,6 +170,14 @@ holding quotes, a comma and a line break, the copies lists ("1-3 of 3", "\"1,3 o
   (one test), and another election's test copy (left out).
 - three counting periods with their tests before and after, and a 3-hour pause during which the
   election was closed.
+`hartaud` covers Hart Verity "Audit Log Report" PDFs (`src\ee_audit_hart.c`): a synthetic 3-page
+VerityCount report (header, wrapped times and Event Data, a row continued at the next page's top, a row
+printed again in full above the next page's table heading) zipped beside an XML signature, and a
+VerityCentral report, loaded as one election: a test task and an official task (a vDrive read again
+replaces its first read, 624 ballots), a vDrive written by Central with 536 ballots and read with 524, one
+never read, the notable events (results exported early, ballots read early, a manual vote record, a
+vDrive saved an hour before its Time read, a rejected vDrive, an error), the timeline, the export round
+trip, and the test task words ("PreLAT", "PLAT", "LAT2a" yes; "Platform", "Translation" no).
 `county1023` covers the October 23 layouts: a clipped polling-place letter (Gregg), row numbers on a
 wrapped record's second line (Wichita) and a "Polling Pl" column whose "BBM" is a mail ballot (Hunt),
 plus Hunt's October 24 date written "10.24.26" (a 2-digit year with dots).

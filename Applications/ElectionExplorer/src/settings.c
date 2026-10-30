@@ -2,7 +2,7 @@
  * @file settings.c
  * @brief Registry-backed persistence of user options. See settings.h.
  *
- * All values are stored as REG_DWORD under a single per-user key. Value names
+ * Values are stored as REG_DWORD (and one REG_SZ) under a single per-user key. Value names
  * are kept stable across versions so an upgrade preserves the user's options.
  * The key path carries no version segment for the same reason.
  */
@@ -19,6 +19,7 @@ static const wchar_t k_ValNameSurnameFirst[] = L"NameSurnameFirst";
 static const wchar_t k_ValCvrMergeWriteins[] = L"CvrMergeWriteins";
 static const wchar_t k_ValCvrTabPartyFirst[] = L"CvrTabPartyFirst";
 static const wchar_t k_ValResultsShowVoteTypes[] = L"ResultsShowVoteTypes";
+static const wchar_t k_ValAuditTestWords[] = L"AuditTestTaskWords";
 
 void EeSettings_Defaults(EeSettings *out)
 {
@@ -33,6 +34,7 @@ void EeSettings_Defaults(EeSettings *out)
     out->cvr_merge_writeins = TRUE;
     out->cvr_tab_party_first = EE_TAB_PARTY_REP;
     out->results_show_vote_types = TRUE;
+    out->audit_test_words[0] = L'\0';
 }
 
 /* Read one REG_DWORD into *value; leave it unchanged if the value is absent or
@@ -48,6 +50,29 @@ static void read_dword(HKEY key, const wchar_t *name, int *value)
     {
         *value = (int)data;
     }
+}
+
+/* Read one REG_SZ into @p buf (cch characters); leave it unchanged if the value is absent,
+ * not a string, or too long. */
+static void read_string(HKEY key, const wchar_t *name, wchar_t *buf, DWORD cch)
+{
+    wchar_t tmp[256];
+    DWORD cb = sizeof(tmp) - sizeof(wchar_t);
+    DWORD type = 0;
+
+    if (RegQueryValueExW(key, name, NULL, &type, (BYTE *)tmp, &cb) == ERROR_SUCCESS && type == REG_SZ &&
+        cb / sizeof(wchar_t) < cch)
+    {
+        tmp[cb / sizeof(wchar_t)] = L'\0';
+        memcpy(buf, tmp, (cb / sizeof(wchar_t) + 1) * sizeof(wchar_t));
+    }
+}
+
+/* Write one REG_SZ; return FALSE on failure. */
+static BOOL write_string(HKEY key, const wchar_t *name, const wchar_t *value)
+{
+    return RegSetValueExW(key, name, 0, REG_SZ, (const BYTE *)value, (DWORD)((wcslen(value) + 1) * sizeof(wchar_t))) ==
+           ERROR_SUCCESS;
 }
 
 /* Write one REG_DWORD; return FALSE on failure. */
@@ -95,6 +120,7 @@ BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
     show_vt = out->results_show_vote_types ? 1 : 0;
     read_dword(key, k_ValResultsShowVoteTypes, &show_vt);
     out->results_show_vote_types = (show_vt != 0);
+    read_string(key, k_ValAuditTestWords, out->audit_test_words, (DWORD)ARRAYSIZE(out->audit_test_words));
     RegCloseKey(key);
     return TRUE;
 }
@@ -127,6 +153,7 @@ BOOL EeSettings_SaveTo(const wchar_t *subkey, const EeSettings *in)
     ok &= write_dword(key, k_ValCvrMergeWriteins, in->cvr_merge_writeins ? 1 : 0);
     ok &= write_dword(key, k_ValCvrTabPartyFirst, in->cvr_tab_party_first);
     ok &= write_dword(key, k_ValResultsShowVoteTypes, in->results_show_vote_types ? 1 : 0);
+    ok &= write_string(key, k_ValAuditTestWords, in->audit_test_words);
     RegCloseKey(key);
     return ok;
 }

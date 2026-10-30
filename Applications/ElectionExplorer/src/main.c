@@ -20485,7 +20485,7 @@ typedef struct AudRow
 {
     uint32_t idx; /* merged event of the log, the event of the copy shown, or a batch */
     uint32_t seq; /* position in display order, the sort's tie-break */
-    uint8_t log;  /* 0 = Election log, 1 = Admin log (EeAuditElection.logs) */
+    uint8_t log;  /* index in EeAuditElection.logs (0 = Election, 1 = Admin, 2.. Hart Verity logs) */
 } AudRow;
 
 typedef struct AudReportWindow AudReportWindow;
@@ -20511,10 +20511,10 @@ typedef struct AuditWindow
     HWND list;
     HWND status;
     EeAuditElection *el; /* one election (an array of 1, freed with EeAudit_FreeElections) */
-    EeAuditAccounting acct; /* the Election log's ballot accounting */
+    EeAuditAccounting acct; /* the ballot accounting (Election log, or Hart VerityCount log) */
     BOOL have_acct;
-    int show_log;       /* View -> Log: 0 = both, else EE_AUDIT_ELECTION / EE_AUDIT_ADMIN */
-    int show_copy_log;  /* View -> Copy: the log (0 / 1) of the copy shown */
+    int show_log;       /* View -> Log: 0 = all, else the kind shown (EE_AUDIT_*) */
+    int show_copy_log;  /* View -> Copy: the log (index in el->logs) of the copy shown */
     int show_copy;      /* the copy shown as printed, or AUD_MERGED */
     int view;           /* AUD_VIEW_* */
     int session;        /* the accounting session the Ballot Batches view shows; -1 none */
@@ -20525,7 +20525,7 @@ typedef struct AuditWindow
     BOOL sort_asc;
     int ncols;
     uint8_t col_kind[AUD_MAX_COLS];
-    uint32_t lacking[2]; /* merged events each log's final copy lacks */
+    uint32_t lacking[EE_AUDIT_NLOGS]; /* merged events each log's final copy lacks */
     AudReportWindow *reps[AUD_REP_COUNT]; /* open report windows (AUD_REP_*), or NULL */
     EeAuditNotes notes;                   /* notable events */
     BOOL have_notes;
@@ -20583,9 +20583,13 @@ static const wchar_t k_AudHelpLoading[] =
     L"printed with a start date lacks the earlier events on purpose.\r\n\r\n"
     L"A reloadable export (File \x2192 Export\x2026, Reloadable) loads back the same way, without "
     L"the PDFs, and can be selected with them.\r\n\r\n"
-    L"Other PDFs, including Hart Verity audit logs and Electionware machine (tabulator) logs, "
-    L"are not read; the message names the file. The logs hold county employees' user IDs, "
-    L"never voter data.";
+    L"Hart Verity \"Audit Log Report\" PDFs load the same way, one per component: VerityCount "
+    L"(tabulation), VerityCentral (central scanning) and VerityData (the election definition). Select "
+    L"an election's component logs together and they open in one window. A .zip holding the report "
+    L"(Hays County posts it with an XML signature) can be selected as it is. The report numbers its "
+    L"rows; the Copies Check says whether any row number is missing.\r\n\r\n"
+    L"Other PDFs, including Electionware and Verity machine (tabulator) logs, are not read; the "
+    L"message names the file. The logs hold county employees' user IDs, never voter data.";
 
 static const wchar_t k_AudHelpOptions[] =
     L"The list shows one row per event, newest first, as the reports print them:\r\n"
@@ -20612,7 +20616,14 @@ static const wchar_t k_AudHelpOptions[] =
     L"\"LA\", \"L&A\", \"Accuracy\" or \"Test\").\r\n"
     L"Batches that no longer count are grey. Double-click a batch, or right-click \x2192 Go to "
     L"Event, to see its commit in the Events view.\r\n\r\n"
-    L"Edit \x2192 Options\x2026 sets the zoom (the size of the list text).\r\n\r\n"
+    L"Hart Verity logs: the columns are the report's (Log Date & Time, Event, Device ID, User, Event "
+    L"Data), and View \x2192 vDrive Reads takes the place of Ballot Batches: each vDrive read into a "
+    L"task (State Read) with its polling place, vDrive ID and Ballot count. A task is a results "
+    L"container that keeps its vDrives each time it is opened again; a vDrive read into the same task "
+    L"again replaces its earlier read.\r\n\r\n"
+    L"Edit \x2192 Options\x2026 sets the zoom (the size of the list text) and the words that make a "
+    L"Hart task a test task (LAT, L&A, Test, Training, Logic; \"Pre-LAT\", \"PLAT\" and \"LAT2a\" "
+    L"match).\r\n\r\n"
     L"Click a column title to sort by it; click again to reverse. View \x2192 Reset View puts "
     L"the rows back in printed order (batches in load order). Edit \x2192 Copy (Ctrl+C) or "
     L"right-click copies the selected rows as tab-separated text.";
@@ -20663,6 +20674,15 @@ static const wchar_t k_AudHelpReports[] =
     L"to see it in the Events view.\r\n\r\n"
     L"Reports \x2192 Users and Workstations\x2026 lists each user's events in both logs, first and last "
     L"event, modules, and the workstations the events name.\r\n\r\n"
+    L"Hart Verity logs: Ballot Accounting lists the VerityCount log's tasks (official, or test by name), "
+    L"their vDrives and ballots; the election task is the official task read into last. Its Central "
+    L"Transfers tab matches each vDrive VerityCentral wrote (\"CVRs written to vDrive\", Total ballots) "
+    L"with VerityCount's read of it by vDrive ID (or, when no \"vDrive closed\" was logged, by ballots "
+    L"and time) and shows any difference in red. The timeline's tests are the test tasks' reads, one per "
+    L"task and day. Notable Events adds Central to Count differences, manual vote records, reporting "
+    L"status overrides, vDrives rejected and registered voter changes; a results report printed or "
+    L"exported before Election Day is a red flag when ballots were read into the official task open at "
+    L"the time.\r\n\r\n"
     L"The reports show what the logs show; they do not judge compliance. Right-click a report to copy "
     L"its rows; Ctrl+C copies the selected rows.";
 
@@ -20702,6 +20722,12 @@ static const wchar_t k_AudHelpCompare[] =
     L"each vote type is a lower bound \x2014 the EMS ballots of that type must be at least the votes of "
     L"the Vote-For-1 contest with the most votes of that type. The EMS vote type comes from each "
     L"batch's poll place name (Early Vote Center, Vote Center, Mail, Provisional).\r\n\r\n"
+    L"Hart Verity logs: the EMS side is the task chosen (the election task unless another is chosen in "
+    L"Reports \x2192 Select Task\x2026): the Ballot count of each vDrive read into it. Only totals are "
+    L"compared: a central count vDrive names no polling place, so it gives no vote type.\r\n\r\n"
+    L"The report also gives the log's print time and newest event, and the results file's timestamp: "
+    L"a log printed before the last ballots were loaded (for example before the final canvass) does not "
+    L"show them, so its total is short of the results.\r\n\r\n"
     L"Statuses: Match, Differs (red), Lower bound met, Lower bound not met (red), Not reported. The "
     L"report is a snapshot taken when it is opened: open it again after loading other files. Filters "
     L"in the other windows are not applied.";
@@ -20805,7 +20831,48 @@ static void Aud_Widen(const char *s, wchar_t *out, size_t cch)
 
 static const wchar_t *Aud_LogName(int kind)
 {
-    return kind == EE_AUDIT_ADMIN ? L"Admin" : L"Election";
+    return EeAudit_LogName(kind);
+}
+
+/* TRUE for Hart Verity logs: the ballot batches are vDrive reads and the sessions are tasks. */
+static BOOL Aud_Hart(const AuditWindow *aw)
+{
+    return aw->have_acct ? aw->acct.hart : EeAudit_IsHart(aw->el);
+}
+
+/* View -> Log's item for a log kind. */
+static UINT Aud_LogMenuId(int kind)
+{
+    switch (kind)
+    {
+    case EE_AUDIT_ELECTION:
+        return IDM_AUD_LOG_ELECTION;
+    case EE_AUDIT_ADMIN:
+        return IDM_AUD_LOG_ADMIN;
+    case EE_AUDIT_HART_COUNT:
+        return IDM_AUD_LOG_HART_COUNT;
+    case EE_AUDIT_HART_CENTRAL:
+        return IDM_AUD_LOG_HART_CENTRAL;
+    default:
+        return IDM_AUD_LOG_HART_DATA;
+    }
+}
+
+/* The logs loaded (with copies). */
+static int Aud_NumLogs(const AuditWindow *aw)
+{
+    int li, n = 0;
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
+    {
+        n += aw->el->logs[li].ncopies > 0;
+    }
+    return n;
+}
+
+/* The log the ballot batches come from: "Election" or "VerityCount". */
+static const wchar_t *Aud_AcctLogName(const AuditWindow *aw)
+{
+    return Aud_Hart(aw) ? L"VerityCount" : L"Election";
 }
 
 /* @p ts as the report prints it, "11/05/2024 09:25:36PM". */
@@ -20830,10 +20897,18 @@ static int Aud_DefaultSession(const AuditWindow *aw)
 }
 
 /* "Election session", "L&A test", "Other (not test decks)" (a session whose batches are not
- * named as test decks, before the election session) or "No batches". */
+ * named as test decks, before the election session) or "No batches". Hart: "Election task",
+ * "Test task", "Official task" (another task with no test word) or "No vDrives read". */
 static const wchar_t *Aud_SessionKind(const AuditWindow *aw, uint32_t si)
 {
     const EeAuditSession *s = &aw->acct.sessions[si];
+    if (aw->acct.hart)
+    {
+        return (int)si == aw->acct.election_session ? L"Election task"
+               : s->test                            ? L"Test task"
+               : s->nbatches == 0                   ? L"No vDrives read"
+                                                    : L"Official task";
+    }
     if ((int)si == aw->acct.election_session)
     {
         return L"Election session";
@@ -20845,10 +20920,11 @@ static const wchar_t *Aud_SessionKind(const AuditWindow *aw, uint32_t si)
     return s->test ? L"L&A test" : L"Other (not test decks)";
 }
 
-/* A batch's commit event in the merged Election log, and the copy holding its strings. */
+/* A batch's commit event (Hart: its vDrive read) in the merged log, and the copy holding its
+ * strings. */
 static const EeAuditEvent *Aud_BatchEvent(const AuditWindow *aw, const EeAuditBatch *b, const EeAuditCopy **copy)
 {
-    return EeAudit_MergedEvent(Aud_Log(aw, 0), b->event, copy);
+    return EeAudit_MergedEvent(Aud_Log(aw, aw->acct.log), b->event, copy);
 }
 
 static void Aud_BatchStatus(const AuditWindow *aw, const EeAuditBatch *b, wchar_t *out, size_t cch)
@@ -20862,7 +20938,9 @@ static void Aud_BatchStatus(const AuditWindow *aw, const EeAuditBatch *b, wchar_
     }
     else if (b->status == EE_AUDIT_BATCH_REPLACED)
     {
-        StringCchCopyW(st, ARRAYSIZE(st), L"Replaced: its batch ID was committed again");
+        StringCchCopyW(st, ARRAYSIZE(st),
+                       aw->acct.hart ? L"Replaced: the vDrive was read into the task again"
+                                     : L"Replaced: its batch ID was committed again");
     }
     else
     {
@@ -20870,7 +20948,7 @@ static void Aud_BatchStatus(const AuditWindow *aw, const EeAuditBatch *b, wchar_
     }
     if (b->test)
     {
-        StringCchPrintfW(out, cch, L"L&A test deck \x2014 %s", st);
+        StringCchPrintfW(out, cch, aw->acct.hart ? L"Test task \x2014 %s" : L"L&A test deck \x2014 %s", st);
     }
     else
     {
@@ -20903,7 +20981,11 @@ static void Aud_BatchCellText(const AuditWindow *aw, const EeAuditBatch *b, uint
         Aud_Widen(b->place, out, cch);
         break;
     case BC_MEDIA:
-        if (b->media >= 0)
+        if (b->device != NULL)
+        {
+            Aud_Widen(b->device, out, cch); /* Hart: the vDrive ID */
+        }
+        else if (b->media >= 0)
         {
             StringCchPrintfW(out, cch, b->central ? L"%d (central)" : L"%d", b->media);
         }
@@ -21080,6 +21162,11 @@ static int __cdecl Aud_BatchSortCmp(void *ctx, const void *pa, const void *pb)
         r = _stricmp(a->place, b->place);
         break;
     case BC_MEDIA:
+        if (a->device != NULL && b->device != NULL)
+        {
+            r = strcmp(a->device, b->device);
+            break;
+        }
         r = Aud_CmpI64(a->media, b->media);
         if (r == 0)
         {
@@ -21295,7 +21382,7 @@ static BOOL Aud_EventPasses(const AuditWindow *aw, int li, const EeAuditCopy *co
 {
     const char *text[AF_COUNT];
     text[AF_TIMESTAMP] = "";
-    text[AF_LOG] = Aud_Log(aw, li)->kind == EE_AUDIT_ADMIN ? "Admin" : "Election";
+    text[AF_LOG] = EeAudit_LogNameA(Aud_Log(aw, li)->kind);
     text[AF_EVENT] = EeAudit_Str(copy, ev->level);
     text[AF_MODULE] = EeAudit_Str(copy, ev->module);
     text[AF_USER] = EeAudit_Str(copy, ev->user);
@@ -21313,7 +21400,7 @@ static BOOL Aud_BatchPasses(const AuditWindow *aw, const EeAuditBatch *b)
     const EeAuditEvent *ev = Aud_BatchEvent(aw, b, &copy);
     const char *text[AF_COUNT];
     text[AF_TIMESTAMP] = "";
-    text[AF_LOG] = "Election";
+    text[AF_LOG] = EeAudit_LogNameA(aw->acct.log + 1);
     text[AF_EVENT] = EeAudit_Str(copy, ev->level);
     text[AF_MODULE] = EeAudit_Str(copy, ev->module);
     text[AF_USER] = EeAudit_Str(copy, ev->user);
@@ -21396,7 +21483,7 @@ static void Aud_Sort(AuditWindow *aw)
 }
 
 /* The rows of the view in printed order: the session's batches in load order, one copy as
- * printed, or the merged events of the logs shown, the two logs interleaved newest first. */
+ * printed, or the merged events of the logs shown, the logs interleaved newest first. */
 static BOOL Aud_BuildRows(AuditWindow *aw)
 {
     uint32_t n = 0, cap;
@@ -21421,7 +21508,7 @@ static BOOL Aud_BuildRows(AuditWindow *aw)
         for (i = 0; i < s->nbatches; i++)
         {
             aw->rows[n].idx = s->first_batch + i;
-            aw->rows[n].log = 0;
+            aw->rows[n].log = (uint8_t)aw->acct.log;
             aw->rows[n].seq = n;
             n++;
         }
@@ -21446,27 +21533,45 @@ static BOOL Aud_BuildRows(AuditWindow *aw)
     }
     else
     {
-        const EeAuditLog *le = Aud_Log(aw, 0);
-        const EeAuditLog *la = Aud_Log(aw, 1);
-        uint32_t ne = (aw->show_log == EE_AUDIT_ADMIN) ? 0 : le->nevents;
-        uint32_t na = (aw->show_log == EE_AUDIT_ELECTION) ? 0 : la->nevents;
-        uint32_t i = 0, j = 0;
-        cap = ne + na;
+        uint32_t next[EE_AUDIT_NLOGS], ne[EE_AUDIT_NLOGS];
+        int li;
+        cap = 0;
+        for (li = 0; li < EE_AUDIT_NLOGS; li++)
+        {
+            const EeAuditLog *log = Aud_Log(aw, li);
+            next[li] = 0;
+            ne[li] = aw->show_log == 0 || aw->show_log == log->kind ? log->nevents : 0;
+            cap += ne[li];
+        }
         aw->rows = (AudRow *)malloc(((size_t)cap + 1) * sizeof(AudRow));
         if (aw->rows == NULL)
         {
             return FALSE;
         }
-        while (i < ne || j < na)
+        for (;;)
         {
-            BOOL take_e = j >= na;
-            if (!take_e && i < ne)
+            /* the newest next event of the logs (the lower log on a tie) */
+            int take = -1;
+            int64_t best = 0;
+            for (li = 0; li < EE_AUDIT_NLOGS; li++)
             {
-                const EeAuditCopy *c1 = NULL, *c2 = NULL;
-                take_e = EeAudit_MergedEvent(le, i, &c1)->ts >= EeAudit_MergedEvent(la, j, &c2)->ts;
+                if (next[li] < ne[li])
+                {
+                    const EeAuditCopy *c = NULL;
+                    int64_t ts = EeAudit_MergedEvent(Aud_Log(aw, li), next[li], &c)->ts;
+                    if (take < 0 || ts > best)
+                    {
+                        take = li;
+                        best = ts;
+                    }
+                }
             }
-            aw->rows[n].idx = take_e ? i++ : j++;
-            aw->rows[n].log = (uint8_t)(take_e ? 0 : 1);
+            if (take < 0)
+            {
+                break;
+            }
+            aw->rows[n].idx = next[take]++;
+            aw->rows[n].log = (uint8_t)take;
             aw->rows[n].seq = n;
             n++;
         }
@@ -21522,8 +21627,23 @@ static void Aud_BuildColumns(AuditWindow *aw)
         {BC_MEDIA, L"Media", 80, LVCFMT_RIGHT},         {BC_VOTETYPE, L"Vote Type", 96, LVCFMT_LEFT},
         {BC_BALLOTS, L"Ballots", 70, LVCFMT_RIGHT},     {BC_USER, L"User Id", 100, LVCFMT_LEFT},
         {BC_STATUS, L"Status", 260, LVCFMT_LEFT}};
-    const AudColDef *defs = aw->view == AUD_VIEW_BATCHES ? k_batches : k_events;
-    int ndefs = aw->view == AUD_VIEW_BATCHES ? (int)ARRAYSIZE(k_batches) : (int)ARRAYSIZE(k_events);
+    /* Hart: the Event Data, the Device ID; a batch is a vDrive read */
+    static const AudColDef k_hart_events[AC_COUNT] = {
+        {AC_TIMESTAMP, L"Log Date & Time", 150, LVCFMT_LEFT}, {AC_LOG, L"Log", 96, LVCFMT_LEFT},
+        {AC_EVENT, L"Event", 170, LVCFMT_LEFT},               {AC_MODULE, L"Device ID", 100, LVCFMT_LEFT},
+        {AC_USER, L"User", 90, LVCFMT_LEFT},                  {AC_DESC, L"Event Data", 520, LVCFMT_LEFT},
+        {AC_COPIES, L"Copies", 70, LVCFMT_LEFT}};
+    static const AudColDef k_hart_batches[] = {
+        {BC_COMMITTED, L"Read", 150, LVCFMT_LEFT},       {BC_ID, L"Read No.", 64, LVCFMT_RIGHT},
+        {BC_PLACE, L"Polling Place", 220, LVCFMT_LEFT},  {BC_MEDIA, L"vDrive ID", 190, LVCFMT_LEFT},
+        {BC_VOTETYPE, L"Vote Type", 96, LVCFMT_LEFT},    {BC_BALLOTS, L"Ballots", 70, LVCFMT_RIGHT},
+        {BC_USER, L"User", 100, LVCFMT_LEFT},            {BC_STATUS, L"Status", 260, LVCFMT_LEFT}};
+    BOOL hart = Aud_Hart(aw);
+    const AudColDef *defs = aw->view == AUD_VIEW_BATCHES ? (hart ? k_hart_batches : k_batches)
+                            : hart                       ? k_hart_events
+                                                         : k_events;
+    int ndefs = aw->view == AUD_VIEW_BATCHES ? (hart ? (int)ARRAYSIZE(k_hart_batches) : (int)ARRAYSIZE(k_batches))
+                                             : (int)ARRAYSIZE(k_events);
     HWND header;
     int i, n = 0;
     if (aw->list == NULL)
@@ -21542,8 +21662,7 @@ static void Aud_BuildColumns(AuditWindow *aw)
         {
             continue; /* one copy as printed */
         }
-        if (defs[i].kind == AC_LOG && (aw->show_copy != AUD_MERGED || aw->show_log != 0 ||
-                                       Aud_Log(aw, 0)->ncopies == 0 || Aud_Log(aw, 1)->ncopies == 0))
+        if (defs[i].kind == AC_LOG && (aw->show_copy != AUD_MERGED || aw->show_log != 0 || Aud_NumLogs(aw) < 2))
         {
             continue; /* one log */
         }
@@ -21600,13 +21719,22 @@ static void Aud_CopyLabel(const AuditWindow *aw, int li, uint32_t ci, wchar_t *o
                      printed, App_PathBaseName(c->path));
 }
 
-/* "Session 14 of 16 (election session), 11/02/2024 11:27:24AM to 11/22/2024 09:51:26AM". */
+/* "Session 14 of 16 (election session), 11/02/2024 11:27:24AM to 11/22/2024 09:51:26AM";
+ * Hart: "Task 1 of 4, Official 2026 Primary (election task), 03/03/2026 ... to ...". */
 static void Aud_SessionLabel(const AuditWindow *aw, uint32_t si, wchar_t *out, size_t cch)
 {
     const EeAuditSession *s = &aw->acct.sessions[si];
     wchar_t t0[48], t1[48];
     Aud_TimeText(s->start, t0, ARRAYSIZE(t0));
     Aud_TimeText(s->end, t1, ARRAYSIZE(t1));
+    if (aw->acct.hart)
+    {
+        wchar_t name[128];
+        Aud_Widen(s->name, name, ARRAYSIZE(name));
+        StringCchPrintfW(out, cch, L"Task %u of %u, %s (%s), %s to %s", si + 1, aw->acct.nsessions, name,
+                         Aud_SessionKind(aw, si), t0, t1);
+        return;
+    }
     StringCchPrintfW(out, cch, L"Session %u of %u (%s), %s to %s", si + 1, aw->acct.nsessions,
                      Aud_SessionKind(aw, si), t0, t1);
 }
@@ -21616,28 +21744,42 @@ static void Aud_UpdateBatchStatus(AuditWindow *aw)
 {
     wchar_t buf[900], n1[32], n2[32], n3[32];
     const EeAuditSession *s;
-    if (!aw->have_acct || Aud_Log(aw, 0)->ncopies == 0)
+    BOOL hart = Aud_Hart(aw);
+    if (!aw->have_acct || Aud_Log(aw, aw->acct.log)->ncopies == 0)
     {
-        StringCchCopyW(buf, ARRAYSIZE(buf), L"No Election log is loaded, so there are no ballot batches.");
+        StringCchCopyW(buf, ARRAYSIZE(buf),
+                       hart ? L"No VerityCount log is loaded, so there are no vDrive reads."
+                            : L"No Election log is loaded, so there are no ballot batches.");
     }
     else if (aw->session < 0)
     {
-        StringCchCopyW(buf, ARRAYSIZE(buf), L"The Election log shows no ballot batches.");
+        StringCchCopyW(buf, ARRAYSIZE(buf),
+                       hart ? L"The VerityCount log shows no vDrive reads." : L"The Election log shows no ballot batches.");
     }
     else
     {
         s = &aw->acct.sessions[aw->session];
         /* the session's times are in Ballot Accounting, so the rest fits */
-        StringCchPrintfW(buf, ARRAYSIZE(buf), L"Session %d of %u (%s)", aw->session + 1, aw->acct.nsessions,
-                         Aud_SessionKind(aw, (uint32_t)aw->session));
+        if (hart)
+        {
+            wchar_t name[128];
+            Aud_Widen(s->name, name, ARRAYSIZE(name));
+            StringCchPrintfW(buf, ARRAYSIZE(buf), L"Task %d of %u, %s (%s)", aw->session + 1, aw->acct.nsessions, name,
+                             Aud_SessionKind(aw, (uint32_t)aw->session));
+        }
+        else
+        {
+            StringCchPrintfW(buf, ARRAYSIZE(buf), L"Session %d of %u (%s)", aw->session + 1, aw->acct.nsessions,
+                             Aud_SessionKind(aw, (uint32_t)aw->session));
+        }
         fmt_count_w((int64_t)s->nbatches, n1, ARRAYSIZE(n1));
         fmt_count_w((int64_t)s->counted, n2, ARRAYSIZE(n2));
         fmt_count_w(s->ballots, n3, ARRAYSIZE(n3));
         StringCchCatW(buf, ARRAYSIZE(buf), L"  \x2022  ");
         StringCchCatW(buf, ARRAYSIZE(buf), n1);
-        StringCchCatW(buf, ARRAYSIZE(buf), L" batches, ");
+        StringCchCatW(buf, ARRAYSIZE(buf), hart ? L" vDrive reads, " : L" batches, ");
         StringCchCatW(buf, ARRAYSIZE(buf), n2);
-        StringCchCatW(buf, ARRAYSIZE(buf), L" counted  \x2022  EMS ballots: ");
+        StringCchCatW(buf, ARRAYSIZE(buf), hart ? L" counted  \x2022  ballots: " : L" counted  \x2022  EMS ballots: ");
         StringCchCatW(buf, ARRAYSIZE(buf), n3);
         if (s->nclears > 0)
         {
@@ -21681,7 +21823,7 @@ static void Aud_UpdateStatus(AuditWindow *aw)
                          aw->notes.per_category[EE_AUDIT_N_RESULTS_EARLY] == 1 ? L"" : L"s");
         StringCchCatW(buf, ARRAYSIZE(buf), part);
     }
-    for (li = 0; li < 2; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         const EeAuditLog *log = Aud_Log(aw, li);
         if (log->ncopies == 0)
@@ -21715,10 +21857,12 @@ static void Aud_UpdateStatus(AuditWindow *aw)
     if (aw->have_acct && aw->acct.election_session >= 0)
     {
         fmt_count_w(aw->acct.sessions[aw->acct.election_session].ballots, n1, ARRAYSIZE(n1));
-        StringCchPrintfW(part, ARRAYSIZE(part), L"  \x2022  EMS ballots (election session): %s", n1);
+        StringCchPrintfW(part, ARRAYSIZE(part),
+                         aw->acct.hart ? L"  \x2022  ballots (election task): %s" : L"  \x2022  EMS ballots (election session): %s",
+                         n1);
         StringCchCatW(buf, ARRAYSIZE(buf), part);
     }
-    for (li = 0; li < 2; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         if (aw->lacking[li] > 0)
         {
@@ -21755,8 +21899,9 @@ static void Aud_UpdateSelectionStatus(AuditWindow *aw)
         const EeAuditBatch *b = &aw->acct.batches[aw->rows[item].idx];
         const EeAuditCopy *copy = NULL;
         const EeAuditEvent *ev = Aud_BatchEvent(aw, b, &copy);
-        const EeAuditLog *log = Aud_Log(aw, 0);
-        StringCchPrintfW(buf, ARRAYSIZE(buf), L"Commit first in copy %u of %u: %s, page %u",
+        const EeAuditLog *log = Aud_Log(aw, aw->acct.log);
+        StringCchPrintfW(buf, ARRAYSIZE(buf), aw->acct.hart ? L"Read first in copy %u of %u: %s, page %u"
+                                                            : L"Commit first in copy %u of %u: %s, page %u",
                          log->events[b->event].copy + 1, log->ncopies, App_PathBaseName(copy->path), ev->page);
     }
     else if (item >= 0 && (uint32_t)item < aw->nrows)
@@ -21978,7 +22123,8 @@ static void App_ExportAudit(AuditWindow *aw, BOOL selection_only)
         }
         if (batches && ok)
         {
-            ok = Utf8Export_AppendChar(&ex, delim) && Utf8Export_AppendFieldW(&ex, L"Session", delim);
+            ok = Utf8Export_AppendChar(&ex, delim) &&
+                 Utf8Export_AppendFieldW(&ex, aw->acct.hart ? L"Task" : L"Session", delim);
         }
         ok = ok && Utf8Export_Append(&ex, "\r\n", 2);
         for (i = 0; i < n && ok; i++)
@@ -22011,14 +22157,14 @@ static void App_ExportAudit(AuditWindow *aw, BOOL selection_only)
     free(idx);
 }
 
-/* Show merged event @p ev of log @p li (0 Election, 1 Admin) in the merged Events view,
+/* Show merged event @p ev of log @p li (index in el->logs) in the merged Events view,
  * selected, and bring the window forward. */
 static void Aud_GotoEvent(AuditWindow *aw, int li, uint32_t ev)
 {
     uint32_t i;
     aw->view = AUD_VIEW_EVENTS;
     aw->show_copy = AUD_MERGED;
-    if ((li == 0 && aw->show_log == EE_AUDIT_ADMIN) || (li == 1 && aw->show_log == EE_AUDIT_ELECTION))
+    if (aw->show_log != 0 && aw->show_log != Aud_Log(aw, li)->kind)
     {
         aw->show_log = 0;
     }
@@ -22044,7 +22190,7 @@ static void Aud_GotoEvent(AuditWindow *aw, int li, uint32_t ev)
 /* Show batch @p bi's commit in the merged Events view, selected. */
 static void Aud_GotoBatchEvent(AuditWindow *aw, uint32_t bi)
 {
-    Aud_GotoEvent(aw, 0, aw->acct.batches[bi].event);
+    Aud_GotoEvent(aw, aw->acct.log, aw->acct.batches[bi].event);
 }
 
 /* Make session @p si the one the Ballot Batches view and the accounting tabs show. */
@@ -22166,7 +22312,7 @@ static BOOL Aud_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint3
     switch (column)
     {
     case AF_LOG:
-        for (li = 0; li < 2 && ok; li++)
+        for (li = 0; li < EE_AUDIT_NLOGS && ok; li++)
         {
             if (Aud_Log(aw, li)->ncopies > 0)
             {
@@ -22186,7 +22332,11 @@ static BOOL Aud_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint3
     {
         /* the days that have events, newest first: suggestions for a typed date */
         int64_t *days = NULL;
-        uint32_t nd = 0, total = Aud_Log(aw, 0)->nevents + Aud_Log(aw, 1)->nevents, i, k;
+        uint32_t nd = 0, total = 0, i, k;
+        for (li = 0; li < EE_AUDIT_NLOGS; li++)
+        {
+            total += Aud_Log(aw, li)->nevents;
+        }
         if (total == 0)
         {
             return TRUE;
@@ -22196,7 +22346,7 @@ static BOOL Aud_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint3
         {
             return FALSE;
         }
-        for (li = 0; li < 2; li++)
+        for (li = 0; li < EE_AUDIT_NLOGS; li++)
         {
             const EeAuditLog *log = Aud_Log(aw, li);
             for (i = 0; i < log->nevents; i++)
@@ -22222,12 +22372,12 @@ static BOOL Aud_FilterCollect(void *ctx, uint32_t column, wchar_t ***vals, uint3
     default:
         break;
     }
-    /* Event, Module, User Id: the distinct strings of both logs' merged events */
+    /* Event, Module, User Id: the distinct strings of the logs' merged events */
     {
         const char **uniq = NULL;
         uint32_t nu = 0, capu = 0, i, k;
         const char *last = NULL;
-        for (li = 0; li < 2 && ok; li++)
+        for (li = 0; li < EE_AUDIT_NLOGS && ok; li++)
         {
             const EeAuditLog *log = Aud_Log(aw, li);
             for (i = 0; i < log->nevents && ok; i++)
@@ -22383,13 +22533,16 @@ static BOOL App_ShowAuditFilter(AuditWindow *aw)
 #define AUD_RF_RED   4 /* a copy that lacks events inside its own time span */
 #define AUD_RF_TOTAL 8 /* a total row: bold, kept last when sorted */
 
+/* A report row's key for an event: its log (index in el->logs) and merged event. */
+#define AUD_KEY(log, ev) ((int)(log) + EE_AUDIT_NLOGS * (int)(ev))
+
 /* Ballot Accounting tabs. */
 enum
 {
-    AT_SESSIONS = 0,
+    AT_SESSIONS = 0, /* Hart: tasks */
     AT_PLACES,
     AT_VOTETYPES,
-    AT_CLEARS,
+    AT_CLEARS, /* Hart: Central transfers */
     AT_COUNT
 };
 
@@ -22544,7 +22697,7 @@ static BOOL AudRep_BuildCopies(AudReportWindow *r)
     const AuditWindow *aw = r->aw;
     int li;
     AudRep_Columns(r, 11, k_titles, k_widths, k_right);
-    for (li = 0; li < 2; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         const EeAuditLog *log = Aud_Log(aw, li);
         uint32_t ci;
@@ -22563,6 +22716,10 @@ static BOOL AudRep_BuildCopies(AudReportWindow *r)
             StringCchCopyW(cells[0], 96, Aud_LogName(log->kind));
             StringCchPrintfW(cells[1], 96, L"%u of %u", ci + 1, log->ncopies);
             StringCchCopyW(cells[2], 96, App_PathBaseName(c->path));
+            if (c->missing_rows > 0)
+            {
+                fl |= AUD_RF_RED;
+            }
             if (c->printed != 0)
             {
                 Aud_TimeText(c->printed, cells[3], AUD_CELL);
@@ -22648,6 +22805,23 @@ static BOOL AudRep_BuildCopies(AudReportWindow *r)
                                  Aud_LogName(log->kind));
                 AudRep_Line(r, line);
             }
+            for (ci = 0; ci < log->ncopies; ci++)
+            {
+                const EeAuditCopy *c = &log->copies[ci];
+                if (c->component != NULL && c->missing_rows == 0)
+                {
+                    StringCchPrintfW(line, ARRAYSIZE(line), L"   Copy %u (%S): rows numbered 1 to %u, none missing.", ci + 1,
+                                     c->component, c->nevents);
+                    AudRep_Line(r, line);
+                }
+                else if (c->component != NULL)
+                {
+                    StringCchPrintfW(line, ARRAYSIZE(line),
+                                     L"   Copy %u (%S): %u row number%s missing from its numbering (shown in red).", ci + 1,
+                                     c->component, c->missing_rows, c->missing_rows == 1 ? L" is" : L"s are");
+                    AudRep_Line(r, line);
+                }
+            }
         }
     }
     if (r->summary_text[0] == L'\0')
@@ -22665,8 +22839,44 @@ static BOOL AudRep_BuildSessions(AudReportWindow *r)
                                                L"Counted", L"Ballots", L"Media Clears", L"Kind"};
     static const int k_widths[9] = {64, 150, 150, 100, 70, 70, 80, 90, 220};
     static const BOOL k_right[9] = {TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, FALSE};
+    static const wchar_t *const k_hart_titles[8] = {L"Task",    L"Name",    L"First Opened", L"Last Event",
+                                                    L"vDrives", L"Counted", L"Ballots",      L"Kind"};
+    static const int k_hart_widths[8] = {48, 220, 150, 150, 70, 70, 80, 200};
+    static const BOOL k_hart_right[8] = {TRUE, FALSE, FALSE, FALSE, TRUE, TRUE, TRUE, FALSE};
     const AuditWindow *aw = r->aw;
     uint32_t si;
+    if (aw->acct.hart)
+    {
+        AudRep_Columns(r, 8, k_hart_titles, k_hart_widths, k_hart_right);
+        for (si = 0; si < aw->acct.nsessions; si++)
+        {
+            const EeAuditSession *s = &aw->acct.sessions[si];
+            wchar_t cells[AUD_REP_MAX_COLS][AUD_CELL];
+            uint8_t fl = 0;
+            ZeroMemory(cells, sizeof(cells));
+            StringCchPrintfW(cells[0], 96, L"%u", si + 1);
+            Aud_Widen(s->name, cells[1], AUD_CELL);
+            Aud_TimeText(s->start, cells[2], AUD_CELL);
+            Aud_TimeText(s->end, cells[3], AUD_CELL);
+            fmt_count_w((int64_t)s->nbatches, cells[4], AUD_CELL);
+            fmt_count_w((int64_t)s->counted, cells[5], AUD_CELL);
+            fmt_count_w(s->ballots, cells[6], AUD_CELL);
+            StringCchPrintfW(cells[7], 96, L"%s%s", Aud_SessionKind(aw, si), (int)si == aw->session ? L" \x2014 shown" : L"");
+            if ((int)si == aw->acct.election_session)
+            {
+                fl |= AUD_RF_BOLD;
+            }
+            else if (s->test || s->nbatches == 0)
+            {
+                fl |= AUD_RF_GREY;
+            }
+            if (!AudRep_AddRow(r, fl, (int)si, cells))
+            {
+                return FALSE;
+            }
+        }
+        return TRUE;
+    }
     AudRep_Columns(r, 9, k_titles, k_widths, k_right);
     for (si = 0; si < aw->acct.nsessions; si++)
     {
@@ -22716,12 +22926,15 @@ static BOOL AudRep_BuildPlaces(AudReportWindow *r, const EeAuditSession *s)
                                                L"Ballots",              L"Removed by Media Clears", L"Replaced"};
     static const int k_widths[6] = {260, 110, 110, 90, 160, 80};
     static const BOOL k_right[6] = {FALSE, FALSE, TRUE, TRUE, TRUE, TRUE};
+    static const wchar_t *const k_hart_titles[5] = {L"Polling Place", L"Vote Type", L"vDrives Counted", L"Ballots",
+                                                    L"Read Again"};
     const AuditWindow *aw = r->aw;
+    BOOL hart = aw->acct.hart;
     AudPlaceSum *sums = NULL;
     uint32_t nsums = 0, i, k;
     AudPlaceSum tot;
     BOOL ok = TRUE;
-    AudRep_Columns(r, 6, k_titles, k_widths, k_right);
+    AudRep_Columns(r, hart ? 5 : 6, hart ? k_hart_titles : k_titles, k_widths, k_right);
     ZeroMemory(&tot, sizeof(tot));
     if (s->nbatches > 0)
     {
@@ -22765,6 +22978,10 @@ static BOOL AudRep_BuildPlaces(AudReportWindow *r, const EeAuditSession *s)
         if (k < nsums)
         {
             Aud_Widen(p->place, cells[0], AUD_CELL);
+            if (cells[0][0] == L'\0')
+            {
+                StringCchCopyW(cells[0], 96, L"(none named)");
+            }
             StringCchCopyW(cells[1], 96, EeAudit_VoteTypeName(p->vote_type));
             tot.counted += p->counted;
             tot.ballots += p->ballots;
@@ -22773,12 +22990,15 @@ static BOOL AudRep_BuildPlaces(AudReportWindow *r, const EeAuditSession *s)
         }
         else
         {
-            StringCchPrintfW(cells[0], 96, L"Total (%u poll places)", nsums);
+            StringCchPrintfW(cells[0], 96, hart ? L"Total (%u polling places)" : L"Total (%u poll places)", nsums);
         }
         fmt_count_w((int64_t)p->counted, cells[2], AUD_CELL);
         fmt_count_w(p->ballots, cells[3], AUD_CELL);
-        fmt_count_w((int64_t)p->removed, cells[4], AUD_CELL);
-        fmt_count_w((int64_t)p->replaced, cells[5], AUD_CELL);
+        fmt_count_w((int64_t)(hart ? p->replaced : p->removed), cells[4], AUD_CELL);
+        if (!hart)
+        {
+            fmt_count_w((int64_t)p->replaced, cells[5], AUD_CELL);
+        }
         ok = AudRep_AddRow(r, k < nsums ? 0 : AUD_RF_TOTAL, -1, cells);
     }
     free(sums);
@@ -22788,6 +23008,7 @@ static BOOL AudRep_BuildPlaces(AudReportWindow *r, const EeAuditSession *s)
 static BOOL AudRep_BuildVoteTypes(AudReportWindow *r, const EeAuditSession *s)
 {
     static const wchar_t *const k_titles[4] = {L"Vote Type", L"Batches Counted", L"Ballots", L"Share"};
+    static const wchar_t *const k_hart_titles[4] = {L"Vote Type", L"vDrives Counted", L"Ballots", L"Share"};
     static const int k_widths[4] = {160, 120, 100, 80};
     static const BOOL k_right[4] = {FALSE, TRUE, TRUE, TRUE};
     static const int k_order[EE_AUDIT_VT_COUNT] = {EE_AUDIT_VT_EARLY, EE_AUDIT_VT_ELECTION_DAY, EE_AUDIT_VT_MAIL,
@@ -22795,7 +23016,7 @@ static BOOL AudRep_BuildVoteTypes(AudReportWindow *r, const EeAuditSession *s)
     const AuditWindow *aw = r->aw;
     uint32_t counted[EE_AUDIT_VT_COUNT] = {0}, total_counted = 0, i;
     int k;
-    AudRep_Columns(r, 4, k_titles, k_widths, k_right);
+    AudRep_Columns(r, 4, aw->acct.hart ? k_hart_titles : k_titles, k_widths, k_right);
     for (i = s->first_batch; i < s->first_batch + s->nbatches; i++)
     {
         const EeAuditBatch *b = &aw->acct.batches[i];
@@ -22822,6 +23043,64 @@ static BOOL AudRep_BuildVoteTypes(AudReportWindow *r, const EeAuditSession *s)
             StringCchPrintfW(cells[3], 96, L"%.1f%%", 100.0 * (double)ballots / (double)s->ballots);
         }
         if (!AudRep_AddRow(r, k < EE_AUDIT_VT_COUNT ? 0 : AUD_RF_TOTAL, -1, cells))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* Hart: VerityCentral's vDrives and VerityCount's reads of them. */
+static BOOL AudRep_BuildTransfers(AudReportWindow *r)
+{
+    static const wchar_t *const k_titles[8] = {L"Written",        L"Central Batches", L"Ballots Written", L"vDrive ID",
+                                               L"Read Into Count", L"Ballots Read",   L"Difference",      L"Status"};
+    static const int k_widths[8] = {150, 200, 110, 190, 150, 100, 80, 260};
+    static const BOOL k_right[8] = {FALSE, FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, FALSE};
+    const AuditWindow *aw = r->aw;
+    uint32_t i;
+    AudRep_Columns(r, 8, k_titles, k_widths, k_right);
+    for (i = 0; i < aw->acct.ntransfers; i++)
+    {
+        const EeAuditTransfer *t = &aw->acct.transfers[i];
+        wchar_t cells[AUD_REP_MAX_COLS][AUD_CELL];
+        uint8_t fl = 0;
+        ZeroMemory(cells, sizeof(cells));
+        Aud_TimeText(t->ts, cells[0], AUD_CELL);
+        Aud_Widen(t->batches, cells[1], AUD_CELL);
+        fmt_count_w(t->ballots, cells[2], AUD_CELL);
+        if (t->device != NULL)
+        {
+            Aud_Widen(t->device, cells[3], AUD_CELL);
+        }
+        else
+        {
+            StringCchCopyW(cells[3], 96, L"(no vDrive closed logged)");
+        }
+        if (t->read_batch >= 0)
+        {
+            Aud_TimeText(aw->acct.batches[t->read_batch].ts, cells[4], AUD_CELL);
+            fmt_count_w(t->read_ballots, cells[5], AUD_CELL);
+            StringCchPrintfW(cells[6], 96, L"%+lld", (long long)(t->read_ballots - t->ballots));
+        }
+        switch (t->status)
+        {
+        case EE_AUDIT_XFER_MATCHED:
+            StringCchCopyW(cells[7], 96, t->by_count ? L"Match (by ballots and time: no vDrive ID logged)" : L"Match");
+            break;
+        case EE_AUDIT_XFER_DIFFERS:
+            StringCchCopyW(cells[7], 96, L"Differs");
+            fl |= AUD_RF_RED;
+            break;
+        case EE_AUDIT_XFER_UNREAD:
+            StringCchCopyW(cells[7], 96, L"No read of this vDrive in the VerityCount log");
+            fl |= AUD_RF_RED;
+            break;
+        default:
+            StringCchCopyW(cells[7], 96, L"No VerityCount log loaded");
+            break;
+        }
+        if (!AudRep_AddRow(r, fl, -1, cells))
         {
             return FALSE;
         }
@@ -22872,12 +23151,83 @@ static BOOL AudRep_BuildClears(AudReportWindow *r, const EeAuditSession *s)
 
 /* The lines above the accounting tabs: sessions, the election session and the session shown,
  * the media clears' other readings, and the load errors. */
+/* Hart: tasks, the election task, the task shown, rejected vDrives and the Central transfers. */
+static void AudRep_HartAcctSummary(AudReportWindow *r)
+{
+    const AuditWindow *aw = r->aw;
+    const EeAuditAccounting *a = &aw->acct;
+    wchar_t line[700], lab[300], n1[32], n2[32], n3[32], n4[32], n5[32], n6[32];
+    uint32_t si, tests = 0, differ = 0;
+    for (si = 0; si < a->nsessions; si++)
+    {
+        tests += a->sessions[si].test ? 1u : 0u;
+    }
+    fmt_count_w((int64_t)a->nbatches, n1, ARRAYSIZE(n1));
+    StringCchPrintfW(line, ARRAYSIZE(line),
+                     L"The VerityCount log shows %u task%s (%u test task%s, told by name) and %s vDrive%s read "
+                     L"(State Read).",
+                     a->nsessions, a->nsessions == 1 ? L"" : L"s", tests, tests == 1 ? L"" : L"s", n1,
+                     a->nbatches == 1 ? L"" : L"s");
+    AudRep_Line(r, line);
+    if (a->election_session >= 0)
+    {
+        const EeAuditSession *s = &a->sessions[a->election_session];
+        Aud_SessionLabel(aw, (uint32_t)a->election_session, lab, ARRAYSIZE(lab));
+        fmt_count_w(s->ballots, n1, ARRAYSIZE(n1));
+        fmt_count_w((int64_t)s->counted, n2, ARRAYSIZE(n2));
+        fmt_count_w(s->ballots_vt[EE_AUDIT_VT_EARLY], n3, ARRAYSIZE(n3));
+        fmt_count_w(s->ballots_vt[EE_AUDIT_VT_ELECTION_DAY], n4, ARRAYSIZE(n4));
+        fmt_count_w(s->ballots_vt[EE_AUDIT_VT_MAIL], n5, ARRAYSIZE(n5));
+        fmt_count_w(s->ballots_vt[EE_AUDIT_VT_PROVISIONAL] + s->ballots_vt[EE_AUDIT_VT_OTHER], n6, ARRAYSIZE(n6));
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"Election task (the official task read into last): %s. %s ballots on %s vDrives (by "
+                         L"polling place name: early voting %s, Election Day %s, mail %s, other %s).",
+                         lab, n1, n2, n3, n4, n5, n6);
+    }
+    else
+    {
+        StringCchCopyW(line, ARRAYSIZE(line), L"No official task (a name without a test word) had vDrives read.");
+    }
+    AudRep_Line(r, line);
+    if (aw->session >= 0 && aw->session != a->election_session)
+    {
+        Aud_SessionLabel(aw, (uint32_t)aw->session, lab, ARRAYSIZE(lab));
+        StringCchPrintfW(line, ARRAYSIZE(line), L"Shown in vDrive Reads and these tabs: %s.", lab);
+        AudRep_Line(r, line);
+    }
+    if (a->rejected > 0)
+    {
+        StringCchPrintfW(line, ARRAYSIZE(line), L"%u vDrive%s rejected (not counted).", a->rejected,
+                         a->rejected == 1 ? L" was" : L"s were");
+        AudRep_Line(r, line);
+    }
+    for (si = 0; si < a->ntransfers; si++)
+    {
+        differ += a->transfers[si].status == EE_AUDIT_XFER_DIFFERS || a->transfers[si].status == EE_AUDIT_XFER_UNREAD;
+    }
+    if (a->ntransfers > 0)
+    {
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"VerityCentral wrote %u vDrive%s of CVRs; %u %s not read into VerityCount with the same ballots "
+                         L"(Central Transfers tab).",
+                         a->ntransfers, a->ntransfers == 1 ? L"" : L"s", differ, differ == 1 ? L"was" : L"were");
+        AudRep_Line(r, line);
+    }
+    AudRep_Line(r, L"Ballots are each vDrive read's Ballot count. A vDrive read into a task again replaces its "
+                   L"earlier read. Test tasks are told by name (Edit \x2192 Options\x2026).");
+}
+
 static void AudRep_AcctSummary(AudReportWindow *r)
 {
     const AuditWindow *aw = r->aw;
     const EeAuditAccounting *a = &aw->acct;
     wchar_t line[700], n1[32], n2[32], n3[32], n4[32], n5[32], n6[32];
     uint32_t si, tests = 0;
+    if (a->hart)
+    {
+        AudRep_HartAcctSummary(r);
+        return;
+    }
     for (si = 0; si < a->nsessions; si++)
     {
         tests += a->sessions[si].test && a->sessions[si].nbatches > 0 ? 1u : 0u;
@@ -22958,13 +23308,14 @@ static BOOL AudRep_BuildAcct(AudReportWindow *r)
     const AuditWindow *aw = r->aw;
     const EeAuditSession *s;
     static const EeAuditSession k_empty = {0};
-    if (!aw->have_acct || Aud_Log(aw, 0)->ncopies == 0)
+    if (!aw->have_acct || (Aud_Log(aw, aw->acct.log)->ncopies == 0 && aw->acct.ntransfers == 0))
     {
         static const wchar_t *const k_t[1] = {L"Ballot Accounting"};
         static const int k_w[1] = {400};
         static const BOOL k_r[1] = {FALSE};
         AudRep_Columns(r, 1, k_t, k_w, k_r);
-        AudRep_Line(r, L"No Election log is loaded: the ballot accounting comes from the Election log.");
+        AudRep_Line(r, Aud_Hart(aw) ? L"No VerityCount log is loaded: the ballot accounting comes from its vDrive reads."
+                                    : L"No Election log is loaded: the ballot accounting comes from the Election log.");
         return TRUE;
     }
     AudRep_AcctSummary(r);
@@ -22976,7 +23327,7 @@ static BOOL AudRep_BuildAcct(AudReportWindow *r)
     case AT_VOTETYPES:
         return AudRep_BuildVoteTypes(r, s);
     case AT_CLEARS:
-        return AudRep_BuildClears(r, s);
+        return aw->acct.hart ? AudRep_BuildTransfers(r) : AudRep_BuildClears(r, s);
     default:
         return AudRep_BuildSessions(r);
     }
@@ -23028,9 +23379,17 @@ static void Aud_ShortTime(int64_t ts, BOOL with_date, wchar_t *out, size_t cch)
     }
 }
 
-static void Aud_TestLabel(const EeAuditTest *t, wchar_t *out, size_t cch)
+static void Aud_TestLabel(const AuditWindow *aw, const EeAuditTest *t, wchar_t *out, size_t cch)
 {
     wchar_t nm[200], n1[32];
+    if (t->kind == EE_AUDIT_TEST_SESSION && aw->acct.hart && t->session < aw->acct.nsessions)
+    {
+        fmt_count_w(t->ballots, n1, ARRAYSIZE(n1));
+        Aud_Widen(aw->acct.sessions[t->session].name, nm, ARRAYSIZE(nm));
+        StringCchPrintfW(out, cch, L"Test task %s: %u vDrive%s read, %s ballots", nm, t->batches,
+                         t->batches == 1 ? L"" : L"s", n1);
+        return;
+    }
     if (t->kind == EE_AUDIT_TEST_SESSION)
     {
         fmt_count_w(t->ballots, n1, ARRAYSIZE(n1));
@@ -23056,7 +23415,7 @@ static void Aud_TestRef(const EeAuditTimeline *tl, int ti, int64_t at, BOOL befo
     Aud_ShortTime(tl->tests[ti].start, TRUE, when, ARRAYSIZE(when));
     Aud_Duration(before ? at - tl->tests[ti].start : tl->tests[ti].start - at, dur, ARRAYSIZE(dur));
     StringCchPrintfW(out, cch, L"%s, %s %s (%s log)", when, dur, before ? L"before" : L"after",
-                     tl->tests[ti].log ? L"Admin" : L"Election");
+                     Aud_LogName(tl->tests[ti].log + 1));
 }
 
 static BOOL AudRep_BuildTimeline(AudReportWindow *r)
@@ -23072,8 +23431,10 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
     AudRep_Columns(r, 7, k_titles, k_widths, k_right);
     if (!aw->have_tl)
     {
-        AudRep_Line(r, Aud_Log(aw, 0)->ncopies == 0 ? L"No Election log is loaded: the timeline needs its batch loads."
-                                                    : L"The timeline could not be built.");
+        AudRep_Line(r, Aud_Log(aw, aw->acct.log)->ncopies == 0
+                           ? (Aud_Hart(aw) ? L"No VerityCount log is loaded: the timeline needs its vDrive reads."
+                                           : L"No Election log is loaded: the timeline needs its batch loads.")
+                           : L"The timeline could not be built.");
         return TRUE;
     }
     /* tests and counting periods in time order */
@@ -23090,10 +23451,10 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
             Aud_TimeText(t->start, cells[0], AUD_CELL);
             Aud_TimeText(t->end, cells[1], AUD_CELL);
             StringCchCopyW(cells[2], AUD_CELL, L"L&A test");
-            StringCchCopyW(cells[3], AUD_CELL, t->log ? L"Admin" : L"Election");
-            Aud_TestLabel(t, cells[4], AUD_CELL);
-            key = t->log + 2 * (int)t->event;
-            el_tests += t->log == 0 ? 1u : 0u;
+            StringCchCopyW(cells[3], AUD_CELL, Aud_LogName(t->log + 1));
+            Aud_TestLabel(aw, t, cells[4], AUD_CELL);
+            key = AUD_KEY(t->log, t->event);
+            el_tests += t->kind == EE_AUDIT_TEST_SESSION ? 1u : 0u;
         }
         else
         {
@@ -23102,10 +23463,18 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
             Aud_TimeText(p->first, cells[0], AUD_CELL);
             Aud_TimeText(p->last, cells[1], AUD_CELL);
             StringCchCopyW(cells[2], AUD_CELL, L"Counting period");
-            StringCchCopyW(cells[3], AUD_CELL, L"Election");
+            StringCchCopyW(cells[3], AUD_CELL, Aud_AcctLogName(aw));
             fmt_count_w(p->ballots, n1, ARRAYSIZE(n1));
-            StringCchPrintfW(cells[4], AUD_CELL, L"%u batch%s loaded, %s ballots", p->batches,
-                             p->batches == 1 ? L"" : L"es", n1);
+            if (aw->acct.hart)
+            {
+                StringCchPrintfW(cells[4], AUD_CELL, L"%u vDrive%s read into official tasks, %s ballots", p->batches,
+                                 p->batches == 1 ? L"" : L"s", n1);
+            }
+            else
+            {
+                StringCchPrintfW(cells[4], AUD_CELL, L"%u batch%s loaded, %s ballots", p->batches,
+                                 p->batches == 1 ? L"" : L"es", n1);
+            }
             for (k = p->first_pause; k < p->first_pause + p->npauses; k++)
             {
                 const EeAuditPause *ps = &tl->pauses[k];
@@ -23119,7 +23488,7 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
             }
             Aud_TestRef(tl, p->test_before, p->first, TRUE, cells[5], AUD_CELL);
             Aud_TestRef(tl, p->test_after, p->last, FALSE, cells[6], AUD_CELL);
-            key = 2 * (int)p->first_event;
+            key = AUD_KEY(aw->acct.log, p->first_event);
             fl = AUD_RF_BOLD;
             if (p->test_before < 0 || p->test_after < 0)
             {
@@ -23147,12 +23516,12 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
             StringCchPrintfW(line, ARRAYSIZE(line),
                              L"Election Day: %s. The first test found: %s, %lld days before Election Day (%s log).", date,
                              first, (long long)((eday - tl->tests[0].start + 86399) / 86400),
-                             tl->tests[0].log ? L"Admin" : L"Election");
+                             Aud_LogName(tl->tests[0].log + 1));
         }
         else
         {
             StringCchPrintfW(line, ARRAYSIZE(line), L"The first test found: %s (%s log).", first,
-                             tl->tests[0].log ? L"Admin" : L"Election");
+                             Aud_LogName(tl->tests[0].log + 1));
         }
     }
     else
@@ -23160,12 +23529,22 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
         StringCchPrintfW(line, ARRAYSIZE(line), L"Election Day: %s. No test was found in these logs.", date);
     }
     AudRep_Line(r, line);
-    StringCchPrintfW(line, ARRAYSIZE(line),
-                     L"%u test%s (%u test session%s in the Election log, %u test cop%s opened in the Admin log) and %u "
-                     L"counting period%s of ballots (not test decks), each running from one test to the next.",
-                     tl->ntests, tl->ntests == 1 ? L"" : L"s", el_tests, el_tests == 1 ? L"" : L"s",
-                     tl->ntests - el_tests, tl->ntests - el_tests == 1 ? L"y" : L"ies", tl->nperiods,
-                     tl->nperiods == 1 ? L"" : L"s");
+    if (aw->acct.hart)
+    {
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"%u test%s (vDrives read into test tasks, one test per task and day) and %u counting "
+                         L"period%s of vDrives read into official tasks, each running from one test to the next.",
+                         tl->ntests, tl->ntests == 1 ? L"" : L"s", tl->nperiods, tl->nperiods == 1 ? L"" : L"s");
+    }
+    else
+    {
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"%u test%s (%u test session%s in the Election log, %u test cop%s opened in the Admin log) and %u "
+                         L"counting period%s of ballots (not test decks), each running from one test to the next.",
+                         tl->ntests, tl->ntests == 1 ? L"" : L"s", el_tests, el_tests == 1 ? L"" : L"s",
+                         tl->ntests - el_tests, tl->ntests - el_tests == 1 ? L"y" : L"ies", tl->nperiods,
+                         tl->nperiods == 1 ? L"" : L"s");
+    }
     AudRep_Line(r, line);
     if (missing > 0)
     {
@@ -23204,8 +23583,11 @@ static BOOL AudRep_BuildTimeline(AudReportWindow *r)
                          tl->other_loads, tl->other_loads == 1 ? L"" : L"s", tl->other_loads == 1 ? L"is" : L"are");
         AudRep_Line(r, line);
     }
-    AudRep_Line(r, L"A test copy's own log is not loaded, so its test shows only as the Admin log's restore and open. "
-                   L"The timeline reports what the logs show; it does not judge compliance.");
+    AudRep_Line(r, aw->acct.hart
+                       ? L"Test tasks are told by name (Edit \x2192 Options\x2026). The timeline reports what the logs "
+                         L"show; it does not judge compliance."
+                       : L"A test copy's own log is not loaded, so its test shows only as the Admin log's restore and "
+                         L"open. The timeline reports what the logs show; it does not judge compliance.");
     return TRUE;
 }
 
@@ -23260,7 +23642,32 @@ static void Aud_NoteDetail(const AuditWindow *aw, const EeAuditNote *n, wchar_t 
     }
     case EE_AUDIT_N_CLOCK:
         Aud_Duration(n->value, dur, ARRAYSIZE(dur));
-        StringCchPrintfW(out, cch, L"%s later than the event printed above it", dur);
+        if (EE_AUDIT_IS_HART(Aud_Log(aw, n->log)->kind))
+        {
+            StringCchPrintfW(out, cch, L"logged %s %s its Time read", dur, n->value < 0 ? L"before" : L"after");
+        }
+        else
+        {
+            StringCchPrintfW(out, cch, L"%s later than the event printed above it", dur);
+        }
+        break;
+    case EE_AUDIT_N_MANUAL_VOTES:
+        if (n->value > 0)
+        {
+            fmt_count_w(n->value, n1, ARRAYSIZE(n1));
+            StringCchPrintfW(out, cch, L"%s ballot%s", n1, n->value == 1 ? L"" : L"s");
+        }
+        break;
+    case EE_AUDIT_N_TRANSFER:
+        if (n->value != 0)
+        {
+            StringCchPrintfW(out, cch, L"VerityCount read %lld ballot%s %s than written", (long long)(n->value < 0 ? -n->value : n->value),
+                             n->value == 1 || n->value == -1 ? L"" : L"s", n->value < 0 ? L"fewer" : L"more");
+        }
+        else
+        {
+            StringCchCopyW(out, cch, L"no read of this vDrive in the VerityCount log");
+        }
         break;
     default:
         break;
@@ -23302,11 +23709,12 @@ static BOOL AudRep_BuildNotable(AudReportWindow *r)
         Aud_Widen(EeAudit_Str(c, e->user), user, ARRAYSIZE(user));
         StringCchPrintfW(line, ARRAYSIZE(line),
                          L"RED FLAG: %u results report%s printed, saved to a file or exported before Election Day while "
-                         L"ballots (not test decks) were loaded; the first at %s by %s. Ballots may be tabulated early "
+                         L"ballots (not test decks%s) were loaded; the first at %s by %s. Ballots may be tabulated early "
                          L"(in a county of 100,000 or more, from %d days before Election Day), but results are not to be "
                          L"printed or released before Election Day.",
                          nt->per_category[EE_AUDIT_N_RESULTS_EARLY],
-                         nt->per_category[EE_AUDIT_N_RESULTS_EARLY] == 1 ? L" was" : L"s were", when, user,
+                         nt->per_category[EE_AUDIT_N_RESULTS_EARLY] == 1 ? L" was" : L"s were",
+                         Aud_Hart(aw) ? L"; read into the official task open at the time" : L"", when, user,
                          EE_AUDIT_EARLY_COUNT_DAYS);
     }
     else if (aw->el->election_date > 0)
@@ -23361,8 +23769,12 @@ static BOOL AudRep_BuildNotable(AudReportWindow *r)
                          n1, nm[0] != L'\0' ? nm : L"another election");
         AudRep_Line(r, line);
     }
-    AudRep_Line(r, L"The Admin log covers the whole system, so its deletes, restores and user changes may concern other "
-                   L"elections. Double-click a category to list its events, and an event to see it in the Events view.");
+    AudRep_Line(r, Aud_Hart(aw)
+                       ? L"A task is official unless its name holds a test word (Edit \x2192 Options\x2026). Double-click "
+                         L"a category to list its events, and an event to see it in the Events view."
+                       : L"The Admin log covers the whole system, so its deletes, restores and user changes may concern "
+                         L"other elections. Double-click a category to list its events, and an event to see it in the "
+                         L"Events view.");
 
     if (r->tab_sel == NT_CATEGORIES)
     {
@@ -23412,7 +23824,7 @@ static BOOL AudRep_BuildNotable(AudReportWindow *r)
     {
         static const wchar_t *const k_titles[7] = {L"Severity", L"Category",    L"Timestamp", L"Log",
                                                    L"User Id",  L"Description", L"Detail"};
-        static const int k_widths[7] = {90, 240, 150, 64, 100, 440, 240};
+        static const int k_widths[7] = {90, 240, 150, 90, 100, 440, 240};
         static const BOOL k_right[7] = {FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE};
         uint32_t shown = 0;
         AudRep_Columns(r, 7, k_titles, k_widths, k_right);
@@ -23437,11 +23849,11 @@ static BOOL AudRep_BuildNotable(AudReportWindow *r)
                 StringCchCopyW(cells[0], AUD_CELL, Aud_SeverityName(EeAudit_NoteSeverity(cat)));
                 StringCchCopyW(cells[1], AUD_CELL, EeAudit_NoteName(cat));
                 Aud_TimeText(e->ts, cells[2], AUD_CELL);
-                StringCchCopyW(cells[3], AUD_CELL, n->log ? L"Admin" : L"Election");
+                StringCchCopyW(cells[3], AUD_CELL, Aud_LogName(n->log + 1));
                 Aud_Widen(EeAudit_Str(c, e->user), cells[4], AUD_CELL);
                 Aud_Widen(EeAudit_Desc(c, e), cells[5], AUD_CELL);
                 Aud_NoteDetail(aw, n, cells[6], AUD_CELL);
-                if (!AudRep_AddRow(r, Aud_SeverityFlags(EeAudit_NoteSeverity(cat)), n->log + 2 * (int)n->event, cells))
+                if (!AudRep_AddRow(r, Aud_SeverityFlags(EeAudit_NoteSeverity(cat)), AUD_KEY(n->log, n->event), cells))
                 {
                     return FALSE;
                 }
@@ -23470,7 +23882,7 @@ static BOOL AudRep_BuildNotable(AudReportWindow *r)
 typedef struct AudUserSum
 {
     const char *user;
-    uint32_t events[2];
+    uint32_t events[EE_AUDIT_NLOGS];
     int64_t first, last;
     uint32_t first_log, first_event;
     const char *modules[AUD_USER_MAX_ITEMS];
@@ -23526,15 +23938,22 @@ static BOOL AudRep_BuildUsers(AudReportWindow *r)
                                                L"First",   L"Last",   L"Modules",      L"Workstations"};
     static const int k_widths[8] = {120, 80, 90, 80, 150, 150, 330, 230};
     static const BOOL k_right[8] = {FALSE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE};
+    /* Hart: one count per component log; the Device ID is the workstation */
+    static const wchar_t *const k_hart_titles[8] = {L"User",  L"Events", L"VerityCount", L"VerityCentral",
+                                                    L"VerityData", L"First", L"Last",     L"Device IDs"};
+    static const int k_hart_widths[8] = {120, 70, 90, 100, 90, 150, 150, 300};
+    static const BOOL k_hart_right[8] = {FALSE, TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE};
     const AuditWindow *aw = r->aw;
+    BOOL hart = Aud_Hart(aw);
     AudUserSum *sums = NULL;
     uint32_t nsums = 0, cap = 0, i, k;
     int li;
     char all_stations[AUD_USER_MAX_ITEMS * 2][40];
     uint32_t nall = 0;
     wchar_t line[1400];
-    AudRep_Columns(r, 8, k_titles, k_widths, k_right);
-    for (li = 0; li < 2; li++)
+    AudRep_Columns(r, 8, hart ? k_hart_titles : k_titles, hart ? k_hart_widths : k_widths,
+                   hart ? k_hart_right : k_right);
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         const EeAuditLog *log = Aud_Log(aw, li);
         for (i = log->nevents; i-- > 0;) /* oldest first */
@@ -23620,6 +24039,30 @@ static BOOL AudRep_BuildUsers(AudReportWindow *r)
         wchar_t w[64];
         ZeroMemory(cells, sizeof(cells));
         Aud_Widen(u->user, cells[0], AUD_CELL);
+        if (hart)
+        {
+            fmt_count_w((int64_t)u->events[2] + u->events[3] + u->events[4], cells[1], AUD_CELL);
+            fmt_count_w((int64_t)u->events[2], cells[2], AUD_CELL);
+            fmt_count_w((int64_t)u->events[3], cells[3], AUD_CELL);
+            fmt_count_w((int64_t)u->events[4], cells[4], AUD_CELL);
+            Aud_TimeText(u->first, cells[5], AUD_CELL);
+            Aud_TimeText(u->last, cells[6], AUD_CELL);
+            for (k = 0; k < u->nmodules; k++)
+            {
+                Aud_Widen(u->modules[k], w, ARRAYSIZE(w));
+                if (k > 0)
+                {
+                    StringCchCatW(cells[7], AUD_CELL, L", ");
+                }
+                StringCchCatW(cells[7], AUD_CELL, w);
+            }
+            if (!AudRep_AddRow(r, 0, AUD_KEY(u->first_log, u->first_event), cells))
+            {
+                free(sums);
+                return FALSE;
+            }
+            continue;
+        }
         fmt_count_w((int64_t)u->events[0] + u->events[1], cells[1], AUD_CELL);
         fmt_count_w((int64_t)u->events[0], cells[2], AUD_CELL);
         fmt_count_w((int64_t)u->events[1], cells[3], AUD_CELL);
@@ -23643,7 +24086,7 @@ static BOOL AudRep_BuildUsers(AudReportWindow *r)
             }
             StringCchCatW(cells[7], AUD_CELL, w);
         }
-        if (!AudRep_AddRow(r, 0, (int)u->first_log + 2 * (int)u->first_event, cells))
+        if (!AudRep_AddRow(r, 0, AUD_KEY(u->first_log, u->first_event), cells))
         {
             free(sums);
             return FALSE;
@@ -23666,8 +24109,11 @@ static BOOL AudRep_BuildUsers(AudReportWindow *r)
         StringCchCatW(line, ARRAYSIZE(line), L".");
     }
     AudRep_Line(r, line);
-    AudRep_Line(r, L"A workstation is listed when an event names it (\"Load Results activated by ... on WORKSTATION-11\", "
-                   L"\"from machine ...\"). Double-click a user to see their first event in the Events view.");
+    AudRep_Line(r, hart ? L"Device IDs are the workstations the events were logged on. Double-click a user to see their first "
+                          L"event in the Events view."
+                        : L"A workstation is listed when an event names it (\"Load Results activated by ... on "
+                          L"WORKSTATION-11\", \"from machine ...\"). Double-click a user to see their first event in the "
+                          L"Events view.");
     free(sums);
     return TRUE;
 }
@@ -23844,16 +24290,52 @@ static BOOL Aud_BuildReconSnapshot(const AuditWindow *aw, CvrWindow *cw, Results
 {
     const EeAuditSession *s = &aw->acct.sessions[aw->session];
     wchar_t line[900], lab[300], n1[32], n2[32], n3[32], note[200];
+    const EeAuditLog *alog = Aud_Log(aw, aw->acct.log);
     summary[0] = L'\0';
-    StringCchPrintfW(lab, ARRAYSIZE(lab), L"Session %d of %u (%s)", aw->session + 1, aw->acct.nsessions,
-                     Aud_SessionKind(aw, (uint32_t)aw->session));
     fmt_count_w(s->ballots, n1, ARRAYSIZE(n1));
     fmt_count_w((int64_t)s->counted, n2, ARRAYSIZE(n2));
-    StringCchPrintfW(line, ARRAYSIZE(line),
-                     L"Audit log: %s: %s ballots in %s batches still loaded into the EMS at its end (each commit's "
-                     L"Number of Ballots: ballots, not sheets). Reports \x2192 Select Session\x2026 picks another session.",
-                     lab, n1, n2);
+    if (aw->acct.hart)
+    {
+        wchar_t name[128];
+        Aud_Widen(s->name, name, ARRAYSIZE(name));
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"Audit log: task %d of %u, %s (%s): %s ballots on %s vDrives read into VerityCount (each "
+                         L"read's Ballot count). Reports \x2192 Select Task\x2026 picks another task.",
+                         aw->session + 1, aw->acct.nsessions, name, Aud_SessionKind(aw, (uint32_t)aw->session), n1, n2);
+    }
+    else
+    {
+        StringCchPrintfW(lab, ARRAYSIZE(lab), L"Session %d of %u (%s)", aw->session + 1, aw->acct.nsessions,
+                         Aud_SessionKind(aw, (uint32_t)aw->session));
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"Audit log: %s: %s ballots in %s batches still loaded into the EMS at its end (each commit's "
+                         L"Number of Ballots: ballots, not sheets). Reports \x2192 Select Session\x2026 picks another "
+                         L"session.",
+                         lab, n1, n2);
+    }
     StringCchCatW(summary, scch, line);
+    if (alog->ncopies > 0 && alog->nevents > 0)
+    {
+        /* a log printed before the last ballots were loaded (a final canvass) lacks them */
+        const EeAuditCopy *last = &alog->copies[alog->ncopies - 1];
+        const EeAuditCopy *c = NULL;
+        wchar_t printed[48] = L"(print time unknown)", newest[48];
+        if (last->printed != 0)
+        {
+            Aud_TimeText(last->printed, printed, ARRAYSIZE(printed));
+        }
+        Aud_TimeText(EeAudit_MergedEvent(alog, 0, &c)->ts, newest, ARRAYSIZE(newest));
+        StringCchPrintfW(line, ARRAYSIZE(line),
+                         L"\r\nThe %s log's last copy was printed %s; its newest event is at %s. A log printed before the "
+                         L"last ballots were loaded (a final canvass) does not show them.",
+                         Aud_LogName(alog->kind), printed, newest);
+        StringCchCatW(summary, scch, line);
+        if (rw != NULL && rw->res.timestamp != NULL && rw->res.timestamp[0] != L'\0')
+        {
+            StringCchPrintfW(line, ARRAYSIZE(line), L" The results file's timestamp: %.80s.", rw->res.timestamp);
+            StringCchCatW(summary, scch, line);
+        }
+    }
     if (cw != NULL)
     {
         const EeCvrCardCounts *cc = &cw->cards;
@@ -23937,7 +24419,14 @@ static BOOL Aud_BuildReconSnapshot(const AuditWindow *aw, CvrWindow *cw, Results
         {
             return FALSE;
         }
-        for (a = 1; a <= EE_AUDIT_VT_COUNT && res->nvt > 0 && res->nvt <= ARRAYSIZE(vt_map); a++)
+        if (aw->acct.hart)
+        {
+            /* a central count vDrive names no polling place and holds mail, provisional and other ballots */
+            StringCchCatW(summary, scch,
+                          L"\r\nHart vDrive reads give no reliable vote type (a central count vDrive names no polling "
+                          L"place), so only the totals are compared.");
+        }
+        for (a = 1; !aw->acct.hart && a <= EE_AUDIT_VT_COUNT && res->nvt > 0 && res->nvt <= ARRAYSIZE(vt_map); a++)
         {
             int vt = a % EE_AUDIT_VT_COUNT; /* early, Election Day, mail, provisional, then other */
             int64_t ems = s->ballots_vt[vt];
@@ -24387,7 +24876,7 @@ static void AudRep_Activate(AudReportWindow *r, int item)
     }
     else if (ev >= 0)
     {
-        Aud_GotoEvent(r->aw, ev & 1, (uint32_t)ev >> 1);
+        Aud_GotoEvent(r->aw, ev % EE_AUDIT_NLOGS, (uint32_t)ev / EE_AUDIT_NLOGS);
     }
     else if (cat >= 0)
     {
@@ -24420,7 +24909,7 @@ static void AudRep_OnContextMenu(AudReportWindow *r, int item, POINT screen)
     {
         AppendMenuW(m, MF_SEPARATOR, 0, NULL);
         AppendMenuW(m, MF_STRING | (si == r->aw->session ? MF_GRAYED : 0), IDM_AUD_USE_SESSION,
-                    L"&Use This Session");
+                    r->aw->acct.hart ? L"&Use This Task" : L"&Use This Session");
     }
     if (ev >= 0)
     {
@@ -24527,8 +25016,12 @@ static LRESULT CALLBACK AudReportWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         {
             static const wchar_t *const k_acct_tabs[AT_COUNT] = {L"Sessions", L"Poll Places", L"Vote Types",
                                                                  L"Media Clears"};
+            static const wchar_t *const k_hart_tabs[AT_COUNT] = {L"Tasks", L"Polling Places", L"Vote Types",
+                                                                 L"Central Transfers"};
             static const wchar_t *const k_note_tabs[NT_COUNT] = {L"Categories", L"Events"};
-            const wchar_t *const *tabs = r->kind == AUD_REP_ACCT ? k_acct_tabs : k_note_tabs;
+            const wchar_t *const *tabs = r->kind != AUD_REP_ACCT ? k_note_tabs
+                                         : Aud_Hart(r->aw)        ? k_hart_tabs
+                                                                  : k_acct_tabs;
             int ntabs = r->kind == AUD_REP_ACCT ? AT_COUNT : NT_COUNT;
             int t;
             r->tab = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0, hwnd,
@@ -24768,7 +25261,7 @@ static void App_RunBallotRecon(HWND audit, HWND other)
     }
     if (!aw->have_acct || aw->session < 0)
     {
-        MessageBoxW(other, L"The audit log window has no Election log ballots to compare (no ballot batches).",
+        MessageBoxW(other, L"The audit log window has no ballots to compare (no ballot batches or vDrive reads).",
                     L"Check Ballot Counts", MB_ICONINFORMATION | MB_OK);
         return;
     }
@@ -24812,6 +25305,7 @@ typedef struct AudOptData
 {
     AppState *app;
     int zoom;
+    wchar_t words[128]; /* the Hart test task words ("" = the built-in list) */
 } AudOptData;
 
 static INT_PTR CALLBACK AudOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -24824,13 +25318,13 @@ static INT_PTR CALLBACK AudOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
         AppState *app;
         RECT rc;
         int margin, btn_w, btn_h, gap, y;
-        HWND ctl[6];
+        HWND ctl[8];
         int nctl = 0, i;
         wchar_t ztxt[16];
         d = (AudOptData *)lParam;
         SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)d);
         app = d->app;
-        App_CenterModalClient(dlg, app, Scale(app, 300), Scale(app, 110));
+        App_CenterModalClient(dlg, app, Scale(app, 420), Scale(app, 196));
         GetClientRect(dlg, &rc);
         margin = Scale(app, 14);
         btn_w = Scale(app, 84);
@@ -24850,6 +25344,18 @@ static INT_PTR CALLBACK AudOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
         SendMessageW(ctl[nctl - 1], UDM_SETBUDDY, (WPARAM)ctl[nctl - 2], 0);
         SendMessageW(ctl[nctl - 1], UDM_SETRANGE32, (WPARAM)k_ZoomMin, (LPARAM)k_ZoomMax);
         SendMessageW(ctl[nctl - 1], UDM_SETPOS32, 0, (LPARAM)d->zoom);
+        y += Scale(app, 34);
+        ctl[nctl++] = CreateWindowExW(0, L"STATIC",
+                                      L"Hart Verity logs: a task is a test task when its name holds one of these "
+                                      L"words (comma separated; empty for the built-in list):",
+                                      WS_CHILD | WS_VISIBLE, margin, y, rc.right - 2 * margin, Scale(app, 34), dlg, NULL,
+                                      app->instance, NULL);
+        y += Scale(app, 38);
+        ctl[nctl++] = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", d->words[0] != L'\0' ? d->words : EeAudit_DefaultTestTaskWords(),
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, margin, y,
+                                      rc.right - 2 * margin, Scale(app, 22), dlg, (HMENU)(INT_PTR)IDC_AUD_TEST_WORDS,
+                                      app->instance, NULL);
+        SendMessageW(ctl[nctl - 1], EM_LIMITTEXT, ARRAYSIZE(d->words) - 1, 0);
         ctl[nctl++] = CreateWindowExW(0, L"BUTTON", L"OK",
                                       WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_DEFPUSHBUTTON,
                                       rc.right - margin - 2 * btn_w - gap, rc.bottom - margin - btn_h, btn_w, btn_h,
@@ -24884,6 +25390,11 @@ static INT_PTR CALLBACK AudOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
                 return (INT_PTR)TRUE;
             }
             d->zoom = (int)z;
+            GetDlgItemTextW(dlg, IDC_AUD_TEST_WORDS, d->words, ARRAYSIZE(d->words));
+            if (wcscmp(d->words, EeAudit_DefaultTestTaskWords()) == 0)
+            {
+                d->words[0] = L'\0'; /* the built-in list, kept as it changes */
+            }
             EndDialog(dlg, 1);
             return (INT_PTR)TRUE;
         }
@@ -24904,13 +25415,52 @@ static INT_PTR CALLBACK AudOptionsDlgProc(HWND dlg, UINT msg, WPARAM wParam, LPA
     return (INT_PTR)FALSE;
 }
 
+/* Count the ballots again (the test task words changed): accounting, notable events, timeline. */
+static void Aud_Recount(AuditWindow *aw)
+{
+    int k;
+    EeAudit_FreeNotes(&aw->notes);
+    EeAudit_FreeTimeline(&aw->tl);
+    if (aw->have_acct)
+    {
+        EeAudit_FreeAccounting(&aw->acct);
+    }
+    aw->have_acct = (aw->el->logs[0].ncopies > 0 || EeAudit_IsHart(aw->el)) &&
+                    EeAudit_ElectionAccounting(aw->el, &aw->acct);
+    aw->session = Aud_DefaultSession(aw);
+    aw->have_notes = EeAudit_Notable(aw->el, &aw->notes);
+    aw->have_tl = aw->have_acct && EeAudit_Timeline(aw->el, &aw->acct, &aw->tl);
+    Aud_Rebuild(aw);
+    for (k = 0; k < AUD_REP_COUNT; k++)
+    {
+        if (aw->reps[k] != NULL)
+        {
+            AudRep_Refresh(aw->reps[k]);
+        }
+    }
+}
+
 static void App_ShowAuditOptions(AuditWindow *aw)
 {
     AudOptData d;
     d.app = aw->app;
     d.zoom = aw->app->zoom_percent > 0 ? aw->app->zoom_percent : k_ZoomDefault;
-    if (App_RunModalDialogOwned(aw->app, aw->hwnd, L"Audit Log Options", AudOptionsDlgProc, (LPARAM)&d) != 1 ||
-        d.zoom == aw->app->zoom_percent)
+    StringCchCopyW(d.words, ARRAYSIZE(d.words), g_settings.audit_test_words);
+    if (App_RunModalDialogOwned(aw->app, aw->hwnd, L"Audit Log Options", AudOptionsDlgProc, (LPARAM)&d) != 1)
+    {
+        return;
+    }
+    if (wcscmp(d.words, g_settings.audit_test_words) != 0)
+    {
+        StringCchCopyW(g_settings.audit_test_words, ARRAYSIZE(g_settings.audit_test_words), d.words);
+        EeSettings_Save(&g_settings);
+        EeAudit_SetTestTaskWords(d.words);
+        if (EeAudit_IsHart(aw->el))
+        {
+            Aud_Recount(aw); /* other open windows count again when reopened */
+        }
+    }
+    if (d.zoom == aw->app->zoom_percent)
     {
         return;
     }
@@ -24987,10 +25537,19 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(edit_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(edit_menu, MF_STRING, IDM_AUD_OPTIONS, L"&Options…");
     AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ALL, L"&All");
-    AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ELECTION, L"&Election");
-    AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ADMIN, L"A&dmin");
+    if (Aud_Hart(aw))
+    {
+        AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_HART_COUNT, L"Verity&Count");
+        AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_HART_CENTRAL, L"VerityC&entral");
+        AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_HART_DATA, L"Verity&Data");
+    }
+    if (!Aud_Hart(aw) || Aud_Log(aw, 0)->ncopies > 0 || Aud_Log(aw, 1)->ncopies > 0)
+    {
+        AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ELECTION, L"&Election");
+        AppendMenuW(log_menu, MF_STRING, IDM_AUD_LOG_ADMIN, L"A&dmin");
+    }
     AppendMenuW(copy_menu, MF_STRING, IDM_AUD_COPY_MERGED, L"All Copies &Merged");
-    for (li = 0; li < 2; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         const EeAuditLog *log = Aud_Log(aw, li);
         uint32_t ci;
@@ -25006,7 +25565,7 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
         }
     }
     AppendMenuW(view_menu, MF_STRING, IDM_AUD_VIEW_EVENTS, L"&Events");
-    AppendMenuW(view_menu, MF_STRING, IDM_AUD_VIEW_BATCHES, L"Ballot &Batches");
+    AppendMenuW(view_menu, MF_STRING, IDM_AUD_VIEW_BATCHES, Aud_Hart(aw) ? L"vDrive &Reads" : L"Ballot &Batches");
     AppendMenuW(view_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(view_menu, MF_POPUP, (UINT_PTR)log_menu, L"&Log");
     AppendMenuW(view_menu, MF_POPUP, (UINT_PTR)copy_menu, L"&Copy");
@@ -25020,7 +25579,7 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(reports_menu, MF_STRING, IDM_AUD_REP_NOTABLE, L"&Notable Events…");
     AppendMenuW(reports_menu, MF_STRING, IDM_AUD_REP_USERS, L"&Users and Workstations…");
     AppendMenuW(reports_menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(reports_menu, MF_STRING, IDM_AUD_SELECT_SESSION, L"&Select Session…");
+    AppendMenuW(reports_menu, MF_STRING, IDM_AUD_SELECT_SESSION, Aud_Hart(aw) ? L"&Select Task…" : L"&Select Session…");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_LOADING, L"&Loading Audit Logs");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_OPTIONS, L"&Views and Options");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_FILTERS, L"&Filters");
@@ -25142,15 +25701,14 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             EnableMenuItem(m, IDM_AUD_VIEW_BATCHES, MF_BYCOMMAND | (aw->session >= 0 ? MF_ENABLED : MF_GRAYED));
             EnableMenuItem(m, IDM_AUD_SELECT_SESSION, MF_BYCOMMAND | (aw->session >= 0 ? MF_ENABLED : MF_GRAYED));
             CheckMenuItem(m, IDM_AUD_LOG_ALL, MF_BYCOMMAND | (merged && aw->show_log == 0 ? MF_CHECKED : MF_UNCHECKED));
-            CheckMenuItem(m, IDM_AUD_LOG_ELECTION,
-                          MF_BYCOMMAND | (merged && aw->show_log == EE_AUDIT_ELECTION ? MF_CHECKED : MF_UNCHECKED));
-            CheckMenuItem(m, IDM_AUD_LOG_ADMIN,
-                          MF_BYCOMMAND | (merged && aw->show_log == EE_AUDIT_ADMIN ? MF_CHECKED : MF_UNCHECKED));
-            EnableMenuItem(m, IDM_AUD_LOG_ELECTION,
-                           MF_BYCOMMAND | (Aud_Log(aw, 0)->ncopies > 0 ? MF_ENABLED : MF_GRAYED));
-            EnableMenuItem(m, IDM_AUD_LOG_ADMIN, MF_BYCOMMAND | (Aud_Log(aw, 1)->ncopies > 0 ? MF_ENABLED : MF_GRAYED));
+            for (li = 0; li < EE_AUDIT_NLOGS; li++)
+            {
+                UINT id = Aud_LogMenuId(li + 1);
+                CheckMenuItem(m, id, MF_BYCOMMAND | (merged && aw->show_log == li + 1 ? MF_CHECKED : MF_UNCHECKED));
+                EnableMenuItem(m, id, MF_BYCOMMAND | (Aud_Log(aw, li)->ncopies > 0 ? MF_ENABLED : MF_GRAYED));
+            }
             CheckMenuItem(m, IDM_AUD_COPY_MERGED, MF_BYCOMMAND | (merged ? MF_CHECKED : MF_UNCHECKED));
-            for (li = 0; li < 2; li++)
+            for (li = 0; li < EE_AUDIT_NLOGS; li++)
             {
                 uint32_t ci;
                 for (ci = 0; ci < Aud_Log(aw, li)->ncopies; ci++)
@@ -25208,7 +25766,8 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             }
             return 0;
         }
-        if (LOWORD(wParam) >= IDM_AUD_COPY_FIRST && LOWORD(wParam) < IDM_AUD_COPY_FIRST + 2 * EE_AUDIT_MAX_COPIES)
+        if (LOWORD(wParam) >= IDM_AUD_COPY_FIRST &&
+            LOWORD(wParam) < IDM_AUD_COPY_FIRST + EE_AUDIT_NLOGS * EE_AUDIT_MAX_COPIES)
         {
             int k = LOWORD(wParam) - IDM_AUD_COPY_FIRST;
             int li = k / EE_AUDIT_MAX_COPIES;
@@ -25250,13 +25809,24 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         case IDM_AUD_LOG_ALL:
         case IDM_AUD_LOG_ELECTION:
         case IDM_AUD_LOG_ADMIN:
-            aw->show_log = LOWORD(wParam) == IDM_AUD_LOG_ELECTION ? EE_AUDIT_ELECTION
-                           : LOWORD(wParam) == IDM_AUD_LOG_ADMIN  ? EE_AUDIT_ADMIN
-                                                                  : 0;
+        case IDM_AUD_LOG_HART_COUNT:
+        case IDM_AUD_LOG_HART_CENTRAL:
+        case IDM_AUD_LOG_HART_DATA:
+        {
+            int kind;
+            aw->show_log = 0;
+            for (kind = 1; kind <= EE_AUDIT_NLOGS; kind++)
+            {
+                if (LOWORD(wParam) == Aud_LogMenuId(kind))
+                {
+                    aw->show_log = kind;
+                }
+            }
             aw->view = AUD_VIEW_EVENTS;
             aw->show_copy = AUD_MERGED;
             Aud_Rebuild(aw);
             return 0;
+        }
         case IDM_AUD_COPY_MERGED:
             if (aw->show_copy != AUD_MERGED || aw->view != AUD_VIEW_EVENTS)
             {
@@ -25475,14 +26045,14 @@ static void App_CreateAuditWindow(AppState *app, EeAuditElection *el)
     aw->sort_col = -1;
     aw->sort_asc = TRUE;
     EeFilter_Init(&aw->filters);
-    for (li = 0; li < 2; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         if (mine->logs[li].ncopies > 0 && aw->base_name[0] == L'\0')
         {
             App_BaseNameNoExt(mine->logs[li].copies[0].path, aw->base_name, ARRAYSIZE(aw->base_name));
         }
     }
-    for (li = 0; li < 2; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         const EeAuditLog *log = &mine->logs[li];
         uint32_t i;
@@ -25498,9 +26068,9 @@ static void App_CreateAuditWindow(AppState *app, EeAuditElection *el)
             }
         }
     }
-    if (mine->logs[0].ncopies > 0)
+    if (mine->logs[0].ncopies > 0 || EeAudit_IsHart(mine))
     {
-        aw->have_acct = EeAudit_Accounting(&mine->logs[0], &aw->acct);
+        aw->have_acct = EeAudit_ElectionAccounting(mine, &aw->acct);
     }
     aw->session = Aud_DefaultSession(aw);
     aw->have_notes = EeAudit_Notable(mine, &aw->notes);
@@ -25673,7 +26243,8 @@ static void App_BeginOpenAudit(AppState *app)
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = app->hwnd_main;
-    ofn.lpstrFilter = L"Audit logs and exports (*.pdf;*.csv;*.tsv)\0*.pdf;*.csv;*.tsv\0Audit log PDFs (*.pdf)\0*.pdf\0"
+    ofn.lpstrFilter = L"Audit logs and exports (*.pdf;*.zip;*.csv;*.tsv)\0*.pdf;*.zip;*.csv;*.tsv\0"
+                      L"Audit log PDFs (*.pdf;*.zip)\0*.pdf;*.zip\0"
                       L"Audit log exports (*.csv;*.tsv)\0*.csv;*.tsv\0All files (*.*)\0*.*\0";
     ofn.lpstrFile = files;
     ofn.nMaxFile = files_cch;
@@ -27093,6 +27664,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     /* Restore user options saved on a previous run (defaults if none). */
     EeSettings_Load(&g_settings);
+    EeAudit_SetTestTaskWords(g_settings.audit_test_words);
 
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_PROGRESS_CLASS | ICC_BAR_CLASSES | ICC_STANDARD_CLASSES |

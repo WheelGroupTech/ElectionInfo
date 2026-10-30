@@ -179,6 +179,7 @@
     <ClCompile Include="src\ee_results_ocr.c" />
     <ClCompile Include="src\ee_glyph_ocr.c" />
     <ClCompile Include="src\ee_audit.c" />
+    <ClCompile Include="src\ee_audit_hart.c" />
     <ClCompile Include="src\hart_cvr.c" />
     <ClCompile Include="src\hart_hvs.c" />
     <ClCompile Include="src\pdf_reader.c" />
@@ -210,6 +211,7 @@
     <ClInclude Include="src\ee_results_ocr.h" />
     <ClInclude Include="src\ee_glyph_ocr.h" />
     <ClInclude Include="src\ee_audit.h" />
+    <ClInclude Include="src\ee_audit_hart.h" />
     <ClInclude Include="src\pdf_reader.h" />
     <ClInclude Include="src\ocr_win.h" />
     <ClInclude Include="src\hart_hvs.h" />

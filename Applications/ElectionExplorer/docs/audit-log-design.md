@@ -927,6 +927,175 @@ exists.
     a period rather than starting a new one.
   - The test-copy name patterns and the 2-hour pause threshold are settings.
 
+## Hart Verity audit logs (1.6, done 2026-10-30)
+
+At the user's request, the Hart logs in `Audit_Logs/` were reviewed for 1.6, and the user
+confirmed decisions H1–H5 (below). The implementation is described at the end of this section.
+
+### What there is
+
+19 "Audit Log Report" PDFs (Microsoft Reporting Services, one layout for every Verity version
+seen, 2.4.2–2.7.7), 37,915 rows in all:
+
+| County | Files | Component | Elections |
+|---|---|---|---|
+| Burnet | 3 | VerityData 2.7.5 (ballot building), VerityCentral 2.7.7 (central scanner), VerityCount 2.7.5 (tabulation) | P26 (one election, three logs) |
+| Hays | 2 (one in a ZIP beside an XML-DSig signature of the PDF) | VerityCount 2.4.2, 2.5.0 | G20, PR24 |
+| Parker | 14 | VerityCount 2.5.0, 2.7.1 | G22, PR22, S23, L23, G23, P24, L24, PR24, G24, L25, P26, S26, L26, PR26 |
+
+### The layout
+
+- **Header on every page:** county ("Burnet County, Texas"), "Audit Log Report", election name and
+  Election ID ("March 2026 Primary | 17075"), election date, Run Date and Run Time, "Page N of M",
+  "Component: VerityCount 2.7.5", "Election ID: 17075".
+- **Table:** Row (numbered 1..N, so a missing row is detectable), Log Date & Time (ISO 8601 with
+  the zone offset, wrapped after the "-": `2026-03-03T16:19:46-` / `06:00`), Device ID
+  (workstation serial), User, Event (an event type) and Event Data (free text, wraps).
+- **Reading notes:**
+  - Read the rows by column position; the text order is fine.
+  - A page's last row can sit as low as y≈22 (there is no footer), and its wrapped lines continue
+    at the next page's top.
+  - Parker's PR22 copy "With Notes" has the county's typed notes in some Event cells ("Task opened
+    LAT # started 3"); keep them as printed.
+  - A research parse gave every file contiguous row numbers (no gaps).
+
+### What the logs show (the events that matter; the most frequent are UI events: View loaded, Button pressed)
+
+- **Sessions:**
+  - "Election Open" and "Task opened" name the counting task: the official one ("Official 2026
+    Primary", "Election 11.05.24") and tests ("LAT1", "LAT 2B", "Pre-LAT", "L&A Testing 2 for…",
+    "2026 March Primary Internal Test", "Training V-drive Report").
+  - "Started/Stopped reading vDrives" and "Tabulation on/off" bound the reading sessions.
+- **Ballots counted (VerityCount):** "vDrive read" / "vDrive saved" give the polling place,
+  Ballot count, Log entries, State (Read / Rejected) and vDrive ID. A vDrive read again in another
+  task (the L&A decks) has the same ID. "vDrive rejected" gives the reason; "Open vDrive
+  override" names the user who granted it.
+- **Central scanning (VerityCentral):**
+  - "Batch created" (type: Absentee Voting).
+  - "Batch saved" / "Batch discarded" give Ballots scanned, Sheets scanned and Sheets rejected;
+    "Batch deleted".
+  - "Page rejected" with the reason (barcode, size); "Ballot accepted" / "Contest accepted" /
+    "Reviewing ballot" record adjudication.
+  - "CVRs written to vDrive" gives Batch(es) [..], Total ballots and the Workstation; "vDrive
+    closed" gives the vDrive ID, which links it to Count's "vDrive read".
+- **Manual changes (notable):**
+  - "Manual vote record created / contest adjusted / choice adjusted / deleted": precinct, type
+    Add, voting type, number of ballots, reason. Parker S23 added 71 ballots "per Crickett" and
+    deleted some.
+  - "Registered Voters updated" (precinct, from → to), "Precinct / Polling Place reporting status
+    manually overridden", "Write-in assigned / rejected" (adjudication, with names), "General
+    reporting option updated" (e.g. "Label Reports As Official- True").
+- **Results out (the red-flag rule applies):** "Export report" / "Report exported" give the
+  report and file name, with the time ('Cumulative Results Report' was exported to:
+  'D:\Cumulative Results-3-3-2026 04-31-41 PM.pdf'); "Print" gives the report and printer; "Export
+  data" covers Detailed Vote Totals CSV; "CVRs exported".
+- **Ballot building (VerityData):** contests, choices, ballot order, translations, imports
+  ("Election data imported", including failures), "Election Staging" (language locks, "Election is
+  locked for export"), "Ballot(s) printed / exported".
+- **Errors:** "Error occurred" ("Invalid signature for root folder!"), "Exception occurred",
+  "Scanner error", "Import failure reason".
+
+### Ballot accounting validated
+
+The official task's vDrive reads (each "vDrive read" with State Read, each vDrive ID once in a
+task, its last read) were compared with the results.
+
+| Election | Official vDrives | Ballots in the log | Results | |
+|---|---:|---:|---:|---|
+| Burnet P26 | 33 | 12,585 | 9,713 REP + 2,872 DEM = 12,585 | exact |
+| Parker G24 | 99 | 91,317 | 91,317 | exact |
+| Parker L25 | 22 | 8,746 | 8,746 | exact |
+| Parker L26 | 22 | 2,425 | 2,425 | exact |
+| Parker P26 | 47 | 33,642 | 33,642 | exact |
+
+**Parker P26** first came out 69 short when "vDrive saved" rows were counted. The 69-ballot
+vDrive of the canvass (03/10/2026) was read at 10:42:39 AM (row 1032), but its "vDrive saved" row
+(820) and the rows around it were logged an hour behind (09:42:59, same zone offset), so the
+report printed them among earlier rows and the saved-row count placed it in no task. Counting
+"vDrive read" rows by their own position gives 33,642. The user's point stands as well: a log can
+be printed at any time, so the Ballot Reconciliation now shows the log's print time and newest
+event beside the results file's timestamp (Parker's P26 log was run at 12:11 PM; the results zips
+were generated at 1:16:49 PM). Travis County prints its final log after the final canvass.
+
+Test tasks re-read the same L&A vDrives (Burnet LAT2 and LAT3: 2 vDrives, 54 ballots) and stay
+out. A cross-log check works on Burnet P26: VerityCentral wrote vDrive `47F%US3[…` with batches
+1–22 and 25, "Total ballots: 536" (the saved batches sum to 536), but VerityCount read that vDrive
+as "Ballot count = 524", 12 fewer. The results match Count. This is a finding to show, not a
+reading error.
+
+### Decisions (confirmed by the user 2026-10-30)
+
+- **H1:** add Hart Verity audit logs to 1.6.
+- **H2:** load Burnet's three component logs (VerityData, VerityCentral, VerityCount) as one
+  election, with the Central → Count vDrive check.
+- **H3:** tell official from test tasks by name (LAT, L&A, Test, Training, Pre-), as a setting.
+- **H4:** keep the ES&S red-flag rule: results printed or exported before Election Day in the
+  official task after official ballots were read.
+- **H5:** list manual vote records and Central → Count ballot differences as notable events.
+
+### Implementation (done 2026-10-30)
+
+- **Engine (`ee_audit.h`):** log kinds `EE_AUDIT_HART_COUNT` (3), `_CENTRAL` (4), `_DATA` (5);
+  `EeAuditElection.logs[EE_AUDIT_NLOGS]` indexed by kind − 1, so ES&S keeps [0] Election and [1]
+  Admin. `EeAudit_LogName` / `LogNameA` / `LogKindOf` name the logs; `EeAudit_IsHart`. Copies gain
+  `component` ("VerityCount 2.7.5") and `missing_rows`. A .zip is read for the audit log PDFs it
+  holds (`au_load_zip`, entries opened with `EePdf_OpenMem`; the Hays XML signature is skipped);
+  the copy's path is "<zip>\<entry>".
+- **Reader (`ee_audit_hart.c`):** detection by the Title "Verity_AuditLogReport" or page 1's "Audit
+  Log Report" + "Component: Verity…". Columns by x (row < 45, time < 135, device < 195, user < 255,
+  event < 400, data). The body is everything 5 points below "Component:" except the table
+  heading. A row number opens a row; other runs join the open row (the time without a space, the
+  rest with one), so a row continued at the next page's top joins its row. Reporting Services
+  also prints a row that did not fit again in full at the next page's top, above the heading: a
+  row number equal to the open row's starts a skip until the next row. Levels = Event, desc =
+  Event Data, user = User, module = Device ID; the ISO time's zone is dropped. Events are
+  reversed to newest first.
+- **Accounting (`EeAudit_HartAccounting`, via `EeAudit_ElectionAccounting`):** sessions are tasks
+  ("Task opened": `Task: 'X'` or `The task 'X' was opened`), in first-opened order, with their
+  name; a read belongs to the task last opened before it; batches are the reads with State Read,
+  grouped by task (`device` = vDrive ID, compared without spaces); a vDrive read again into a task
+  replaces its earlier read. The election session is the official task whose last counted read
+  is latest. Transfers: each "CVRs written to vDrive" (+ the following "vDrive closed") matched
+  to a Count read by vDrive ID; with no "vDrive closed" logged (Burnet batches 28 and 29), the
+  first unused read of the same ballot count within 2 days (`by_count`).
+- **Test task words (H3):** `EeAudit_SetTestTaskWords` / `EeAudit_IsTestTask`; default "LAT, L&A,
+  Test, Training, Logic"; a word matches in any case when not followed by a letter, at the start,
+  after a non-letter, or after a prefix of up to 3 letters ("PreLAT", "PLAT"). Saved in the
+  registry (`AuditTestTaskWords`) and set in the audit window's Edit → Options; a change counts the
+  window again. All task names in the 19 files are classified right.
+- **Notable events (`EeAudit_HartNotable`):** new categories TRANSFER (review), MANUAL_VOTES
+  (review: created / deleted, with the ballots), OVERRIDES (review: reporting status set by hand,
+  Open vDrive override), VDRIVE_REJECTED (info), REG_VOTERS (info); DELETED also covers "Task
+  deleted"; ERRORS covers Error / Exception occurred, Scanner error and failed imports (the "Import
+  failure reason" rows are details, not counted); CLOCK is a vDrive read or save logged more than
+  10 minutes from its own Time read (Parker P26's hour). RESULTS_EARLY / RESULTS_TEST use the task
+  open at the output and the reads in it so far; results output is Print / Export report / Report
+  exported / Export data / CVRs exported, except reports that are not results (device logs, the
+  audit log, scanned batches, vDrive status, precincts reporting, configuration, registered
+  voters).
+- **Timeline:** a test task's reads give one test per task and day (a read 12 hours after the
+  last starts another); counting periods take the reads in time order.
+- **Window (`main.c`):** rows of any number of logs merged newest first; View → Log lists
+  VerityCount / VerityCentral / VerityData; Hart columns Log Date & Time, Event, Device ID, User,
+  Event Data; View → vDrive Reads (Read, Read No., Polling Place, vDrive ID, Vote Type, Ballots,
+  User, Status); Ballot Accounting tabs Tasks / Polling Places / Vote Types / Central Transfers;
+  Copies Check notes the row numbering; report row keys are `log + 5 × event` (`AUD_KEY`). The
+  Ballot Reconciliation compares only totals for Hart (a central count vDrive names no polling
+  place) and, for every log, adds the log's print time and newest event and the results file's
+  timestamp.
+- **Export:** the Log column names the component; a Copy record keeps the component in Module.
+- **Tests:** smoke `hartaud` (a synthetic 3-page VerityCount report with a row continued across a
+  page and a row printed again, a VerityCentral report, the zip, accounting, transfers, notes,
+  timeline, export round trip, test words). ES&S regression: the committed and the new engine give
+  identical logs, accounting, timeline, notes and export hashes for the 13 Travis and Dallas
+  elections (only the renamed category "Elections or tasks deleted" differs).
+- **Validation sweep (19 files):** every row numbering complete; official task totals Burnet P26
+  12,585, Hays G20 109,963, Hays PR24 3,262, Parker PR22 16,751, G22 63,580, S23 170 (task
+  "2-7-2023 City of Aledo Special"; an earlier official task "Election 2.7.23" read 73), L23
+  11,003, G23 24,273, P24 35,152, L24 3,292, PR24 6,696, G24 91,317, L25 8,746, P26 33,642, S26
+  150, L26 2,425, PR26 17,181. No results output before Election Day with official ballots read in
+  any of them.
+
 ## Appendix — research event counts (2026-10-28)
 
 Events per file from the position-based research extraction (one event per Timestamp-column

@@ -6,15 +6,15 @@
 
 **Last updated:** 2026-10-30. Election Explorer **1.5.0.0 certified and published on the
 Microsoft Store**. Committed for 1.6: Dominion results, scanned/ASCII85 results PDFs (`ae7eb01`),
-Webb certificate-number mail lists (`5ed8228`). Uncommitted: Hart HVS "Votes by Precinct" CVR
-reports (`src/hart_hvs.{c,h}`, Burnet County 2024; CVR design doc "Hart HVS"), with CVR/results
-Compare matching `9-MFISD` = `9 - MFISD` and `Trump/JD Vance` = `Trump / JD Vance`; Hart
-primary results whose headings name no party take it from the candidates' Party column or the
-file name, and the primary canvass's "Sheriff -" titles lose the dash (Burnet PR24/P24 group as
-one election per party).
+Webb certificate-number mail lists (`5ed8228`), Hart HVS "Votes by Precinct" CVRs (`2c0fbd3`).
+**Uncommitted: Hart Verity audit logs (1.6, decisions H1–H5 confirmed by the user)** —
+`src/ee_audit_hart.{c,h}` (new), `ee_audit.{c,h}` (5 log slots, zips, Hart accounting / notes /
+timeline / export), `main.c` audit window, `settings.{c,h}` (test task words), `resource.h`,
+.vcxproj(+filters), smoke `hartaud`, docs (`docs/audit-log-design.md` "Hart Verity audit logs"),
+RELEASES.md 1.6 note (1,454 of 1,500 characters, now naming Hart Verity logs and HVS CVRs) and
+STORE-LISTING.txt.
 **1.6.0.0 is not final:** the user has more changes first; then rebuild the Store bundle (the
-one built on 2026-10-29 predates Dominion and OCR) and decide whether the 1.6 note (1,462 of
-1,500 characters) mentions HVS CVRs.
+one built on 2026-10-29 predates Dominion, OCR, HVS and Hart audit logs).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -111,6 +111,20 @@ Listing; all committed, lint 10/10. Run with `python -I`.
   ballots were printed from the old ESD 9 layout.
 
 ## Next steps
+
+- **1.6 Hart Verity audit logs (done 2026-10-30, uncommitted):** VerityCount / VerityCentral /
+  VerityData "Audit Log Report" PDFs (and the Hays zip) load into the audit window; one election
+  per county and date. Accounting = "vDrive read" State Read per task (a read belongs to the last
+  "Task opened"); test tasks by name (setting, default "LAT, L&A, Test, Training, Logic"); Central
+  "CVRs written to vDrive" matched to Count reads by vDrive ID (or ballots + time when no "vDrive
+  closed" was logged). All 19 files: rows complete; official totals equal the results (Burnet P26
+  12,585, Parker P26 33,642, ...). Burnet P26's Central → Count 536 vs 524 is flagged. Parker P26's
+  hour-behind "vDrive saved" rows show as a clock anomaly. The reconciliation now shows the log's
+  print time / newest event and the results timestamp (a log printed before the final canvass is
+  short). ES&S regression identical (13 elections). Release x64/ARM64 clean; smoke all pass.
+  Scratch tools (desktop scratchpad): `hart_probe.c` + `build_hartprobe.ps1` (summary of any audit
+  logs), `ess_probe.c` + `build_essprobe.ps1` (ES&S regression vs `git archive HEAD`),
+  `hartaud/` (research parse), `uia/hart/` screenshots.
 
 - **1.6 ES&S audit logs — steps 1–3 (engine) done 2026-10-28; steps 4–9 (window, batches,
   reports, filter, timeline / notable / users, ballot reconciliation, export) done 2026-10-29:**

@@ -57,6 +57,9 @@
     <ClCompile Include="src\ee_audit.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ee_audit_hart.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\hart_cvr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -126,6 +129,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ee_audit.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ee_audit_hart.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\pdf_reader.h">

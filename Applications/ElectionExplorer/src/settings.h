@@ -33,6 +33,8 @@ extern "C"
                                        *   0 = Republican (default), 1 = Democratic. Also
                                        *   orders the Election Results window. */
         BOOL results_show_vote_types; /**< Election Results: one column per vote type. */
+        wchar_t audit_test_words[128]; /**< Audit logs: the words that make a Hart task a test
+                                        *   task, comma separated; "" = the built-in list. */
     } EeSettings;
 
     /** Values for EeSettings.cvr_tab_party_first. */

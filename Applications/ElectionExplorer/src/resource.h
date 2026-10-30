@@ -104,8 +104,11 @@
 #define IDM_AUD_REP_USERS       40147
 #define IDM_AUD_SHOW_EVENTS     40148
 #define IDM_FILE_EXPORT_AUDIT   40149
+#define IDM_AUD_LOG_HART_COUNT   40150 /* View -> Log: Hart Verity component logs */
+#define IDM_AUD_LOG_HART_CENTRAL 40151
+#define IDM_AUD_LOG_HART_DATA    40152
 /* View -> Copy: one item per copy, IDM_AUD_COPY_FIRST + log * EE_AUDIT_MAX_COPIES + copy
- * (two logs of up to 64 copies: 40200..40327). */
+ * (five logs of up to 64 copies: 40200..40519). */
 #define IDM_AUD_COPY_FIRST      40200
 
 /* Election Results options dialog. */
@@ -120,6 +123,7 @@
 /* Audit Log options dialog. */
 #define IDC_AUD_ZOOM      41700
 #define IDC_AUD_ZOOM_SPIN 41701
+#define IDC_AUD_TEST_WORDS 41702
 
 /* Help / About dialog child controls. */
 #define IDC_HELP_TEXT     41200

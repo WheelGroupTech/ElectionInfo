@@ -13862,7 +13862,7 @@ static int test_audit_notable(void)
         {30, "Info", "Election Opened: G24 ED Tab Test"},
         {90, "Info", "Election Closed: G24 ED Tab Test"},
         {5000, "Info", "Election Closed: November 5, 2024 Joint General and Special Elections"}};
-    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 2, 0, 3, 2, 1};
+    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 2, 0, 3, 0, 2, 1};
 #undef D
     AudRow el_rows[ARRAYSIZE(k_el)], admin_rows[ARRAYSIZE(k_admin)];
     EeAuditCopy copies[2];
@@ -14142,6 +14142,366 @@ done:
     return rc;
 }
 
+/* --- Hart Verity audit log reports ----------------------------------------- */
+
+/* A Verity "Audit Log Report" page's header and table heading (Reporting Services layout). */
+static BOOL hva_page(TBuf *c, const char *component, int page, int pages)
+{
+    char pg[32];
+    StringCchPrintfA(pg, sizeof(pg), "Page %d of %d", page, pages);
+    return rpdf_text(c, 423.4, 581.2, 10.0, "Test County, Texas") && rpdf_text(c, 22.9, 578.0, 10.0, "Audit Log Report") &&
+           rpdf_text(c, 407.7, 563.2, 10.0, "March 2026 Primary | 17075") &&
+           rpdf_text(c, 22.8, 548.4, 8.0, "Run Time") && rpdf_text(c, 137.9, 548.4, 8.0, "3:03 PM") &&
+           rpdf_text(c, 452.4, 545.2, 10.0, "3/3/2026") && rpdf_text(c, 22.8, 534.0, 8.0, "Run Date") &&
+           rpdf_text(c, 125.6, 534.0, 8.0, "03/12/2026") && rpdf_text(c, 452.0, 530.9, 8.0, pg) &&
+           rpdf_text(c, 20.0, 500.1, 10.0, "Component:") && rpdf_text(c, 85.4, 500.1, 10.0, component) &&
+           rpdf_text(c, 286.4, 500.1, 10.0, "Election ID:") && rpdf_text(c, 347.6, 500.1, 10.0, "17075") &&
+           rpdf_text(c, 25.2, 478.1, 8.5, "Row") && rpdf_text(c, 59.4, 478.1, 8.5, "Log Date & Time") &&
+           rpdf_text(c, 146.4, 478.1, 8.5, "Device ID") && rpdf_text(c, 217.1, 478.1, 8.5, "User") &&
+           rpdf_text(c, 317.6, 478.1, 8.5, "Event") && rpdf_text(c, 566.3, 478.1, 8.5, "Event Data");
+}
+
+/* A row at @p y: its time wraps after the zone's "-" ("06:00" on the next line, 10.7 lower);
+ * @p data2 is the Event Data's second line (or NULL). With @p second FALSE only the first
+ * line is drawn (the rest runs onto the next page). */
+static BOOL hva_row(TBuf *c, double y, int row, const char *time, const char *event, const char *data,
+                    const char *data2, BOOL second)
+{
+    char no[16];
+    StringCchPrintfA(no, sizeof(no), "%d", row);
+    return rpdf_text(c, 20.0, y, 8.0, no) && rpdf_text(c, 49.4, y, 8.0, time) &&
+           rpdf_text(c, 141.0, y, 8.0, "D2400348001") && rpdf_text(c, 198.2, y, 8.0, "mevans") &&
+           rpdf_text(c, 259.1, y, 8.0, event) && rpdf_text(c, 405.1, y, 8.0, data) &&
+           (!second || (rpdf_text(c, 49.4, y - 10.7, 8.0, "06:00") &&
+                        (data2 == NULL || rpdf_text(c, 405.1, y - 10.7, 8.0, data2))));
+}
+
+/* The newest-first event @p i of @p c: its level and description. */
+static BOOL hva_is(const EeAuditCopy *c, uint32_t i, const char *level, const char *desc)
+{
+    if (i >= c->nevents || strcmp(EeAudit_Str(c, c->events[i].level), level) != 0 ||
+        strcmp(EeAudit_Desc(c, &c->events[i]), desc) != 0)
+    {
+        printf("hartaud: event %u: [%s] [%s]\n", i, i < c->nevents ? EeAudit_Str(c, c->events[i].level) : "",
+               i < c->nevents ? EeAudit_Desc(c, &c->events[i]) : "");
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static int test_audit_hart(void)
+{
+    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 2, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0};
+    wchar_t dir[MAX_PATH], p_count[MAX_PATH], p_central[MAX_PATH], p_zip[MAX_PATH], p_exp[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *paths[2];
+    TBuf cnt[3] = {{0}, {0}, {0}}, cen = {0};
+    EeAuditCopy c, *more = NULL;
+    EeAuditElection *els = NULL, *back = NULL;
+    uint32_t nels = 0, nback = 0, nmore = 0, i, k;
+    EeAuditAccounting a, a2;
+    EeAuditNotes n;
+    EeAuditTimeline tl;
+    char t[40], *buf = NULL;
+    size_t len = 0;
+    BOOL ok;
+    int rc = 1;
+
+    EeAudit_InitCopy(&c);
+    memset(&a, 0, sizeof(a));
+    memset(&a2, 0, sizeof(a2));
+    memset(&n, 0, sizeof(n));
+    memset(&tl, 0, sizeof(tl));
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_count, MAX_PATH, L"%sHVA_count.pdf", dir);
+    StringCchPrintfW(p_central, MAX_PATH, L"%sHVA_central.pdf", dir);
+    StringCchPrintfW(p_zip, MAX_PATH, L"%sHVA_count.zip", dir);
+    StringCchPrintfW(p_exp, MAX_PATH, L"%sHVA_export.csv", dir);
+
+    /* test task words */
+    if (!EeAudit_IsTestTask("PreLAT") || !EeAudit_IsTestTask("PLAT") || !EeAudit_IsTestTask("LAT2a") ||
+        !EeAudit_IsTestTask("Pre-LAT") || !EeAudit_IsTestTask("L&A Main Test 10 Apr 2024") ||
+        !EeAudit_IsTestTask("Training V-drive Report") || EeAudit_IsTestTask("Election 3.3.26") ||
+        EeAudit_IsTestTask("Platform") || EeAudit_IsTestTask("Translation") || EeAudit_IsTestTask("Latino Outreach"))
+    {
+        wprintf(L"hartaud: test task words\n");
+        goto done;
+    }
+    EeAudit_SetTestTaskWords(L"Drill, Mock");
+    ok = EeAudit_IsTestTask("Drill 1") && EeAudit_IsTestTask("MOCK election") && !EeAudit_IsTestTask("LAT1");
+    EeAudit_SetTestTaskWords(NULL);
+    if (!ok || !EeAudit_IsTestTask("LAT1"))
+    {
+        wprintf(L"hartaud: set test task words\n");
+        goto done;
+    }
+
+    /* VerityCount, 3 pages: a test task, an official task with a vDrive read early and a
+     * results report exported early, a vDrive read again, a row whose Event Data runs onto
+     * page 2's top, a row printed again in full above page 3's table heading, a vDrive saved
+     * an hour before its Time read */
+    ok = hva_page(&cnt[0], "VerityCount 2.7.5", 1, 3) &&
+         hva_row(&cnt[0], 461.3, 1, "2026-02-20T10:00:00-", "Task opened", "Task: 'Pre-LAT'", NULL, TRUE) &&
+         hva_row(&cnt[0], 436.0, 2, "2026-02-20T10:01:00-", "vDrive read",
+                 "vDrive read with values: Polling Place- 'Deck', Ballot count = 50, Log entries = 0, Time read-",
+                 "2/20/2026 10:01:00 AM, State- Read, Election ID- 1, vDrive ID- T1, State reason- '',", TRUE) &&
+         hva_row(&cnt[0], 410.7, 3, "2026-02-20T10:02:00-", "Print", "'Cumulative Results Report' printed to 'OKI'",
+                 NULL, TRUE) &&
+         hva_row(&cnt[0], 385.4, 4, "2026-02-26T19:00:00-", "Task opened", "Task: 'Election 3.3.26'", NULL, TRUE) &&
+         hva_row(&cnt[0], 360.1, 5, "2026-02-26T19:01:00-", "vDrive read",
+                 "vDrive read with values: Polling Place- 'Annex - EV', Ballot count = 100, Log entries = 0, Time read-",
+                 "2/26/2026 7:01:00 PM, State- Read, Election ID- 1, vDrive ID- E1 X, State reason- '',", TRUE) &&
+         hva_row(&cnt[0], 334.7, 6, "2026-02-26T19:02:00-", "Export report",
+                 "'Cumulative Results Report' was exported to: 'D:\\Results.pdf'", NULL, TRUE) &&
+         hva_row(&cnt[0], 309.4, 7, "2026-03-03T20:00:00-", "vDrive read",
+                 "vDrive read with values: Polling Place- 'Annex - EV', Ballot count = 100, Log entries = 0, Time read-",
+                 "3/3/2026 8:00:00 PM, State- Read, Election ID- 1, vDrive ID- E1X, State reason- '',", TRUE) &&
+         hva_row(&cnt[0], 22.0, 8, "2026-03-03T20:05:00-", "vDrive read",
+                 "vDrive read with values: Polling Place- '', Ballot count = 524, Log entries = 0, Time read-", NULL,
+                 FALSE);
+    ok = ok && hva_page(&cnt[1], "VerityCount 2.7.5", 2, 3) && rpdf_text(&cnt[1], 49.4, 461.3, 8.0, "06:00") &&
+         rpdf_text(&cnt[1], 405.1, 461.3, 8.0, "3/3/2026 8:05:00 PM, State- Read, Election ID- 1, vDrive ID- C1,") &&
+         hva_row(&cnt[1], 436.0, 9, "2026-03-03T20:06:00-", "vDrive rejected",
+                 "Reason is 'vDrive is not from this election'", NULL, TRUE) &&
+         hva_row(&cnt[1], 22.0, 10, "2026-03-03T20:10:00-", "Manual vote record created",
+                 "Precinct- 101, Party- , Adjustment type- Add, Voting Type- Absentee Voting, Number of ballots-",
+                 "5, Reason- 'per judge'", TRUE);
+    ok = ok && hva_page(&cnt[2], "VerityCount 2.7.5", 3, 3) &&
+         rpdf_text(&cnt[2], 20.0, 485.6, 8.0, "10") && rpdf_text(&cnt[2], 49.4, 485.6, 8.0, "2026-03-03T20:10:00-") &&
+         rpdf_text(&cnt[2], 141.0, 485.6, 8.0, "D2400348001") && rpdf_text(&cnt[2], 198.2, 485.6, 8.0, "mevans") &&
+         rpdf_text(&cnt[2], 259.1, 485.6, 8.0, "Manual vote record created") &&
+         rpdf_text(&cnt[2], 405.1, 485.6, 8.0,
+                   "Precinct- 101, Party- , Adjustment type- Add, Voting Type- Absentee Voting, Number of ballots-") &&
+         rpdf_text(&cnt[2], 49.4, 475.0, 8.0, "06:00") && rpdf_text(&cnt[2], 405.1, 475.0, 8.0, "5, Reason- 'per judge'") &&
+         hva_row(&cnt[2], 460.4, 11, "2026-03-10T09:00:00-", "vDrive saved",
+                 "vDrive saved with values: Polling Place- '', Ballot count = 7, Log entries count = 0, Time read-",
+                 "3/10/2026 10:00:00 AM, State- Read, Election Id- 1, vDrive ID- C2", TRUE) &&
+         hva_row(&cnt[2], 435.0, 12, "2026-03-10T10:00:00-", "Error occurred", "Invalid signature for root folder!", NULL,
+                 TRUE);
+    /* VerityCentral: a vDrive written with 536 ballots (read as 524), and one never read */
+    ok = ok && hva_page(&cen, "VerityCentral 2.7.7", 1, 1) &&
+         hva_row(&cen, 461.3, 1, "2026-03-03T19:30:00-", "Batch saved",
+                 "Batch 1, Ballots scanned: 536, Sheets scanned: 1072, Sheets rejected: 0", NULL, TRUE) &&
+         hva_row(&cen, 436.0, 2, "2026-03-03T19:35:00-", "CVRs written to vDrive",
+                 "Batch(es): [1]; Total ballots: 536; Workstation: D2400349101", NULL, TRUE) &&
+         hva_row(&cen, 410.7, 3, "2026-03-03T19:36:00-", "vDrive closed", "vDrive Device Data ID: C1", NULL, TRUE) &&
+         hva_row(&cen, 385.4, 4, "2026-03-09T16:00:00-", "CVRs written to vDrive",
+                 "Batch(es): [2]; Total ballots: 7; Workstation: D2400349101", NULL, TRUE);
+    g_tpdf_producer = "Microsoft Reporting Services PDF Rendering Extension 2019.11.0.0";
+    ok = ok && tpdf_write(p_count, cnt, 3, FALSE) && tpdf_write(p_central, &cen, 1, FALSE);
+    g_tpdf_producer = NULL;
+    if (!ok)
+    {
+        wprintf(L"hartaud: fixtures\n");
+        goto done;
+    }
+
+    /* the report */
+    if (!EeAudit_IsAuditPdf(p_count) ||
+        EeAudit_LoadCopy(p_count, &c, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"hartaud: load: %s\n", err);
+        goto done;
+    }
+    EeAudit_FormatTime(c.printed, t, sizeof(t));
+    if (c.kind != EE_AUDIT_HART_COUNT || c.nevents != 12 || c.pages != 3 || c.missing_rows != 0 ||
+        c.election_date != 20260303 || c.customer == NULL || strcmp(c.customer, "Test County") != 0 ||
+        c.election == NULL || strcmp(c.election, "March 2026 Primary") != 0 || c.component == NULL ||
+        strcmp(c.component, "VerityCount 2.7.5") != 0 || strcmp(t, "03/12/2026 03:03:00PM") != 0)
+    {
+        printf("hartaud: header: kind %d, %u events, %u pages, missing %u, %d, [%s] [%s] [%s] printed %s\n", c.kind,
+               c.nevents, c.pages, c.missing_rows, c.election_date, c.customer ? c.customer : "",
+               c.election ? c.election : "", c.component ? c.component : "", t);
+        goto done;
+    }
+    /* newest first: row 12 is event 0, row 1 event 11 */
+    if (!hva_is(&c, 0, "Error occurred", "Invalid signature for root folder!") ||
+        !hva_is(&c, 2, "Manual vote record created",
+                "Precinct- 101, Party- , Adjustment type- Add, Voting Type- Absentee Voting, Number of ballots- 5, "
+                "Reason- 'per judge'") ||
+        !hva_is(&c, 4, "vDrive read",
+                "vDrive read with values: Polling Place- '', Ballot count = 524, Log entries = 0, Time read- 3/3/2026 "
+                "8:05:00 PM, State- Read, Election ID- 1, vDrive ID- C1,") ||
+        !hva_is(&c, 11, "Task opened", "Task: 'Pre-LAT'") || c.events[2].page != 2 || c.events[4].page != 1 ||
+        c.events[4].ts != EeAudit_MakeTime(2026, 3, 3, 20, 5, 0) ||
+        strcmp(EeAudit_Str(&c, c.events[0].module), "D2400348001") != 0 ||
+        strcmp(EeAudit_Str(&c, c.events[0].user), "mevans") != 0)
+    {
+        wprintf(L"hartaud: rows\n");
+        goto done;
+    }
+    EeAudit_FreeCopy(&c);
+
+    /* the zipped report (with an XML signature beside it), and the Central log: one election */
+    {
+        mz_zip_archive z;
+        char zpath[MAX_PATH * 3];
+        void *data = NULL;
+        size_t size = 0;
+        FILE *fp = NULL;
+        memset(&z, 0, sizeof(z));
+        WideCharToMultiByte(CP_UTF8, 0, p_zip, -1, zpath, (int)sizeof(zpath), NULL, NULL);
+        DeleteFileW(p_zip);
+        if (_wfopen_s(&fp, p_count, L"rb") == 0 && fp != NULL)
+        {
+            fseek(fp, 0, SEEK_END);
+            size = (size_t)ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+            data = malloc(size);
+            ok = data != NULL && fread(data, 1, size, fp) == size;
+            fclose(fp);
+        }
+        else
+        {
+            ok = FALSE;
+        }
+        ok = ok && mz_zip_writer_init_file(&z, zpath, 0) &&
+             mz_zip_writer_add_mem(&z, "Audit Log Report.xml", "<Signature/>", 12, MZ_DEFAULT_COMPRESSION) &&
+             mz_zip_writer_add_mem(&z, "Audit Log Report.pdf", data, size, MZ_DEFAULT_COMPRESSION) &&
+             mz_zip_writer_finalize_archive(&z);
+        mz_zip_writer_end(&z);
+        free(data);
+        if (!ok)
+        {
+            wprintf(L"hartaud: zip fixture\n");
+            goto done;
+        }
+    }
+    paths[0] = p_zip;
+    paths[1] = p_central;
+    if (EeAudit_LoadFiles(paths, 2, &els, &nels, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        nels != 1 || !EeAudit_IsHart(&els[0]) || els[0].logs[EE_AUDIT_HART_COUNT - 1].ncopies != 1 ||
+        els[0].logs[EE_AUDIT_HART_CENTRAL - 1].ncopies != 1 || els[0].logs[0].ncopies != 0 ||
+        wcsstr(els[0].logs[EE_AUDIT_HART_COUNT - 1].copies[0].path, L"HVA_count.zip\\Audit Log Report.pdf") == NULL)
+    {
+        wprintf(L"hartaud: load files: %s (%u elections)\n", err, nels);
+        goto done;
+    }
+
+    /* accounting: the test task's read, the official task's three reads (one replaced) */
+    if (!EeAudit_ElectionAccounting(&els[0], &a) || !a.hart || a.log != EE_AUDIT_HART_COUNT - 1 || a.nsessions != 2 ||
+        a.nbatches != 4 || a.election_session != 1 || !a.sessions[0].test || a.sessions[1].test ||
+        strcmp(a.sessions[1].name, "Election 3.3.26") != 0 || a.sessions[1].counted != 2 ||
+        a.sessions[1].ballots != 624 || a.sessions[0].ballots != 50 || a.rejected != 1 ||
+        a.batches[1].status != EE_AUDIT_BATCH_REPLACED || a.batches[2].status != EE_AUDIT_BATCH_COUNTED ||
+        a.batches[1].vote_type != EE_AUDIT_VT_EARLY || strcmp(a.batches[3].device, "C1") != 0)
+    {
+        printf("hartaud: accounting: %u sessions, %u batches, election %d, rejected %u\n", a.nsessions, a.nbatches,
+               a.election_session, a.rejected);
+        goto done;
+    }
+    if (a.ntransfers != 2 || a.transfers[0].status != EE_AUDIT_XFER_DIFFERS || a.transfers[0].ballots != 536 ||
+        a.transfers[0].read_ballots != 524 || a.transfers[0].read_batch != 3 ||
+        a.transfers[1].status != EE_AUDIT_XFER_UNREAD || a.transfers[1].device != NULL)
+    {
+        wprintf(L"hartaud: transfers\n");
+        goto done;
+    }
+
+    /* notable events */
+    if (!EeAudit_Notable(&els[0], &n))
+    {
+        wprintf(L"hartaud: notable\n");
+        goto done;
+    }
+    for (k = 0; k < EE_AUDIT_N_COUNT; k++)
+    {
+        if (n.per_category[k] != k_expect[k])
+        {
+            wprintf(L"hartaud: category %u (%s): %u, expected %u\n", k, EeAudit_NoteName((int)k), n.per_category[k],
+                    k_expect[k]);
+            goto done;
+        }
+    }
+    for (i = 0; i < n.count; i++)
+    {
+        const EeAuditNote *x = &n.notes[i];
+        if ((x->category == EE_AUDIT_N_RESULTS_EARLY && (x->value != 100 || x->batches != 1)) ||
+            (x->category == EE_AUDIT_N_LOADED_EARLY && x->value != 100) ||
+            (x->category == EE_AUDIT_N_CLOCK && x->value != -3600) ||
+            (x->category == EE_AUDIT_N_MANUAL_VOTES && x->value != 5) ||
+            (x->category == EE_AUDIT_N_TRANSFER && (x->log != EE_AUDIT_HART_CENTRAL - 1 || (x->value != -12 && x->value != 0))) ||
+            (x->category == EE_AUDIT_N_RESULTS_TEST && x->batches != 1))
+        {
+            wprintf(L"hartaud: note %s: value %lld, batches %u, log %d\n", EeAudit_NoteName(x->category),
+                    (long long)x->value, x->batches, x->log);
+            goto done;
+        }
+    }
+
+    /* timeline: the test task's read, then one counting period */
+    if (!EeAudit_Timeline(&els[0], &a, &tl) || tl.ntests != 1 || tl.tests[0].log != EE_AUDIT_HART_COUNT - 1 ||
+        tl.tests[0].ballots != 50 || tl.nperiods != 1 || tl.periods[0].test_before != 0 || tl.periods[0].batches != 3)
+    {
+        wprintf(L"hartaud: timeline: %u tests, %u periods\n", tl.ntests, tl.nperiods);
+        goto done;
+    }
+
+    /* the reloadable export keeps the component logs, their components and the accounting */
+    {
+        EeAuditExportRow rows[32];
+        uint32_t nr = 0;
+        int li;
+        FILE *fp = NULL;
+        for (li = 0; li < EE_AUDIT_NLOGS; li++)
+        {
+            for (i = 0; i < els[0].logs[li].nevents && nr < ARRAYSIZE(rows); i++)
+            {
+                rows[nr].log = (uint32_t)li;
+                rows[nr].index = i;
+                nr++;
+            }
+        }
+        if (!EeAudit_FormatExportUtf8(&els[0], 0, -1, rows, nr, ',', &buf, &len) || strstr(buf, ",VerityCentral,") == NULL ||
+            _wfopen_s(&fp, p_exp, L"wb") != 0 || fp == NULL)
+        {
+            wprintf(L"hartaud: export\n");
+            goto done;
+        }
+        fwrite(buf, 1, len, fp);
+        fclose(fp);
+    }
+    if (EeAudit_LoadExport(p_exp, &more, &nmore, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        nmore != 2 || !EeAudit_GroupCopies(more, nmore, &back, &nback) || nback != 1 ||
+        back[0].logs[EE_AUDIT_HART_COUNT - 1].ncopies != 1 ||
+        back[0].logs[EE_AUDIT_HART_COUNT - 1].copies[0].component == NULL ||
+        strcmp(back[0].logs[EE_AUDIT_HART_COUNT - 1].copies[0].component, "VerityCount 2.7.5") != 0 ||
+        !EeAudit_ElectionAccounting(&back[0], &a2) || a2.election_session != 1 || a2.sessions[1].ballots != 624 ||
+        a2.ntransfers != 2 || a2.transfers[0].status != EE_AUDIT_XFER_DIFFERS)
+    {
+        wprintf(L"hartaud: reload: %s\n", err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_tpdf_producer = NULL;
+    EeAudit_SetTestTaskWords(NULL);
+    EeAudit_FreeCopy(&c);
+    free(more);
+    free(buf);
+    EeAudit_FreeAccounting(&a);
+    EeAudit_FreeAccounting(&a2);
+    EeAudit_FreeNotes(&n);
+    EeAudit_FreeTimeline(&tl);
+    EeAudit_FreeElections(els, nels);
+    EeAudit_FreeElections(back, nback);
+    for (k = 0; k < 3; k++)
+    {
+        free(cnt[k].p);
+    }
+    free(cen.p);
+    DeleteFileW(p_count);
+    DeleteFileW(p_central);
+    DeleteFileW(p_zip);
+    DeleteFileW(p_exp);
+    if (rc == 0)
+    {
+        wprintf(L"hartaud: OK (Verity rows across pages, zip, tasks, Central to Count, notes, timeline, export)\n");
+    }
+    return rc;
+}
+
 int wmain(void)
 {
     int failed = 0;
@@ -14232,5 +14592,6 @@ int wmain(void)
     failed |= test_audit_accounting();
     failed |= test_audit_notable();
     failed |= test_audit_export();
+    failed |= test_audit_hart();
     return failed == 0 ? 0 : 1;
 }

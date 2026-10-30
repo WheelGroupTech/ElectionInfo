@@ -1,11 +1,14 @@
 /**
  * @file ee_audit.c
- * @brief ES&S Electionware audit event reports read into events. See ee_audit.h and
- *        docs/audit-log-design.md.
+ * @brief ES&S Electionware audit event reports read into events, and the engine (merge,
+ *        accounting, notable events, timeline, export) shared with Hart Verity logs
+ *        (ee_audit_hart.c). See ee_audit.h and docs/audit-log-design.md.
  */
 
 #include "ee_audit.h"
 #include "csv_sheet.h"
+#include "ee_audit_hart.h"
+#include "third_party/miniz/miniz.h"
 #include "pdf_reader.h"
 
 #include <math.h>
@@ -276,6 +279,7 @@ void EeAudit_FreeCopy(EeAuditCopy *c)
     free(c->path);
     free(c->customer);
     free(c->election);
+    free(c->component);
     memset(c, 0, sizeof(*c));
 }
 
@@ -831,15 +835,11 @@ static BOOL au_page_events(EeAuditCopy *c, AuPage *pg, uint32_t page_no, AuStr *
 /* Public                                                                     */
 /* -------------------------------------------------------------------------- */
 
-BOOL EeAudit_IsAuditPdf(const wchar_t *path)
+/* An Electionware audit events report (from its Creator or first page). */
+static BOOL au_is_ess_pdf(EePdf *pdf)
 {
-    EePdf *pdf = NULL;
     char creator[256];
     BOOL yes = FALSE;
-    if (!EePdf_Open(path, &pdf, NULL, 0))
-    {
-        return FALSE;
-    }
     if (EePdf_GetInfoText(pdf, "Creator", creator, sizeof(creator)) &&
         (strstr(creator, "AuditEventsReport") != NULL || strstr(creator, "Audit Events Report") != NULL))
     {
@@ -865,33 +865,42 @@ BOOL EeAudit_IsAuditPdf(const wchar_t *path)
         free(pg.anchor_ts);
         EePdf_PageTextFree(&pt);
     }
+    return yes;
+}
+
+BOOL EeAudit_IsAuditPdf(const wchar_t *path)
+{
+    EePdf *pdf = NULL;
+    BOOL yes;
+    if (!EePdf_Open(path, &pdf, NULL, 0))
+    {
+        return FALSE;
+    }
+    yes = au_is_ess_pdf(pdf) || AuHart_IsReport(pdf);
     EePdf_Close(pdf);
     return yes;
 }
 
-EeLoadStatus EeAudit_LoadCopy(const wchar_t *path,
-                              EeAuditCopy *out,
-                              volatile LONG *cancel_flag,
-                              EeLoadProgressFn progress_fn,
-                              void *progress_user,
-                              wchar_t *err,
-                              size_t errcch)
+/* Read an opened audit log PDF into @p out (initialized, its path set). */
+static EeLoadStatus au_load_pdf(EePdf *pdf,
+                                const wchar_t *path,
+                                EeAuditCopy *out,
+                                volatile LONG *cancel_flag,
+                                EeLoadProgressFn progress_fn,
+                                void *progress_user,
+                                wchar_t *err,
+                                size_t errcch)
 {
-    EePdf *pdf = NULL;
     EePdfPageText pt;
     AuPage pg;
     AuStr f, tmp;
-    wchar_t perr[256] = L"";
     uint32_t p, npages;
     EeLoadStatus st = EeLoadStatus_Ok;
 
-    EeAudit_InitCopy(out);
-    if (!EePdf_Open(path, &pdf, perr, ARRAYSIZE(perr)))
+    if (AuHart_IsReport(pdf))
     {
-        au_set_err(err, errcch, L"%s could not be read as a PDF.", path);
-        return EeLoadStatus_Error;
+        return AuHart_ReadPdf(pdf, path, out, cancel_flag, progress_fn, progress_user, err, errcch);
     }
-    out->path = au_wcsdup(path);
     npages = EePdf_PageCount(pdf);
     out->pages = npages;
     EePdf_PageTextInit(&pt);
@@ -958,6 +967,29 @@ EeLoadStatus EeAudit_LoadCopy(const wchar_t *path,
     free(f.p);
     free(tmp.p);
     EePdf_PageTextFree(&pt);
+    return st;
+}
+
+EeLoadStatus EeAudit_LoadCopy(const wchar_t *path,
+                              EeAuditCopy *out,
+                              volatile LONG *cancel_flag,
+                              EeLoadProgressFn progress_fn,
+                              void *progress_user,
+                              wchar_t *err,
+                              size_t errcch)
+{
+    EePdf *pdf = NULL;
+    wchar_t perr[256] = L"";
+    EeLoadStatus st;
+
+    EeAudit_InitCopy(out);
+    if (!EePdf_Open(path, &pdf, perr, ARRAYSIZE(perr)))
+    {
+        au_set_err(err, errcch, L"%s could not be read as a PDF.", path);
+        return EeLoadStatus_Error;
+    }
+    out->path = au_wcsdup(path);
+    st = au_load_pdf(pdf, path, out, cancel_flag, progress_fn, progress_user, err, errcch);
     EePdf_Close(pdf);
     if (st != EeLoadStatus_Ok)
     {
@@ -1062,7 +1094,48 @@ const EeAuditEvent *EeAudit_MergedEvent(const EeAuditLog *log, uint32_t i, const
 
 const EeAuditLog *EeAudit_Log(const EeAuditElection *el, int kind)
 {
-    return &el->logs[kind == EE_AUDIT_ADMIN ? 1 : 0];
+    return &el->logs[kind >= 1 && kind <= EE_AUDIT_NLOGS ? kind - 1 : 0];
+}
+
+BOOL EeAudit_IsHart(const EeAuditElection *el)
+{
+    int k;
+    for (k = EE_AUDIT_HART_COUNT; el != NULL && k <= EE_AUDIT_HART_DATA; k++)
+    {
+        if (el->logs[k - 1].ncopies > 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static const char *const k_au_log_names[EE_AUDIT_NLOGS] = {"Election", "Admin", "VerityCount", "VerityCentral",
+                                                            "VerityData"};
+static const wchar_t *const k_au_log_wnames[EE_AUDIT_NLOGS] = {L"Election", L"Admin", L"VerityCount",
+                                                                L"VerityCentral", L"VerityData"};
+
+const wchar_t *EeAudit_LogName(int kind)
+{
+    return kind >= 1 && kind <= EE_AUDIT_NLOGS ? k_au_log_wnames[kind - 1] : L"";
+}
+
+const char *EeAudit_LogNameA(int kind)
+{
+    return kind >= 1 && kind <= EE_AUDIT_NLOGS ? k_au_log_names[kind - 1] : "";
+}
+
+int EeAudit_LogKindOf(const char *name)
+{
+    int k;
+    for (k = 0; name != NULL && k < EE_AUDIT_NLOGS; k++)
+    {
+        if (_stricmp(name, k_au_log_names[k]) == 0)
+        {
+            return k + 1;
+        }
+    }
+    return 0;
 }
 
 /* An earlier copy's event the merged list does not hold yet, with the merged event it
@@ -1340,6 +1413,12 @@ static BOOL au_same_customer(const char *a, const char *b)
     return na == nb && _strnicmp(a, b, na) == 0;
 }
 
+/* The slot of a copy's kind in EeAuditElection.logs. */
+static int au_log_index(int kind)
+{
+    return kind >= 1 && kind <= EE_AUDIT_NLOGS ? kind - 1 : 0;
+}
+
 static void au_free_log(EeAuditLog *log)
 {
     uint32_t i;
@@ -1362,8 +1441,11 @@ void EeAudit_FreeElections(EeAuditElection *els, uint32_t count)
     }
     for (i = 0; i < count; i++)
     {
-        au_free_log(&els[i].logs[0]);
-        au_free_log(&els[i].logs[1]);
+        int l;
+        for (l = 0; l < EE_AUDIT_NLOGS; l++)
+        {
+            au_free_log(&els[i].logs[l]);
+        }
         free(els[i].customer);
         free(els[i].election);
     }
@@ -1382,7 +1464,7 @@ static char *au_common_name(const EeAuditElection *el)
 {
     const char *best = NULL;
     uint32_t best_n = 0, l, i, l2, j;
-    for (l = 0; l < 2; l++)
+    for (l = 0; l < EE_AUDIT_NLOGS; l++)
     {
         for (i = 0; i < el->logs[l].ncopies; i++)
         {
@@ -1392,7 +1474,7 @@ static char *au_common_name(const EeAuditElection *el)
             {
                 continue;
             }
-            for (l2 = 0; l2 < 2; l2++)
+            for (l2 = 0; l2 < EE_AUDIT_NLOGS; l2++)
             {
                 for (j = 0; j < el->logs[l2].ncopies; j++)
                 {
@@ -1445,12 +1527,12 @@ BOOL EeAudit_GroupCopies(EeAuditCopy *copies, uint32_t ncopies, EeAuditElection 
                 copies[i].customer != NULL ? au_strdup_n(copies[i].customer, strlen(copies[i].customer)) : NULL;
             nels++;
         }
-        els[g].logs[copies[i].kind == EE_AUDIT_ADMIN ? 1 : 0].ncopies++;
+        els[g].logs[au_log_index(copies[i].kind)].ncopies++;
     }
     for (g = 0; g < nels && ok; g++)
     {
         int l;
-        for (l = 0; l < 2; l++)
+        for (l = 0; l < EE_AUDIT_NLOGS; l++)
         {
             EeAuditLog *log = &els[g].logs[l];
             if (log->ncopies > EE_AUDIT_MAX_COPIES)
@@ -1459,7 +1541,7 @@ BOOL EeAudit_GroupCopies(EeAuditCopy *copies, uint32_t ncopies, EeAuditElection 
             }
             else if (log->ncopies > 0)
             {
-                log->kind = l == 1 ? EE_AUDIT_ADMIN : EE_AUDIT_ELECTION;
+                log->kind = l + 1;
                 log->copies = (EeAuditCopy *)calloc(log->ncopies, sizeof(EeAuditCopy));
                 ok = ok && log->copies != NULL;
                 log->ncopies = 0; /* refilled below */
@@ -1475,7 +1557,7 @@ BOOL EeAudit_GroupCopies(EeAuditCopy *copies, uint32_t ncopies, EeAuditElection 
             if (els[g].election_date == copies[i].election_date &&
                 au_same_customer(els[g].customer, copies[i].customer))
             {
-                log = &els[g].logs[copies[i].kind == EE_AUDIT_ADMIN ? 1 : 0];
+                log = &els[g].logs[au_log_index(copies[i].kind)];
                 break;
             }
         }
@@ -1491,7 +1573,11 @@ BOOL EeAudit_GroupCopies(EeAuditCopy *copies, uint32_t ncopies, EeAuditElection 
     }
     for (g = 0; g < nels && ok; g++)
     {
-        ok = au_build_log(&els[g].logs[0]) && au_build_log(&els[g].logs[1]);
+        int l;
+        for (l = 0; l < EE_AUDIT_NLOGS && ok; l++)
+        {
+            ok = au_build_log(&els[g].logs[l]);
+        }
         els[g].election = au_common_name(&els[g]);
     }
     if (!ok)
@@ -1534,6 +1620,123 @@ static uint64_t au_file_size(const wchar_t *path)
         return 0;
     }
     return ((uint64_t)fa.nFileSizeHigh << 32) | fa.nFileSizeLow;
+}
+
+static BOOL au_is_zip_path(const wchar_t *path)
+{
+    const wchar_t *dot = wcsrchr(path, L'.');
+    return dot != NULL && _wcsicmp(dot, L".zip") == 0;
+}
+
+/* Read the audit log PDFs a .zip holds into copies[*n ...] (room grown for them and the
+ * @p later files still to come). Other entries (an XML signature) are left out; a zip with
+ * no audit log is an error. */
+static EeLoadStatus au_load_zip(const wchar_t *path,
+                                EeAuditCopy **copies,
+                                size_t *cap,
+                                uint32_t *n,
+                                uint32_t later,
+                                volatile LONG *cancel_flag,
+                                EeLoadProgressFn progress_fn,
+                                void *progress_user,
+                                wchar_t *err,
+                                size_t errcch)
+{
+    mz_zip_archive zip;
+    FILE *fp = NULL;
+    mz_uint i, nfiles;
+    uint32_t found = 0;
+    EeLoadStatus st = EeLoadStatus_Ok;
+    long long fsize;
+
+    memset(&zip, 0, sizeof(zip));
+    if (_wfopen_s(&fp, path, L"rb") != 0 || fp == NULL)
+    {
+        au_set_err(err, errcch, L"%s could not be opened.", path);
+        return EeLoadStatus_Error;
+    }
+    _fseeki64(fp, 0, SEEK_END);
+    fsize = _ftelli64(fp);
+    _fseeki64(fp, 0, SEEK_SET);
+    if (fsize <= 0 || !mz_zip_reader_init_cfile(&zip, fp, (mz_uint64)fsize, 0))
+    {
+        fclose(fp);
+        au_set_err(err, errcch, L"%s could not be read as a zip file.", path);
+        return EeLoadStatus_Error;
+    }
+    nfiles = mz_zip_reader_get_num_files(&zip);
+    for (i = 0; i < nfiles && st == EeLoadStatus_Ok; i++)
+    {
+        char name[MAX_PATH * 3];
+        wchar_t wname[MAX_PATH];
+        wchar_t *full;
+        size_t size = 0, flen;
+        void *data;
+        EePdf *pdf = NULL;
+        EeAuditCopy *c;
+        const char *dot;
+        if (mz_zip_reader_is_file_a_directory(&zip, i) ||
+            mz_zip_reader_get_filename(&zip, i, name, (mz_uint)sizeof(name)) == 0 ||
+            (dot = strrchr(name, '.')) == NULL || _stricmp(dot, ".pdf") != 0)
+        {
+            continue;
+        }
+        data = mz_zip_reader_extract_to_heap(&zip, i, &size, 0);
+        if (data == NULL)
+        {
+            au_set_err(err, errcch, L"A file in %s could not be unzipped.", path);
+            st = EeLoadStatus_Error;
+            break;
+        }
+        if (!EePdf_OpenMem(data, size, &pdf, NULL, 0) || (!au_is_ess_pdf(pdf) && !AuHart_IsReport(pdf)))
+        {
+            EePdf_Close(pdf);
+            mz_free(data);
+            continue; /* not an audit log */
+        }
+        if (!au_grow((void **)copies, cap, (size_t)*n + 1 + later, sizeof(EeAuditCopy)))
+        {
+            EePdf_Close(pdf);
+            mz_free(data);
+            au_set_err(err, errcch, L"Out of memory.%s", L"");
+            st = EeLoadStatus_Error;
+            break;
+        }
+        /* the copy's path: the zip's, then the entry's name, as if the zip were a folder */
+        if (MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, ARRAYSIZE(wname)) == 0)
+        {
+            wname[0] = L'\0';
+        }
+        flen = wcslen(path) + 1 + wcslen(wname) + 1;
+        full = (wchar_t *)malloc(flen * sizeof(wchar_t));
+        c = &(*copies)[*n];
+        EeAudit_InitCopy(c);
+        if (full != NULL)
+        {
+            StringCchPrintfW(full, flen, L"%s\\%s", path, wname);
+        }
+        c->path = full;
+        st = au_load_pdf(pdf, full != NULL ? full : path, c, cancel_flag, progress_fn, progress_user, err, errcch);
+        EePdf_Close(pdf);
+        mz_free(data);
+        if (st == EeLoadStatus_Ok)
+        {
+            (*n)++;
+            found++;
+        }
+        else
+        {
+            EeAudit_FreeCopy(c);
+        }
+    }
+    mz_zip_reader_end(&zip);
+    fclose(fp);
+    if (st == EeLoadStatus_Ok && found == 0)
+    {
+        au_set_err(err, errcch, L"%s holds no audit log report.", path);
+        st = EeLoadStatus_Error;
+    }
+    return st;
 }
 
 EeLoadStatus EeAudit_LoadFiles(const wchar_t *const *paths,
@@ -1595,6 +1798,11 @@ EeLoadStatus EeAudit_LoadFiles(const wchar_t *const *paths,
                 }
             }
             free(more);
+        }
+        else if (au_is_zip_path(paths[i]))
+        {
+            st = au_load_zip(paths[i], &copies, &cap, &n, count - i, cancel_flag,
+                             progress_fn != NULL ? au_files_progress : NULL, &fp, err, errcch);
         }
         else
         {
@@ -1854,14 +2062,25 @@ void EeAudit_FreeAccounting(EeAuditAccounting *a)
     {
         free(a->batches[i].name);
         free(a->batches[i].place);
+        free(a->batches[i].device);
+    }
+    for (i = 0; i < a->nsessions; i++)
+    {
+        free(a->sessions[i].name);
     }
     for (i = 0; i < a->nclears; i++)
     {
         free(a->clears[i].place);
     }
+    for (i = 0; i < a->ntransfers; i++)
+    {
+        free(a->transfers[i].device);
+        free(a->transfers[i].batches);
+    }
     free(a->batches);
     free(a->sessions);
     free(a->clears);
+    free(a->transfers);
     memset(a, 0, sizeof(*a));
 }
 
@@ -2200,6 +2419,15 @@ BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out)
     return TRUE;
 }
 
+BOOL EeAudit_ElectionAccounting(const EeAuditElection *el, EeAuditAccounting *out)
+{
+    if (el != NULL && el->logs[0].ncopies == 0 && EeAudit_IsHart(el))
+    {
+        return EeAudit_HartAccounting(el, out);
+    }
+    return EeAudit_Accounting(el != NULL ? &el->logs[0] : NULL, out);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Notable events                                                             */
 /* -------------------------------------------------------------------------- */
@@ -2213,24 +2441,39 @@ static const struct
     {EE_AUDIT_SEV_RED, L"Results output before Election Day",
      L"A results report was printed, saved to a file or exported before Election Day while ballots "
      L"(not test decks) were loaded. Ballots may be tabulated early, but results are not to be printed "
-     L"or released before Election Day."},
+     L"or released before Election Day. Hart: ballots read into the official task open at the time."},
     {EE_AUDIT_SEV_REVIEW, L"Ballots loaded early",
      L"Ballots (not test decks) were loaded more than 3 days before Election Day, earlier than "
      L"tabulation may start in a county of 100,000 or more. Test batches not named as test decks "
-     L"also appear here."},
-    {EE_AUDIT_SEV_REVIEW, L"Elections deleted",
-     L"An election was deleted; its own audit log is deleted with it."},
+     L"(Hart: reads into a task whose name has no test word) also appear here."},
+    {EE_AUDIT_SEV_REVIEW, L"Central to Count differences",
+     L"Hart: VerityCentral wrote CVRs to a vDrive that VerityCount read with another ballot count, or "
+     L"that VerityCount's log does not show read (see Ballot Accounting \x2192 Central Transfers)."},
+    {EE_AUDIT_SEV_REVIEW, L"Elections or tasks deleted",
+     L"An election was deleted; its own audit log is deleted with it. Hart: a task was deleted, with "
+     L"the vDrives read into it."},
     {EE_AUDIT_SEV_REVIEW, L"Failed restores and backups", L"A restore or a backup did not succeed."},
     {EE_AUDIT_SEV_REVIEW, L"Results validation errors",
      L"A results or media validation error while loading results (for example \"Results validation "
      L"error. Verify poll closed correctly\")."},
-    {EE_AUDIT_SEV_REVIEW, L"Errors", L"Other events logged as Error or Fatal."},
+    {EE_AUDIT_SEV_REVIEW, L"Errors",
+     L"Other events logged as Error or Fatal. Hart: errors, exceptions, scanner errors and failed "
+     L"imports."},
     {EE_AUDIT_SEV_REVIEW, L"Ballot sheet load errors", L"A ballot sheet could not be loaded."},
+    {EE_AUDIT_SEV_REVIEW, L"Manual vote records",
+     L"Hart: votes were entered by hand (a manual vote record created, with its ballots) or a manual "
+     L"vote record was deleted."},
+    {EE_AUDIT_SEV_REVIEW, L"Overrides",
+     L"Hart: a precinct's or polling place's reporting status was set by hand, or an Open vDrive "
+     L"override was granted."},
     {EE_AUDIT_SEV_REVIEW, L"Media clears",
      L"The results of one media were cleared (see Ballot Accounting \x2192 Media Clears)."},
     {EE_AUDIT_SEV_REVIEW, L"Clock anomalies",
      L"An event's time is later than the event printed above it (the log is newest first): the "
-     L"workstation's clock was set ahead, or the next one's behind."},
+     L"workstation's clock was set ahead, or the next one's behind. Hart: a vDrive event logged at a "
+     L"time more than 10 minutes from the vDrive's own Time read."},
+    {EE_AUDIT_SEV_INFO, L"vDrives rejected",
+     L"Hart: a vDrive was rejected (not from this election, no new ballots, the wrong media type)."},
     {EE_AUDIT_SEV_INFO, L"Full clears",
      L"All results were cleared: a new session starts (see Ballot Accounting \x2192 Sessions)."},
     {EE_AUDIT_SEV_INFO, L"Zero-ballot batches", L"A batch (not a test deck) was committed with 0 ballots."},
@@ -2239,6 +2482,7 @@ static const struct
     {EE_AUDIT_SEV_INFO, L"Results output before Election Day (testing)",
      L"A results report was printed, saved or exported before Election Day with only test decks "
      L"loaded (a logic and accuracy test) or no ballots counted (a zero report)."},
+    {EE_AUDIT_SEV_INFO, L"Registered voters changed", L"Hart: a precinct's registered voters were changed."},
     {EE_AUDIT_SEV_INFO, L"Elections restored", L"An election was restored from a backup."},
     {EE_AUDIT_SEV_INFO, L"User accounts", L"A user account was created or updated, or passwords were viewed."}};
 
@@ -2610,6 +2854,10 @@ BOOL EeAudit_Notable(const EeAuditElection *el, EeAuditNotes *out)
     {
         return FALSE;
     }
+    if (el->logs[0].ncopies == 0 && el->logs[1].ncopies == 0 && EeAudit_IsHart(el))
+    {
+        return EeAudit_HartNotable(el, out);
+    }
     if (!au_notes_election(el, out, &cap) || !au_notes_admin(el, out, &cap))
     {
         EeAudit_FreeNotes(out);
@@ -2878,14 +3126,59 @@ static BOOL au_closed_between(const EeAuditElection *el, int64_t from, int64_t t
     return FALSE;
 }
 
+/* A Hart test task's reads as tests: one per day it was read into (a read 12 hours or more
+ * after the one before it starts another). */
+static BOOL au_hart_tests(const EeAuditAccounting *acct, uint32_t si, EeAuditTimeline *out, size_t *cap)
+{
+    const EeAuditSession *s = &acct->sessions[si];
+    EeAuditTest *x = NULL;
+    uint32_t b;
+    for (b = s->first_batch; b < s->first_batch + s->nbatches; b++)
+    {
+        const EeAuditBatch *ba = &acct->batches[b];
+        if (x == NULL || ba->ts - x->end >= 12 * 3600)
+        {
+            if (!au_grow((void **)&out->tests, cap, (size_t)out->ntests + 1, sizeof(EeAuditTest)))
+            {
+                return FALSE;
+            }
+            x = &out->tests[out->ntests++];
+            memset(x, 0, sizeof(*x));
+            x->start = ba->ts;
+            x->kind = EE_AUDIT_TEST_SESSION;
+            x->log = acct->log;
+            x->event = ba->event;
+            x->session = si;
+        }
+        x->end = ba->ts;
+        x->batches++;
+        x->ballots += ba->ballots;
+    }
+    return TRUE;
+}
+
+static const EeAuditBatch *g_au_sort_batches; /* for au_cmp_batch_time (one thread: the UI's) */
+
+static int au_cmp_batch_time(const void *pa, const void *pb)
+{
+    const EeAuditBatch *a = &g_au_sort_batches[*(const uint32_t *)pa];
+    const EeAuditBatch *b = &g_au_sort_batches[*(const uint32_t *)pb];
+    if (a->ts != b->ts)
+    {
+        return a->ts < b->ts ? -1 : 1;
+    }
+    return a->event > b->event ? -1 : (a->event < b->event ? 1 : 0); /* events are newest first */
+}
+
 BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, EeAuditTimeline *out)
 {
     size_t cap_tests = 0, cap_periods = 0, cap_pauses = 0;
-    uint32_t si, b;
+    uint32_t si, b, oi;
     uint32_t next_test = 0; /* tests that started at or before the current load */
     EeAuditPeriod *cur = NULL;
     int64_t prev_ts = 0;
     uint8_t *era = NULL;
+    uint32_t *order = NULL; /* the batches in load order */
     AuNames mine;
     memset(out, 0, sizeof(*out));
     memset(&mine, 0, sizeof(mine));
@@ -2893,9 +3186,30 @@ BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, 
     {
         return FALSE;
     }
-    if ((era = au_election_eras(el, NULL)) == NULL || !au_this_copies(el, &mine))
+    if (acct->log != 0)
+    {
+        /* not an Election log: no other election's history to leave out */
+        era = (uint8_t *)calloc((size_t)el->logs[acct->log].nevents + 1, 1);
+    }
+    else
+    {
+        era = au_election_eras(el, NULL);
+    }
+    order = (uint32_t *)malloc(((size_t)acct->nbatches + 1) * sizeof(uint32_t));
+    if (era == NULL || order == NULL || !au_this_copies(el, &mine))
     {
         goto oom;
+    }
+    for (b = 0; b < acct->nbatches; b++)
+    {
+        order[b] = b;
+    }
+    if (acct->hart && acct->nbatches > 1)
+    {
+        /* Hart batches are grouped by task: take them in time order */
+        g_au_sort_batches = acct->batches;
+        qsort(order, acct->nbatches, sizeof(uint32_t), au_cmp_batch_time);
+        g_au_sort_batches = NULL;
     }
     /* tests: the Election log's test sessions, then the Admin log's test copies */
     for (si = 0; si < acct->nsessions; si++)
@@ -2904,6 +3218,14 @@ BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, 
         EeAuditTest *x;
         if (!s->test || s->nbatches == 0 || era[acct->batches[s->first_batch].event] == AU_ERA_OTHER)
         {
+            continue;
+        }
+        if (acct->hart)
+        {
+            if (!au_hart_tests(acct, si, out, &cap_tests))
+            {
+                goto oom;
+            }
             continue;
         }
         if (!au_grow((void **)&out->tests, &cap_tests, (size_t)out->ntests + 1, sizeof(EeAuditTest)))
@@ -2915,7 +3237,7 @@ BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, 
         x->start = acct->batches[s->first_batch].ts;
         x->end = s->end;
         x->kind = EE_AUDIT_TEST_SESSION;
-        x->log = 0;
+        x->log = acct->log;
         x->event = acct->batches[s->first_batch].event;
         x->session = si;
         for (b = s->first_batch; b < s->first_batch + s->nbatches; b++)
@@ -2933,9 +3255,9 @@ BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, 
         qsort(out->tests, out->ntests, sizeof(EeAuditTest), au_cmp_test);
     }
     /* counting periods: loads of ballots (not test decks) in load order, split at each test */
-    for (b = 0; b < acct->nbatches; b++)
+    for (oi = 0; oi < acct->nbatches; oi++)
     {
-        const EeAuditBatch *x = &acct->batches[b];
+        const EeAuditBatch *x = &acct->batches[order[oi]];
         uint32_t nt = next_test;
         if (x->test)
         {
@@ -2998,10 +3320,12 @@ BOOL EeAudit_Timeline(const EeAuditElection *el, const EeAuditAccounting *acct, 
         }
     }
     free(era);
+    free(order);
     au_names_free(&mine);
     return TRUE;
 oom:
     free(era);
+    free(order);
     au_names_free(&mine);
     EeAudit_FreeTimeline(out);
     return FALSE;
@@ -3170,7 +3494,8 @@ static void ax_copy_record(AuOut *o, const EeAuditCopy *c, int kind, uint32_t nu
         EeAudit_FormatTime(c->printed, t, sizeof(t));
     }
     f[AX_TIME] = t;
-    f[AX_LOG] = kind == EE_AUDIT_ADMIN ? "Admin" : "Election";
+    f[AX_LOG] = EeAudit_LogNameA(kind);
+    f[AX_MODULE] = c->component; /* Hart: "VerityCount 2.7.5" */
     f[AX_DESC] = c->election;
     StringCchPrintfA(num, sizeof(num), "%u of %u", number, of);
     f[AX_COPIES] = num;
@@ -3197,7 +3522,7 @@ static void ax_event_record(AuOut *o, const EeAuditCopy *c, const EeAuditEvent *
     f[AX_TYPE] = "Event";
     EeAudit_FormatTime(e->ts, t, sizeof(t));
     f[AX_TIME] = t;
-    f[AX_LOG] = kind == EE_AUDIT_ADMIN ? "Admin" : "Election";
+    f[AX_LOG] = EeAudit_LogNameA(kind);
     f[AX_EVENT] = EeAudit_Str(c, e->level);
     f[AX_MODULE] = EeAudit_Str(c, e->module);
     f[AX_USER] = EeAudit_Str(c, e->user);
@@ -3241,7 +3566,7 @@ BOOL EeAudit_FormatExportUtf8(const EeAuditElection *el,
     ax_put(&o, "\r\n", 2);
     if (copy >= 0)
     {
-        const EeAuditLog *log = &el->logs[copy_log != 0 ? 1 : 0];
+        const EeAuditLog *log = &el->logs[copy_log >= 0 && copy_log < EE_AUDIT_NLOGS ? copy_log : 0];
         const EeAuditCopy *c;
         char name[AX_NAME];
         if ((uint32_t)copy >= log->ncopies)
@@ -3262,9 +3587,9 @@ BOOL EeAudit_FormatExportUtf8(const EeAuditElection *el,
     }
     else
     {
-        BOOL used[2] = {FALSE, FALSE};
+        BOOL used[EE_AUDIT_NLOGS] = {FALSE};
         int li;
-        char *names = (char *)malloc((size_t)2 * EE_AUDIT_MAX_COPIES * AX_NAME); /* each copy's file name */
+        char *names = (char *)malloc((size_t)EE_AUDIT_NLOGS * EE_AUDIT_MAX_COPIES * AX_NAME); /* each copy's file name */
         if (names == NULL)
         {
             free(o.p);
@@ -3272,12 +3597,12 @@ BOOL EeAudit_FormatExportUtf8(const EeAuditElection *el,
         }
         for (i = 0; i < nrows; i++)
         {
-            if (rows[i].log < 2)
+            if (rows[i].log < EE_AUDIT_NLOGS)
             {
                 used[rows[i].log] = TRUE;
             }
         }
-        for (li = 0; li < 2; li++)
+        for (li = 0; li < EE_AUDIT_NLOGS; li++)
         {
             const EeAuditLog *log = &el->logs[li];
             for (k = 0; used[li] && k < log->ncopies && k < EE_AUDIT_MAX_COPIES; k++)
@@ -3293,7 +3618,7 @@ BOOL EeAudit_FormatExportUtf8(const EeAuditElection *el,
             const EeAuditCopy *c;
             const EeAuditEvent *e;
             char cp[256];
-            if (rows[i].log >= 2 || rows[i].index >= el->logs[rows[i].log].nevents)
+            if (rows[i].log >= EE_AUDIT_NLOGS || rows[i].index >= el->logs[rows[i].log].nevents)
             {
                 continue;
             }
@@ -3327,9 +3652,9 @@ typedef struct AuReload
 {
     int col[AX_COUNT]; /* each column's cell, -1 when missing */
     BOOL have_header;
-    uint32_t ncopies[2];
-    EeAuditCopy *copies[2];
-    uint64_t described[2]; /* bit k: copy k's Copy record was read */
+    uint32_t ncopies[EE_AUDIT_NLOGS]; /* by log slot (kind - 1) */
+    EeAuditCopy *copies[EE_AUDIT_NLOGS];
+    uint64_t described[EE_AUDIT_NLOGS]; /* bit k: copy k's Copy record was read */
     uint64_t record;       /* records read, for messages */
     wchar_t msg[300];      /* what went wrong (without the file name) */
 } AuReload;
@@ -3514,7 +3839,7 @@ static BOOL ax_log_copies(AuReload *rl, int li, uint32_t of)
     if (rl->ncopies[li] != 0)
     {
         StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu gives the %s log %u copies, not %u.",
-                         (unsigned long long)rl->record, li == 1 ? L"Admin" : L"Election", of, rl->ncopies[li]);
+                         (unsigned long long)rl->record, EeAudit_LogName(li + 1), of, rl->ncopies[li]);
         return FALSE;
     }
     rl->copies[li] = (EeAuditCopy *)calloc(of, sizeof(EeAuditCopy));
@@ -3526,7 +3851,7 @@ static BOOL ax_log_copies(AuReload *rl, int li, uint32_t of)
     rl->ncopies[li] = of;
     for (k = 0; k < of; k++)
     {
-        rl->copies[li][k].kind = li == 1 ? EE_AUDIT_ADMIN : EE_AUDIT_ELECTION;
+        rl->copies[li][k].kind = li + 1;
     }
     return TRUE;
 }
@@ -3591,6 +3916,10 @@ static void ax_copy_fields(AuReload *rl, EeAuditCopy *c, const char *const *cell
     }
     c->election = ax_dup(ax_cell(rl, cells, ncells, AX_DESC));
     c->customer = ax_dup(ax_cell(rl, cells, ncells, AX_COUNTY));
+    if (EE_AUDIT_IS_HART(c->kind))
+    {
+        c->component = ax_dup(ax_cell(rl, cells, ncells, AX_MODULE));
+    }
     c->pages = (uint32_t)strtoul(ax_cell(rl, cells, ncells, AX_PAGE), NULL, 10);
     s = ax_cell(rl, cells, ncells, AX_FIRST);
     if (s[0] != '\0')
@@ -3621,17 +3950,11 @@ static BOOL ax_sink(void *ctx, const char *const *cells, uint32_t ncells)
         return TRUE; /* a blank line */
     }
     logname = ax_cell(rl, cells, ncells, AX_LOG);
-    if (_stricmp(logname, "Election") == 0)
+    li = EeAudit_LogKindOf(logname) - 1;
+    if (li < 0)
     {
-        li = 0;
-    }
-    else if (_stricmp(logname, "Admin") == 0)
-    {
-        li = 1;
-    }
-    else
-    {
-        StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg), L"record %llu: the Log is neither Election nor Admin.",
+        StringCchPrintfW(rl->msg, ARRAYSIZE(rl->msg),
+                         L"record %llu: the Log is not Election, Admin, VerityCount, VerityCentral or VerityData.",
                          (unsigned long long)rl->record);
         return FALSE;
     }
@@ -3714,19 +4037,23 @@ EeLoadStatus EeAudit_LoadExport(const wchar_t *path,
     memset(&rl, 0, sizeof(rl));
     csv_err[0] = L'\0';
     st = EeCsv_ReadSheet(path, ax_sink, &rl, cancel_flag, progress_fn, progress_user, csv_err, ARRAYSIZE(csv_err));
-    if (st == EeLoadStatus_Ok && rl.ncopies[0] == 0 && rl.ncopies[1] == 0)
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
+    {
+        n += rl.ncopies[li];
+    }
+    if (st == EeLoadStatus_Ok && n == 0)
     {
         StringCchCopyW(rl.msg, ARRAYSIZE(rl.msg), rl.have_header ? L"the export holds no copies." : L"the file is empty.");
         st = EeLoadStatus_Error;
     }
-    for (li = 0; li < 2 && st == EeLoadStatus_Ok; li++)
+    for (li = 0; li < EE_AUDIT_NLOGS && st == EeLoadStatus_Ok; li++)
     {
         for (k = 0; k < rl.ncopies[li]; k++)
         {
             if ((rl.described[li] & ((uint64_t)1 << k)) == 0)
             {
                 StringCchPrintfW(rl.msg, ARRAYSIZE(rl.msg), L"there is no Copy record for copy %u of %u of the %s log.",
-                                 k + 1, rl.ncopies[li], li == 1 ? L"Admin" : L"Election");
+                                 k + 1, rl.ncopies[li], EeAudit_LogName((int)li + 1));
                 st = EeLoadStatus_Error;
                 break;
             }
@@ -3734,14 +4061,15 @@ EeLoadStatus EeAudit_LoadExport(const wchar_t *path,
     }
     if (st == EeLoadStatus_Ok)
     {
-        arr = (EeAuditCopy *)calloc((size_t)rl.ncopies[0] + rl.ncopies[1] + 1, sizeof(EeAuditCopy));
+        arr = (EeAuditCopy *)calloc((size_t)n + 1, sizeof(EeAuditCopy));
         if (arr == NULL)
         {
             StringCchCopyW(rl.msg, ARRAYSIZE(rl.msg), L"out of memory.");
             st = EeLoadStatus_Error;
         }
     }
-    for (li = 0; li < 2; li++)
+    n = 0;
+    for (li = 0; li < EE_AUDIT_NLOGS; li++)
     {
         for (k = 0; k < rl.ncopies[li]; k++)
         {

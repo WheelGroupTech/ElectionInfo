@@ -176,6 +176,7 @@
     <ClCompile Include="src\ee_results.c" />
     <ClCompile Include="src\ee_results_pdf.c" />
     <ClCompile Include="src\ee_results_dom.c" />
+    <ClCompile Include="src\ee_results_ocr.c" />
     <ClCompile Include="src\ee_glyph_ocr.c" />
     <ClCompile Include="src\ee_audit.c" />
     <ClCompile Include="src\hart_cvr.c" />
@@ -205,6 +206,7 @@
     <ClInclude Include="src\ee_results.h" />
     <ClInclude Include="src\ee_results_pdf.h" />
     <ClInclude Include="src\ee_results_dom.h" />
+    <ClInclude Include="src\ee_results_ocr.h" />
     <ClInclude Include="src\ee_glyph_ocr.h" />
     <ClInclude Include="src\ee_audit.h" />
     <ClInclude Include="src\pdf_reader.h" />

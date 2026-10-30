@@ -1282,8 +1282,122 @@ static uint64_t find_endstream(EePdf *pdf, uint64_t from)
     return UINT64_MAX;
 }
 
+/* ASCII85Decode: groups of five characters '!'..'u' are four bytes, 'z' four zeros, "~>"
+ * the end; white space is skipped. */
+static BOOL ascii85_decode(const unsigned char *s, size_t n, ByteBuf *out)
+{
+    uint32_t v = 0;
+    int cnt = 0;
+    size_t i;
+    unsigned char b[4];
+    for (i = 0; i < n; i++)
+    {
+        unsigned char c = s[i];
+        if (c == '~')
+        {
+            break;
+        }
+        if (is_ws(c))
+        {
+            continue;
+        }
+        if (c == 'z' && cnt == 0)
+        {
+            static const unsigned char k_zero[4] = {0, 0, 0, 0};
+            if (!bb_append(out, k_zero, 4))
+            {
+                return FALSE;
+            }
+            continue;
+        }
+        if (c < '!' || c > 'u')
+        {
+            return FALSE;
+        }
+        v = v * 85u + (uint32_t)(c - '!');
+        if (++cnt == 5)
+        {
+            b[0] = (unsigned char)(v >> 24);
+            b[1] = (unsigned char)(v >> 16);
+            b[2] = (unsigned char)(v >> 8);
+            b[3] = (unsigned char)v;
+            if (!bb_append(out, b, 4))
+            {
+                return FALSE;
+            }
+            v = 0;
+            cnt = 0;
+        }
+    }
+    if (cnt > 1)
+    {
+        /* a last partial group: pad with 'u' and keep cnt - 1 bytes */
+        int k;
+        for (k = cnt; k < 5; k++)
+        {
+            v = v * 85u + 84u;
+        }
+        b[0] = (unsigned char)(v >> 24);
+        b[1] = (unsigned char)(v >> 16);
+        b[2] = (unsigned char)(v >> 8);
+        b[3] = (unsigned char)v;
+        if (!bb_append(out, b, (size_t)(cnt - 1)))
+        {
+            return FALSE;
+        }
+    }
+    return out->p != NULL || bb_append(out, "", 0);
+}
+
+static int hex_val(unsigned char c)
+{
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+}
+
+/* ASCIIHexDecode: pairs of hex digits, '>' the end, white space skipped. */
+static BOOL asciihex_decode(const unsigned char *s, size_t n, ByteBuf *out)
+{
+    int hi = -1;
+    size_t i;
+    for (i = 0; i < n && s[i] != '>'; i++)
+    {
+        int d = hex_val(s[i]);
+        if (d < 0)
+        {
+            if (is_ws(s[i]))
+            {
+                continue;
+            }
+            return FALSE;
+        }
+        if (hi < 0)
+        {
+            hi = d;
+        }
+        else
+        {
+            unsigned char b = (unsigned char)(hi * 16 + d);
+            if (!bb_append(out, &b, 1))
+            {
+                return FALSE;
+            }
+            hi = -1;
+        }
+    }
+    if (hi >= 0)
+    {
+        unsigned char b = (unsigned char)(hi * 16);
+        if (!bb_append(out, &b, 1))
+        {
+            return FALSE;
+        }
+    }
+    return out->p != NULL || bb_append(out, "", 0);
+}
+
 /* Decode the stream whose dictionary is @p dict and data starts at @p data_off into
- * @p out (replaced). Supports no filter and FlateDecode (+ PNG predictors). */
+ * @p out (replaced). Supports no filter, FlateDecode (+ PNG predictors), ASCII85Decode and
+ * ASCIIHexDecode, in a chain, and a last DCTDecode when @p is_dct is given. */
 static BOOL stream_decode_ex(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t data_off,
                              ByteBuf *out, int *is_dct)
 {
@@ -1292,7 +1406,19 @@ static BOOL stream_decode_ex(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t 
     const PdfObj *filt = resolve(pdf, a, dict_get(dict, "Filter"), NULL);
     const PdfObj *parms = resolve(pdf, a, dict_get(dict, "DecodeParms"), NULL);
     int64_t len = (lenobj != NULL && lenobj->t == PO_INT) ? lenobj->u.i : -1;
-    int flate = 0;
+    /* the filters in order: ASCII85 / ASCIIHex text encodings (ReportLab writes
+     * [/ASCII85Decode /FlateDecode]), Flate, and a last DCT (JPEG, returned encoded) */
+    enum
+    {
+        SF_A85 = 1,
+        SF_AHX,
+        SF_FLATE,
+        SF_DCT,
+        SF_CCITT
+    };
+    int fl[4];
+    int nfl = 0, k;
+    const PdfObj *flate_parms = NULL;
     const unsigned char *src;
     size_t avail = 0;
 
@@ -1301,40 +1427,49 @@ static BOOL stream_decode_ex(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t 
     {
         *is_dct = 0;
     }
-    if (filt != NULL && filt->t == PO_ARRAY)
-    {
-        if (filt->n == 0)
-        {
-            filt = NULL;
-        }
-        else if (filt->n == 1)
-        {
-            filt = &filt->u.items[0];
-            if (parms != NULL && parms->t == PO_ARRAY)
-            {
-                parms = (parms->n > 0) ? resolve(pdf, a, &parms->u.items[0], NULL) : NULL;
-            }
-        }
-        else
-        {
-            return FALSE; /* filter chains are not needed for report PDFs */
-        }
-    }
     if (filt != NULL)
     {
-        if (obj_is_name(filt, "FlateDecode") || obj_is_name(filt, "Fl"))
-        {
-            flate = 1;
-        }
-        else if (is_dct != NULL && (obj_is_name(filt, "DCTDecode") || obj_is_name(filt, "DCT")))
-        {
-            *is_dct = 1; /* JPEG: returned as the encoded bytes */
-        }
-        else
+        uint32_t n = filt->t == PO_ARRAY ? filt->n : 1, i;
+        if (n > ARRAYSIZE(fl))
         {
             return FALSE;
         }
+        for (i = 0; i < n; i++)
+        {
+            const PdfObj *f = filt->t == PO_ARRAY ? resolve(pdf, a, &filt->u.items[i], NULL) : filt;
+            const PdfObj *p = parms;
+            if (parms != NULL && parms->t == PO_ARRAY)
+            {
+                p = i < parms->n ? resolve(pdf, a, &parms->u.items[i], NULL) : NULL;
+            }
+            if (obj_is_name(f, "FlateDecode") || obj_is_name(f, "Fl"))
+            {
+                fl[nfl++] = SF_FLATE;
+                flate_parms = p;
+            }
+            else if (obj_is_name(f, "ASCII85Decode") || obj_is_name(f, "A85"))
+            {
+                fl[nfl++] = SF_A85;
+            }
+            else if (obj_is_name(f, "ASCIIHexDecode") || obj_is_name(f, "AHx"))
+            {
+                fl[nfl++] = SF_AHX;
+            }
+            else if (is_dct != NULL && i + 1 == n && (obj_is_name(f, "DCTDecode") || obj_is_name(f, "DCT")))
+            {
+                fl[nfl++] = SF_DCT; /* JPEG: returned as the encoded bytes */
+            }
+            else if (is_dct != NULL && i + 1 == n && (obj_is_name(f, "CCITTFaxDecode") || obj_is_name(f, "CCF")))
+            {
+                fl[nfl++] = SF_CCITT; /* a fax image (a scanned page): returned encoded, *is_dct = 2 */
+            }
+            else
+            {
+                return FALSE;
+            }
+        }
     }
+    parms = flate_parms;
 
     /* Validate /Length against an "endstream" marker; recover it by search if bad. */
     if (len < 0 || data_off + (uint64_t)len > pdf->size)
@@ -1388,17 +1523,46 @@ static BOOL stream_decode_ex(EePdf *pdf, Arena *a, const PdfObj *dict, uint64_t 
     }
 
     src = pdf_view(pdf, data_off, (size_t)len, &avail);
-    if (!flate)
+    if (!bb_append(out, src, avail))
     {
-        return bb_append(out, src, avail);
+        return FALSE;
     }
-    if (!inflate_into(src, avail, out, 0))
+    for (k = 0; k < nfl; k++)
     {
-        out->len = 0;
-        if (!inflate_into(src, avail, out, 1))
+        ByteBuf in = *out; /* this filter's input; out receives its output */
+        BOOL ok = TRUE;
+        ZeroMemory(out, sizeof(*out));
+        switch (fl[k])
+        {
+        case SF_A85:
+            ok = ascii85_decode(in.p, in.len, out);
+            break;
+        case SF_AHX:
+            ok = asciihex_decode(in.p, in.len, out);
+            break;
+        case SF_FLATE:
+            ok = inflate_into(in.p, in.len, out, 0);
+            if (!ok)
+            {
+                out->len = 0;
+                ok = inflate_into(in.p, in.len, out, 1);
+            }
+            break;
+        default: /* SF_DCT, SF_CCITT: kept encoded */
+            *is_dct = fl[k] == SF_CCITT ? 2 : 1;
+            *out = in;
+            in.p = NULL;
+            break;
+        }
+        bb_free(&in);
+        if (!ok)
         {
             return FALSE;
         }
+    }
+    if (nfl > 0 && fl[nfl - 1] != SF_FLATE)
+    {
+        return TRUE; /* (a predictor applies to Flate's output) */
     }
     if (parms != NULL && parms->t == PO_DICT)
     {
@@ -4409,6 +4573,73 @@ void EePdf_ImageFree(EePdfImage *img)
     }
 }
 
+static void tiff_entry(unsigned char *p, uint16_t tag, uint16_t type, uint32_t value)
+{
+    p[0] = (unsigned char)tag;
+    p[1] = (unsigned char)(tag >> 8);
+    p[2] = (unsigned char)type;
+    p[3] = (unsigned char)(type >> 8);
+    p[4] = 1; /* count */
+    p[5] = p[6] = p[7] = 0;
+    if (type == 3)
+    {
+        p[8] = (unsigned char)value; /* SHORT: left-justified */
+        p[9] = (unsigned char)(value >> 8);
+        p[10] = p[11] = 0;
+    }
+    else
+    {
+        p[8] = (unsigned char)value;
+        p[9] = (unsigned char)(value >> 8);
+        p[10] = (unsigned char)(value >> 16);
+        p[11] = (unsigned char)(value >> 24);
+    }
+}
+
+/* Wrap the CCITT fax data in @p img (its whole buffer) as a one-strip little-endian TIFF:
+ * Group 4 for K < 0, else Group 3 (2-D for K > 0). @p inverted: black is 1 once the PDF's
+ * BlackIs1 and /Decode are taken together, so the TIFF says BlackIsZero. */
+static BOOL ccitt_to_tiff(EePdfImage *img, uint32_t w, uint32_t h, int k, BOOL inverted, BOOL byte_align)
+{
+    enum
+    {
+        NTAGS = 11
+    };
+    size_t head = 8 + 2 + NTAGS * 12 + 4, i = 0;
+    unsigned char *t;
+    unsigned char *e;
+    if (img->len > 0xFFFFFFFFu - head || (t = (unsigned char *)malloc(head + img->len)) == NULL)
+    {
+        return FALSE;
+    }
+    t[0] = 'I';
+    t[1] = 'I';
+    t[2] = 42;
+    t[3] = 0;
+    t[4] = 8; /* the IFD follows the header */
+    t[5] = t[6] = t[7] = 0;
+    t[8] = NTAGS;
+    t[9] = 0;
+    e = t + 10;
+    tiff_entry(e + 12 * i++, 256, 4, w);                      /* ImageWidth */
+    tiff_entry(e + 12 * i++, 257, 4, h);                      /* ImageLength */
+    tiff_entry(e + 12 * i++, 258, 3, 1);                      /* BitsPerSample */
+    tiff_entry(e + 12 * i++, 259, 3, k < 0 ? 4u : 3u);        /* Compression: G4 / G3 */
+    tiff_entry(e + 12 * i++, 262, 3, inverted ? 1u : 0u);     /* Photometric */
+    tiff_entry(e + 12 * i++, 273, 4, (uint32_t)head);         /* StripOffsets */
+    tiff_entry(e + 12 * i++, 277, 3, 1);                      /* SamplesPerPixel */
+    tiff_entry(e + 12 * i++, 278, 4, h);                      /* RowsPerStrip */
+    tiff_entry(e + 12 * i++, 279, 4, (uint32_t)img->len);     /* StripByteCounts */
+    tiff_entry(e + 12 * i++, 292, 4, (k > 0 ? 1u : 0u) | (byte_align ? 4u : 0u)); /* T4Options */
+    tiff_entry(e + 12 * i++, 293, 4, 0);                      /* T6Options */
+    e[12 * NTAGS] = e[12 * NTAGS + 1] = e[12 * NTAGS + 2] = e[12 * NTAGS + 3] = 0; /* no next IFD */
+    memcpy(t + head, img->data, img->len);
+    free(img->data);
+    img->data = t;
+    img->len = img->cap = head + img->len;
+    return TRUE;
+}
+
 BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out)
 {
     char name[128];
@@ -4417,6 +4648,7 @@ BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out)
     PdfObj d;
     uint64_t soff = 0;
     int is_dct = 0;
+    BOOL invert = FALSE;
     uint32_t w, h, ch;
     if (pdf == NULL || out == NULL)
     {
@@ -4465,9 +4697,64 @@ BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out)
     }
     out->width = w;
     out->height = h;
+    {
+        /* /Decode [1 0] inverts the samples */
+        const PdfObj *dec = resolve(pdf, &pdf->arena, dict_get(&d, "Decode"), NULL);
+        invert = dec != NULL && dec->t == PO_ARRAY && dec->n >= 2 && obj_num(&dec->u.items[0]) > 0.5;
+    }
+    if (is_dct == 2)
+    {
+        /* a fax image: wrapped as a TIFF, which WIC decodes */
+        const PdfObj *pa = resolve(pdf, &pdf->arena, dict_get(&d, "DecodeParms"), NULL);
+        if (pa != NULL && pa->t == PO_ARRAY)
+        {
+            pa = pa->n > 0 ? resolve(pdf, &pdf->arena, &pa->u.items[pa->n - 1], NULL) : NULL;
+        }
+        {
+            int k = pa != NULL && pa->t == PO_DICT ? (int)obj_num(dict_get(pa, "K")) : 0;
+            const PdfObj *b1 = pa != NULL && pa->t == PO_DICT ? dict_get(pa, "BlackIs1") : NULL;
+            const PdfObj *al = pa != NULL && pa->t == PO_DICT ? dict_get(pa, "EncodedByteAlign") : NULL;
+            BOOL black1 = b1 != NULL && b1->t == PO_BOOL && b1->u.i != 0;
+            BOOL align = al != NULL && al->t == PO_BOOL && al->u.i != 0;
+            if (w == 0 || h == 0 || !ccitt_to_tiff(out, w, h, k, black1 != invert, align))
+            {
+                out->len = 0;
+                return FALSE;
+            }
+        }
+        out->kind = EE_PDF_IMAGE_ENCODED;
+        return TRUE;
+    }
     if (is_dct)
     {
         out->kind = EE_PDF_IMAGE_ENCODED;
+        return TRUE;
+    }
+    if (obj_is_name(cs, "DeviceGray") && bpc != NULL && obj_num(bpc) == 1.0 && w > 0 && h > 0)
+    {
+        /* a 1-bit scan: each bit becomes an 8-bit gray sample (0 black, 1 white) */
+        size_t row = ((size_t)w + 7) / 8, x, y;
+        unsigned char *px;
+        if ((uint64_t)row * h > out->len || (px = (unsigned char *)malloc((size_t)w * h)) == NULL)
+        {
+            out->len = 0;
+            return FALSE;
+        }
+        for (y = 0; y < h; y++)
+        {
+            const unsigned char *src_row = out->data + y * row;
+            for (x = 0; x < w; x++)
+            {
+                int bit = (src_row[x >> 3] >> (7 - (x & 7))) & 1;
+                px[y * w + x] = (unsigned char)((bit != 0) != invert ? 255 : 0);
+            }
+        }
+        free(out->data);
+        out->data = px;
+        out->cap = out->len = (size_t)w * h;
+        out->kind = EE_PDF_IMAGE_PIXELS;
+        out->channels = 1;
+        out->stride = w;
         return TRUE;
     }
     /* Raw samples: support 8-bit gray / RGB. */

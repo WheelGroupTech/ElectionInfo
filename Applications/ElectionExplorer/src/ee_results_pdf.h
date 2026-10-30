@@ -125,6 +125,19 @@ extern "C"
      */
     BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, size_t errcch);
 
+    /**
+     * EeRpdf_Parse with progress for a scanned report, which is read by OCR a page at a time
+     * (ee_results_ocr.c): @p page_fn (optional) is called after each page with pages done /
+     * total, and returns FALSE to cancel.
+     */
+    BOOL EeRpdf_ParseEx(const void *data,
+                        size_t size,
+                        EeRpdfDoc *out,
+                        BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
+                        void *user,
+                        wchar_t *err,
+                        size_t errcch);
+
     /** Release a report from EeRpdf_Parse. */
     void EeRpdf_Free(EeRpdfDoc *doc);
 

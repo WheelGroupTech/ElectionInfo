@@ -66,6 +66,7 @@ struct EeOcr
     ISoftwareBitmapNativeFactory *sbf;
     __x_ABI_CWindows_CMedia_COcr_CIOcrEngine *engine;
     UINT32 max_dim;
+    int quarter_turns; /* EeOcr_SetRotation: 0..3 clockwise */
 };
 
 #define RELEASE(p)                                                                                 \
@@ -360,6 +361,7 @@ static BOOL recognize_source(EeOcr *ocr,
     HRESULT hr;
     UINT w = 0, h = 0, tw, th;
     IWICBitmapScaler *scaler = NULL;
+    IWICBitmapFlipRotator *rot = NULL;
     IWICFormatConverter *conv = NULL;
     IWICBitmap *bmp = NULL;
     __x_ABI_CWindows_CGraphics_CImaging_CISoftwareBitmap *sb = NULL;
@@ -425,6 +427,36 @@ static BOOL recognize_source(EeOcr *ocr,
                                                        WICBitmapCacheOnLoad,
                                                        &bmp);
     }
+    if (SUCCEEDED(hr) && ocr->quarter_turns != 0)
+    {
+        /* turn the decoded gray copy (turning a decoder's frame decodes it again per row) */
+        static const WICBitmapTransformOptions k_turn[4] = {WICBitmapTransformRotate0, WICBitmapTransformRotate90,
+                                                            WICBitmapTransformRotate180, WICBitmapTransformRotate270};
+        IWICBitmap *turned = NULL;
+        hr = IWICImagingFactory_CreateBitmapFlipRotator(ocr->wic, &rot);
+        if (SUCCEEDED(hr))
+        {
+            hr = IWICBitmapFlipRotator_Initialize(rot, (IWICBitmapSource *)bmp, k_turn[ocr->quarter_turns & 3]);
+        }
+        if (SUCCEEDED(hr))
+        {
+            hr = IWICImagingFactory_CreateBitmapFromSource(ocr->wic, (IWICBitmapSource *)rot, WICBitmapCacheOnLoad,
+                                                           &turned);
+        }
+        if (FAILED(hr))
+        {
+            set_err(err, errcch, L"The page image could not be turned", hr);
+            goto done;
+        }
+        RELEASE(bmp);
+        bmp = turned;
+        if (ocr->quarter_turns & 1)
+        {
+            UINT t = tw;
+            tw = th;
+            th = t;
+        }
+    }
     if (SUCCEEDED(hr))
     {
         hr = ocr->sbf->lpVtbl->CreateFromWICBitmap(ocr->sbf,
@@ -486,7 +518,16 @@ done:
     RELEASE(bmp);
     RELEASE(conv);
     RELEASE(scaler);
+    RELEASE(rot);
     return ok;
+}
+
+void EeOcr_SetRotation(EeOcr *ocr, int quarter_turns)
+{
+    if (ocr != NULL)
+    {
+        ocr->quarter_turns = ((quarter_turns % 4) + 4) % 4;
+    }
 }
 
 BOOL EeOcr_RecognizeEncoded(EeOcr *ocr,

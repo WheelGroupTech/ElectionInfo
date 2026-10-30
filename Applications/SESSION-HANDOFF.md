@@ -5,10 +5,11 @@
 > Keep it short and current — git history is the permanent record.
 
 **Last updated:** 2026-10-29. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Uncommitted: Dominion election results for 1.6 (San Francisco summary
-XML/XLSX/PDF, DeKalb Statement of Votes Cast; `src/ee_results_dom.{c,h}`, smoke test `resdom`,
-election-results design doc "Dominion results"). **1.6.0.0 is not final:** the user has more
-changes first; then rebuild the Store bundle (the one built on 2026-10-29 predates Dominion).
+Microsoft Store**. Committed: Dominion election results (`5f88d66`). Uncommitted: scanned and
+ASCII85 results PDFs for 1.6 (`src/ee_results_ocr.{c,h}` reads scanned ES&S reports by OCR;
+`pdf_reader.c` filter chains and CCITT images; `ocr_win.c` page turning; election-results design
+doc "Scanned and ASCII85 results PDFs"). **1.6.0.0 is not final:** the user has more changes
+first; then rebuild the Store bundle (the one built on 2026-10-29 predates Dominion and OCR).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
 
 ## Current state
@@ -196,8 +197,12 @@ Listing; all committed, lint 10/10. Run with `python -I`.
     `uia/recon_travis.ps1` runs the Travis reconciliations.
 - **Bastrop name fix:** committed 2026-10-28 (`fca8719`); candidate for 1.5.1.
 - **Candidates for the next version** (design doc "After step 9" and "Implementation plan" 11):
-  - results PDFs still refused: scanned reports (~450), Electionware "Statement of Votes Cast"
-    and custom table grids (~78), the encrypted Ellis PDFs;
+  - results PDFs still refused: scanned Hart reports (9), Midland's scanned "Custom Table
+    Report" grids, JPX/JBIG2 scans, Liberty's turned per-entity L24 files; Electionware
+    "Statement of Votes Cast" and custom table grids (~78), the encrypted Ellis PDFs;
+  - scanned results: Cameron's faint 2020–22 primary scans still leave many rows that do not add
+    up (OCR misses single-digit counts at any scale); the precinct ballots check could fill
+    more if it learned which contests are on every ballot;
   - Hart CSV exports, ES&S CSV exports (Collin, Bexar), Comal's Enhanced Voting, Dominion PDFs;
   - a vote-type breakdown for summary-only contests (the model keeps totals only);
   - in OCR-read reports, settle split glyph readings by context (only flagged today).

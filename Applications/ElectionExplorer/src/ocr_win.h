@@ -112,6 +112,13 @@ extern "C"
                                wchar_t *err,
                                size_t errcch);
 
+    /**
+     * Turn later images @p quarter_turns x 90 degrees clockwise before recognition (a page
+     * scanned sideways); 0 = as is. Word coordinates are in the turned image.
+     */
+    void EeOcr_SetRotation(EeOcr *ocr, int quarter_turns);
+
+
     /** Initialize / release an EeOcrText. */
     void EeOcr_TextInit(EeOcrText *t);
     void EeOcr_TextFree(EeOcrText *t);

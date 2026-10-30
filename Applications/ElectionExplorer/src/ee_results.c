@@ -4386,13 +4386,49 @@ done:
     return b->oom ? 0 : fmt;
 }
 
-/* A results report PDF (ES&S Electionware, Hart, Dominion), read by ee_results_pdf.c.
- * Returns its format (EE_RES_FMT_*), or 0 after b_fail. */
+/* The load in progress on this thread (EeResults_LoadFiles), for a scanned report's pages. */
+typedef struct ResLoadCtl
+{
+    volatile LONG *cancel_flag;
+    EeLoadProgressFn progress_fn;
+    void *progress_user;
+    uint32_t file, nfiles;
+} ResLoadCtl;
+
+static __declspec(thread) const ResLoadCtl *t_load;
+
+/* A scanned report's page read by OCR: progress within the file's share, and cancel. */
+static BOOL res_pdf_page(uint32_t done, uint32_t total, void *user)
+{
+    const ResLoadCtl *c = (const ResLoadCtl *)user;
+    if (c == NULL)
+    {
+        return TRUE;
+    }
+    if (c->cancel_flag != NULL && *c->cancel_flag != 0)
+    {
+        return FALSE;
+    }
+    if (c->progress_fn != NULL && total > 0 && c->nfiles > 0)
+    {
+        EeLoadProgress pr;
+        uint64_t part = (uint64_t)c->file * total + done; /* of nfiles * total */
+        ZeroMemory(&pr, sizeof(pr));
+        pr.percent = (uint32_t)(part * 90u / ((uint64_t)c->nfiles * total));
+        pr.bytes_read = c->file;
+        pr.bytes_total = c->nfiles;
+        return c->progress_fn(&pr, c->progress_user);
+    }
+    return TRUE;
+}
+
+/* A results report PDF (ES&S Electionware, Hart, Dominion; a scanned ES&S report by OCR),
+ * read by ee_results_pdf.c. Returns its format (EE_RES_FMT_*), or 0 after b_fail. */
 static uint32_t parse_results_pdf(ResBuilder *b, const uint8_t *d, size_t n)
 {
     EeRpdfDoc doc;
     wchar_t err[400] = L"";
-    if (!EeRpdf_Parse(d, n, &doc, err, ARRAYSIZE(err)))
+    if (!EeRpdf_ParseEx(d, n, &doc, res_pdf_page, (void *)t_load, err, ARRAYSIZE(err)))
     {
         b_fail(b, err);
         return 0;
@@ -6287,6 +6323,7 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
                                  size_t error_cch)
 {
     ParsedList pl = {0};
+    ResLoadCtl ctl = {0};
     EeResults *res = NULL;
     uint32_t ngroups = 0;
     uint32_t *gfirst = NULL; /* per group: index of its first member */
@@ -6306,8 +6343,14 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
         res_set_err(error_message, error_cch, L"Invalid arguments.");
         return EeLoadStatus_Error;
     }
+    ctl.cancel_flag = cancel_flag;
+    ctl.progress_fn = progress_fn;
+    ctl.progress_user = progress_user;
+    ctl.nfiles = count;
+    t_load = &ctl;
     for (i = 0; i < count; i++)
     {
+        ctl.file = i;
         if (cancel_flag != NULL && *cancel_flag != 0)
         {
             status = EeLoadStatus_Cancelled;
@@ -6328,9 +6371,14 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
         }
         if (!load_path(paths[i], &pl, error_message, error_cch))
         {
+            if (cancel_flag != NULL && *cancel_flag != 0)
+            {
+                status = EeLoadStatus_Cancelled;
+            }
             goto cleanup;
         }
     }
+    t_load = NULL;
 
     if (!combine_split(&pl))
     {
@@ -6470,6 +6518,7 @@ EeLoadStatus EeResults_LoadFiles(const wchar_t *const *paths,
     status = EeLoadStatus_Ok;
 
 cleanup:
+    t_load = NULL;
     if (res != NULL)
     {
         EeResults_FreeArray(res, ngroups);

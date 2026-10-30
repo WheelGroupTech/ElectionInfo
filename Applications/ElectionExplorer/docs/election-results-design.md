@@ -1102,6 +1102,90 @@ intermediate model (`EeRpdfDoc`), and `ee_results.c` (`res_from_rpdf`) turns it 
     - XLSX: 12 of 39 (the rest are Collin's own exports).
     - CSV, TXT and HTML: 0 of 50 (Collin's and Bexar's own exports).
 
+### Scanned and ASCII85 results PDFs (1.6, done 2026-10-29)
+
+Steps 1–3 of `scanned-results-survey.md`, at the user's request for 1.6.0.0. The new engine is
+`src/ee_results_ocr.{c,h}`. `EeRpdf_ParseEx` (with a page callback) calls it when the first page
+with no text draws an image. `ee_results.c` passes the load's progress and Cancel through a
+thread-local (`t_load`, `res_pdf_page`). Smoke test `respdf` gained an ASCII85 + Flate check; the
+OCR reader has no fixture (it would need a page image), so it was checked against the folder.
+Release x64 and ARM64 build with no warnings.
+
+- **Step 1, text that was refused:**
+  - `pdf_reader.c` decodes filter chains (ASCII85, ASCIIHex, Flate; a final DCT or CCITT is
+    returned encoded). Cameron's 38 ReportLab reports (2024–26) now load. They set Electionware's
+    layout with numbers aligned to their headings (`rp_aligned_col`) and name precincts reported
+    together as "1,59,83" (`rp_number_list`, ReportLab only: a global rule broke Orange G20's
+    pieced numbers).
+  - Up to three scanned cover pages are skipped before the report's text (Liberty L24 canvass).
+    Liberty's per-entity files are not read: Acrobat turned their pages, and their Hart Title and
+    Producer are gone. The full L24 canvass loads.
+- **Page images:** CCITT fax images are wrapped as a TIFF for WIC (G4 when K < 0, BlackIs1,
+  EncodedByteAlign), 1-bit gray is expanded to 8-bit, and `EeOcr_SetRotation` turns a page.
+  Turning a decoder's frame decoded the JPEG again for every row (10–15 s a page), so
+  `ocr_win.c` turns the decoded gray copy (0.4 s).
+- **One reader for both ES&S layouts:** the older monospaced reports (ERM: "SUMMRY
+  REPT-GROUP DETAIL", "PREC REPORT-GROUP DETAIL", EL30A / EL45A) and Electionware. The
+  Electionware text reader keys on exact font sizes, which OCR cannot give, so scans do not go
+  through it.
+  - **Per page:** OCR at about 2,200 pixels on the long side; again at 1.5x when more than 55% of
+    the rows with a name at the left have fewer than two numbers (faint scans: P20 DEM page 2
+    reads 87 numbers instead of 18). Black-and-white thresholding made it worse. The orientation
+    is the one with the most well-formed words, tried again on a page that reads poorly.
+  - **Rows:** words grouped by their centre (skew taken out), split words joined ("Sheri ff"),
+    numbers rejoined from pieces ("39 , 497", "49 i"), look-alikes read as digits ("o", "Vote For
+    I"), "18.150" read as 18,150, "44.690/0" as 44.69%.
+  - **Columns:** a heading's TOTAL and vote-type words give the right edges. The first 4 pages
+    are read twice, first to learn each table's layout (Electionware's statistics and contest
+    tables differ), so a heading OCR read in part is completed. A cluster of numbers under no
+    heading word is a column too, named after a vote type the file names elsewhere, or the
+    missing one of EV, MAIL, ED, PROV. Columns move to where their numbers end. Only the learn
+    pass changes the layouts: changing them on any page let one bad page spoil the rest (Cameron
+    G20: "Column 6", "Column 7").
+  - **Names:** contests, choices and precincts are matched by likeness (numbers and one-letter
+    words must agree: "Pl 2" / "Pl 4"); the commonest spelling is kept. A contest missing from
+    the match may still be the one that usually comes next if only a mark or a digit was lost
+    ("P] ace 4", "Place g"); a one-digit difference is not allowed ("Place 7" / "Place 8").
+    Choices also match through digit look-alikes and cut names ("Eddie Lucio 111", "B. Vela
+    (DEM)"). Precincts match by number ("Precinct 1" = "1" = "ncinct 1"). Contests left with the
+    same title and no precinct in common are merged.
+  - **Precincts:** a second statistics block is another part of the precinct (Cameron prints
+    county-only and city parts under one name; they add up) or, with no precinct line read, a
+    precinct named "(precinct not read, page n)" that the next page's line names.
+- **Checking (`ro_repair`):**
+  - Each row's total is the sum of its vote types. Each column of choices sums to the Total
+    row, and with over and under votes to "Contest Totals" (only when over and under votes are
+    printed; Midland's reports print neither).
+  - A missing count is filled when one is missing; when the row already adds up, the rest are
+    zeros (OCR drops lone zeros). A misread count is corrected when one change makes the row and
+    every column it is in add up, a +d / -d pair across two columns is undone, and a choice's
+    percentage gives its total ("868 56.44%" of 652 is 368).
+  - Still off: the precinct's ballots cast by vote type are tried as the contest's ballots row,
+    only to check and never to fill (it does not hold where a contest is on some of a precinct's
+    ballots). A ballots row missing two vote types is completed from the first vote-for-1
+    contest.
+  - Choice rows after a contest's Under Votes belong to a contest whose title was not read: they
+    are not read, and the Load Summary says how many.
+  - The Load Summary gives the pages read, how many rows were filled or corrected, how many still
+    do not add up (with the first three), and any precincts named by page.
+- **Validated:**
+  - **Cameron LR24, 42-page scanned precinct report against its scanned summary:** registered
+    voters, ballots cast and its vote types, and 6 of 8 candidate totals equal; two are one vote
+    short.
+  - **Cameron G20, 412-page ERM precinct report against its ERM summary:** the 43 choices both
+    read differ by 1.06% of 1.64 million votes in all (both files are OCR'd; 2 of the summary's 7
+    pages have no image, so the files do not group).
+  - **Angelina G24 summary:** 134 rows, every one adds up.
+  - **The 211 scanned files:** 166 load (ERM 114 of 119 with 5,829 pages, Electionware 48 of 58,
+    other 4 of 21; Hart and the SOS forms are not read). Rows that still do not add up: Electionware
+    1,279 of 29,858 (4.3%), ERM 9,170 of 123,045 (7.5%). About 7,300 of the ERM ones are in three
+    faint Cameron primary scans (P20 DEM, both P22 REP files), where OCR misses single-digit counts
+    at any scale; the other ERM files are about 1.5%. The sweep took 47 minutes of OCR in all.
+  - **Sweep of the other 3,782 files:** 3,373 load (41 more: the ReportLab and cover-page files and
+    Ellis's ZIPs of them), none lost, no crashes; every other file reads as before.
+- **Time:** about 0.3 s a page; Cameron's 700-page primaries take about 4 minutes, behind the
+  progress dialog.
+
 ## Implementation plan (proposed)
 
 1. **Engine `src/ee_results.{c,h}`** (no UI):

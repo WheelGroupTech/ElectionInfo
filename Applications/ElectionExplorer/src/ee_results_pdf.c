@@ -34,6 +34,7 @@
 
 #include "ee_results_pdf.h"
 #include "ee_results_dom.h"
+#include "ee_results_ocr.h"
 #include "ee_glyph_ocr.h"
 #include "pdf_reader.h"
 
@@ -289,6 +290,30 @@ static BOOL rp_is_date(const wchar_t *s)
     return FALSE;
 }
 
+/* A list of numbers ("1,59,83": precincts Cameron reports together), not one number: a comma
+ * not followed by exactly three digits. */
+static BOOL rp_number_list(const wchar_t *s)
+{
+    const wchar_t *c = wcschr(s, L',');
+    BOOL list = FALSE;
+    if (c == NULL || !iswdigit(s[0]))
+    {
+        return FALSE;
+    }
+    for (; *s != L'\0'; s++)
+    {
+        if (*s == L',')
+        {
+            list = list || !(iswdigit(s[1]) && iswdigit(s[2]) && iswdigit(s[3]) && !iswdigit(s[4]));
+        }
+        else if (!iswdigit(*s))
+        {
+            return FALSE;
+        }
+    }
+    return list;
+}
+
 /* Party codes Electionware prints before a candidate's name ("REP Donald J. Trump"). */
 static BOOL rp_party_code(const wchar_t *s, size_t n)
 {
@@ -362,7 +387,9 @@ typedef struct RpCtx
     EeRpdfDoc *d;
     BOOL oom;
     BOOL electionware; /* the footer names Electionware */
-    BOOL jasper;       /* the Creator is JasperReports (Electionware with no footer) */
+    BOOL jasper;       /* the Creator is JasperReports, or the Producer ReportLab (Electionware's
+                        * layout with no footer) */
+    BOOL aligned;      /* ReportLab: numbers line up with their headings (rp_aligned_col) */
     BOOL structure;    /* a "STATISTICS" block or a contest's "Vote For" line was read */
     BOOL any_text;
     uint32_t pre; /* current precinct, UINT32_MAX before the first */
@@ -841,6 +868,29 @@ static void rp_build_cols(RpCtx *cx, float *edges, size_t nedges)
     }
 }
 
+/* Cameron's ReportLab reports align each number with its heading, left edges in the contest
+ * tables and right edges in Statistics: the column whose heading starts or ends where the
+ * number [x0, x1] does (within 1.5 pt), or -1. */
+static int rp_aligned_col(const RpCtx *cx, float x0, float x1)
+{
+    int k;
+    for (k = 0; k < cx->ncols; k++)
+    {
+        if (fabsf(x0 - cx->cols[k].x0) <= 1.5f)
+        {
+            return k;
+        }
+    }
+    for (k = 0; k < cx->ncols; k++)
+    {
+        if (fabsf(x1 - cx->cols[k].x1) <= 1.5f)
+        {
+            return k;
+        }
+    }
+    return -1;
+}
+
 /* The column whose right edge is nearest @p x1 (or -1), and that distance. */
 static int rp_nearest_col(const RpCtx *cx, float x1, float *dist)
 {
@@ -968,8 +1018,12 @@ static void rp_row(RpCtx *cx, RpItem *const *it, size_t n)
             continue;
         }
         {
-            float bd;
-            int best = rp_nearest_col(cx, t->x1, &bd);
+            float bd = 0.0f;
+            int best = cx->aligned ? rp_aligned_col(cx, t->x, t->x1) : -1;
+            if (best < 0)
+            {
+                best = rp_nearest_col(cx, t->x1, &bd);
+            }
             if (t->num == 2 && (best < 0 || cx->cols[best].kind != RC_PCT))
             {
                 continue; /* a percentage outside a % column: turnout, derived */
@@ -1498,6 +1552,15 @@ static void rp_body(RpCtx *cx, RpItem *items, size_t n)
             case RL_HEAD:
             {
                 size_t j, ne = 0;
+                if (cx->aligned && ln->n > 0 && _wcsicmp(pool[ln->first]->text, L"Statistics") == 0 &&
+                    pool[ln->first]->x < ln->total_x - 10.0f)
+                {
+                    /* Cameron 2026: "Statistics" at 8 pt on its heading's own line */
+                    cx->structure = TRUE;
+                    cx->section = RS_STATS;
+                    cx->ptitle[0] = L'\0';
+                    cx->nocc = 0;
+                }
                 /* a title with no "Vote For" line just before the heading */
                 if (cx->ptitle[0] != L'\0' && k > 0 &&
                     (L[k - 1].kind == RL_TEXT || (L[k - 1].kind == RL_HEADPART && k > 1 && L[k - 2].kind == RL_TEXT)))
@@ -1946,13 +2009,16 @@ static void rp_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
                     break; /* items[i]: the first item of the body */
                 }
             }
-            if (i < nitems && items[i].size > hsize + 0.6f && items[i].num == 0)
+            /* (Cameron's ReportLab reports name precincts reported together "1,59,83") */
+            if (i < nitems && items[i].size > hsize + 0.6f &&
+                (items[i].num == 0 || (cx->aligned && rp_number_list(items[i].text))))
             {
                 float y0 = items[i].y;
                 BOOL ok = TRUE;
                 for (j = 0; j < nitems; j++)
                 {
-                    if (fabsf(items[j].y - y0) < RP_LINE_TOL && (items[j].x > 250.0f || items[j].num != 0 ||
+                    if (fabsf(items[j].y - y0) < RP_LINE_TOL &&
+                        (items[j].x > 250.0f || (items[j].num != 0 && !(cx->aligned && rp_number_list(items[j].text))) ||
                                                                  _wcsicmp(items[j].text, L"Statistics") == 0))
                     {
                         ok = FALSE;
@@ -2012,6 +2078,10 @@ static void rp_page(RpCtx *cx, const EePdfPageText *pt, BOOL first_page)
                         break;
                     }
                 }
+            }
+            if (cx->aligned && _wcsicmp(name, L"Summary") == 0)
+            {
+                name[0] = L'\0'; /* Cameron 2026: a summary report's "precinct" line */
             }
             if (name[0] != L'\0' && (cx->pre == UINT32_MAX || wcscmp(cx->d->precincts[cx->pre].name, name) != 0))
             {
@@ -3925,11 +3995,22 @@ void EeRpdf_Free(EeRpdfDoc *doc)
 
 BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, size_t errcch)
 {
+    return EeRpdf_ParseEx(data, size, out, NULL, NULL, err, errcch);
+}
+
+BOOL EeRpdf_ParseEx(const void *data,
+                    size_t size,
+                    EeRpdfDoc *out,
+                    BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
+                    void *user,
+                    wchar_t *err,
+                    size_t errcch)
+{
     EePdf *pdf = NULL;
     EePdfPageText pt;
     RpCtx cx;
     wchar_t perr[256] = L"";
-    uint32_t np, p, hl_first = 0;
+    uint32_t np, p, p0, hl_first = 0;
     BOOL ok = FALSE;
     BOOL glyphs_learned = FALSE; /* the text was learned through OCR (ee_glyph_ocr.c) */
     EeGlyphOcrStats gst = {0};
@@ -3961,7 +4042,12 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
         char prod[256];
         cx.hart = EePdf_GetInfoText(pdf, "Producer", prod, sizeof(prod)) && strstr(prod, "Reporting Services") != NULL;
         cx.jasper = EePdf_GetInfoText(pdf, "Creator", prod, sizeof(prod)) && strstr(prod, "JasperReports") != NULL;
-        if (cx.hart && (cx.hcols = (struct HtCol *)calloc(RP_MAX_COLS, sizeof(struct HtCol))) == NULL)
+        if (!cx.jasper && EePdf_GetInfoText(pdf, "Producer", prod, sizeof(prod)) && strstr(prod, "ReportLab") != NULL)
+        {
+            cx.jasper = TRUE; /* Cameron's 2024-26 reports, set again in Electionware's layout through ReportLab */
+            cx.aligned = TRUE;
+        }
+        if (cx.hart &&(cx.hcols = (struct HtCol *)calloc(RP_MAX_COLS, sizeof(struct HtCol))) == NULL)
         {
             cx.oom = TRUE;
         }
@@ -3990,7 +4076,26 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
         }
         glyphs_learned = TRUE;
     }
-    for (p = 0; p < np && !cx.oom; p++)
+    /* a scanned cover page (Liberty's signed certificate) before the report's text pages: the
+     * report starts at the first page with text */
+    for (p0 = 0; p0 + 1 < np && p0 < 3; p0++)
+    {
+        if (!EePdf_ExtractPageText(pdf, p0, &pt) || pt.nruns > 0)
+        {
+            break;
+        }
+    }
+    if (np > 0 && !glyphs_learned && EePdf_ExtractPageText(pdf, p0, &pt) && pt.nruns == 0 &&
+        EeRocr_IsScannedPage(pdf, p0))
+    {
+        /* a scanned report (page images only): read by OCR, ee_results_ocr.c */
+        EePdf_PageTextFree(&pt);
+        free(cx.hcols);
+        ok = EeRocr_Parse(pdf, out, page_fn, user, err, errcch);
+        EePdf_Close(pdf);
+        return ok;
+    }
+    for (p = p0; p < np && !cx.oom; p++)
     {
         if (!EePdf_ExtractPageText(pdf, p, &pt))
         {
@@ -3998,14 +4103,14 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
         }
         if (cx.hart)
         {
-            hart_page(&cx, &pt, p == 0);
-            if (p == 0 && !cx.hart_canvass && !cx.hart_cum)
+            hart_page(&cx, &pt, p == p0);
+            if (p == p0 && !cx.hart_canvass && !cx.hart_cum)
             {
                 break; /* no canvass grid or cumulative table on the first page */
             }
             continue;
         }
-        if (p <= 1 && !cx.hart_old && !cx.jasper && !cx.electionware && hl_detect(&pt))
+        if (p <= p0 + 1 && !cx.hart_old && !cx.jasper && !cx.electionware && hl_detect(&pt))
         {
             cx.hart_old = TRUE; /* (McLennan's 2020 primaries start with a cover page) */
             hl_first = p;
@@ -4019,8 +4124,8 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
             }
             continue;
         }
-        rp_page(&cx, &pt, p == 0);
-        if (p == 1 && !cx.electionware && !(cx.jasper && cx.structure))
+        rp_page(&cx, &pt, p == p0);
+        if (p == p0 + 1 && !cx.electionware && !(cx.jasper && cx.structure))
         {
             break; /* not an Electionware report: stop early */
         }
@@ -4039,8 +4144,8 @@ BOOL EeRpdf_Parse(const void *data, size_t size, EeRpdfDoc *out, wchar_t *err, s
     else if (!cx.any_text)
     {
         rp_set_err(err, errcch,
-                   L"The PDF has no text to read (a scanned report?). Results PDFs from ES&S "
-                   L"Electionware can be loaded.");
+                   L"The PDF has no text to read, and no page image this version can read by OCR "
+                   L"(JPEG 2000 and JBIG2 images are not read).");
     }
     else if (!cx.electionware && !cx.hart_canvass && !cx.hart_cum && !cx.hl_table && !cx.hl_canvass)
     {

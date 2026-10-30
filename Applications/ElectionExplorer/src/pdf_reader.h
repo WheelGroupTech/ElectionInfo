@@ -188,10 +188,12 @@ extern "C"
 
     /**
      * Find the largest image XObject drawn on page @p page_index and return its data:
-     * JPEG (DCTDecode) images as their encoded bytes, Flate-compressed 8-bit gray/RGB
-     * images as raw pixels. @p out (zero-initialize before first use; reused across
-     * calls) gets kind EE_PDF_IMAGE_NONE when the page draws no image. Returns FALSE on
-     * a read error or an unsupported image encoding (e.g. JPX, CCITT, indexed color).
+     * JPEG (DCTDecode) images as their encoded bytes, CCITT fax images wrapped as a TIFF
+     * (encoded bytes WIC decodes), Flate-compressed 8-bit gray/RGB images as raw pixels,
+     * and 1-bit gray images expanded to 8-bit pixels. @p out (zero-initialize before first
+     * use; reused across calls) gets kind EE_PDF_IMAGE_NONE when the page draws no image.
+     * Returns FALSE on a read error or an unsupported image encoding (e.g. JPX, JBIG2,
+     * indexed color).
      */
     BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out);
 

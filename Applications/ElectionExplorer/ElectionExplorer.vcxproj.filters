@@ -48,6 +48,9 @@
     <ClCompile Include="src\ee_results_dom.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ee_results_ocr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\ee_glyph_ocr.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -111,6 +114,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ee_results_dom.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ee_results_ocr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ee_glyph_ocr.h">

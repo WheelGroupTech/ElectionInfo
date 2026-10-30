@@ -5178,6 +5178,37 @@ static const char *g_tpdf_producer = NULL;
 static const char *g_tpdf_title = NULL;
 /* The Info Creator tpdf_write writes (PDF string syntax); NULL = none. */
 static const char *g_tpdf_creator = NULL;
+/* tpdf_write: content streams as /Filter [/ASCII85Decode /FlateDecode] (ReportLab). */
+static BOOL g_tpdf_a85 = FALSE;
+
+/* ASCII85-encode @p n bytes into @p out (with the "~>" end mark). */
+static BOOL tpdf_a85(TBuf *out, const unsigned char *d, size_t n)
+{
+    size_t i;
+    BOOL ok = TRUE;
+    for (i = 0; i < n && ok; i += 4)
+    {
+        size_t m = n - i < 4 ? n - i : 4, k;
+        uint32_t v = 0;
+        char g[5];
+        for (k = 0; k < 4; k++)
+        {
+            v = (v << 8) | (k < m ? d[i + k] : 0);
+        }
+        if (v == 0 && m == 4)
+        {
+            ok = tb_add(out, "z", 1);
+            continue;
+        }
+        for (k = 5; k-- > 0;)
+        {
+            g[k] = (char)('!' + v % 85);
+            v /= 85;
+        }
+        ok = tb_add(out, g, m + 1);
+    }
+    return ok && tb_add(out, "~>", 2);
+}
 
 /* Write a PDF whose pages have the given content streams. @p hart adds the Info Title
  * and the Type0/ToUnicode font; @p break_startxref writes a bogus negative startxref so
@@ -5251,9 +5282,22 @@ static BOOL tpdf_write(const wchar_t *path, TBuf *pages, int npages, BOOL break_
                                  "/Contents %d 0 R /Resources << /Font << /F5 3 0 R "
                                  "/F255 4 0 R >> >> >>\r\nendobj\r\n", pn + 1);
         OBJ(pn + 1);
-        /* /Length is an indirect object written AFTER the stream (as SSRS does). */
-        ok = ok && tb_printf(&b, "<</Length %d 0 R\r\n/Filter /FlateDecode >>\r\nstream\r\n", pn + 2);
-        ok = ok && tb_add(&b, z, clen);
+        if (g_tpdf_a85)
+        {
+            TBuf a = {0};
+            ok = ok && tpdf_a85(&a, z, clen);
+            clen = (mz_ulong)a.len;
+            ok = ok && tb_printf(&b, "<</Length %d 0 R\r\n/Filter [ /ASCII85Decode /FlateDecode ] >>\r\nstream\r\n",
+                                 pn + 2);
+            ok = ok && tb_add(&b, a.p, a.len);
+            free(a.p);
+        }
+        else
+        {
+            /* /Length is an indirect object written AFTER the stream (as SSRS does). */
+            ok = ok && tb_printf(&b, "<</Length %d 0 R\r\n/Filter /FlateDecode >>\r\nstream\r\n", pn + 2);
+            ok = ok && tb_add(&b, z, clen);
+        }
         ok = ok && tb_printf(&b, "\r\nendstream\r\nendobj\r\n");
         OBJ(pn + 2);
         ok = ok && tb_printf(&b, "%lu\r\nendobj\r\n", (unsigned long)clen);
@@ -11649,7 +11693,7 @@ static BOOL rpdf_no_diffs(const EeResults *r)
 static int test_results_pdf(void)
 {
     wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH], p_hcum[MAX_PATH], p_hcan[MAX_PATH], p_new[MAX_PATH],
-        p_nof[MAX_PATH];
+        p_nof[MAX_PATH], p_a85s[MAX_PATH] = L"", p_a85p[MAX_PATH] = L"";
     wchar_t err[512] = L"";
     TBuf sum = {0}, pre[2] = {{0}, {0}}, hcum = {0}, hcan[2] = {{0}, {0}}, newp[2] = {{0}, {0}}, nof = {0};
     EeResults *res = NULL;
@@ -11805,6 +11849,32 @@ static int test_results_pdf(void)
     res = NULL;
     nres = 0;
 
+    /* the same pair with ASCII85 + Flate content streams (Cameron's ReportLab reports) */
+    g_tpdf_a85 = TRUE;
+    g_tpdf_producer = "iText 2.1.7 by 1T3XT";
+    StringCchPrintfW(p_a85s, MAX_PATH, L"%sRPDF_a85_sum.pdf", dir);
+    StringCchPrintfW(p_a85p, MAX_PATH, L"%sRPDF_a85_pre.pdf", dir);
+    ok = tpdf_write(p_a85s, &sum, 1, FALSE) && tpdf_write(p_a85p, pre, 2, FALSE);
+    g_tpdf_a85 = FALSE;
+    g_tpdf_producer = NULL;
+    paths[0] = p_a85s;
+    paths[1] = p_a85p;
+    if (!ok || !res_load(paths, 2, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"respdf: ascii85 load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = res[0].ncontests == 3 ? &res[0].contests[0] : NULL;
+    if (ct == NULL || res[0].nprecincts != 2 || res[0].choices[ct->first_choice].total != 180 ||
+        rpdf_cell(&res[0], ct, 1, L"102", 0) != 17 || !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"respdf: ascii85 result (contests %u, precincts %u)\n", res[0].ncontests, res[0].nprecincts);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
     /* Hart: cumulative + canvass */
     paths[0] = p_hcum;
     paths[1] = p_hcan;
@@ -11895,7 +11965,13 @@ static int test_results_pdf(void)
 done:
     g_tpdf_producer = NULL;
     g_tpdf_creator = NULL;
+    g_tpdf_a85 = FALSE;
     EeResults_FreeArray(res, nres);
+    if (p_a85s[0] != L'\0')
+    {
+        DeleteFileW(p_a85s);
+        DeleteFileW(p_a85p);
+    }
     free(sum.p);
     free(pre[0].p);
     free(pre[1].p);

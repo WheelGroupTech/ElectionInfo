@@ -112,6 +112,20 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
+- **OneDrive data backup (2026-10-30, uncommitted tools):** `ElectionExplorer/test/data_check.c` +
+  `build_data_check.ps1` (loader harness, JSON out) and `test/backup_data.py` + `backup_data.json`
+  (dry run / `--copy`; docs in `test/README.md`) back up rosters, CVRs, results and audit logs that
+  Election Explorer reads to `OneDrive\Documents\Elections\ElectionExplorerData` (never voter lists),
+  load-check the backup and cross-check CVR / results / audit logs per election. On-demand task:
+  `election-data-onedrive-backup`. Files that load with no data are not copied (user). Fixed the
+  same day (uncommitted, 1.6): Hart Verity precinct reports now load by precinct and vote type
+  (`ht_precinct_line` in ee_results_pdf.c; 162 reports had been read as totals; smoke `reshartpct`;
+  docs/election-results-design.md "Precinct report (1.6)"), Hart number pieces shown from one point
+  join (McLennan 2023), and Angelina's 10/29 roster printed two pages wide with no title row loads
+  (`read_pdf_halves` in voter_roster.c; smoke `rosterhalves`; survey doc "Angelina's October 29
+  layout"). Regression: old vs new reader on all 893 Hart results files (only intended changes) and
+  371 roster PDFs (only Angelina 10/29). Still open: Compare cannot pair Clarity combined primaries
+  without party prefixes (Tarrant, Hunt; choices carry party="REP") with Hart "REP X" CVR contests.
 - **1.6 Hart Verity audit logs (done 2026-10-30, uncommitted):** VerityCount / VerityCentral /
   VerityData "Audit Log Report" PDFs (and the Hays zip) load into the audit window; one election
   per county and date. Accounting = "vDrive read" State Read per task (a read belongs to the last

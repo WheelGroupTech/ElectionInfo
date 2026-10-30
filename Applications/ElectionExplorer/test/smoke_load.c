@@ -10067,6 +10067,108 @@ done:
     return rc;
 }
 
+/* A roster sheet printed two pages wide with no title row (Angelina, October 29, 2026): the
+ * first page holds the election heading and the Voter IDs and names, the second the precinct
+ * and date of the same rows at the same heights. The rows join page to page (tag: rosterhalves;
+ * needs src\pdf_reader.c). */
+static int test_roster_halves(void)
+{
+    static const char *const k_rows[6][4] = {
+        {"1001363699", "DOE, JANE ANN", "S 2.1", "10/29/2026"},  {"1001441463", "ROE, RICHARD", "S 24.2", "10/29/2026"},
+        {"1001441471", "ROE, DEBRA N", "S 24.2", "10/29/2026"},  {"1002000001", "POE, EDGAR", "P 29", "10/29/2026"},
+        {"1002000002", "LEE, ANN", "S 11B.3", "10/29/2026"},     {"1002000003", "RAY, BOB", "S 35.3", "10/29/2026"}};
+    TBuf pg[2] = {{0}, {0}};
+    wchar_t path[MAX_PATH];
+    const wchar_t *paths[1];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256], got[64];
+    uint32_t r;
+    int i;
+    BOOL ok;
+    int rc = 1;
+
+    ok = tb_printf(&pg[0], "BT /F1 11 Tf 1 0 0 1 40.8 738 Tm (Election_Name) Tj ET"
+                           " BT /F1 11 Tf 1 0 0 1 185.9 738 Tm (Election_Date) Tj ET"
+                           " BT /F1 11 Tf 1 0 0 1 412.3 738 Tm (Total_Voter_Checkins) Tj ET"
+                           " BT /F1 11 Tf 1 0 0 1 40.8 722.8 Tm (General Election 2026-11-03) Tj ET"
+                           " BT /F1 11 Tf 1 0 0 1 362 722.8 Tm (11/3/2026) Tj ET"
+                           " BT /F1 11 Tf 1 0 0 1 505.9 722.8 Tm (17475) Tj ET\n");
+    for (i = 0; i < 6 && ok; i++)
+    {
+        double y = 692.3 - 15.25 * i;
+        ok = tb_printf(&pg[0], "BT /F1 11 Tf 1 0 0 1 125.6 %.2f Tm (%s) Tj ET BT /F1 11 Tf 1 0 0 1 185.9 %.2f Tm (%s) Tj ET\n",
+                       y, k_rows[i][0], y, k_rows[i][1]) &&
+             tb_printf(&pg[1], "BT /F1 11 Tf 1 0 0 1 40.8 %.2f Tm (%s) Tj ET BT /F1 11 Tf 1 0 0 1 118.7 %.2f Tm (%s) Tj ET\n",
+                       y, k_rows[i][2], y, k_rows[i][3]);
+    }
+    GetTempPathW(MAX_PATH, path);
+    StringCchCatW(path, MAX_PATH, L"G26_early_voting_history_102926.pdf");
+    paths[0] = path;
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(path, pg, 2))
+    {
+        wprintf(L"rosterhalves: could not write the file\n");
+        goto done;
+    }
+    if (EeRoster_LoadFiles(paths, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"rosterhalves: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 6 || info.rows_no_date != 0 || info.method_rows[EE_VM_EARLY] != 6)
+    {
+        wprintf(L"rosterhalves: rows %u nodate %u early %u\n", t.row_count, info.rows_no_date,
+                info.method_rows[EE_VM_EARLY]);
+        goto done;
+    }
+    for (i = 0; i < 6; i++)
+    {
+        wchar_t vuid[16], want[32];
+        MultiByteToWideChar(CP_UTF8, 0, k_rows[i][0], -1, vuid, ARRAYSIZE(vuid));
+        MultiByteToWideChar(CP_UTF8, 0, k_rows[i][2], -1, want, ARRAYSIZE(want));
+        r = rt_find_vuid(&t, vuid);
+        if (r == UINT32_MAX)
+        {
+            wprintf(L"rosterhalves: '%s' not loaded\n", vuid);
+            goto done;
+        }
+        rt_cell(&t, r, L"Precinct", got, ARRAYSIZE(got));
+        if (wcscmp(got, want) != 0)
+        {
+            wprintf(L"rosterhalves: '%s' precinct '%s', want '%s'\n", vuid, got, want);
+            goto done;
+        }
+        rt_cell(&t, r, L"Date Voted", got, ARRAYSIZE(got));
+        if (wcscmp(got, L"10/29/2026") != 0)
+        {
+            wprintf(L"rosterhalves: '%s' date '%s'\n", vuid, got);
+            goto done;
+        }
+    }
+    r = rt_find_vuid(&t, L"1001441463");
+    rt_cell(&t, r, L"Last Name", got, ARRAYSIZE(got));
+    if (wcscmp(got, L"ROE") != 0)
+    {
+        wprintf(L"rosterhalves: last name '%s'\n", got);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"rosterhalves ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    DeleteFileW(path);
+    free(pg[0].p);
+    free(pg[1].p);
+    if (rc != 0)
+    {
+        wprintf(L"rosterhalves test failed\n");
+    }
+    return rc;
+}
+
 /* Texas Secretary of State turnout rosters (tag: sosroster): a loose statewide early voting
  * CSV (COUNTY, MAIL-IN / IN-PERSON, no voting date) and Election Day ZIPs that name their
  * roster "STATEWIDE_VOTER_INFO.csv" for every party (named after the ZIP instead), a
@@ -12548,6 +12650,160 @@ done:
     return rc;
 }
 
+/* A Verity precinct report's precinct line: "<precinct>   <ballots> of <registered> registered
+ * voters = n%" in 10 pt (Burnet, Coryell, McLennan, Montgomery, Brazos). */
+static BOOL hart_pct_line(TBuf *c, double y, const char *name, const char *voters)
+{
+    return rpdf_text(c, 20.0, y, 10.0, name) && rpdf_text(c, 408.9, y, 10.0, voters);
+}
+
+/* Hart Verity precinct reports: the cumulative tables repeated under each precinct's line load
+ * by precinct and vote type (contests found again on the next precinct's page); a count shown a
+ * piece at a time from one point ("4" "0") is one number, and a percentage piece ("%") is not
+ * part of the choice's name. 2020's layout (Tom Green) prints the precinct alone in 12 pt and
+ * the table heading on two lines. With the cumulative report of the same counts it loads as one
+ * election with no differences (tag: reshartpct). */
+static int test_results_hart_pct(void)
+{
+    wchar_t dir[MAX_PATH], p_pct[MAX_PATH], p_cum[MAX_PATH], p_old[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf pct[2] = {{0}, {0}}, cum = {0}, old = {0};
+    EeResults *res = NULL;
+    uint32_t nres = 0;
+    const wchar_t *paths[2];
+    const EeResultsContest *ct, *cc;
+    double r_ed = 406.9 + rpdf_w("Election Day Voting", 9.0), r_ev = 344.2 + rpdf_w("Early Voting", 9.0);
+    BOOL ok;
+    int rc = 1;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_pct, MAX_PATH, L"%sRPDF_hart_precinct.pdf", dir);
+    StringCchPrintfW(p_cum, MAX_PATH, L"%sRPDF_hart_pct_cumulative.pdf", dir);
+    StringCchPrintfW(p_old, MAX_PATH, L"%sRPDF_hart_precinct_2020.pdf", dir);
+
+    /* precinct 110: Ann Lee 20 / 30, Bob Ray 10 / 20; Kim Fox 15 / 20, Lou Gray 10 / 15 */
+    ok = hart_page_head(&pct[0], "Precinct Results Report") &&
+         hart_pct_line(&pct[0], 640.2, "110", "85 of 600 registered voters = 14.17%") &&
+         hart_cum_contest(&pct[0], 615.0, "Sheriff (Dem) - Democratic Party") &&
+         hart_cum_row(&pct[0], 582.3, "Ann Lee", "DEM", "20", "30", "50") &&
+         hart_cum_row(&pct[0], 566.4, "Bob Ray", "DEM", "10", "20", "30") &&
+         hart_cum_row(&pct[0], 548.7, "Cast Votes:", NULL, "30", "50", "80") &&
+         hart_cum_row(&pct[0], 527.1, "Undervotes:", NULL, "1", "1", "2") &&
+         hart_cum_row(&pct[0], 512.4, "Overvotes:", NULL, "0", "0", "0") &&
+         hart_cum_contest(&pct[0], 479.2, "City Council - Vote for none, one, or two.") &&
+         hart_cum_row(&pct[0], 446.5, "Kim Fox", NULL, "15", "20", "35") &&
+         hart_cum_row(&pct[0], 430.6, "Lou Gray", NULL, "10", "15", "25");
+    /* precinct 120 on the next page: Ann Lee 30 / 40 (the 40 shown as "4" "0" from one point,
+     * its percentage as "50.00" and a "%" piece), Bob Ray 20 / 30; Kim Fox 25 / 30, Lou Gray 20 / 25 */
+    ok = ok && hart_page_head(&pct[1], "Precinct Results Report") &&
+         hart_pct_line(&pct[1], 640.2, "120", "115 of 400 registered voters = 28.75%") &&
+         hart_cum_contest(&pct[1], 615.0, "Sheriff (Dem) - Democratic Party") &&
+         rpdf_text(&pct[1], 20.0, 582.3, 8.0, "Ann Lee") && rpdf_text(&pct[1], 179.9, 582.3, 8.0, "DEM") &&
+         rpdf_right(&pct[1], r_ev - 38.8, 582.3, 8.0, "30") && rpdf_right(&pct[1], r_ev, 582.3, 8.0, "50.00%") &&
+         rpdf_text(&pct[1], r_ed - 38.8 - rpdf_w("40", 8.0), 582.3, 8.0, "4") &&
+         rpdf_text(&pct[1], r_ed - 38.8 - rpdf_w("40", 8.0), 582.3, 8.0, "0") &&
+         rpdf_right(&pct[1], r_ed - 8.0, 582.3, 8.0, "50.00") && rpdf_text(&pct[1], r_ed - 2.0, 582.3, 8.0, "%") &&
+         rpdf_right(&pct[1], 570.3 + rpdf_w("Total", 9.0) - 38.8, 582.3, 8.0, "70") &&
+         hart_cum_row(&pct[1], 566.4, "Bob Ray", "DEM", "20", "30", "50") &&
+         hart_cum_row(&pct[1], 548.7, "Cast Votes:", NULL, "50", "70", "120") &&
+         hart_cum_row(&pct[1], 527.1, "Undervotes:", NULL, "1", "2", "3") &&
+         hart_cum_row(&pct[1], 512.4, "Overvotes:", NULL, "0", "1", "1") &&
+         hart_cum_contest(&pct[1], 479.2, "City Council - Vote for none, one, or two.") &&
+         hart_cum_row(&pct[1], 446.5, "Kim Fox", NULL, "25", "30", "55") &&
+         hart_cum_row(&pct[1], 430.6, "Lou Gray", NULL, "20", "25", "45");
+    /* the cumulative report of the same counts */
+    ok = ok && hart_page_head(&cum, "Cumulative Results Report") &&
+         hart_cum_contest(&cum, 642.4, "Sheriff (Dem) - Democratic Party") &&
+         hart_cum_row(&cum, 609.4, "Ann Lee", "DEM", "50", "70", "120") &&
+         hart_cum_row(&cum, 594.3, "Bob Ray", "DEM", "30", "50", "80") &&
+         hart_cum_row(&cum, 578.7, "Cast Votes:", NULL, "80", "120", "200") &&
+         hart_cum_row(&cum, 557.1, "Undervotes:", NULL, "2", "3", "5") &&
+         hart_cum_row(&cum, 542.0, "Overvotes:", NULL, "0", "1", "1") &&
+         hart_cum_contest(&cum, 510.0, "City Council - Vote for none, one, or two.") &&
+         hart_cum_row(&cum, 477.1, "Kim Fox", NULL, "40", "50", "90") &&
+         hart_cum_row(&cum, 462.0, "Lou Gray", NULL, "30", "40", "70");
+    /* 2020: "106 BS1" alone in 12 pt, an 11 pt title, the heading's first line 2 pt apart
+     * ("Election Day" above "Early Voting") over "Choice Party Voting Total" */
+    ok = ok && hart_page_head(&old, "Precinct Results") && rpdf_text(&old, 20.0, 649.2, 12.0, "106 BS1") &&
+         rpdf_text(&old, 20.0, 618.7, 11.0, "Mayor - Vote for One") &&
+         rpdf_text(&old, 381.5, 585.4, 9.0, "Election Day ") && rpdf_text(&old, 285.7, 583.4, 9.0, "Early Voting") &&
+         rpdf_text(&old, 20.0, 573.5, 9.0, "Choice") && rpdf_text(&old, 120.8, 573.5, 9.0, "Party") &&
+         rpdf_text(&old, 407.8, 573.5, 9.0, "Voting") && rpdf_text(&old, 487.8, 573.5, 9.0, "Total") &&
+         rpdf_text(&old, 20.0, 553.7, 10.0, "ROY WEST") && rpdf_right(&old, 302.3, 553.0, 9.0, "7") &&
+         rpdf_right(&old, 401.2, 553.0, 9.0, "13") && rpdf_right(&old, 499.4, 553.0, 9.0, "20");
+
+    ok = ok && tpdf_write(p_pct, pct, 2, FALSE) && tpdf_write(p_cum, &cum, 1, FALSE) && tpdf_write(p_old, &old, 1, FALSE);
+    if (!ok)
+    {
+        wprintf(L"reshartpct: fixtures\n");
+        goto done;
+    }
+
+    paths[0] = p_pct;
+    if (!res_load(paths, 1, &res, &nres, err) || nres != 1)
+    {
+        wprintf(L"reshartpct: load (%u) %s\n", nres, err);
+        goto done;
+    }
+    ct = rpdf_contest(&res[0], L"DEM Sheriff (Dem)");
+    cc = rpdf_contest(&res[0], L"City Council");
+    if (ct == NULL || cc == NULL || res[0].ncontests != 2 || res[0].sources[0].format != EE_RES_FMT_HART_PCT_REPORT ||
+        res[0].nprecincts != 2 || res[0].nvt != 2 || wcscmp(res[0].vote_types[0], L"Early Voting") != 0 ||
+        wcscmp(res[0].vote_types[1], L"Election Day Voting") != 0 || ct->nchoices != 2 ||
+        wcscmp(res[0].choices[ct->first_choice].name, L"Ann Lee") != 0 || res[0].choices[ct->first_choice].total != 120 ||
+        rpdf_cell(&res[0], ct, 0, L"110", 0) != 20 || rpdf_cell(&res[0], ct, 0, L"120", 1) != 40 ||
+        ct->under_total != 5 || ct->over_total != 1 || cc->vote_for != 2 ||
+        res[0].choices[cc->first_choice + 1].total != 70 || res[0].precincts[0].registered != 600 ||
+        res[0].precincts[1].ballots != 115 || res[0].ballots_total != 200 || res[0].registered_total != 1000 ||
+        !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"reshartpct: result (contests %u, precincts %u, vt %u, issues %u)\n", res[0].ncontests,
+                res[0].nprecincts, res[0].nvt, res[0].nissues);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* with the cumulative report: one election, no differences */
+    paths[1] = p_cum;
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1 || res[0].nsources != 2 || res[0].ncontests != 2 ||
+        !rpdf_no_diffs(&res[0]))
+    {
+        wprintf(L"reshartpct: with the cumulative (%u results, %u issues) %s\n", nres, nres ? res[0].nissues : 0, err);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* 2020's layout */
+    paths[0] = p_old;
+    if (!res_load(paths, 1, &res, &nres, err) || nres != 1 || res[0].nprecincts != 1 ||
+        wcscmp(res[0].precincts[0].name, L"106 BS1") != 0 || res[0].nvt != 2 ||
+        wcscmp(res[0].vote_types[0], L"Early Voting") != 0 || wcscmp(res[0].vote_types[1], L"Election Day Voting") != 0 ||
+        (ct = rpdf_contest(&res[0], L"Mayor")) == NULL || res[0].choices[ct->first_choice].total != 20 ||
+        rpdf_cell(&res[0], ct, 0, L"106 BS1", 1) != 13)
+    {
+        wprintf(L"reshartpct: 2020 layout (%u results, %u precincts, %u vt) %s\n", nres, nres ? res[0].nprecincts : 0,
+                nres ? res[0].nvt : 0, err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeArray(res, nres);
+    free(pct[0].p);
+    free(pct[1].p);
+    free(cum.p);
+    free(old.p);
+    DeleteFileW(p_pct);
+    DeleteFileW(p_cum);
+    DeleteFileW(p_old);
+    wprintf(L"reshartpct: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* PScript5's two cells in one string: the last digit of @p a (right edge @p ra) and the
  * first of @p b (right edge @p rb) shown together, spread by a character spacing set before
  * a q ... Q that sets it to 0 inside (the Q restores it, as in Travis's L22 report). */
@@ -14529,6 +14785,7 @@ int wmain(void)
     failed |= test_county1023();
     failed |= test_pdf_strays();
     failed |= test_county1026();
+    failed |= test_roster_halves();
     failed |= test_county1028();
     failed |= test_sos_roster();
     failed |= test_roster_totals();
@@ -14584,6 +14841,7 @@ int wmain(void)
     failed |= test_results_dominion();
     failed |= test_results_hart_old();
     failed |= test_results_hart_runoff();
+    failed |= test_results_hart_pct();
     failed |= test_results_glyphs();
     failed |= test_results_compare();
     failed |= test_results_view();

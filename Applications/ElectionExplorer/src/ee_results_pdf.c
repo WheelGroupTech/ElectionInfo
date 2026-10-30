@@ -421,6 +421,9 @@ typedef struct RpCtx
     BOOL hart;          /* Microsoft Reporting Services report */
     BOOL hart_canvass;  /* a canvass page was read */
     BOOL hart_cum;      /* a cumulative table was read */
+    BOOL hart_pct;      /* a precinct report: the cumulative tables repeat under each precinct */
+    BOOL hart_pct_head; /* the report heading says "Precinct Results" / "Precinct Report" */
+    uint32_t hart_pct_bad; /* precinct rows whose vote-type counts do not add up to their total */
     float party_x;      /* cumulative: the Party column */
     struct HtCol *hcols; /* cumulative: the table heading's columns (RP_MAX_COLS) */
     int nhcols;
@@ -1780,7 +1783,7 @@ static size_t rp_items(RpCtx *cx, const EePdfPageText *pt, RpItem *items, wchar_
         endx = r->x + (r->has_width ? r->width : rp_text_width_n(pool + poolpos, len, r->font_size));
         /* the runs shown after it from the same point (not a repeat of the same text), or
          * starting where it ends in the same size ("104" "," "443" placed one after another) */
-        while (i + 1 < pt->nruns && !cx->hart) /* (Hart reports are read as in step 8) */
+        while (i + 1 < pt->nruns) /* (Hart: only pieces of a number, below) */
         {
             const EePdfTextRun *n = &pt->runs[i + 1];
             BOOL same = fabsf(n->x - r->x) < 0.05f;
@@ -1796,6 +1799,13 @@ static size_t rp_items(RpCtx *cx, const EePdfPageText *pt, RpItem *items, wchar_
                                      (int)(cap - poolpos - len));
             if (nn <= 0)
             {
+                break;
+            }
+            if (cx->hart && !(rp_numeric_chars(pool + poolpos, len) && rp_numeric_chars(pool + poolpos + len, (size_t)nn)))
+            {
+                /* Hart reports are read as in step 8, but a number whose font gives some digits
+                 * no width is shown a piece at a time from one point (McLennan 2023: "3" "7",
+                 * "88." "10" "%") */
                 break;
             }
             /* touching joins the pieces of a number, or pieces with a space between them
@@ -2174,6 +2184,7 @@ struct HtCol
     float x0, x1, anchor;
     int kind;
     uint32_t choice;
+    wchar_t label[48]; /* cumulative: the heading ("Early Voting"), a vote type */
 };
 typedef struct HtCol HtCol;
 
@@ -2285,6 +2296,18 @@ static void ht_contest(RpCtx *cx, const wchar_t *raw_title)
     {
         return;
     }
+    if (cx->hart_pct && cx->pre != UINT32_MAX)
+    {
+        /* a precinct report: the contest each earlier precinct showed under this title (a
+         * canvass sets the precinct per row, and keeps its own contests) */
+        cx->contest = rp_contest(cx, title, vote_for);
+        cx->have_contest = !cx->oom;
+        if (rp_grow((void **)&cx->seq, &cx->cap_seq, cx->nseq + 1, sizeof(uint32_t)))
+        {
+            cx->seq[cx->nseq++] = cx->contest;
+        }
+        return;
+    }
     if (!rp_grow32((void **)&d->contests, &d->cap_contests, d->ncontests + 1, sizeof(EeRpdfContest)))
     {
         cx->oom = TRUE;
@@ -2320,6 +2343,10 @@ static void ht_heading(RpCtx *cx, RpItem *items, size_t n, float body_top)
         if (items[i].y <= body_top || items[i].rot != 0)
         {
             continue;
+        }
+        if (items[i].x < 40.0f && (wcsstr(s, L"Precinct Results") != NULL || wcsstr(s, L"Precinct Report") != NULL))
+        {
+            cx->hart_pct_head = TRUE; /* "Precinct Results Report", "Arena Hall Precinct Report" */
         }
         if (!got_counts && wcsstr(s, L" of ") != NULL && wcschr(s, L'=') != NULL)
         {
@@ -2612,7 +2639,72 @@ static void ht_canvass(RpCtx *cx, RpItem *items, size_t n, float body_top)
     }
 }
 
-/* A cumulative page: contests of "Choice Party <vote types> Total" tables. */
+/* A precinct report's precinct line: "<precinct>   389 of 1,673 registered voters = 23.25%"
+ * (Burnet "01", Coryell "101 - BS4", McLennan "001-A"), printed again on each page; 2020's
+ * reports (Tom Green) print only the precinct, in 12 pt. @p reg is the line's "registered
+ * voters" item (NULL when there is none); the precinct is the text left of it. */
+static void ht_precinct_line(RpCtx *cx, RpItem **line, size_t nl, const RpItem *reg)
+{
+    EeRpdfDoc *d = cx->d;
+    RpItem *left[16];
+    size_t nleft = 0, j;
+    wchar_t name[256], a[32], b[32];
+    int64_t ballots = EE_RPDF_UNKNOWN, registered = EE_RPDF_UNKNOWN;
+    const wchar_t *of = reg != NULL ? wcsstr(reg->text, L" of ") : NULL;
+    for (j = 0; j < nl && nleft < 16; j++)
+    {
+        if (reg == NULL || (line[j] != reg && line[j]->x < reg->x - 20.0f))
+        {
+            left[nleft++] = line[j];
+        }
+    }
+    rp_join(left, nleft, name, ARRAYSIZE(name));
+    rp_norm(name);
+    if (name[0] == L'\0')
+    {
+        return;
+    }
+    cx->hart_pct = TRUE;
+    if (cx->pre != UINT32_MAX && wcscmp(d->precincts[cx->pre].name, name) == 0)
+    {
+        return; /* the same precinct at the top of its next page */
+    }
+    cx->pre = rp_precinct(cx, name);
+    cx->nocc = 0;
+    cx->have_contest = FALSE;
+    cx->hpending[0] = L'\0';
+    cx->hart_title_line = FALSE;
+    if (rp_grow((void **)&cx->seq, &cx->cap_seq, cx->nseq + 1, sizeof(uint32_t)))
+    {
+        cx->seq[cx->nseq++] = UINT32_MAX;
+    }
+    else
+    {
+        cx->oom = TRUE;
+    }
+    if (cx->oom || of == NULL || (size_t)(of - reg->text) >= ARRAYSIZE(a))
+    {
+        return;
+    }
+    StringCchCopyNW(a, ARRAYSIZE(a), reg->text, (size_t)(of - reg->text));
+    for (j = 0; of[4 + j] != L'\0' && of[4 + j] != L' ' && j + 1 < ARRAYSIZE(b); j++)
+    {
+        b[j] = of[4 + j];
+    }
+    b[j] = L'\0';
+    if (rp_number(a, &ballots) == 1)
+    {
+        d->precincts[cx->pre].ballots = ballots;
+    }
+    /* a primary prints "469 of 0 registered voters": not known */
+    if (rp_number(b, &registered) == 1 && registered > 0)
+    {
+        d->precincts[cx->pre].registered = registered;
+    }
+}
+
+/* A cumulative page: contests of "Choice Party <vote types> Total" tables. A precinct report
+ * repeats them under each precinct's line; its counts are kept by precinct and vote type. */
 static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
 {
     EeRpdfDoc *d = cx->d;
@@ -2621,6 +2713,9 @@ static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
     wchar_t *pending = cx->hpending;
     const size_t pending_cch = ARRAYSIZE(cx->hpending);
     RpItem *line[64];
+    RpItem *above[16], *prev[16]; /* the last line when it may be a heading's first line */
+    size_t nabove = 0, nprev = 0;
+    float above_y = 0.0f, prev_y = 0.0f;
 
     while (i < n && !cx->oom)
     {
@@ -2651,6 +2746,52 @@ static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
             continue;
         }
         qsort(line, nl, sizeof(RpItem *), rp_ptr_x_cmp);
+        /* a heading's first line, for the next line ("Absentee Voting  Early Voting  Election
+         * Day" above "Choice  Party  Voting  Total" in 2020) */
+        nprev = nabove;
+        prev_y = above_y;
+        memcpy(prev, above, nabove * sizeof(RpItem *));
+        nabove = 0;
+        if (!any_num && maxsize < RP_HEAD_SIZE && line[0]->x > 100.0f)
+        {
+            if (nprev > 0 && prev_y - y < 3.0f)
+            {
+                /* its runs 2 pt apart (Tom Green 2020: "Election Day" above "Early Voting") */
+                memcpy(above, prev, nprev * sizeof(RpItem *));
+                nabove = nprev;
+            }
+            for (j = 0; j < nl && nabove < ARRAYSIZE(above); j++)
+            {
+                above[nabove++] = line[j];
+            }
+            above_y = y;
+        }
+        for (j = 0; j < nl; j++)
+        {
+            if (wcsstr(line[j]->text, L"registered voters") != NULL)
+            {
+                break;
+            }
+        }
+        if (j < nl)
+        {
+            ht_precinct_line(cx, line, nl, line[j]);
+            continue;
+        }
+        if (cx->hart_pct_head && line[0]->x < 40.0f)
+        {
+            /* 2020: the precinct alone, in 12 pt ("106 BS1", "106") */
+            BOOL big = TRUE;
+            for (j = 0; j < nl; j++)
+            {
+                big = big && line[j]->size >= 11.7f;
+            }
+            if (big)
+            {
+                ht_precinct_line(cx, line, nl, NULL);
+                continue;
+            }
+        }
         if (wcscmp(line[0]->text, L"Choice") == 0 && line[0]->x < 40.0f)
         {
             /* the table heading */
@@ -2666,6 +2807,48 @@ static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
                 cols[ncols].x0 = line[j]->x;
                 cols[ncols].x1 = line[j]->x1;
                 cols[ncols].kind = _wcsicmp(line[j]->text, L"Total") == 0 ? HCOL_TOTAL : HCOL_SKIP;
+                cols[ncols].choice = UINT32_MAX; /* its vote type, once a precinct count needs it */
+                StringCchCopyW(cols[ncols].label, ARRAYSIZE(cols[ncols].label), line[j]->text);
+                rp_norm(cols[ncols].label);
+                ncols++;
+            }
+            for (j = 0; j < nprev && prev_y - y < 14.0f; j++)
+            {
+                /* a heading line above: a wrapped heading's first line joins the column under
+                 * it ("Election Day" + "Voting"), another heading is a column of its own */
+                const RpItem *p = prev[j];
+                int k, m;
+                for (k = 0; k < ncols; k++)
+                {
+                    if (p->x < cols[k].x1 && p->x1 > cols[k].x0)
+                    {
+                        break;
+                    }
+                }
+                if (k < ncols)
+                {
+                    wchar_t t[48];
+                    StringCchPrintfW(t, ARRAYSIZE(t), L"%s %s", p->text, cols[k].label);
+                    StringCchCopyW(cols[k].label, ARRAYSIZE(cols[k].label), t);
+                    rp_norm(cols[k].label);
+                    cols[k].x0 = p->x < cols[k].x0 ? p->x : cols[k].x0;
+                    cols[k].x1 = p->x1 > cols[k].x1 ? p->x1 : cols[k].x1;
+                    continue;
+                }
+                if (ncols >= RP_MAX_COLS)
+                {
+                    break;
+                }
+                for (m = ncols; m > 0 && cols[m - 1].x0 > p->x; m--)
+                {
+                    cols[m] = cols[m - 1]; /* keep the columns left to right */
+                }
+                cols[m].x0 = p->x;
+                cols[m].x1 = p->x1;
+                cols[m].kind = HCOL_SKIP;
+                cols[m].choice = UINT32_MAX;
+                StringCchCopyW(cols[m].label, ARRAYSIZE(cols[m].label), p->text);
+                rp_norm(cols[m].label);
                 ncols++;
             }
             cx->nhcols = ncols;
@@ -2704,15 +2887,22 @@ static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
         {
             wchar_t name[256] = L"", party[32] = L"";
             int64_t total = EE_RPDF_UNKNOWN;
+            int64_t vals[RP_MAX_COLS];
+            BOOL has[RP_MAX_COLS] = {FALSE};
             float first_x = cols[0].x0 - 30.0f;
             int k;
             EeRpdfContest *c = &d->contests[cx->contest];
+            uint32_t ch;
             for (j = 0; j < nl; j++)
             {
                 RpItem *t = line[j];
                 if (t->num == 0 || t->x < first_x)
                 {
                     BOOL is_party = cx->party_x > 0.0f && t->x >= cx->party_x - 3.0f && t->x < first_x;
+                    if (t->x >= first_x)
+                    {
+                        continue; /* a piece of a number cell ("%" of "88.10%"), not the name */
+                    }
                     wchar_t *dst = is_party ? party : name;
                     size_t cch = is_party ? ARRAYSIZE(party) : ARRAYSIZE(name);
                     if (dst[0] != L'\0')
@@ -2736,6 +2926,11 @@ static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
                     {
                         total = t->value;
                     }
+                    else if (k < cx->nhcols)
+                    {
+                        vals[k] = t->value;
+                        has[k] = TRUE;
+                    }
                 }
             }
             rp_norm(name);
@@ -2746,27 +2941,64 @@ static void ht_cumulative(RpCtx *cx, RpItem *items, size_t n, float body_top)
             }
             if (_wcsicmp(name, L"Undervotes:") == 0 || _wcsicmp(name, L"Overvotes:") == 0)
             {
+                BOOL over = _wcsicmp(name, L"Overvotes:") == 0;
                 c->has_over_under = TRUE;
-                if (_wcsicmp(name, L"Overvotes:") == 0)
+                if (cx->pre == UINT32_MAX)
                 {
-                    c->over = total;
+                    if (over)
+                    {
+                        c->over = total;
+                    }
+                    else
+                    {
+                        c->under = total;
+                    }
+                    continue;
                 }
-                else
+                ch = over ? EE_RPDF_OVER : EE_RPDF_UNDER;
+            }
+            else
+            {
+                if (ht_kind(name) == HCOL_SKIP || rp_starts(name, L"Rejected write-in") ||
+                    rp_starts(name, L"Unresolved write-in"))
                 {
-                    c->under = total;
+                    continue;
                 }
-                continue;
-            }
-            if (ht_kind(name) == HCOL_SKIP || rp_starts(name, L"Rejected write-in") ||
-                rp_starts(name, L"Unresolved write-in"))
-            {
-                continue;
-            }
-            {
-                uint32_t ch = rp_choice(cx, cx->contest, name, party);
-                if (!cx->oom)
+                ch = rp_choice(cx, cx->contest, name, party);
+                if (cx->oom)
+                {
+                    break;
+                }
+                if (cx->pre == UINT32_MAX)
                 {
                     d->contests[cx->contest].choices[ch].total = total;
+                    continue;
+                }
+            }
+            /* a precinct's counts by vote type (or its total when there are none) */
+            {
+                BOOL any_vt = FALSE;
+                int64_t sum = 0;
+                for (k = 0; k < cx->nhcols && !cx->oom; k++)
+                {
+                    if (has[k])
+                    {
+                        if (cols[k].choice == UINT32_MAX)
+                        {
+                            cols[k].choice = rp_vt(cx, cols[k].label);
+                        }
+                        rp_count(cx, FALSE, cx->contest, ch, cols[k].choice, vals[k]);
+                        sum += vals[k];
+                        any_vt = TRUE;
+                    }
+                }
+                if (!any_vt && total != EE_RPDF_UNKNOWN)
+                {
+                    rp_count(cx, FALSE, cx->contest, ch, EE_RPDF_NO_VT, total);
+                }
+                else if (any_vt && total != EE_RPDF_UNKNOWN && sum != total)
+                {
+                    cx->hart_pct_bad++; /* a count that did not line up with its column */
                 }
             }
         }
@@ -4178,7 +4410,9 @@ BOOL EeRpdf_ParseEx(const void *data,
         wchar_t msg[300];
         if (cx.hart)
         {
-            out->kind = cx.hart_canvass ? EE_RPDF_HART_PRECINCT : EE_RPDF_HART_SUMMARY;
+            out->kind = cx.hart_canvass ? EE_RPDF_HART_PRECINCT
+                        : cx.hart_pct   ? EE_RPDF_HART_PCT_REPORT
+                                        : EE_RPDF_HART_SUMMARY;
         }
         else if (cx.hart_old)
         {
@@ -4197,6 +4431,14 @@ BOOL EeRpdf_ParseEx(const void *data,
                              L"driver); its %u distinct characters were read by OCR over %u pages%s.",
                              gst.learned, gst.pages,
                              gst.uncertain > 0 ? L", some with few or split readings: check its figures" : L"");
+            rp_note(&cx, msg);
+        }
+        if (cx.hart_pct_bad > 0)
+        {
+            StringCchPrintfW(msg, ARRAYSIZE(msg),
+                             L"%u precinct rows have vote-type counts that do not add up to their total; "
+                             L"the counts by vote type were kept.",
+                             cx.hart_pct_bad);
             rp_note(&cx, msg);
         }
         if (cx.hl_bad_rows > 0)

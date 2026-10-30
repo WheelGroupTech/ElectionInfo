@@ -1,0 +1,20 @@
+{
+  "_comment": "Policy for backup_data.py (decisions confirmed by the user 2026-10-30). skip_patterns: file names (regex) not backed up (converted copies of CVRs whose originals are backed up). skip_files: paths (relative to the data root) not backed up. replace_patterns: paths (regex) whose backup copy a newer source copy replaces (state files revised after download). cvr_compare_skip: CVR files left out of the cross-check tabulation. include_dirs / skip_dirs: folders to include although they start with '_', or to leave out.",
+  "skip_patterns": [
+    "-utf8-bom\\.csv$",
+    "-utf8\\.csv$",
+    "-ansi\\.txt$",
+    "CVR-All_Contests-\\d+\\.csv$",
+    " Dan\\.csv$"
+  ],
+  "skip_files": [
+    "Election_CVRs\\TX_Travis_County\\G24 CVR.csv",
+    "Election_CVRs\\TX_Dallas_County\\G24 CVR.csv"
+  ],
+  "replace_patterns": [
+    "\\.EarlyVoting\\.\\d{2}_\\d{2}_\\d{4}\\.csv$"
+  ],
+  "cvr_compare_skip": [],
+  "include_dirs": [],
+  "skip_dirs": []
+}

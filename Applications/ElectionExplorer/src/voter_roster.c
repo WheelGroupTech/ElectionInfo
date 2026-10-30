@@ -4340,6 +4340,177 @@ static BOOL limited_form_row(const EePdfPageText *pt, const uint32_t *ord, const
 
 /* Read source @p si as a PDF table into @p sc's rows. Returns 1 when a table was read,
  * 0 when the PDF is not a table (or cannot be opened), -1 on out of memory / cancel. */
+/* One printed line of a page: its baseline and its runs' texts, left to right. */
+typedef struct PdfHalfRow
+{
+    float y;
+    int n;
+    char cell[4][PDF_TABLE_CELL];
+} PdfHalfRow;
+
+/* The lines of @p page with 1 to 4 runs into @p rows (at most @p cap). Sets *@p header when a
+ * line is a title row. Returns the line count, or -1 when the page cannot be read. */
+static int pdf_half_rows(EePdf *pdf, uint32_t page, EePdfPageText *pt, PdfHalfRow *rows, int cap, BOOL *header)
+{
+    uint32_t *ord;
+    uint32_t i, start = 0;
+    int n = 0;
+    *header = FALSE;
+    if (!EePdf_ExtractPageText(pdf, page, pt))
+    {
+        return -1;
+    }
+    ord = (uint32_t *)malloc(((size_t)pt->nruns + 1) * sizeof(uint32_t));
+    if (ord == NULL)
+    {
+        return -1;
+    }
+    for (i = 0; i < pt->nruns; i++)
+    {
+        ord[i] = i;
+    }
+    qsort_s(ord, pt->nruns, sizeof(uint32_t), pdf_run_cmp, pt);
+    for (i = 1; i <= pt->nruns; i++)
+    {
+        const EePdfTextRun *f = &pt->runs[ord[start]];
+        float tol = f->font_size > 4.0f ? 0.3f * f->font_size : 1.5f;
+        PdfLine ln;
+        uint32_t k, m, idx[4];
+        if (i < pt->nruns && f->y - pt->runs[ord[i]].y <= tol)
+        {
+            continue; /* the same line */
+        }
+        ln.first = start;
+        ln.count = i - start;
+        start = i;
+        if (pdf_line_is_header(pt, ord, &ln))
+        {
+            *header = TRUE;
+        }
+        if (ln.count > 4 || n >= cap)
+        {
+            continue;
+        }
+        for (k = 0; k < ln.count; k++)
+        {
+            /* the line's runs left to right */
+            uint32_t v = ord[ln.first + k];
+            m = k;
+            while (m > 0 && pt->runs[idx[m - 1]].x > pt->runs[v].x)
+            {
+                idx[m] = idx[m - 1];
+                m--;
+            }
+            idx[m] = v;
+        }
+        rows[n].y = f->y;
+        rows[n].n = (int)ln.count;
+        for (k = 0; k < ln.count; k++)
+        {
+            pdf_run_text(pt, &pt->runs[idx[k]], rows[n].cell[k], PDF_TABLE_CELL);
+        }
+        n++;
+    }
+    free(ord);
+    return n;
+}
+
+/* A roster sheet printed two pages wide with no title row (Angelina, October 29, 2026: Excel
+ * printed the Voter ID and name columns on the first half of the pages and the precinct "S
+ * 2.1" and date "10/29/2026" of the same rows on the second half, in the same order). The
+ * first page's lines are an ID and a name; the first page of the second half has no ID and
+ * as many lines of a value and a date. Each row joins the line at the same height of page
+ * p + half. Returns 1 when read, 0 when the PDF is not printed so, -1 on error or cancel. */
+static int read_pdf_halves(Loader *L, EePdf *pdf, uint32_t npages, EePdfPageText *pt, SinkCtx *sc)
+{
+    enum
+    {
+        CAP = 200
+    };
+    static const char *const k_titles[4] = {"VUID", "Name", "Precinct", "Date"};
+    PdfHalfRow *lr = (PdfHalfRow *)malloc(2 * CAP * sizeof(PdfHalfRow));
+    PdfHalfRow *rr = lr + CAP;
+    uint32_t half = npages / 2, p;
+    int nl, nr, i, j, ids = 0, vals = 0, result = 0;
+    BOOL hl = FALSE, hr = FALSE;
+    if (lr == NULL)
+    {
+        return -1;
+    }
+    if (npages < 2 || npages % 2 != 0)
+    {
+        free(lr);
+        return 0;
+    }
+    nl = pdf_half_rows(pdf, 0, pt, lr, CAP, &hl);
+    nr = pdf_half_rows(pdf, half, pt, rr, CAP, &hr);
+    for (i = 0; i < nl; i++)
+    {
+        ids += lr[i].n == 2 && vuid_valid(lr[i].cell[0]) && has_letter(lr[i].cell[1]);
+    }
+    for (i = 0; i < nr; i++)
+    {
+        BOOL any_id = FALSE;
+        for (j = 0; j < rr[i].n; j++)
+        {
+            any_id = any_id || vuid_valid(rr[i].cell[j]);
+        }
+        if (any_id)
+        {
+            vals = -1000; /* an ID on the second half: not this layout */
+        }
+        vals += rr[i].n == 2 && find_date(rr[i].cell[1]) != 0 && find_date(rr[i].cell[0]) == 0;
+    }
+    if (hl || hr || ids < 5 || vals < 5 || abs(ids - vals) > 2)
+    {
+        free(lr);
+        return 0;
+    }
+    if (!rows_sink(sc, k_titles, 4))
+    {
+        free(lr);
+        return -1;
+    }
+    for (p = 0; p < half && result == 0; p++)
+    {
+        if (cancelled(L))
+        {
+            result = -1;
+            break;
+        }
+        report(L, L->done_bytes + (L->cur_size * (p + 1)) / (half ? half : 1));
+        nl = pdf_half_rows(pdf, p, pt, lr, CAP, &hl);
+        nr = pdf_half_rows(pdf, p + half, pt, rr, CAP, &hr);
+        for (i = 0; i < nl && result == 0; i++)
+        {
+            const char *cells[4];
+            if (lr[i].n != 2 || !vuid_valid(lr[i].cell[0]))
+            {
+                continue; /* the election heading, not a row */
+            }
+            cells[0] = lr[i].cell[0];
+            cells[1] = lr[i].cell[1];
+            cells[2] = cells[3] = "";
+            for (j = 0; j < nr; j++)
+            {
+                if (rr[j].n == 2 && rr[j].y - lr[i].y < 2.0f && lr[i].y - rr[j].y < 2.0f &&
+                    find_date(rr[j].cell[1]) != 0)
+                {
+                    cells[2] = rr[j].cell[0];
+                    cells[3] = rr[j].cell[1];
+                    break;
+                }
+            }
+            if (!rows_sink(sc, cells, 4))
+            {
+                result = -1;
+            }
+        }
+    }
+    free(lr);
+    return result < 0 ? -1 : 1;
+}
+
 static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
 {
     RosterSource *s = &L->src[si];
@@ -4387,7 +4558,9 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
     EePdf_PageTextInit(&pt);
     pt.split_gaps = 1; /* Randall, Gregg: one TJ per printed line, columns set apart by kerns */
     npages = EePdf_PageCount(pdf);
-    for (page = 0; page < npages; page++)
+    /* a sheet printed two pages wide with no title row: read_pdf_halves reads it all */
+    result = read_pdf_halves(L, pdf, npages, &pt, sc);
+    for (page = result != 0 ? npages : 0; page < npages; page++)
     {
         uint32_t i;
         uint32_t nlines = 0;

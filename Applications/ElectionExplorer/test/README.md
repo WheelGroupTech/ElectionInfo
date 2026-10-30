@@ -366,3 +366,42 @@ rosters, and Election Day dates from the election name (primary 03/03/2026, prim
 two voters with the same name and DOB who both voted, a group where only one voted, one
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without
 birth dates.)
+
+## Data backup check (on demand)
+
+`backup_data.py` backs up the election records Election Explorer reads (voter rosters, CVRs,
+election results, audit logs) from the repository's data folders to
+`%USERPROFILE%\OneDrive\Documents\Elections\ElectionExplorerData` (same
+`<Category>\<ST_County>\` layout). It never copies voter lists (some hold dates of birth); the
+backup's own voter lists are only load-checked.
+
+1. Build the loader harness `data_check.c` (Election Explorer's own loaders, console output as
+   JSON; it prints counts, never voter names):
+
+   ```bat
+   pwsh -File test\build_data_check.ps1
+   ```
+
+   The exe goes to `Applications\Build\win-x64-release\ElectionExplorer\data_check\`.
+2. Dry run (checks, plan and report; copies nothing):
+
+   ```bat
+   python -I test\backup_data.py
+   ```
+
+3. Review the report, then copy: `python -I test\backup_data.py --copy`.
+
+Every file in both trees is hashed and loaded (results cached in `Applications\Build\backup_data\`
+by content hash and a hash of the loader sources, so a rerun loads only new or changed files).
+A source file is copied only when it loads with data and is not already in the backup; a backup
+file of the same name with other content is a conflict left for the user, except state files
+matching `replace_patterns` in `backup_data.json` (the user's decisions: converted CVR copies are
+skipped, re-downloaded SOS EarlyVoting CSVs replace older copies, folders starting with `_` are
+left out). Hart precinct-by-precinct reports that the results loader reads as totals (most contest
+titles repeated) are reported as *misread* and not copied.
+
+The cross-check groups files by county and election code (`G24_…`) and compares each results
+file's contest totals with the CVR tabulation (`data_check compare`), and the audit log's official
+ballots with the results' ballots. The report (`Applications\Build\backup_data\reports\<time>\
+report.md`, with `plan.json`, `backup_checks.json`, `crosscheck.json`) lists conflicts, files that
+do not load, misread files and each election's findings.

@@ -570,6 +570,26 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
   - **Canvass:** one contest per page with turned (90°) column headings and a row per precinct,
     then "Totals". Columns that do not fit go on to a following page under the same title. It
     has no vote-type split, so it loads with no vote types.
+  - **Precinct report (1.6, 2026-10-30):** the cumulative tables repeated under each precinct's
+    line, "<precinct>   389 of 1,673 registered voters = 23.25%" (10 pt, printed again on each
+    page; 2020's reports print only the precinct, in 12 pt, below a "Precinct Results" heading).
+    Until then these were read as cumulative reports: every precinct's contests became contests
+    of their own (Burnet G25: 345 contests instead of 19). Now the line starts a precinct (its
+    ballots and registered voters), a contest seen in an earlier precinct is found again
+    (`rp_contest`), and the rows are kept by precinct and vote type (`EE_RES_FMT_HART_PCT_REPORT`).
+    2020's table heading is on two lines ("Absentee Voting  Early Voting  Election Day" above
+    "Choice  Party  Voting  Total", the first line's runs 2 pt apart): a heading line just above
+    the "Choice" line adds or completes columns. A row whose vote-type counts do not add up to
+    its Total gets a note. Found by the backup cross-check (`test/backup_data.py`): 162 reports
+    of Brazos, Burnet, Coryell, Ector, Liberty, Lubbock, McLennan, Montgomery and Tom Green; each
+    one with a cumulative or canvass report of the same election gives the same choice totals
+    (Coryell G24's own precinct lines add up to 92 ballots fewer than its total: the county's
+    report). Brazos's reports are per polling place (Election Day locations).
+  - **Number pieces (McLennan 2023):** a font that gives some digits no width shows "37" as "3"
+    and "7" from one point and "88.10%" as "88." "10" "%". Pieces of a number shown from one
+    point or touching are now one item in Hart reports too, and a non-number piece right of the
+    first count column ("%") is no longer added to the choice's name (it made "Peaches Henry
+    88. %" a choice of its own in the cumulative reports as well).
   - Naming as the rest of the program and the Hart CVR:
     - "Ken Paxton, REP" is "Ken Paxton" with party REP;
     - " - Democratic Party" becomes the "DEM " prefix;

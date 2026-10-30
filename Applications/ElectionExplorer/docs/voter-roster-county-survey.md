@@ -781,6 +781,19 @@ files, each G26 PDF alone, the SOS CSVs): only Henderson, Tom Green and Guadalup
 Bend's `EV-10-19_1.xlsx`, whose 38 "Total" subtotal rows had loaded as voters with no VUID (now non-voter
 rows). Smoke test `county1026`.
 
+### Angelina's October 29 layout (2026-10-30)
+
+Angelina's `G26_early_voting_history_102926.pdf` (Acrobat PDFMaker for Excel, 64 pages) dropped the
+"Voter_ID  Voter_Name  Precinct  Timestamp" title row and added "Total_Voter_Checkins 17475" (the
+cumulative count) to the heading; the rows are the day's 1,368 check-ins. Excel printed the sheet two
+pages wide: pages 1-32 hold the Voter ID and name, pages 33-64 the precinct ("S 2.1", "P 29") and date
+of the same rows at the same heights. `read_pdf_halves` (voter_roster.c) recognizes it (an even page
+count, no title row, page 1's lines an ID and a name, the first page of the second half with no ID and
+as many lines of a value and a date) and joins each row with the line at its height on page p + half,
+titled VUID / Name / Precinct / Date: 1,368 records, all dated, precincts as the October 28 file's.
+Regression: of 371 roster PDFs and the 5 roster ZIPs holding PDFs, only this file changes. Smoke test
+`rosterhalves`.
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

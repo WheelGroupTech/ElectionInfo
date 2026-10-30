@@ -176,6 +176,9 @@ voting date and a "Henderson County Voter Turnout" title that is not a Voter ID 
 list with no title row (columns named from their contents, a 9-digit county number, titles printed once
 on page 2 below some rows); Guadalupe's check-in report drawn one TJ per line (columns set apart by
 kerns, the date a little lower, a voter with no Voter ID, a "TOTAL" line that is not a voter).
+`county1028` covers Webb's mail list from October 28: a "Certificate" column (the county's mail ballot
+certificate number) and no Voter ID; its voters load with a blank Voter ID and the number in a
+Certificate column, and a title line on page 2 is not a voter.
 `filterfile` saves filter rules with `EeFilter_SaveFile` (CSV and tab-delimited, with quoted values: a
 comma, quotes, a trailing space, an empty value) and loads them with `EeFilter_LoadFile` into columns in
 another order, choosing the saved Column Number between two columns with one title, skipping a missing

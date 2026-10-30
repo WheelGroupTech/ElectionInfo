@@ -1168,6 +1168,8 @@ typedef struct HeaderMap
     BOOL gap_comma; /* names written "LAST  FIRST MIDDLE" (see sheet_gap_comma) */
     BOOL limited_form; /* the Limited Ballot poll list: "Name of Voter", then the assisting
                         * person's "Name" / "Address" */
+    BOOL cert_only;    /* a mail list with the county's "Certificate" number and no Voter ID
+                        * (Webb): its voters keep a blank Voter ID */
     int ncols;
     BOOL rich;      /* a wide county export (15+ titled columns): untitled columns are kept
                      * as "Column N", never taken as notes */
@@ -1228,6 +1230,7 @@ typedef struct Loader
     WBuf swapped; /* sheets whose Voter ID / name columns were read by their contents */
     uint32_t merged_rows; /* per-jurisdiction rows folded into one record (Montgomery) */
     uint32_t limited_forms; /* Limited Ballot poll lists (SOS form 5-38) read from PDFs */
+    WBuf cert_lists;        /* mail lists that give a certificate number, not the Voter ID */
     uint32_t not_returned;  /* mail list rows for ballots not received yet ("-"): skipped */
     WBuf limited_dates;     /* those whose file-name date is not during early voting */
     uint32_t sos_no_date;   /* records of Secretary of State turnout rosters (none has a
@@ -1532,9 +1535,26 @@ static int vuid_rank(const char *lab)
     return 0;
 }
 
+/* A mail list's received-date title ("ReceivedDate", "Ballot Received Date", ...). */
+static BOOL received_title(const char *lab)
+{
+    return contains_ci(lab, "received date") || strcmp(lab, "receiveddate") == 0 ||
+           strcmp(lab, "date received") == 0 || strcmp(lab, "ballot received") == 0;
+}
+
+/* Webb's mail list from October 28, 2026: "Certificate" (the county's mail ballot
+ * certificate number, not the Voter ID), the voter's name and "ReceivedDate". With no
+ * Voter ID title, a "Certificate" title beside a received date marks the header. */
+static void note_cert_title(const char *lab, BOOL *cert, BOOL *rcvd)
+{
+    *cert |= (strcmp(lab, "certificate") == 0);
+    *rcvd |= received_title(lab);
+}
+
 static BOOL row_is_header(const SheetRows *r, uint32_t row)
 {
     uint32_t c;
+    BOOL cert = FALSE, rcvd = FALSE;
     for (c = 0; c < r->row_len[row]; c++)
     {
         char lab[96];
@@ -1543,8 +1563,9 @@ static BOOL row_is_header(const SheetRows *r, uint32_t row)
         {
             return TRUE;
         }
+        note_cert_title(lab, &cert, &rcvd);
     }
-    return FALSE;
+    return cert && rcvd;
 }
 
 /* Header cell @p c, or the repaired title from @p fix when it has one. */
@@ -1567,6 +1588,8 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
     BOOL county_col = FALSE;
     BOOL method_col = FALSE;
     BOOL name_title = FALSE; /* a name column other than a bare "Voter" */
+    BOOL cert = FALSE;
+    BOOL rcvd = FALSE;
     int titled = 0;
     int best_vuid = 0;
     map_init(m);
@@ -1628,7 +1651,9 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
         id_voter |= (strcmp(lab, "id voter") == 0);
         county_col |= (strcmp(lab, "county") == 0 || strcmp(lab, "county name") == 0);
         method_col |= (strcmp(lab, "voting method") == 0);
+        note_cert_title(lab, &cert, &rcvd);
     }
+    m->cert_only = (best_vuid == 0 && cert && rcvd); /* "Certificate" stays an extra column */
     m->rich = (titled >= 15);
     m->split_pct = sos_vuid && !has_subcode;
     m->sos_list = id_voter && county_col && method_col;
@@ -3033,6 +3058,10 @@ static void process_sheet(Loader *L, int si, const char *sheet_name, const Sheet
         method = EE_VM_LIMITED; /* the SOS Limited Ballot poll list (form 5-38) */
         L->limited_forms++;
     }
+    if (m.cert_only)
+    {
+        append_name(&L->cert_lists, s->name, sheet_name);
+    }
     if (method == EE_VM_NONE && m.method >= 0)
     {
         method = sheet_column_method(r, data_from, m.method);
@@ -3971,10 +4000,12 @@ static int pdf_untitled_columns(const EePdfPageText *pt, const uint32_t *ord, co
     return (int)ncols;
 }
 
-/* A line is the header when one of its runs names the Voter ID. */
+/* A line is the header when one of its runs names the Voter ID (or, with no Voter ID,
+ * a mail ballot certificate number beside a received date: see note_cert_title). */
 static BOOL pdf_line_is_header(const EePdfPageText *pt, const uint32_t *ord, const PdfLine *ln)
 {
     uint32_t k;
+    BOOL cert = FALSE, rcvd = FALSE;
     for (k = 0; k < ln->count; k++)
     {
         char t[PDF_TABLE_CELL];
@@ -3993,8 +4024,9 @@ static BOOL pdf_line_is_header(const EePdfPageText *pt, const uint32_t *ord, con
         {
             return TRUE;
         }
+        note_cert_title(lab, &cert, &rcvd);
     }
-    return FALSE;
+    return cert && rcvd;
 }
 
 /* The Texas Secretary of State's "Poll List for Voters Voting Limited Ballot by Personal
@@ -4321,6 +4353,7 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
     int ncols = 0;
     int vcol = -1; /* the header's Voter ID and precinct columns */
     int pcol = -1;
+    int ccol = -1; /* with no Voter ID column: the mail ballot "Certificate" column (Webb) */
     char pend[PDF_TABLE_MAX_COLS][PDF_TABLE_CELL]; /* the data row not yet emitted (it may wrap) */
     int pend_n = 0;
     float pend_y = 0.0f; /* baseline of its first line */
@@ -4603,7 +4636,7 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                     cellp[ncols] = cells[ncols];
                     ncols++;
                 }
-                vcol = pcol = -1;
+                vcol = pcol = ccol = -1;
                 for (c = 0; c < ncols; c++)
                 {
                     char lab[96];
@@ -4617,6 +4650,14 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                     {
                         pcol = c;
                     }
+                    else if (ccol < 0 && strcmp(lab, "certificate") == 0)
+                    {
+                        ccol = c;
+                    }
+                }
+                if (vcol >= 0)
+                {
+                    ccol = -1;
                 }
                 if (!header_emitted)
                 {
@@ -4854,6 +4895,11 @@ static int read_pdf_table(Loader *L, int si, SinkCtx *sc)
                         StringCchCatA(cells[col_of[k]], PDF_TABLE_CELL, t); /* no space: one word */
                     }
                 }
+            }
+            if (ccol >= 0 && (cells[ccol][0] == '\0' || strspn(cells[ccol], "0123456789") != strlen(cells[ccol])))
+            {
+                continue; /* a certificate list's rows begin with the number; a line without it
+                           * is a title or note, not a voter */
             }
             {
                 /* Wichita's October 21 absentee list wraps a record onto a second line (the
@@ -5459,6 +5505,13 @@ static void build_note(Loader *L)
                      L"voter is not registered in the county).",
                   (unsigned long)L->limited_forms, L->limited_forms == 1 ? L"" : L"s");
     }
+    if (L->cert_lists.len > 0)
+    {
+        wb_printf(&b, L"\r\n\r\nThese mail lists give the county's mail ballot certificate number instead of "
+                     L"the Voter ID: their voters are kept with a blank Voter ID, the number in the "
+                     L"Certificate column: %s",
+                  L->cert_lists.p);
+    }
     if (L->limited_dates.len > 0)
     {
         wb_printf(&b, L"\r\n\r\nThe date in these Limited Ballot file names is not during early voting for "
@@ -5743,6 +5796,7 @@ static void loader_free(Loader *L)
     free(L->year_fixes.p);
     free(L->swapped.p);
     free(L->limited_dates.p);
+    free(L->cert_lists.p);
     intern_free(&L->str);
 }
 

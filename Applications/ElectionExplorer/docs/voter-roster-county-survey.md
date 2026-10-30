@@ -582,6 +582,16 @@ Loader fixes found with these files (`voter_roster.c`):
   dropped as a non-voter (208 of 7,111). Bell now = `pdftotext -raw` (7,111 / 1,685 lines).
 - **`CertificateNumber`** (Collin's and Webb's check-in reports: the VUID) is a Voter ID title
   (generic rank; Tarrant's plain `Certificate` is still not one); **`VoteDate`** is Date Voted.
+- **Webb's mail list without VUIDs** (from `10-28-2026 - Mail Ballot Received (PDF).pdf`, added
+  2026-10-30): `Certificate`, `LastName`, `FirstName`, `MiddleName`, `NameSuffix`, `ReceivedDate`. The
+  `Certificate` value is the county's mail ballot certificate number (4-8 digits), not the VUID.
+  A `Certificate` title beside a received-date title, with no Voter ID title, now marks the
+  header (`note_cert_title`). The voters load with a blank Voter ID and the number in a
+  `Certificate` extra column, and the load summary names the file. In such a PDF, a line whose
+  Certificate cell is not a number is a title, not a voter (page 2 repeats no header). Checked
+  2026-10-30: 52 records = the 52 numbers in the PDF, middle names 35 and suffixes 6 as printed.
+  Re-reading the 34 counties' current files changed only Webb (+52 rows), and smoke test
+  `county1028` was added.
 - **Mail lists with unreturned ballots**: Collin's "absentee returns" workbook lists every
   ballot mailed, with `-` in `ReceivedDate` for the 10,257 not back yet; a mail list row
   whose received date is `-` is skipped and counted ("... sent but not received yet ... not

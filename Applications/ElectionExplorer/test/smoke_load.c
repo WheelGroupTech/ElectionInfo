@@ -9470,6 +9470,85 @@ done:
     return rc;
 }
 
+/* Webb's mail list from October 28, 2026 (tag: county1028; needs src\pdf_reader.c): the
+ * county's mail ballot "Certificate" number (4 to 8 digits) in place of the Voter ID, beside
+ * the name parts and "ReceivedDate". Its voters load with a blank Voter ID and the number in
+ * a Certificate column; a title line on the second page (no number) is not a voter. */
+static int test_county1028(void)
+{
+    TBuf pg[2] = {{0}, {0}};
+    wchar_t path[MAX_PATH];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    wchar_t err[256];
+    const wchar_t *paths[1];
+    BOOL ok;
+    int rc = 1;
+
+    ok = tb_printf(&pg[0], "BT /F1 18 Tf 1 0 0 1 180 720 Tm (November 3, 2026 Joint General Election) Tj ET\n"
+                           "BT /F1 18 Tf 1 0 0 1 176 696 Tm (10-28-2026 - Mail Ballot Received) Tj ET\n"
+                           "BT /F1 12 Tf 1 0 0 1 20 678 Tm (Certificate) Tj ET BT /F1 12 Tf 1 0 0 1 92 678 Tm (LastName) Tj ET"
+                           " BT /F1 12 Tf 1 0 0 1 240 678 Tm (FirstName) Tj ET BT /F1 12 Tf 1 0 0 1 339 678 Tm (MiddleName) Tj ET"
+                           " BT /F1 12 Tf 1 0 0 1 426 678 Tm (NameSuffix) Tj ET BT /F1 12 Tf 1 0 0 1 505 678 Tm (ReceivedDate) Tj ET\n"
+                           "BT /F1 12 Tf 1 0 0 1 20 661 Tm (957653) Tj ET BT /F1 12 Tf 1 0 0 1 92 661 Tm (WEBC) Tj ET"
+                           " BT /F1 12 Tf 1 0 0 1 240 661 Tm (ANA) Tj ET BT /F1 12 Tf 1 0 0 1 339 661 Tm (LUZ) Tj ET"
+                           " BT /F1 12 Tf 1 0 0 1 426 661 Tm (JR) Tj ET BT /F1 12 Tf 1 0 0 1 505 661 Tm (10/28/2026) Tj ET\n"
+                           "BT /F1 12 Tf 1 0 0 1 20 645 Tm (22651) Tj ET BT /F1 12 Tf 1 0 0 1 92 645 Tm (WEBC) Tj ET"
+                           " BT /F1 12 Tf 1 0 0 1 240 645 Tm (BETO) Tj ET BT /F1 12 Tf 1 0 0 1 505 645 Tm (10/28/2026) Tj ET\n") &&
+         tb_printf(&pg[1], "BT /F1 18 Tf 1 0 0 1 176 760 Tm (Mail Ballot Received) Tj ET\n"
+                           "BT /F1 12 Tf 1 0 0 1 20 725 Tm (10002237) Tj ET BT /F1 12 Tf 1 0 0 1 92 725 Tm (WEBC) Tj ET"
+                           " BT /F1 12 Tf 1 0 0 1 240 725 Tm (CRUZ) Tj ET BT /F1 12 Tf 1 0 0 1 505 725 Tm (10/28/2026) Tj ET\n");
+    GetTempPathW(MAX_PATH, path);
+    StringCchCatW(path, MAX_PATH, L"10-28-2026 - Mail Ballot Received (PDF).pdf");
+    paths[0] = path;
+    EeVoterTable_Init(&t);
+    ZeroMemory(&info, sizeof(info));
+    if (!ok || !proster_write(path, pg, 2))
+    {
+        wprintf(L"county1028: could not write the file\n");
+        goto done;
+    }
+    if (EeRoster_LoadFiles(paths, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"county1028: load failed: %s\n", err);
+        goto done;
+    }
+    if (t.row_count != 3 || info.rows_non_voter != 0 || info.unsupported_files != 0)
+    {
+        wprintf(L"county1028: rows %u nonvoter %u unsupported %u\n", t.row_count, info.rows_non_voter,
+                info.unsupported_files);
+        goto done;
+    }
+    if (!rt_expect(&t, L"WEBC", L"ANA", L"VUID", L"") || !rt_expect(&t, L"WEBC", L"ANA", L"Certificate", L"957653") ||
+        !rt_expect(&t, L"WEBC", L"ANA", L"Middle Name", L"LUZ") || !rt_expect(&t, L"WEBC", L"ANA", L"Name Suffix", L"JR") ||
+        !rt_expect(&t, L"WEBC", L"ANA", L"Voting Method", L"Mail Ballot") ||
+        !rt_expect(&t, L"WEBC", L"ANA", L"Date Voted", L"10/28/2026") ||
+        !rt_expect(&t, L"WEBC", L"BETO", L"Certificate", L"22651") ||
+        !rt_expect(&t, L"WEBC", L"CRUZ", L"Certificate", L"10002237") ||
+        !rt_expect(&t, L"WEBC", L"CRUZ", L"Voting Method", L"Mail Ballot"))
+    {
+        goto done;
+    }
+    if (info.note == NULL || wcsstr(info.note, L"certificate number instead of the Voter ID") == NULL)
+    {
+        wprintf(L"county1028: note: %s\n", info.note ? info.note : L"(none)");
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"county1028 ok\n");
+done:
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    DeleteFileW(path);
+    free(pg[0].p);
+    free(pg[1].p);
+    if (rc != 0)
+    {
+        wprintf(L"county1028 test failed\n");
+    }
+    return rc;
+}
+
 /* Row of @p t whose VUID is @p vuid, or UINT32_MAX. */
 static uint32_t rt_find_vuid(const EeVoterTable *t, const wchar_t *vuid)
 {
@@ -13818,6 +13897,7 @@ int wmain(void)
     failed |= test_county1023();
     failed |= test_pdf_strays();
     failed |= test_county1026();
+    failed |= test_county1028();
     failed |= test_sos_roster();
     failed |= test_roster_totals();
     failed |= test_roster_compare();

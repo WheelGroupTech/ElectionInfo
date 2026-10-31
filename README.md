@@ -20,6 +20,10 @@ folders are **not** in the repository — they are `.gitignore`d because the fil
 are too large for GitHub, so they only appear if you add them yourself. None of
 the analysis scripts depend on them.
 
+For why election records are so hard to work with, and what each kind of record looks like
+(voter lists, rosters, cast vote records, results and audit logs), see
+[`ELECTION-DATA-FORMATS.md`](ELECTION-DATA-FORMATS.md).
+
 ## Repository layout
 
 | Directory | Purpose |

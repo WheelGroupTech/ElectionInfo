@@ -7253,6 +7253,97 @@ static BOOL rt_expect(const EeVoterTable *t, const wchar_t *last, const wchar_t 
     return TRUE;
 }
 
+/* Voter roster loader: Travis's G26 corrections -- "_UPDATED" replaced by "_UPDATED_2",
+ * and "(UPDATE)" -- each replace the files before them, so no voter is listed twice
+ * (tag: rosterrev). */
+static int test_roster_revisions(void)
+{
+    static const char *v1[] = {"Travis County Ballot By Mail Roster", "2026-10-05", "Election",
+                               "VUID|Precinct|First Name|Last Name", "1000000101|101|ANN|ABLE"};
+    static const char *v2[] = {"Travis County Ballot By Mail Roster", "2026-10-05", "Election",
+                               "VUID|Precinct|First Name|Last Name", "1000000101|101|ANN|ABLE",
+                               "1000000102|102|BEN|BAKER"};
+    static const char *v3[] = {"Travis County Ballot By Mail Roster", "2026-10-05", "Election",
+                               "VUID|Precinct|First Name|Last Name", "1000000101|101|ANN|ABLE",
+                               "1000000102|102|BEN|BAKER", "1000000103|103|CY|COLE"};
+    static const char *w1[] = {"Travis County Ballot By Mail Roster", "2026-10-28", "Election",
+                               "VUID|Precinct|First Name|Last Name", "1000000201|201|DEE|DANE"};
+    static const char *w2[] = {"Travis County Ballot By Mail Roster", "2026-10-28", "Election",
+                               "VUID|Precinct|First Name|Last Name", "1000000201|201|DEE|DANE",
+                               "1000000202|202|EVE|EGAN"};
+    const char *entry[5] = {"10.05.2026 Ballot by Mail.xlsx", "10.05.2026 Ballot by Mail_UPDATED_2.xlsx",
+                            "10.05.2026 Ballot by Mail_UPDATED.xlsx", "10.28.2026 Ballot by Mail.xlsx",
+                            "10.28.2026 Ballot by Mail (UPDATE).xlsx"};
+    void *data[5] = {0};
+    size_t size[5] = {0};
+    wchar_t zpath[MAX_PATH], err[512] = L"";
+    const wchar_t *one[1];
+    EeVoterTable t;
+    EeRosterLoadInfo info;
+    mz_zip_archive zip;
+    void *zbuf = NULL;
+    size_t zsize = 0;
+    BOOL ok;
+    int rc = 1;
+    int i;
+
+    ZeroMemory(&info, sizeof(info));
+    EeVoterTable_Init(&t);
+    if (!cvr_temp_path(zpath, ARRAYSIZE(zpath), L"ee_roster_rev.zip"))
+    {
+        wprintf(L"rosterrev: temp path failed\n");
+        return 1;
+    }
+    ok = rt_xlsx1("report", v1, ARRAYSIZE(v1), &data[0], &size[0]) &&
+         rt_xlsx1("report", v3, ARRAYSIZE(v3), &data[1], &size[1]) &&
+         rt_xlsx1("report", v2, ARRAYSIZE(v2), &data[2], &size[2]) &&
+         rt_xlsx1("report", w1, ARRAYSIZE(w1), &data[3], &size[3]) &&
+         rt_xlsx1("report", w2, ARRAYSIZE(w2), &data[4], &size[4]);
+    mz_zip_zero_struct(&zip);
+    ok = ok && mz_zip_writer_init_heap(&zip, 0, 0);
+    for (i = 0; ok && i < 5; i++)
+    {
+        ok = mz_zip_writer_add_mem(&zip, entry[i], data[i], size[i], MZ_DEFAULT_COMPRESSION);
+    }
+    ok = ok && mz_zip_writer_finalize_heap_archive(&zip, &zbuf, &zsize);
+    mz_zip_writer_end(&zip);
+    ok = ok && cvr_write_bytes(zpath, zbuf, zsize);
+    if (!ok)
+    {
+        wprintf(L"rosterrev: could not author the test zip\n");
+        goto done;
+    }
+    one[0] = zpath;
+    if (EeRoster_LoadFiles(one, 1, &t, &info, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok)
+    {
+        wprintf(L"rosterrev: load failed: %s\n", err);
+        goto done;
+    }
+    /* 3 voters from _UPDATED_2 + 2 from (UPDATE); the other three files are replaced. */
+    if (t.row_count != 5 || info.superseded_files != 3 || info.vuids_duplicated != 0 ||
+        !rt_expect(&t, L"COLE", L"CY", L"Source File", L"10.05.2026 Ballot by Mail_UPDATED_2.xlsx") ||
+        !rt_expect(&t, L"EGAN", L"EVE", L"Source File", L"10.28.2026 Ballot by Mail (UPDATE).xlsx") ||
+        !rt_expect(&t, L"DANE", L"DEE", L"Source File", L"10.28.2026 Ballot by Mail (UPDATE).xlsx"))
+    {
+        wprintf(L"rosterrev: rows=%u superseded=%u dup=%u\n%s\n", t.row_count, info.superseded_files,
+                info.vuids_duplicated, info.note ? info.note : L"");
+        goto done;
+    }
+    rc = 0;
+
+done:
+    for (i = 0; i < 5; i++)
+    {
+        mz_free(data[i]);
+    }
+    mz_free(zbuf);
+    EeRoster_FreeInfo(&info);
+    EeVoterTable_Clear(&t);
+    DeleteFileW(zpath);
+    wprintf(L"rosterrev: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* Voter roster loader: a Travis-style ZIP with every clerical quirk found in the
  * survey -- title rows, several header layouts, a correction (_Updated) replacing its
  * original, a primary workbook whose Republican sheet lacks its header row, pasted
@@ -13129,6 +13220,117 @@ done:
     return rc;
 }
 
+/* A Clarity combined primary (Tarrant): both parties' contests under the same titles with no
+ * party prefix, the choices carrying party="DEM" / "REP", and a party proposition. */
+static const char k_res_primary_xml[] =
+    "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+    "<ElectionResult><Timestamp>3/10/2026 1:00:00 PM CST</Timestamp>"
+    "<ElectionName>Primary Elections 3/3/2026</ElectionName><ElectionDate>3/3/2026</ElectionDate>"
+    "<Region>Test</Region><VoterTurnout totalVoters=\"500\" ballotsCast=\"140\" voterTurnout=\"28.00\">"
+    "<Precincts><Precinct name=\"101\" totalVoters=\"500\" ballotsCast=\"140\" voterTurnout=\"28.00\" />"
+    "</Precincts></VoterTurnout>"
+    "<Contest key=\"1\" text=\"United States Senator\" voteFor=\"1\" isQuestion=\"false\">"
+    "<Choice key=\"1\" text=\"Ann Dem\" party=\"DEM\" totalVotes=\"30\"><VoteType name=\"Early\" votes=\"30\">"
+    "<Precinct name=\"101\" votes=\"30\" /></VoteType></Choice>"
+    "<Choice key=\"2\" text=\"Bo Dem\" party=\"DEM\" totalVotes=\"20\"><VoteType name=\"Early\" votes=\"20\">"
+    "<Precinct name=\"101\" votes=\"20\" /></VoteType></Choice></Contest>"
+    "<Contest key=\"2\" text=\"United States Senator\" voteFor=\"1\" isQuestion=\"false\">"
+    "<Choice key=\"3\" text=\"Cy Rep\" party=\"REP\" totalVotes=\"50\"><VoteType name=\"Early\" votes=\"50\">"
+    "<Precinct name=\"101\" votes=\"50\" /></VoteType></Choice>"
+    "<Choice key=\"4\" text=\"Di Rep\" party=\"REP\" totalVotes=\"40\"><VoteType name=\"Early\" votes=\"40\">"
+    "<Precinct name=\"101\" votes=\"40\" /></VoteType></Choice></Contest>"
+    "<Contest key=\"3\" text=\"Republican Party Proposition 1\" voteFor=\"1\" isQuestion=\"true\">"
+    "<Choice key=\"5\" text=\"Yes\" party=\"REP\" totalVotes=\"70\"><VoteType name=\"Early\" votes=\"70\">"
+    "<Precinct name=\"101\" votes=\"70\" /></VoteType></Choice>"
+    "<Choice key=\"6\" text=\"No\" party=\"REP\" totalVotes=\"20\"><VoteType name=\"Early\" votes=\"20\">"
+    "<Precinct name=\"101\" votes=\"20\" /></VoteType></Choice></Contest></ElectionResult>\r\n";
+
+/* Compare pairs contests that name their primary party differently: a Clarity combined
+ * primary's "United States Senator" (DEM choices, then REP choices) with a Hart CVR's "DEM
+ * United States Senator" / "REP United States Senator" whatever their order, a party
+ * proposition whose choices carry no party, and Wichita's "U.S. Senator - Republican Party"
+ * and "PRESIDENT - VOTE FOR ONE OR NONE" (tag: rescmpparty). */
+static int test_results_compare_party(void)
+{
+    static const EeResultsTallyItem k_cvr[] = {
+        {1, L"REP United States Senator", L"Cy Rep", NULL, 50},
+        {1, L"REP United States Senator", L"Di Rep", NULL, 40},
+        {2, L"DEM United States Senator", L"Ann Dem", NULL, 30},
+        {2, L"DEM United States Senator", L"Bo Dem", NULL, 19},
+        {3, L"REP Republican Party Proposition 1", L"Yes", NULL, 70},
+        {3, L"REP Republican Party Proposition 1", L"No", NULL, 20},
+    };
+    static const EeResultsTallyItem k_wres[] = {
+        {1, L"U.S. Senator - Republican Party", L"Cy Rep", NULL, 50},
+        {2, L"PRESIDENT/VICE PRESIDENT - VOTE FOR ONE OR NONE", L"TRUMP/VANCE", NULL, 9},
+    };
+    static const EeResultsTallyItem k_wcvr[] = {
+        {1, L"President/Vice President", L"Trump/Vance", NULL, 9},
+        {2, L"REP U.S. Senator", L"Cy Rep", NULL, 50},
+    };
+    wchar_t dir[MAX_PATH], p_xml[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *paths[1];
+    EeResults *x = NULL;
+    EeResults t, w, wc;
+    uint32_t nx = 0, nd = 0;
+    EeResultsDiff *d = NULL;
+    const EeResultsDiff *r;
+    int rc = 1;
+
+    EeResults_Init(&t);
+    EeResults_Init(&w);
+    EeResults_Init(&wc);
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_xml, MAX_PATH, L"%sCMP_primary_detail.xml", dir);
+    paths[0] = p_xml;
+    if (!cvr_write_bytes(p_xml, k_res_primary_xml, strlen(k_res_primary_xml)) || !res_load(paths, 1, &x, &nx, err) ||
+        nx != 1 || !EeResults_FromTally(k_cvr, ARRAYSIZE(k_cvr), EE_RES_UNKNOWN, &t))
+    {
+        wprintf(L"rescmpparty: fixtures (%u) %s\n", nx, err);
+        goto done;
+    }
+    if (!EeResults_Compare(x, NULL, NULL, &t, NULL, NULL, &d, &nd) ||
+        rescmp_count(d, nd, EE_DIFF_ONLY_A) != 0 || rescmp_count(d, nd, EE_DIFF_ONLY_B) != 0 ||
+        rescmp_count(d, nd, EE_DIFF_DIFFERS) != 1 ||
+        (r = rescmp_find(d, nd, L"United States Senator", 0, L"Bo Dem", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_DIFFERS || r->a != 20 || r->b != 19 ||
+        (r = rescmp_find(d, nd, L"United States Senator", 0, L"Cy Rep", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH ||
+        (r = rescmp_find(d, nd, L"Republican Party Proposition 1", 0, L"Yes", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH)
+    {
+        wprintf(L"rescmpparty: primary (%u rows: %u only results, %u only CVR, %u differ)\n", nd,
+                rescmp_count(d, nd, EE_DIFF_ONLY_A), rescmp_count(d, nd, EE_DIFF_ONLY_B),
+                rescmp_count(d, nd, EE_DIFF_DIFFERS));
+        goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+
+    if (!EeResults_FromTally(k_wres, ARRAYSIZE(k_wres), EE_RES_UNKNOWN, &w) ||
+        !EeResults_FromTally(k_wcvr, ARRAYSIZE(k_wcvr), EE_RES_UNKNOWN, &wc) ||
+        !EeResults_Compare(&w, NULL, NULL, &wc, NULL, NULL, &d, &nd) ||
+        rescmp_count(d, nd, EE_DIFF_ONLY_A) != 0 || rescmp_count(d, nd, EE_DIFF_ONLY_B) != 0 ||
+        rescmp_count(d, nd, EE_DIFF_DIFFERS) != 0)
+    {
+        wprintf(L"rescmpparty: title suffixes (%u rows: %u only results, %u only CVR)\n", nd,
+                rescmp_count(d, nd, EE_DIFF_ONLY_A), rescmp_count(d, nd, EE_DIFF_ONLY_B));
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeDiff(d, nd);
+    EeResults_FreeArray(x, nx);
+    EeResults_Clear(&t);
+    EeResults_Clear(&w);
+    EeResults_Clear(&wc);
+    DeleteFileW(p_xml);
+    wprintf(L"rescmpparty: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* Compare: results with themselves (all match), with a summary whose total differs, and
  * with CVR-style tallies (contest "(digits)" and choice "(EC n)" ids dropped, same-named
  * contests kept apart, over/under votes, ballots; precinct rows when a precinct differs)
@@ -14774,6 +14976,7 @@ int wmain(void)
     failed |= test_infer_residence_state();
     failed |= test_el_paso_layout();
     failed |= test_voter_roster();
+    failed |= test_roster_revisions();
     failed |= test_tarrant_roster();
     failed |= test_harris_roster();
     failed |= test_dallas_roster();
@@ -14844,6 +15047,7 @@ int wmain(void)
     failed |= test_results_hart_pct();
     failed |= test_results_glyphs();
     failed |= test_results_compare();
+    failed |= test_results_compare_party();
     failed |= test_results_view();
     failed |= test_audit();
     failed |= test_audit_merge();

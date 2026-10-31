@@ -124,8 +124,11 @@ Listing; all committed, lint 10/10. Run with `python -I`.
   join (McLennan 2023), and Angelina's 10/29 roster printed two pages wide with no title row loads
   (`read_pdf_halves` in voter_roster.c; smoke `rosterhalves`; survey doc "Angelina's October 29
   layout"). Regression: old vs new reader on all 893 Hart results files (only intended changes) and
-  371 roster PDFs (only Angelina 10/29). Still open: Compare cannot pair Clarity combined primaries
-  without party prefixes (Tarrant, Hunt; choices carry party="REP") with Hart "REP X" CVR contests.
+  371 roster PDFs (only Angelina 10/29). Compare now pairs primary contests named with their party
+  another way (Clarity combined primaries' party="REP" choices, "REP X", "X - Republican Party") and
+  takes a slash for a word break in names (`cmp_party_title` in ee_results.c; smoke `rescmpparty`).
+  Travis roster corrections now rank by revision: `_UPDATED_2` replaces `_UPDATED` (both in the
+  10-30 ZIP) and `(UPDATE)` is read as a correction (`parse_source_name`, smoke `rosterrev`).
 - **1.6 Hart Verity audit logs (done 2026-10-30, uncommitted):** VerityCount / VerityCentral /
   VerityData "Audit Log Report" PDFs (and the Hays zip) load into the audit window; one election
   per county and date. Accounting = "vDrive read" State Read per task (a read belongs to the last

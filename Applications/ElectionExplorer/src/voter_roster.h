@@ -97,7 +97,8 @@ extern "C"
      * entries are counted and listed but not read), .xlsx, .csv, .tsv, .txt, and a
      * roster printed to .pdf from a spreadsheet (read as a table) or the SOS Limited
      * Ballot poll list (form 5-38; scanned PDFs are listed as not readable). A correction
-     * "<name>_Updated" replaces "<name>"; a file whose voters all appear in another
+     * "<name>_Updated" or "<name> (Update)" replaces "<name>", and "<name>_Updated_2"
+     * replaces both; a file whose voters all appear in another
      * file of a different voting method is skipped; duplicate Voter IDs are kept.
      *
      * @param info  Optional; receives counts and a summary note (free with

@@ -475,6 +475,21 @@ BOOL EeResults_NamesMatch(const wchar_t *a, const wchar_t *b)
         {
             return *a == *b;
         }
+        if ((*a == L'/' && *b != L'/' && sb) || (*b == L'/' && *a != L'/' && sa))
+        {
+            /* a slash for a word break (a Hart CVR writes "Donald J. Trump JD Vance", the
+             * results "Donald J. Trump/JD Vance") */
+            if (*a == L'/')
+            {
+                a++;
+            }
+            else
+            {
+                b++;
+            }
+            prev = L'/';
+            continue;
+        }
         if (sa != sb && prev != L'/' && !(*a == L'/' && *b == L'/'))
         {
             /* a word break on one side only (spaces around a slash do not count: an HVS CVR
@@ -7503,6 +7518,85 @@ static void cmp_one_side(DiffList *l,
     }
 }
 
+/* A primary party code ("DEM", "REP", "LIB", "GRN") for a party name or code, else NULL:
+ * "REP", "Rep", "Republican", "Republican Party". */
+static const wchar_t *cmp_party_code(const wchar_t *s, size_t n)
+{
+    static const wchar_t *const k_code[] = {L"DEM", L"REP", L"LIB", L"GRN"};
+    static const wchar_t *const k_name[] = {L"Democratic", L"Republican", L"Libertarian", L"Green"};
+    size_t i;
+    while (n > 0 && is_ws(s[n - 1]))
+    {
+        n--;
+    }
+    if (n > 6 && _wcsnicmp(s + n - 6, L" Party", 6) == 0)
+    {
+        n -= 6;
+    }
+    for (i = 0; i < ARRAYSIZE(k_code); i++)
+    {
+        if ((n == 3 && _wcsnicmp(s, k_code[i], 3) == 0) ||
+            (n == wcslen(k_name[i]) && _wcsnicmp(s, k_name[i], n) == 0))
+        {
+            return k_code[i];
+        }
+    }
+    return NULL;
+}
+
+/* A contest's primary party and its title without it, for pairing contests that name their
+ * party differently: a "REP " prefix (Hart CVRs, Clarity "Dem Governor"), a " - Republican
+ * Party" suffix (Wichita's Electionware reports), or no party in the title when every choice
+ * that has a party has the same one (a Clarity combined primary, Tarrant's "Governor" with
+ * party="REP" choices). A trailing " - Vote for ..." is dropped from the title too (Wichita
+ * "PRESIDENT/VICE PRESIDENT - VOTE FOR ONE OR NONE"). Returns the party code or NULL. */
+static const wchar_t *cmp_party_title(const EeResults *r, const EeResultsContest *c, wchar_t *base, size_t cch)
+{
+    const wchar_t *t = c->title != NULL ? c->title : L"";
+    const wchar_t *party = NULL, *sp = wcschr(t, L' '), *dash;
+    uint32_t k, with = 0;
+    if (sp != NULL && sp - t == 3 && (party = cmp_party_code(t, 3)) != NULL)
+    {
+        t = sp + 1; /* a code only: "Republican Party Proposition 1" keeps its title */
+    }
+    StringCchCopyW(base, cch, t);
+    for (dash = wcsstr(base, L" - "); dash != NULL; dash = wcsstr(dash + 3, L" - "))
+    {
+        const wchar_t *p;
+        if (_wcsnicmp(dash + 3, L"Vote for", 8) == 0)
+        {
+            base[dash - base] = L'\0'; /* " - Vote for none or one." and what follows */
+            break;
+        }
+        if (party == NULL && (p = cmp_party_code(dash + 3, wcslen(dash + 3))) != NULL)
+        {
+            party = p;
+            base[dash - base] = L'\0';
+            break;
+        }
+    }
+    if (party != NULL)
+    {
+        return party;
+    }
+    for (k = 0; k < c->nchoices; k++)
+    {
+        const wchar_t *cp = r->choices[c->first_choice + k].party;
+        const wchar_t *code = cp != NULL ? cmp_party_code(cp, wcslen(cp)) : NULL;
+        if (cp == NULL || cp[0] == L'\0')
+        {
+            continue; /* a write-in row */
+        }
+        if (code == NULL || (party != NULL && wcscmp(code, party) != 0))
+        {
+            return NULL; /* not a party code, or two parties: a general election's contest */
+        }
+        party = code;
+        with++;
+    }
+    return with * 2 >= c->nchoices ? party : NULL;
+}
+
 BOOL EeResults_Compare(const EeResults *a,
                        const uint8_t *a_pmask,
                        const uint8_t *a_vmask,
@@ -7629,6 +7723,34 @@ BOOL EeResults_Compare(const EeResults *a,
                 EeResults_NamesMatch(pc->title, b->contests[k].title))
             {
                 break;
+            }
+        }
+        if (k == b->ncontests)
+        {
+            /* the same contest with its party named another way (cmp_party_title): a Clarity
+             * combined primary's "Governor" with REP choices is a Hart CVR's "REP Governor" */
+            wchar_t ta[512], tb[512];
+            const wchar_t *pa = cmp_party_title(a, pc, ta, ARRAYSIZE(ta));
+            int pass;
+            /* the same party first; then a side with no party (a primary's proposition, whose
+             * Yes / No choices carry none: "Republican Party Proposition 1") */
+            for (pass = 0, k = b->ncontests; pass < 2 && k == b->ncontests; pass++)
+            {
+                for (k = 0; k < b->ncontests; k++)
+                {
+                    const wchar_t *pb;
+                    BOOL same;
+                    if (bused[k] || !contest_counted(&b->contests[k], b_pmask))
+                    {
+                        continue;
+                    }
+                    pb = cmp_party_title(b, &b->contests[k], tb, ARRAYSIZE(tb));
+                    same = (pa == NULL && pb == NULL) || (pa != NULL && pb != NULL && wcscmp(pa, pb) == 0);
+                    if ((pass == 0 ? same : (pa == NULL) != (pb == NULL)) && EeResults_NamesMatch(ta, tb))
+                    {
+                        break;
+                    }
+                }
             }
         }
         if (k == b->ncontests)

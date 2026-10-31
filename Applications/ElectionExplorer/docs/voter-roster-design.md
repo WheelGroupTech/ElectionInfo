@@ -35,7 +35,9 @@ are in `Scripts/Travis_County_Elections/` (one variant per election).
   filename date is impossible.
 - **Corrections:** `<name>_Updated.xlsx` / `_UPDATED.xlsx` sits beside the original
   (L26: 1, P26: 5, PR26: 7). The original is **not loaded** when its correction is
-  present.
+  present. G26 (2026-10-30 ZIP) added a second correction, `_UPDATED_2.xlsx`, which
+  replaces `_UPDATED.xlsx` (both stayed in the ZIP), and `<name> (UPDATE).xlsx`; the
+  number after the word is the revision and the highest one is loaded (smoke `rosterrev`).
 - **Primaries:** two sheets per workbook, named `Democrat`/`Democratic` and
   `Republican`; the title rows also say "Democratic Primary" / "Republican Primary
   Runoff"; P24 early-vote files also have a `Party Ballot` column (`DEM`/`REP`). Sheet

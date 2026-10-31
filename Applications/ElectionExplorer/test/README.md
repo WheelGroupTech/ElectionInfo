@@ -297,6 +297,8 @@ an unlabeled notes column, a combined `LAST,FIRST MIDDLE` name, a Limited Ballot
 a misnamed Early Vote copy of the Election Day roster (skipped), and a PDF (listed, not
 read); checks rows, methods, dates, party, extras and the load-summary counts; then
 exports TSV, reloads it, and requires every cell to match;
+`rosterrev` covers Travis's G26 corrections: `_UPDATED` replaced by `_UPDATED_2` and
+`(UPDATE)` each replace the files before them, so no Voter ID is listed twice;
 `rtotals` covers `EeRoster_ComputeTotals` (Voting Totals): a builder-made roster with a
 Voter ID repeated later and earlier (each counted once, on the earliest record), a blank
 Voter ID (counted), a record with no date, an unrecognized Voting Method, two parties, and

@@ -3,7 +3,7 @@
  * @brief Voter roster loader. See voter_roster.h and docs/voter-roster-design.md.
  *
  * Pipeline: expand the inputs into sources (ZIP entries / loose files) -> parse each
- * file name (date, voting method, "_Updated" correction flag) -> drop originals that
+ * file name (date, voting method, "_Updated[_n]" correction) -> drop originals that
  * have a correction and file names repeated across inputs -> read every worksheet of
  * every remaining source into rows, find its header row, map its columns, validate
  * and split each row into a record -> drop whole-file copies of another voting method
@@ -1097,7 +1097,7 @@ typedef struct RosterSource
     EeVotingMethod method;    /* from the file name */
     const char *party;        /* from the file name ("_Dem", "-REP"), NULL if none */
     uint32_t date;            /* yyyymmdd from the file name, 0 unknown */
-    BOOL updated;             /* "<name>_Updated" correction */
+    int updated;              /* correction: 0 none, 1 "_Updated" / "(Update)", n "_Updated_n" */
     BOOL in_person;           /* "IN PERSON" in the file name (Brazoria): never a mail list */
     BOOL sos_list;            /* read as a Secretary of State turnout roster */
     uint32_t sos_ed_date;     /* its in-person rows' election day (yyyymmdd), 0 none */
@@ -3430,14 +3430,44 @@ static void parse_source_name(RosterSource *s)
     {
         *dot = '\0';
     }
-    /* "<name>_Updated" / " Updated" / "-Updated" / "(Updated)" marks a correction. */
-    u = strstr(low, "updated");
-    s->updated = FALSE;
-    if (u != NULL && u > low &&
-        (u[-1] == '_' || u[-1] == ' ' || u[-1] == '-' || u[-1] == '('))
+    /* "<name>_Updated" / " Updated" / "-Updated" / "(Updated)" / "(Update)" marks a
+     * correction; "_Updated_2" (Travis) replaces "_Updated", so a number after it is the
+     * revision. */
+    s->updated = 0;
+    for (u = strstr(low, "update"); u != NULL; u = strstr(u + 1, "update"))
+    {
+        const char *t = u + 6;
+        int rev = 0;
+        if (u == low || (u[-1] != '_' && u[-1] != ' ' && u[-1] != '-' && u[-1] != '('))
+        {
+            continue;
+        }
+        if (*t == 'd')
+        {
+            t++;
+        }
+        if (*t >= 'a' && *t <= 'z')
+        {
+            continue; /* "updates" */
+        }
+        while (*t == '_' || *t == ' ' || *t == '-' || *t == '(')
+        {
+            t++;
+        }
+        while (*t >= '0' && *t <= '9' && rev < 1000)
+        {
+            rev = rev * 10 + (*t++ - '0');
+        }
+        while (*t == ')' || *t == ' ')
+        {
+            t++;
+        }
+        s->updated = rev > 1 && *t == '\0' ? rev : 1; /* (not a date after the word) */
+        break;
+    }
+    if (s->updated != 0)
     {
         char *cut = u - 1;
-        s->updated = TRUE;
         while (cut > low && (cut[-1] == ' ' || cut[-1] == '_' || cut[-1] == '-'))
         {
             cut--;
@@ -3618,7 +3648,7 @@ static void mark_superseded(Loader *L)
             {
                 continue;
             }
-            if (!a->updated && b->updated)
+            if (a->updated < b->updated)
             {
                 a->skip = SKIP_SUPERSEDED;
                 break;

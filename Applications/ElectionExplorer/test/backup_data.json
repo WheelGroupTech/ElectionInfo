@@ -1,5 +1,5 @@
 {
-  "_comment": "Policy for backup_data.py (decisions confirmed by the user 2026-10-30). skip_patterns: file names (regex) not backed up (converted copies of CVRs whose originals are backed up). skip_files: paths (relative to the data root) not backed up. replace_patterns: paths (regex) whose backup copy a newer source copy replaces (state files revised after download). cvr_compare_skip: CVR files left out of the cross-check tabulation. include_dirs / skip_dirs: folders to include although they start with '_', or to leave out.",
+  "_comment": "Policy for backup_data.py (decisions confirmed by the user 2026-10-30). skip_patterns: file names (regex) not backed up (converted copies of CVRs whose originals are backed up). skip_files: paths (relative to the data root) not backed up. replace_patterns: paths (regex) whose backup copy a newer source copy replaces (state files revised after download). cvr_compare_skip: CVR files left out of the cross-check tabulation. include_dirs / skip_dirs: folders to include although they start with '_', or to leave out (the user: never back up Election_CVRs\\_Other-2022 Primary).",
   "skip_patterns": [
     "-utf8-bom\\.csv$",
     "-utf8\\.csv$",
@@ -16,5 +16,7 @@
   ],
   "cvr_compare_skip": [],
   "include_dirs": [],
-  "skip_dirs": []
+  "skip_dirs": [
+    "Election_CVRs\\_Other-2022 Primary"
+  ]
 }

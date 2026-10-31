@@ -601,6 +601,18 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
   "315-BS14", "110DEM"). New `EeResults_MatchPrecinctName` gives the results precinct a name
   stands for (exact, else the longest precinct name it starts with when no digit follows), and
   `Cvr_BuildResults` files the CVR's rows under it when comparing.
+- **Primary contests named with their party another way (1.6, 2026-10-30):** a Clarity
+  combined primary (Tarrant, Hunt) titles both parties' contests alike ("United States Senator")
+  and puts the party on the choices (party="REP"); a Hart CVR titles them "REP United States
+  Senator"; Wichita's Electionware reports write "United States Senator - Republican Party". When
+  no contest has the same title, `EeResults_Compare` now pairs on the party and the title without
+  it (`cmp_party_title`: a 3-letter code prefix, a " - <Party> Party" suffix, or the one party all
+  the choices that have one share; a trailing " - Vote for ..." is dropped), then lets a side with
+  no party (a primary's proposition, whose Yes / No carry none) pair by title. Exact titles pair
+  first, so other compares are unchanged. `EeResults_NamesMatch` also takes a slash for a word
+  break ("Donald J. Trump JD Vance" = "Donald J. Trump/JD Vance", Parker's Hart CVR). Tarrant
+  P26 now pairs all 677 contest totals (all equal), PR26 40, P24 458 (one precinct chair race
+  only in the results). Smoke test `rescmpparty`.
 - **Results-wide figures:** `adopt_figures` now also takes registered voters, ballots cast and
   ballots by vote type from another file when the shown one lacks them (an ES&S precinct report
   whose statistics give only turnout).

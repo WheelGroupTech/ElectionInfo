@@ -205,7 +205,7 @@ dates) masked.
 |---|---|---|
 | Travis `Registered_Voter_List.csv` | Comma-delimited, ~260 MB | `VUID, EDR, NAME, Registration Date, Status, Residential Address, Street Number 1, Street Name 1, Pre-Direction, …, Precinct`, then one column per district type (`COUNTY COMMISSIONER`, `STATE SENATE`, `US CONGRESS`, `SCHOOL`, `MUNICIPAL UTILITY`, …) |
 | Travis `Registered_Voters_With_History.csv` | Comma-delimited, 58 columns | The voter, then one `<election>VOTED` column per past election (`PR26VOTED`, `L26VOTED`, … back to `P16VOTED`) |
-| Travis OLVR (`p26_olvr_primary_voter_data_rep.csv`) | Fully quoted CSV, state field names | `COUNTY_CODE, PRECINCT, LAST_NAME, FIRST_NAME, …, VUID, RES_ADDR, DATE_OF_BIRTH, …, DIST_TYPE, DIST_CODE, PARTY_CODE` |
+| Texas TEAM Official List of Registered Voters (OLRV) | Fully quoted CSV, state field names | `COUNTY_CODE, PRECINCT, LAST_NAME, FIRST_NAME, …, VUID, RES_ADDR, DATE_OF_BIRTH, …, DIST_TYPE, DIST_CODE, PARTY_CODE` |
 | Dallas, El Paso `COUNTYWIDE…txt` | Tab-delimited, up to ~520 MB | `SOS_VoterID, idnumber, voter_status, party_code, lastname, firstname, …, streetnumber, streetname, …, birthdate, precinct, precsub`, then `district_01 … district_NN`. El Paso names some district columns and leaves others as `district_22` |
 | El Paso (2026) | XLSX | The same fields as a workbook |
 
@@ -441,7 +441,7 @@ Explorer loaded all 471 Clarity elections, and every export-and-reload round tri
 | **ES&S ERM** (older) | Monospaced "SUMMRY REPT-GROUP DETAIL", "PREC REPORT-GROUP DETAIL" | The same facts in a typewriter layout | Mostly scanned |
 | **Electionware printed to PDF** (Travis) | No Producer or Creator; Type 3 fonts | A normal Electionware report | **No character mapping:** glyphs are numbered by first use, so the text has to be recovered by OCR and per-font voting |
 | **Hart Verity** cumulative, canvass, precinct | PDF Producer (Reporting Services) | Cumulative: choice × vote type. Canvass: one contest per page, precinct rows, column headings turned 90° | Columns that do not fit continue on the next page; a precinct report must not be read as one contest per precinct |
-| **Hart (before Verity)** | No Producer, no Creator | "<entity> Canvass / Cumulative / Precinct Report — Official" | Title text split into runs ("C", "umulative") |
+| **Hart (before Verity)** | No Producer, no Creator | `<entity> Canvass / Cumulative / Precinct Report — Official` | Title text split into runs ("C", "umulative") |
 | **Dominion** Election Summary Report | Report title (`ElectionSummaryReportRPT`) | The same report as XML, XLSX and PDF | Vote For not printed (derived from the XML's ballot counts); qualified write-ins listed by name |
 | **Dominion** Statement of Votes Cast | `StatementOfVotesCastRPT` | Precinct × vote type, two panels per page (DeKalb P26: 3,084 pages) | Counts printed as `****` ("Insufficient Turnout to Protect Voter Privacy"), recovered from each precinct's total |
 

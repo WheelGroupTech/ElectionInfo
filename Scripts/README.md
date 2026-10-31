@@ -15,11 +15,22 @@ commands.
 
 | Directory | Purpose |
 |-----------|---------|
+| [`Documentation/`](Documentation/) | Build the PDF version of the repository's election data formats document |
 | [`ES&S/`](ES&S/) | Process and analyze ES&S CVR, ballot, and audit exports |
 | [`Results_Tapes/`](Results_Tapes/) | OCR/process ES&S DS200 results-tape TIFF images and analyze captured totals |
 | [`Travis_County_Appraisal_District/`](Travis_County_Appraisal_District/) | Parse TCAD certified appraisal exports into property CSV files |
 | [`Travis_County_Elections/`](Travis_County_Elections/) | Election-specific Travis County roster, registration, RID, check-in, and ballot tools |
 | [`Travis_County_Voter_Registration/`](Travis_County_Voter_Registration/) | General Travis County voter-registration list analysis and property matching |
+
+---
+
+## `Documentation/`
+
+Tools for the repository's documents. They need Microsoft Edge and `python -m pip install markdown pymupdf`.
+
+| File | Overview |
+|------|----------|
+| `build_election_data_formats_pdf.py` | Builds `ELECTION-DATA-FORMATS.pdf` from `ELECTION-DATA-FORMATS.md` (both at the repository root): converts the Markdown to HTML, draws the Mermaid diagram as HTML boxes, points repository links at GitHub, prints with headless Edge, and adds page-number footers. Rerun it whenever the Markdown changes |
 
 ---
 

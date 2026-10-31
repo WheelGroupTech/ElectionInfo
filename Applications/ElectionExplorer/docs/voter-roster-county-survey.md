@@ -794,6 +794,17 @@ titled VUID / Name / Precinct / Date: 1,368 records, all dated, precincts as the
 Regression: of 371 roster PDFs and the 5 roster ZIPs holding PDFs, only this file changes. Smoke test
 `rosterhalves`.
 
+### Bexar's and Travis's October 29-30 file names (2026-10-30)
+
+Bexar renamed its daily files on October 29: `Early Vote Ballots - 2026 - 10 - 29 November 3, 2026
+General Election.pdf` (the day's in-person voters, 40,159) and `Received Mail Ballots - 2023-10-29 -
+November 3, General Election.pdf` (the year a typo; its rows still load as 10/29/2026). The spaced
+"YYYY - MM - DD" date was not recognized, so every in-person row had no Date Voted; `find_date_numeric`
+now reads it (smoke test `county50`). Only this file name among the roster files and ZIPs has the form.
+Travis's October 30 ZIP holds a second correction, `10.05.2026 Ballot by Mail_UPDATED_2.xlsx`, beside
+`_UPDATED`, and `10.28.2026 Ballot by Mail (UPDATE).xlsx`; corrections are now ranked by the number after
+the word, so 911 repeated mail voters are gone (smoke test `rosterrev`).
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

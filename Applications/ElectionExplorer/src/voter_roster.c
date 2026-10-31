@@ -505,6 +505,42 @@ static uint32_t find_date_numeric(const char *s)
             }
             continue;
         }
+        /* "YYYY - MM - DD", spaced (Bexar "Early Vote Ballots - 2026 - 10 - 29 November 3, 2026
+         * General Election.pdf") */
+        if (n - i >= 12 && is_digit(p[1]) && is_digit(p[2]) && is_digit(p[3]) && p[4] == ' ')
+        {
+            const char *q = p + 4;
+            unsigned v[2] = {0, 0};
+            int part;
+            y = (unsigned)((p[0] - '0') * 1000 + (p[1] - '0') * 100 + (p[2] - '0') * 10 + (p[3] - '0'));
+            for (part = 0; part < 2; part++)
+            {
+                while (*q == ' ')
+                {
+                    q++;
+                }
+                if (*q++ != '-')
+                {
+                    break;
+                }
+                while (*q == ' ')
+                {
+                    q++;
+                }
+                for (k = 0; k < 2 && is_digit(*q); k++, q++)
+                {
+                    v[part] = v[part] * 10u + (unsigned)(*q - '0');
+                }
+                if (k == 0 || is_digit(*q))
+                {
+                    break;
+                }
+            }
+            if (part == 2 && y >= 1900 && y <= 2199 && v[0] >= 1 && v[0] <= 12 && v[1] >= 1 && v[1] <= 31)
+            {
+                return y * 10000u + v[0] * 100u + v[1];
+            }
+        }
         /* M[M] sep D[D] sep YYYY */
         for (k = 0; k < 2 && is_digit(*p); k++, p++)
         {

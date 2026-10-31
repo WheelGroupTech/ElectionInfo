@@ -9372,8 +9372,8 @@ cleanup:
  * titles right of their data (Grayson), "MAIL" / "IN PERSON" under "VOTE METHOD" in a list
  * named "mail and in person" (Victoria), "M/D/YY" dates under "ballot returned" and a
  * "101926" file-name date (Tom Green), a weekday file name (Bastrop), "M.D.YY" and "Prct"
- * (Smith), a bare "Voter" name title with "Date Rec'd" (Bowie), and Hunt's truncated
- * "voter_state_vot" title. */
+ * (Smith), a bare "Voter" name title with "Date Rec'd" (Bowie), Hunt's truncated
+ * "voter_state_vot" title, and a spaced "2026 - 10 - 21" file-name date (Bexar). */
 static int test_county50(void)
 {
     static const struct
@@ -9401,6 +9401,8 @@ static int test_county50(void)
         {L"Vote History 10.20.26.csv",
          "election_name,voter_state_vot,voter_first_na,voter_last_n,checkin_tim\r\n"
          "2026 NOVEMBER J,1012439904,FAY,HUNT,10/19/2026 8:00\r\n"},
+        {L"Early Vote Ballots - 2026 - 10 - 21 November 3, 2026 General Election.csv",
+         "VUID,Last Name,First Name,Precinct\r\n1033445566,BEXA,GIL,1001\r\n"},
     };
     TBuf ev[2] = {{0}, {0}};
     TBuf rot = {0}, brz = {0}, pot = {0}, wch = {0};
@@ -9491,11 +9493,11 @@ static int test_county50(void)
         wprintf(L"county50: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 20 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+    if (t.row_count != 21 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
         info.rows_no_date != 0 || info.unsupported_files != 0)
     {
         uint32_t r;
-        wprintf(L"county50: rows %u unknown %u nonvoter %u nodate %u unsupported %u\n", t.row_count,
+        wprintf(L"county50:rows %u unknown %u nonvoter %u nodate %u unsupported %u\n", t.row_count,
                 info.method_rows[EE_VM_NONE], info.rows_non_voter, info.rows_no_date, info.unsupported_files);
         for (r = 0; r < t.row_count; r++)
         {
@@ -9546,7 +9548,9 @@ static int test_county50(void)
         !rt_expect(&t, L"WICH", L"ANNA", L"Middle Name", L"MARIE") ||
         !rt_expect(&t, L"WICH", L"DORA", L"Middle Name", L"LEE") ||
         !rt_expect(&t, L"WICH", L"DORA", L"Voting Method", L"Mail Ballot") ||
-        !rt_expect(&t, L"WICH", L"DORA", L"Date Voted", L"10/21/2026"))
+        !rt_expect(&t, L"WICH", L"DORA", L"Date Voted", L"10/21/2026") ||
+        !rt_expect(&t, L"BEXA", L"GIL", L"Date Voted", L"10/21/2026") ||
+        !rt_expect(&t, L"BEXA", L"GIL", L"Voting Method", L"Early Vote In-Person"))
     {
         goto done;
     }

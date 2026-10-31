@@ -76,8 +76,11 @@ Win32 C11 desktop app (no MFC, static CRT, x64 + ARM64) under `ElectionExplorer/
   (through 10/27 done).
 - **Nightly review reports:**
   `State_Election_Info/Texas_Election_Info/Texas_Early_Voting_Roster_Review_<date>`
-  (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-28 (data
-  through 10/27).
+  (.md/.pdf, plus `_Supplement` and `_Supplement_Records.csv`); latest 2026-10-30 (data
+  through 10/29).
+  - **Loader fix 2026-10-30 (uncommitted; smoke test `county50`):** Bexar's 10/29 in-person file
+    names its date "2026 - 10 - 29" (spaced); `find_date_numeric` now reads it (40,159 rows had
+    no Date Voted). Survey doc "Bexar's and Travis's October 29-30 file names".
   - **Loader gaps found 2026-10-28, fixed 2026-10-29 (uncommitted; smoke test `pdfpieces`):**
     - Guadalupe from 10/27 draws its "VUID"/"DATE" titles in two pieces (one in its cell's clip,
       one not): header titles now join across that;

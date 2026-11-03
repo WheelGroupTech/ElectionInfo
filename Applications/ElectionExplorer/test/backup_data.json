@@ -9,7 +9,8 @@
   ],
   "skip_files": [
     "Election_CVRs\\TX_Travis_County\\G24 CVR.csv",
-    "Election_CVRs\\TX_Dallas_County\\G24 CVR.csv"
+    "Election_CVRs\\TX_Dallas_County\\G24 CVR.csv",
+    "Audit_Logs\\TX_Hays_County\\P26_Audit Log Report-4-20-2026 01-42-18 PM - Burnet.pdf"
   ],
   "replace_patterns": [
     "\\.EarlyVoting\\.\\d{2}_\\d{2}_\\d{4}\\.csv$"

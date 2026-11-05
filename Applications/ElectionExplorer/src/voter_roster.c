@@ -733,10 +733,12 @@ static EeVotingMethod method_from_column(const char *s)
 
 /* Voting method of a file name: its words, else the abbreviations as whole words
  * ("Cumulative_BBM_1124" mail, "Cumulative_EV_1124_10-21-24" early voting, "ED Roster"
- * Election Day). */
+ * Election Day). "BBM" wins over an earlier "EV" (Fort Bend's 2024 mail lists are
+ * "EV-BBM-10-21.pdf": early voting by mail); otherwise the first of EV / ED decides. */
 static EeVotingMethod method_from_name(const char *name)
 {
     EeVotingMethod m = method_from_text(name);
+    EeVotingMethod first = EE_VM_NONE;
     char w[16];
     size_t n = 0;
     const char *p;
@@ -756,13 +758,13 @@ static EeVotingMethod method_from_name(const char *name)
         w[n] = '\0';
         if (strcmp(w, "bbm") == 0 || strcmp(w, "abbm") == 0)
             return EE_VM_MAIL;
-        if (strcmp(w, "ev") == 0)
-            return EE_VM_EARLY;
-        if (strcmp(w, "ed") == 0)
-            return EE_VM_ELECTION_DAY;
+        if (first == EE_VM_NONE && strcmp(w, "ev") == 0)
+            first = EE_VM_EARLY;
+        if (first == EE_VM_NONE && strcmp(w, "ed") == 0)
+            first = EE_VM_ELECTION_DAY;
         n = 0;
         if (c == '\0')
-            return EE_VM_NONE;
+            return first;
     }
 }
 

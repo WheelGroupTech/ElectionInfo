@@ -9199,7 +9199,8 @@ done:
  * - Collin: a mail list that also lists a ballot not received yet ("-": skipped, noted), an
  *   early voting check-in sheet ("CertificateNumber" = the VUID, "VoteDate"), and the
  *   combined early + Election Day list, whose file name names no method: "VotedPhase"
- *   gives it, and VoteType "Provisional" still wins (made-up voters). */
+ *   gives it, and VoteType "Provisional" still wins (made-up voters);
+ * - Fort Bend: a 2024 mail list named "EV-BBM-10-21" (BBM wins over the earlier EV). */
 static int test_county_rosters(void)
 {
     static const struct
@@ -9268,6 +9269,9 @@ static int test_county_rosters(void)
          "Election Day\r\n"
          "\"SAMPLE, CARA PROV\",\"3 MAIN ST, PLANO, TX 75025\",1099000003,121,2026-11-03,25G,Provisional,"
          "Election Day\r\n"},
+        {L"G24_EV-BBM-10-21.csv",
+         "VUID,Name,Precinct\r\n"
+         "1099000004,\"SAMPLE, DORA MAIL\",1001\r\n"},
         {L"G26_VoterTurnout_261013_202610131840074642.csv",
          "VUID,Name,Precinct,Election Name,Voting Method,Ballot Date\r\n"
          "1168600721,\"AARON,CHARLES SIDNEY\",393,2026 NOVEMBER 3 JOINT GENERAL AND SPECIAL ELECTION,AV,10/13/2026\r\n"
@@ -9302,7 +9306,7 @@ static int test_county_rosters(void)
         wprintf(L"counties: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 23 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+    if (t.row_count != 24 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
         info.vuids_duplicated != 0)
     {
         wprintf(L"counties: rows %u unknown %u nonvoter %u dup %u\n", t.row_count, info.method_rows[EE_VM_NONE],
@@ -9349,7 +9353,8 @@ static int test_county_rosters(void)
         !rt_expect(&t, L"SAMPLE", L"ANNA", L"Date Voted", L"10/20/2026") ||
         !rt_expect(&t, L"SAMPLE", L"BETH", L"Voting Method", L"Election Day In-Person") ||
         !rt_expect(&t, L"SAMPLE", L"BETH", L"Date Voted", L"11/03/2026") ||
-        !rt_expect(&t, L"SAMPLE", L"CARA", L"Voting Method", L"Provisional"))
+        !rt_expect(&t, L"SAMPLE", L"CARA", L"Voting Method", L"Provisional") ||
+        !rt_expect(&t, L"SAMPLE", L"DORA", L"Voting Method", L"Mail Ballot"))
     {
         goto done;
     }

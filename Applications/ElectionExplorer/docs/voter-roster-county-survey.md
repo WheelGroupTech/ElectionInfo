@@ -813,6 +813,122 @@ Travis's October 30 ZIP holds a second correction, `10.05.2026 Ballot by Mail_UP
 `_UPDATED`, and `10.28.2026 Ballot by Mail (UPDATE).xlsx`; corrections are now ranked by the number after
 the word, so 911 repeated mail voters are gone (smoke test `rosterrev`).
 
+## Past elections: P24, G24, P26 (2026-11-05)
+
+The user asked for the March 2024 primaries (P24), the November 2024 general (G24) and the March
+2026 primaries (P26) for all 50 counties, from the county sites and the Secretary of State. Files
+are in `Voter_Rosters/TX_<County>_County/` with the usual `<Code>_` prefix.
+
+**Secretary of State.**
+
+- **P26** is still on the current portal (`goelect.txelections.civixapps.com`, election ids 53813
+  Republican and 53814 Democratic).
+  - Saved: every early-voting day's county CSV plus the county's Election Day ZIP. That is 1,200
+    files, 24 per county, all non-empty.
+  - Names: `P26_<COUNTY>.2026 <PARTY> PRIMARY ELECTION.EarlyVoting.<MM_DD_YYYY>.csv` and
+    `...ElectionDay.03_03_2026.zip`.
+  - The portal lists early-voting dates only from 02/17, so mail ballots received before then
+    are in no daily file.
+- **P24 and G24** are only on the older portal `earlyvoting.texas-election.com` (ids 49664
+  G24, 49665 P24 Democratic, 49666 P24 Republican).
+  - Coverage: 34 dates per election, from the first mail day (Sept 29 / Jan 28), plus Election
+    Day.
+  - Access: the portal sits behind Cloudflare and refuses scripts, so the files were fetched
+    inside the built-in browser. The page's own POST requests were used:
+    - early voting: `downloadVoterInfoReport.do` with `idElection`, `selectedDate`,
+      `earlyVoteFlag=true`, `idTown`;
+    - Election Day: `downloadParticipationCountReport.do` with `earlyVoteFlag=false`.
+  - Each election's files were packed into one gzip bundle, saved through the browser and
+    split byte-for-byte.
+  - Its county ids equal the new portal's.
+  - Saved under the new portal's naming:
+    - early voting: `G24_<COUNTY>.2024 NOVEMBER 5TH GENERAL ELECTION.EarlyVoting.<MM_DD_YYYY>.csv`;
+    - Election Day: `...ElectionDay.11_05_2024.zip`;
+    - the primaries likewise, as `2024 MARCH 5TH DEMOCRATIC|REPUBLICAN PRIMARY`.
+  - File counts: G24 1,344; P24 987 Democratic and 1,025 Republican.
+- **Old-portal formats.**
+  - **Days with no data:** for a county/day with no voters the old portal returns its own HTML
+    page instead of a file (no `attachment` header). These are not saved: 406 G24, 763 + 725
+    P24, all on mail-only days before early voting in person.
+  - **CSV:** `VOTER_NAME, ID_VOTER, VOTING_METHOD, PRECINCT`, with no COUNTY column.
+  - **Election Day ZIP:** holds `<eid>_VOTER_<id>.CSV` (with a `Date` column) and a
+    `<eid>_<id>.csv` polling-place count table. The loader skips the count table, noting it as
+    "no recognizable layout".
+  - Rockwall G24 loads 61,891 rows: 51,657 in person + 1,404 mail + 8,830 Election Day, which
+    equals the SOS Election Day count.
+- **Checks against the old portal's own last-day turnout table** (cumulative in-person + mail):
+  - G24: Harris 1,229,926, Dallas, Tarrant, Bexar, Travis, Collin and others equal exactly.
+    Brazoria, Johnson, Hunt, Walker and Bastrop differ by 250-400 voters.
+  - P24: 39 / 50 counties exact (Democratic) and 42 / 50 (Republican). The rest differ by
+    1-77 voters.
+  - P26: Rockwall loads with party, method and date on every row.
+
+**County sites** (four search agents covered every county; files fetched with plain GETs,
+through the built-in browser for sites that refuse scripts, or as Internet Archive `id_`
+copies where the live files are gone). New this run (the 20 largest counties' P24 / G24 / P26
+files from the 10-12 sweep were already there):
+
+- Fort Bend:
+  - P24: daily `EV-m-d.pdf` + `EV-BBM-m-d.pdf`, 20 files.
+  - G24: the same per day, 25 files.
+  - P26: `EV_0222.xlsx` only.
+  - The 2024 files are still served from an old `statistics/2024/` folder that no page links.
+  - Its `Early-Voting-by-Mail-Statistics-*.pdf` are count tables and were not kept.
+  - `EV-BBM-*` loaded as early voting in person, because the file name's first word "EV" won
+    over "BBM". **Fixed 2026-11-05:** in a file name "BBM" now wins over an earlier EV / ED
+    (`method_from_name`; smoke `counties`). The 22 `EV-BBM` files now load 10,280 mail voters,
+    and the 50-county report dumps are unchanged.
+- Wichita P24: the user downloaded `P24_2.20-3.1-Roster.pdf` and `P24_Mail-Ballots-2.23.pdf` by
+  hand. They load 4,130 early in-person voters (the SOS count is 4,131) and 121 undated mail
+  voters.
+- El Paso G24: 23 daily `EV_UPDATED_*` / `ABS_UPDATED_*` text files, from Wayback; the S3
+  originals are 403 now.
+- Cameron: P24 has 4 files (party rosters through 3/1 and mail on 3/4). G24 has 2 files (the
+  countywide roster on 11/01 and mail on 11/04). All are from Wayback.
+- Webb: one daily list each for P24 (3/5) and G24 (10/23), from Wayback.
+- Denton: the G24 mail roster through 11/01, from Wayback.
+- Williamson: one P26 snapshot (2/27), from Wayback.
+- Brazos (browser): G24 has 45 files from its "Archived Election Rosters" page. P26 has 52
+  daily DEM/REP PDFs, the live files reached by their old addresses; one was 404 live and
+  taken from Wayback.
+- Comal: `264/Archived-Data` ZIPs for P24 and G24 (daily PDFs inside, G24 also per-entity
+  subsets), plus 50 P26 daily PDFs.
+- Kaufman: cumulative early-voter rosters for P24 (xlsx) and G24 (csv), both CivicPlus documents.
+  Its P26 documents are 404.
+- Gregg (browser): P26 daily DEM/REP rosters + mail, 25 files. `2026-DEMS-Primary-02-25.pdf` was
+  missed. Its 2024 pages have no rosters.
+- Midland (browser): P26 in-person through 2/27 and mail through 2/19 per party, 4 files.
+- Liberty: P24 has 22 files, G24 has 27 (including Tarkington ISD subsets) and P26 has 12,
+  all live.
+- Hunt: G24 has 154 Wayback files (many per-jurisdiction subsets) and P26 has 38. Its P24
+  files are not archived.
+- Wichita: 12 G24 daily rosters from Wayback (10.24.24 not archived). The live site served two
+  P24 files once and then answered 403 (Cloudflare): `2024/03/2.20-3.1.pdf` and
+  `2024/02/Mail-Ballots-2.23.pdf`. The user downloaded both by hand (see Fort Bend above).
+- Victoria:
+  - P24: cumulative EV + ED rosters, CSV + PDF, CivicPlus docs 1392-1395. These are not linked
+    anywhere; the election was read from the title row.
+  - G24 / P26: 4 files each.
+  - Docs 1381-1390 are a November 2023 election and a February 2024 city special election.
+- Orange: G24 daily mail and in-person lists, 25 files.
+- Potter: cumulative EV and mail rosters, 4 per primary and 2 for G24. The Wix copies were
+  overwritten during each election.
+- Tom Green: 3-4 lists per election.
+- Bowie: P26 mail-received lists, 22 files.
+- Angelina: P26, 22 files.
+- Coryell: P26 (`coryellcountytax.com/early-voting-rosters/`), 24 files.
+- Randall: two cumulative G24 rosters, from Wayback.
+
+**Nothing found online for these elections:**
+
+- Turnout or count tables only: Collin, Nueces.
+- Sites keep the current election only: Bell, Galveston, Hays, Smith (Laserfiche holds only G25
+  / G26 lists), Ellis, Johnson, Parker, Ector, Taylor, Rockwall, Bastrop, Henderson, Walker,
+  Jefferson (new site; older uploads unreachable).
+- Gone and not archived: McLennan (one truncated P24 Wayback copy, discarded), Grayson P26,
+  Hunt P24, Kaufman P26, Randall P24 / P26.
+- For all of these, the SOS files above are the only source.
+
 ## Open questions for the user
 
 1. Order of counties to support (suggest Tarrant first — local files and layout PDFs —

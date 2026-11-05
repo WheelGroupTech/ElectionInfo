@@ -115,11 +115,15 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
-- **Collin combined roster (2026-11-05, uncommitted):** `voters-through-november-3-2026.xlsx` now
+- **Collin combined roster (2026-11-05, committed 1d89b74):** `voters-through-november-3-2026.xlsx` now
   loads with methods: its `VotedPhase` column ("Early Voting" / "Election Day") gives the method,
   VoteType "Provisional" still wins (`HeaderMap.phase` in voter_roster.c; smoke `counties`; survey
   doc "Collin's combined list"). Checked against an independent count; the 50 counties' report
-  dumps are otherwise unchanged.
+  dumps are otherwise unchanged. Also (uncommitted): a file name's "BBM" now wins over an earlier "EV" (Fort
+  Bend 2024 `EV-BBM-*.pdf` mail lists; `method_from_name`; smoke `counties`).
+- **Past-election rosters (2026-11-05, data only, gitignored):** P24 / G24 / P26 rosters for the
+  50 counties from the SOS (old portal for 2024, via the built-in browser) and county sites.
+  The sources and quirks are in the survey doc's "Past elections: P24, G24, P26" section.
 - **OneDrive data backup (2026-10-30, uncommitted tools):** `ElectionExplorer/test/data_check.c` +
   `build_data_check.ps1` (loader harness, JSON out) and `test/backup_data.py` + `backup_data.json`
   (dry run / `--copy`; docs in `test/README.md`) back up rosters, CVRs, results and audit logs that

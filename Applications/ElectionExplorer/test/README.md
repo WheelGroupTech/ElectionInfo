@@ -358,7 +358,7 @@ Voting Method "AV" (mail) on a 10/13 ballot (outside the 17-day early-voting win
 blank method cell in an all-"AV" column, Collin's mail list with a ballot not received yet
 ("-": skipped, noted), its check-in sheet (CertificateNumber = VUID, VoteDate) and its
 combined early + Election Day list (VotedPhase gives the method; VoteType "Provisional"
-still wins);
+still wins), and Fort Bend's 2024 mail list named "EV-BBM-10-21" (BBM wins over EV);
 `sosroster` covers the Texas Secretary of State's turnout rosters: a loose statewide early
 voting CSV (`COUNTY`, `ID_VOTER`, MAIL-IN / IN-PERSON, a "Jr" suffix, no Date Voted) and
 Election Day ZIPs whose roster is `STATEWIDE_VOTER_INFO.csv` for both parties (named after

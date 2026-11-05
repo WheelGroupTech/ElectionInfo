@@ -1199,6 +1199,7 @@ typedef struct HeaderMap
                      * use_time_date */
     int pct_alt;    /* Harris "NEWPRECINCT" (also kept): the precinct when PRECINCT is blank */
     int site;       /* Hidalgo "SITE" (also kept): "EV-..." / "ED-..." names the method */
+    int phase;      /* Collin "VotedPhase" (also kept): "Early Voting" / "Election Day" */
     BOOL mail_hint; /* a mail list's columns (received / return date, ballot status) */
     BOOL by_entity; /* Montgomery "Election_Name": one row per jurisdiction on the ballot */
     BOOL gap_comma; /* names written "LAST  FIRST MIDDLE" (see sheet_gap_comma) */
@@ -1546,7 +1547,7 @@ static void map_init(HeaderMap *m)
     ZeroMemory(m, sizeof(*m));
     m->vuid = m->pct = m->first = m->last = m->middle = m->suffix = m->full = m->party =
         m->notes = m->aname = m->aaddr = m->method = m->date = m->source = m->vtype = m->adate =
-            m->pct_alt = m->site = m->tdate = -1;
+            m->pct_alt = m->site = m->tdate = m->phase = -1;
 }
 
 /* How well a header label names the state Voter ID (VUID): 1 = a state ID ("VUID",
@@ -1842,6 +1843,12 @@ static void map_header(Loader *L, const SheetRows *r, uint32_t row, HeaderMap *m
                 {
                     m->site = ci; /* Hidalgo "EV-Elections Annex" / "ED-UTRGV"; Hunt "Polling Pl"
                                    * (cut short in print): "FWCC-EV", "BBM" (a mail ballot) */
+                }
+                if (m->phase < 0 && (strcmp(lab, "votedphase") == 0 || strcmp(lab, "voted phase") == 0 ||
+                                     strcmp(lab, "phase") == 0))
+                {
+                    m->phase = ci; /* Collin "VotedPhase": its combined list of early and
+                                    * Election Day voters names no method in its file name */
                 }
             }
         }
@@ -2323,6 +2330,16 @@ static void emit_row(Loader *L, int si, const SheetRows *r, uint32_t row, const 
      * Harris export holds both code schemes). */
     {
         BOOL labeled = FALSE;
+        if (m->phase >= 0)
+        {
+            /* the voting period's words ("Early Voting", "Election Day"); a Vote Type code
+             * below still makes a row Provisional */
+            EeVotingMethod mm = method_from_text(cell_at(r, row, m->phase));
+            if (mm != EE_VM_NONE)
+            {
+                method = mm;
+            }
+        }
         if (m->method >= 0)
         {
             EeVotingMethod mm = EeRoster_MethodFromLabel(cell_at(r, row, m->method));

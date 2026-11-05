@@ -582,6 +582,14 @@ Loader fixes found with these files (`voter_roster.c`):
   dropped as a non-voter (208 of 7,111). Bell now = `pdftotext -raw` (7,111 / 1,685 lines).
 - **`CertificateNumber`** (Collin's and Webb's check-in reports: the VUID) is a Voter ID title
   (generic rank; Tarrant's plain `Certificate` is still not one); **`VoteDate`** is Date Voted.
+- **Collin's combined list** (`voters-through-november-3-2026.xlsx`, posted after Election Day)
+  has the same columns as its early voting and Election Day lists, but its file name names no
+  method, and `VoteType` holds only `Regular` / `Provisional`. **`VotedPhase`** (`Early Voting` /
+  `Election Day`, also kept as an extra column) now gives the method; `Provisional` still makes
+  a row Provisional. Checked 2026-11-05: 453,115 rows = 372,750 early + 76,836 Election Day +
+  3,529 provisional, each equal to an independent count of the workbook (before, the 449,586
+  regular rows loaded with no method). Re-reading the 50 counties' current files changed
+  nothing else. Smoke test `counties` covers it.
 - **Webb's mail list without VUIDs** (from `10-28-2026 - Mail Ballot Received (PDF).pdf`, added
   2026-10-30): `Certificate`, `LastName`, `FirstName`, `MiddleName`, `NameSuffix`, `ReceivedDate`. The
   `Certificate` value is the county's mail ballot certificate number (4-8 digits), not the VUID.

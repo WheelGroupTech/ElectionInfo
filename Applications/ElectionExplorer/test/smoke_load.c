@@ -9196,8 +9196,10 @@ done:
  *   "SANDRA  GLEDHILL" (an empty middle name);
  * - Williamson: Voting Method "AV" (mail) on a 10/13 ballot -- before early voting, which
  *   starts at most 17 days before Nov 3 -- and a row whose method cell is blank;
- * - Collin: a mail list that also lists a ballot not received yet ("-": skipped, noted) and
- *   an early voting check-in sheet ("CertificateNumber" = the VUID, "VoteDate"). */
+ * - Collin: a mail list that also lists a ballot not received yet ("-": skipped, noted), an
+ *   early voting check-in sheet ("CertificateNumber" = the VUID, "VoteDate"), and the
+ *   combined early + Election Day list, whose file name names no method: "VotedPhase"
+ *   gives it, and VoteType "Provisional" still wins (made-up voters). */
 static int test_county_rosters(void)
 {
     static const struct
@@ -9258,6 +9260,14 @@ static int test_county_rosters(void)
          "VoterName,VoterAddress,CertificateNumber,Precinct,VoteDate,VotedBallotStyle1,VoteType,VotedPhase\r\n"
          "\"AALDERINK, RAFE AARON\",\"2448 BRYCEWOOD LN, PLANO, TX 75025\",1077076274,121,2026-10-19,25G,Regular,"
          "Early Voting\r\n"},
+        {L"G26_voters-through-november-3-2026.csv",
+         "VoterName,VoterAddress,CertificateNumber,Precinct,VoteDate,VotedBallotStyle1,VoteType,VotedPhase\r\n"
+         "\"SAMPLE, ANNA EARLY\",\"1 MAIN ST, PLANO, TX 75025\",1099000001,121,2026-10-20,25G,Regular,"
+         "Early Voting\r\n"
+         "\"SAMPLE, BETH DAY\",\"2 MAIN ST, PLANO, TX 75025\",1099000002,121,2026-11-03,25G,Regular,"
+         "Election Day\r\n"
+         "\"SAMPLE, CARA PROV\",\"3 MAIN ST, PLANO, TX 75025\",1099000003,121,2026-11-03,25G,Provisional,"
+         "Election Day\r\n"},
         {L"G26_VoterTurnout_261013_202610131840074642.csv",
          "VUID,Name,Precinct,Election Name,Voting Method,Ballot Date\r\n"
          "1168600721,\"AARON,CHARLES SIDNEY\",393,2026 NOVEMBER 3 JOINT GENERAL AND SPECIAL ELECTION,AV,10/13/2026\r\n"
@@ -9292,7 +9302,7 @@ static int test_county_rosters(void)
         wprintf(L"counties: load failed: %s\n", err);
         goto done;
     }
-    if (t.row_count != 20 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
+    if (t.row_count != 23 || info.method_rows[EE_VM_NONE] != 0 || info.rows_non_voter != 0 ||
         info.vuids_duplicated != 0)
     {
         wprintf(L"counties: rows %u unknown %u nonvoter %u dup %u\n", t.row_count, info.method_rows[EE_VM_NONE],
@@ -9334,7 +9344,12 @@ static int test_county_rosters(void)
         !rt_expect(&t, L"ABDI", L"HERVE", L"Date Voted", L"10/07/2026") ||
         !rt_expect(&t, L"AALDERINK", L"RAFE", L"VUID", L"1077076274") ||
         !rt_expect(&t, L"AALDERINK", L"RAFE", L"Voting Method", L"Early Vote In-Person") ||
-        !rt_expect(&t, L"AALDERINK", L"RAFE", L"Date Voted", L"10/19/2026"))
+        !rt_expect(&t, L"AALDERINK", L"RAFE", L"Date Voted", L"10/19/2026") ||
+        !rt_expect(&t, L"SAMPLE", L"ANNA", L"Voting Method", L"Early Vote In-Person") ||
+        !rt_expect(&t, L"SAMPLE", L"ANNA", L"Date Voted", L"10/20/2026") ||
+        !rt_expect(&t, L"SAMPLE", L"BETH", L"Voting Method", L"Election Day In-Person") ||
+        !rt_expect(&t, L"SAMPLE", L"BETH", L"Date Voted", L"11/03/2026") ||
+        !rt_expect(&t, L"SAMPLE", L"CARA", L"Voting Method", L"Provisional"))
     {
         goto done;
     }

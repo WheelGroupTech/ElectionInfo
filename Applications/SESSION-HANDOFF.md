@@ -115,6 +115,11 @@ Listing; all committed, lint 10/10. Run with `python -I`.
 
 ## Next steps
 
+- **Collin combined roster (2026-11-05, uncommitted):** `voters-through-november-3-2026.xlsx` now
+  loads with methods: its `VotedPhase` column ("Early Voting" / "Election Day") gives the method,
+  VoteType "Provisional" still wins (`HeaderMap.phase` in voter_roster.c; smoke `counties`; survey
+  doc "Collin's combined list"). Checked against an independent count; the 50 counties' report
+  dumps are otherwise unchanged.
 - **OneDrive data backup (2026-10-30, uncommitted tools):** `ElectionExplorer/test/data_check.c` +
   `build_data_check.ps1` (loader harness, JSON out) and `test/backup_data.py` + `backup_data.json`
   (dry run / `--copy`; docs in `test/README.md`) back up rosters, CVRs, results and audit logs that

@@ -5,7 +5,7 @@
 **Data:**
 
 - Travis County's own voter rosters and the Texas Secretary of State's (SOS) roster files for all four elections. The SOS G26 Election Day files were downloaded again on November 5, 2026.
-- Travis County voter registration lists from October 2024 to October 27, 2026:
+- Travis County voter registration lists from March 2024 to October 27, 2026:
   - the county's published lists (`Registered_Voter_List`, `Registered_Voters_With_History`);
   - Official Lists of Registered Voters (OLRV) from the state's Texas Election Administration Management (TEAM) system, which Travis County provided under an Open Records Request.
   - Sources are in section 3.
@@ -107,7 +107,7 @@ Of all 17,854 G26 mail voters, 1,244 have a registration mailing address outside
 
 **Anomalies in the G26 data** (section 9):
 
-- 4,938 G26 voters are on no 2026 Travis registration list, including the county's own Voter Lists through October 20.
+- 4,938 G26 voters are on no 2026 Travis registration list, including the county's own Voter Lists through October 20. Earlier elections had the same gap: 8,804 G24 voters and 1,503 P26 voters were missing from the list at the time. Nearly all the P26 voters appeared on the next list (section 9.1).
 - 558 have a registration date after the October 5 deadline and are on no earlier Travis list. The date may be when the record was entered in TEAM, not when the application was received.
 - 99 are on the September 16 OLRV but on no October list. 72 of them voted by mail.
 - 6 voters were flagged as deceased (obituary findings) in a May 1, 2026 review of the Travis voter list by Elly (theelectorlist.com).
@@ -643,6 +643,49 @@ Pointers to the cause:
 - **Not one of the OLRV gaps the county described:** these voters are not on the county's Voter List either.
 
 The pattern fits registrations or transfers from other counties that were processed or entered in TEAM after October 20. It does not show ineligible voting. It should be checked against the county's post-election registration list: a G26 voter still on no Travis list after the canvass would need an explanation.
+
+**The same gap in earlier elections.** No registration list on file has a record for every G26 voter. To see whether that is unusual, the G24 and P26 rosters (county or SOS) were compared in the same way with the list in use at the time. Missing voters were then looked up on every later Travis list through October 27, 2026: 24 lists in all, from March 2024 on.
+
+| | G24 | P26 |
+|---|---:|---:|
+| Voters on the roster (VUIDs) | 584,611 | 274,689 |
+| List(s) at the time | the county's "2024-10-24" lists | the county's February 10, 2026 list and the P26 OLRV |
+| **Missing from the list at the time** | **8,804 (1.5%)** | **1,503 (0.5%)** |
+| Found on a later list | 4,682 | 1,433 |
+| On no later list | 4,122 | 70 |
+| The county's later vote history credits the vote | 4,056 | 1,397 |
+
+**P26:** the gap closed within weeks.
+
+- **Most reappeared on the next list:** 1,425 of the 1,503 are on the P26 runoff OLRV of May 14, 2026.
+- **The list at the time was the official one:** the P26 OLRV has 920,114 records, exactly the official registered-voter count for P26.
+- **Who they are:** mostly early (940) and Election Day (495) voters, many with new VUIDs (33xxxxxxxx).
+- **Registration timing:** among the 1,433 found later, 1,271 had applied by the February 2 registration deadline and 147 after it but before Election Day.
+
+**G24:** two different groups.
+
+- **4,682 found on a later list:**
+  - **New registrations (3,563):** mostly early and Election Day voters; 2,927 had applied by the October 7 deadline.
+  - **Absent from the October list only (1,119):** on the March 2024 list and on later lists.
+    - 1,045 of these are mail voters listed only in the SOS file, not on the county's roster.
+    - The county's own later vote history credits 1,077 of the 1,119 with a G24 vote.
+  - **When they reappear:** most first reappear on the October 25, 2025 list, because no list between October 2024 and October 2025 is on file.
+- **4,081 on no Travis list at all:** from March 2024 through October 27, 2026.
+  - **Who they are:** 4,012 are mail voters, and 4,054 have VUIDs beginning with 22.
+  - **When their ballots arrived:** they make up almost all of the county's earliest mail lists, before regular mail ballots went out: 87 of 88 voters on September 30, all 216 on October 7 and all 41 on October 8. They are most of the lists after Election Day: 110 of 135 on November 7 and 46 of 53 on November 8. 156 of their mail ballots were logged after Election Day.
+  - **G26:** 4,009 of them did not vote in G26.
+  - **Likely explanation (not confirmed by the county):** this fits overseas and military voters registered by Federal Post Card Application, whom the county's published lists appear not to include.
+- **The G24 list was older than its name:**
+  - **Its real date:** the files named "2024-10-24" carry a file date of October 14, 2024, and their G24 vote history ends with mail ballots received October 11.
+  - **What that means:** they show the list about three weeks before Election Day, a week after the registration deadline, so registrations processed after that are missing.
+
+**What this means for G26:** the 4,938 G26 voters (0.9%) look like the P26 group and the G24 new registrations, not the G24 mail group.
+
+- **Who they are:** mostly early and Election Day voters with new VUIDs.
+- **Comparison with G24:** without the 4,081 never-listed mail voters, G24's gap is 4,723 voters (0.8%), close to G26's.
+- **What to expect:** if G26 follows P26, most of the 4,938 should appear on the first Travis list after the election.
+
+**History files not refreshed:** the county's `Registered_Voters_With_History` downloads dated October 25, 2025, January 17, 2026 and February 10, 2026 are byte-for-byte the same file. The county did not refresh it for four months.
 
 ### 9.2 Registration dated after the deadline (558; records A2)
 

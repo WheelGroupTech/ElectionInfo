@@ -1,8 +1,12 @@
-# Travis County 2025 Election Precinct Changes: Boundary and Data Review
+# Travis County 2025 Election Precinct Changes: Review and Requested Corrections
 
 **Subject:** the county election precinct plan the Travis County Commissioners Court adopted on December 4, 2025 (287 precincts to 308), and how that plan was carried into the voter registration data  
 **County:** Travis County, Texas  
-**Date:** November 8, 2026
+**For:** Travis County Tax Office, Voter Registration Division; Travis County Clerk, Elections Division; and the Travis County Commissioners Court  
+**Date:** November 8, 2026  
+**Prepared by:** Daniel M. Teal, dan@teals.org
+
+**What is requested.** Section 2 is a register of every record that needs investigation or correction, with its count, the section of this report that establishes it, and the itemised list in the companion supplement. The adopted precinct map itself is not in question: all 308 precincts are contiguous, the published shapefile matches the live county service, and the county's own address data follows the map in 99.91% of cases. What needs attention is how that plan was carried into the published registration data, together with three size and population questions the new plan raises for the Commissioners Court under Texas Election Code Chapter 42.
 
 **Why the precincts changed.** The 89th Legislature passed new congressional districts in a 2025 special session. Texas Election Code §42.005(a) forbids a county election precinct from containing territory from more than one congressional district (and likewise more than one state senate, state house, commissioners, justice of the peace or State Board of Education district), so new congressional lines force a county to redraw its election precincts. The Commissioners Court adopted the new plan unanimously on December 4, 2025, on Commissioner Travillion's motion "to approve the election precinct boundaries proposed plan for 2025, which includes the additional change to precinct 100 and precinct 108, as included in the backup," with the proviso that if the Supreme Court made the 2021 congressional map operational for 2026 the county would revert to the 2021 precincts. The 2025 map stayed in effect, and the new precincts took effect January 1, 2026 under §42.033(a).
 
@@ -16,7 +20,7 @@
 
 **Privacy.** Voters are identified only by VUID (state voter identification number). No voter names or dates of birth appear here, and no voter is linked to a street address. Street addresses in this report are property-level facts taken from the county's published address master, the appraisal district's parcel records and the Commissioners Court's own maps.
 
-**Companion files.** The correction detail for the county is in **Travis_County_2025_Precinct_Change_Review_2026-11-08_Supplement.md**, and three data files accompany this report:
+**Companion files.** The record-by-record correction detail is in **Travis_County_2025_Precinct_Change_Review_2026-11-08_Supplement.md**, which is organised by the kind of correction needed and names the specific VUIDs, addresses and layers in each case. Three data files accompany this report:
 
 - **`..._Records.csv`** — one row per finding, with the columns `section`, `category`, `key` and `detail`. Its 1,300 records are in sections S1 through S12, listed below.
 - **`..._Precincts.csv`** — one row per precinct, with the geometry measures, the address, parcel and registration counts and the G26 roster count used throughout this report.
@@ -48,19 +52,19 @@
 
 **The errors are in the registration data, not the map.**
 
-- **141 registered voters at 97 distinct addresses** were in a precinct, on the county's October 20, 2026 Voter List, that contradicts both the adopted map and the county's own address master. In 96 of the 97 resolvable cases the map and the address master agree with each other and the voter list is the outlier (section 5.3).
+- **141 registered voters at 97 distinct addresses** were in a precinct, on the county's October 20, 2026 Voter List, that contradicts both the adopted map and the county's own address master. In **all 96 of the 96 resolvable cases** the map and the address master agree with each other and the voter list is the outlier; the remaining address has no usable geometry and is left unresolved (section 5.3).
 - **125 of those 141** were in a precinct whose districts differ from the correct precinct's — 49 in the wrong congressional district, 94 in the wrong state house district, 21 in the wrong senate district, 90 in the wrong commissioners precinct and 93 in the wrong JP precinct.
-- **The error reached the ballot.** 93 of the 141 voted in G26. **84 of them appear on the official G26 roster under the wrong precinct, and 71 of those 84 were in a precinct carrying at least one different district — including 23 in the wrong congressional district.** Those voters were very likely issued a ballot for districts they do not live in.
+- **The error reached the roster the polls worked from.** 93 of the 141 voted in G26. **84 of them appear on the official G26 roster under the wrong precinct, and 71 of those 84 were in a precinct carrying at least one different district — including 23 in the wrong congressional district.** Those 71 were very likely issued a ballot for districts they do not live in. The ballot style actually issued cannot be confirmed from the roster alone. This is the finding with the shortest window for action, and the 71 VUIDs are listed in the supplement so the county can check them against its own ballot-style records.
 - The October 27, 2026 TEAM OLRV — the file behind the electronic pollbook — has **489 voters** whose precinct contradicts the address master (section 5.4). Part of that count is unit-level ambiguity in dense student housing, but the largest clusters are the same addresses that are wrong on the county list.
 
-**Precinct 369 is the clearest single failure, and it is exactly as first observed.**
+**Precinct 369 is the clearest single defect in the published lists — and the county had it right by Election Day.**
 
 - Precinct 369 is a 1.68-acre precinct carved out of 2021 precinct 382. It holds four single-family parcels: 5302 and 5308 Hanging Cliff Cove and 10701 and 10705 Watering Rock Lane, in ZIP 78759.
 - It had 8 or 9 registered voters on every county list from February 10, 2026 through October 13, 2026, and on the September 16 OLRV and the October 27 *initial* OLRV.
 - On the **October 20 county Voter List** its nine voters appear with the precinct value **"P 182.4"** — a precinct-split code, not a precinct number, naming precinct 182, which lies about 7 miles east in a different congressional, house and commissioners district. These are the only nine such malformed values in a list of 950,019.
 - On the **October 27 TEAM OLRV** the same nine appear in **precinct 309**, which does not exist in the 308-precinct plan.
-- Precinct 369 is therefore the **only one of 308 precincts where more voters voted than can be accounted for**: 6 voters on the G26 roster against 0 registered voters on the October 20 list and 0 on the October 27 OLRV.
-- The ballots appear to have been right anyway. All six of those voters are on the G26 roster in precinct 369, so the pollbook used the correct precinct even though both published lists did not.
+- Precinct 369 is therefore the **only one of 308 precincts whose G26 roster shows more voters than either published registration list**: 6 roster voters against 0 registered voters on the October 20 list and 0 on the October 27 OLRV. The six voters are fully accounted for — they were registered, they live at four identified addresses, and the roster carries them under 369. What failed is that both published lists mislabelled them.
+- **The correct value reached the November election.** All six of the nine who voted appear on the G26 roster in precinct 369, so the roster the polls worked from carried the correct precinct even though both published lists did not — whether because the county corrected it or because the defect never entered that pipeline is for the county's records to show. Precinct 369 is thus a defect in the published extracts rather than in what happened at the polls. What remains to be corrected is the registration record itself and the two published files, and what remains to be investigated is how a correct value became "P 182.4" and "P 309" in the last two weeks before the election.
 
 **Nine precincts contain no residence at all, and should never show a voter.**
 
@@ -85,34 +89,33 @@ Each contains a single placeholder address record named "FAKE PT" and **zero app
 
 This matters because the OLRV's precinct field is itself a split designation (`S 331.2`, `P 266`), so stale split numbering is a plausible route by which a correct precinct becomes a wrong one downstream.
 
-## 2. Direct answers
+## 2. Records that need investigation or correction
 
-**Did Travis County go from 287 to 308 precincts?** Yes. Intergovernmental Relations Officer Julie Wheeler told the Commissioners Court on December 4, 2025: "We are currently at 287 precincts. With these changes will go up to 308." The adopted shapefile has exactly 308.
+Every item below is itemised record by record — by VUID, by address, or by layer and field — in the companion supplement, and in machine-readable form in `..._Records.csv`. Counts are as published in the county and TEAM files dated through October 27, 2026. The last three columns give the section of this report that establishes the item, the section of the supplement that lists the individual records, and the record section in the CSV. A letter is a lettered section of the supplement; "Fix *n*" is an item in its closing "Suggested systemic fixes" list.
 
-**Have addresses been properly updated to the correct precincts in the voter registration lists?** Almost entirely, but not completely. Measured against the adopted map and the county's own address master, **141 of 950,019 registered voters (1 in 6,738), at 97 addresses, were in the wrong precinct on the October 20, 2026 list**; the October 27 TEAM OLRV has 489 such voters. 99.69% of the October 20 list joined to the address master, so the measurement covers nearly the whole list (section 5.2).
+| # | What needs correcting | Scale | Report | Supplement | Records |
+|---:|---|---|---|---|---|
+| 1 | Nine registrations published under the invalid precinct values "P 182.4" and "P 309"; they belong to precinct 369 | 9 voters | 3 | G | S9 |
+| 2 | Voters who cast a G26 ballot from a precinct carrying at least one district other than their own, 23 of them a different congressional district | 71 voters | 5.3 | B | S1 |
+| 3 | Addresses coded to the wrong precinct on the October 20, 2026 county Voter List | 97 addresses, 141 voters | 5.3 | A | S3 |
+| 4 | Address records whose district codes conflict with their own precinct, the condition §42.005 forbids | 20 addresses in 9 precincts | 6.3 | C | S4 |
+| 5 | Address-master points coded to a precinct their own coordinates do not fall in | 28 points | 5.5 | D | S5 |
+| 6 | Address-master points that fall outside every precinct polygon | 351 points | 5.5 | D | S6 |
+| 7 | TEAM OLRV precinct values that disagree with the county address master; the student-housing subset needs the county's unit-level data to resolve | 489 voters at 476 addresses | 5.4 | J | S2 |
+| 8 | One corrupt OLRV split value, "0864.02", for a voter every other file places in split 308.3 | 1 voter | 5.4 | J | — |
+| 9 | Registrations published in precinct "99999", including two with unusable residence addresses | 14 voters | 5.6 | H | S10 |
+| 10 | `AdMas` `PrecinctSplit` and `Split` fields still carrying 2021 precinct numbers | 32,067 points, 92 number pairs | 4.2 | E | S8 |
+| 11 | The `Splits` polygon layer, which still describes the 2021 plan's 287 precincts and was never redrawn | all 1,133 polygons | 4.2 | E | — |
+| 12 | Two malformed `PrecinctSplit` values: "150" with no split number at 16336 Cameron Road, and "13.01" for the placeholder record in precinct 139 | 2 points | 4.2 | E | S8 |
+| 13 | `UnregisteredAddresses` points coded to precinct numbers the 2025 plan retired | 5,203 points, 22 numbers | 4.3 | F | S7 |
+| 14 | Precincts outside the §42.006(a) range of 100 to 5,000 non-suspense registered voters | 23 precincts | 6.1 | I.1, I.2 | S12 |
+| 15 | Precincts that contain no residence at all, which §42.010(b) directs the Commissioners Court to consider eliminating | 9 precincts | 6.2 | I.3 | S11 |
+| 16 | Published shapefile metadata still carrying unmodified template text, and a `VoterCount` attribute now below the registered count in 294 of 308 precincts | 1 file | 4.4, 4.5 | Fix 5 | — |
+| 17 | `AdMas` housekeeping: `Latitude` and `Longitude` zero in 410,070 of 412,053 records, 532 blank `County` codes, and one record coded to county 277 | 3 items | 4.5, 5.5 | Fixes 6, 7 | — |
 
-**How many addresses have been assigned to incorrect precincts?** 97 distinct addresses on the county's October 20 list, and 476 on the October 27 TEAM OLRV. Separately, 28 of the county's own address-master points are coded to a precinct their coordinates do not fall in, and 351 fall outside the precinct layer entirely.
+Items 1 through 9 are corrections to voter records and published extracts and can be made by the Voter Registration Division and the Elections Division. Items 10 through 13 and 16 and 17 are GIS and metadata corrections. Items 14 and 15 are matters for the Commissioners Court at the review §42.031(a) sets for March or April of 2027, or earlier under §42.031(b)(2).
 
-**Are there more voters from a precinct than can be accounted for?** In exactly one precinct: **369**, with 6 G26 voters against 0 registered voters on both the October 20 county list and the October 27 OLRV. Every other precinct's G26 roster count is below its registration count.
-
-**What precincts should not have any voters?** Nine: **128, 139, 147, 179, 228, 239, 249, 257 and 259**. Each holds one placeholder address record and no appraisal-district parcel whatsoever. **239 is entirely within Lake Austin** and **228 is a 125-foot-wide strip inside the MoPac (Loop 1) right-of-way**, as suspected. A tenth, **369**, should have about 8 or 9 voters and is published with none.
-
-**Do the provided shapefiles contain address information?** **No.** `Election_Precincts.shp` carries only `Precinct`, `VoterCount` and the six district codes (congressional, senate, legislative, commissioner, JP/constable, State Board of Education), plus editor and edit-date fields. Its XML metadata is an unfilled template — the abstract and purpose still read "REQUIRED: A brief narrative summary of the data set" — and it records no effective date or plan identification.
-
-**But the county does publish address-level precinct data**, on the same ArcGIS server that serves the precinct layer, and it is the key to auditing this:
-
-| Service | Records | What it is |
-|---|---:|---|
-| `AdMas/AdMas` | 412,053 | the address master: every address with `Precinct`, `Split`, `PrecinctSplit`, all six districts, the appraisal `property_id` and a `CodeCat` jurisdiction string |
-| `VotingAddresses/VA` | 412,016 | the same addresses in the voter-registration layout |
-| `UnregisteredAddresses` | 110,630 | addresses with no registered voter |
-| `AdMas/Splits` | 1,133 | precinct-split polygons (still on the 2021 plan) |
-| `Precincts` | 308 | the adopted precinct polygons |
-| `Parcels` | 373,683 | appraisal parcels with `PROP_ID`, situs address, land-use code and values |
-
-One caveat: the `Latitude` and `Longitude` *attributes* in the address master are 0 for 410,070 of the 412,053 records, so the point geometry has to be read instead of those columns.
-
-**Does the appraisal district data help?** Yes, decisively for the empty precincts. Assigning all 373,683 parcels to precincts confirms that the nine placeholder precincts contain no parcel at all, while precinct 369 contains four single-family parcels. The appraisal records also characterise the largest misassigned addresses — 1007 S Congress Avenue is an apartment and commercial-condo property (state codes B1 and F4), and the precinct 369 addresses are four single-family homes.
+**What is not in question.** The adopted map itself holds up on every test applied here: 308 contiguous precincts, the published shapefile identical to the live `Precincts` service, each precinct carrying a single value for all six district types, and 411,674 of 412,053 address points (99.91%) geometrically inside the precinct they are coded to. No change to the adopted boundaries is requested on account of any finding in this report other than items 14 and 15, which arise from the statutory size and population tests rather than from a defect in the drawing.
 
 ## 3. Precinct 369: the full sequence
 
@@ -132,6 +135,8 @@ Precinct 369 was created by splitting 2021 precinct 382. Of 382's address-stable
 
 Both failures appeared in the last two weeks before the election, after ten months of correct values, and both affect the same nine VUIDs (records section S9).
 
+**The roster was right.** The G26 roster carries all six of the nine who voted under precinct 369, so whatever went wrong in the October 20 Voter List and the October 27 OLRV did not reach the roster the polls worked from: the county had the correct precinct for these voters for the November election. That narrows what is outstanding to three things — the registration record itself, which should read 369 on any extract taken today; the two published files, which should be reissued with the correct value; and the cause, since a value that had been correct for ten months became a malformed split code two weeks before a general election and would have mattered a great deal had it also reached the roster.
+
 The county's own account of the October 27 OLRV files, recorded in the November 5, 2026 participation review, fits this: the initial pull "was missing the voters of two precinct splits" and "included voters with incorrect splits, whom the county removed," and the current version "still showed about 200 voters with the incorrect split, whom the county was updating by hand." Precinct 369 came from a precinct split, and the wrong value published for it on October 20 is literally a split code — 182.4.
 
 Neither wrong value is a near-miss for 369. Precinct 182 exists in both the 2021 and 2025 plans (2021 precinct 182 became 182 and 188); its centroid is about 7 miles east of precinct 369, in congressional district G10 rather than G37, house district L50 rather than L47, and commissioners precinct P01 rather than P03. Precinct 309 does not exist at all: the 2025 plan runs 308 then 311. Both values therefore point away from precinct 369's actual districts, which is why the 49 wrong-district counts in section 5.3 include all nine of these registrations.
@@ -150,6 +155,8 @@ The address master puts nine address points in precinct 369 — those four plus 
 ## 4. The adopted plan
 
 ### 4.1 What changed
+
+Intergovernmental Relations Officer Julie Wheeler told the Commissioners Court on December 4, 2025: "We are currently at 287 precincts. With these changes will go up to 308." The adopted shapefile has exactly 308.
 
 Reconstructed from the 874,747 voters who appear on both the October 25, 2025 and February 10, 2026 county lists **at the same residential address**, so that ordinary moves are excluded (21,976 voters who moved are set aside):
 
@@ -211,6 +218,25 @@ The `Splits` polygon layer tells the same story more starkly: all 1,133 split po
 ### 4.4 The shapefile's VoterCount is a stale snapshot
 
 The shapefile and the live service both carry a `VoterCount` per precinct, totalling 823,777. The October 20, 2026 list has 950,019 registered voters, of whom 812,742 are not in suspense. `VoterCount` is below the current registered count in **294 of 308 precincts**, by as much as 1,599 (precinct 312). It appears to be a non-suspense count from about the time the map was drawn. Anyone checking §42.006 compliance from the shapefile alone would be working from numbers that are now a year stale — and four precincts (126, 464, 138, 483) already exceeded 5,000 by that measure when the plan was adopted.
+
+### 4.5 The shapefile carries no address data; the county's other layers do
+
+`Election_Precincts.shp` carries only `Precinct`, `VoterCount` and the six district codes — congressional, senate, legislative, commissioner, JP/constable and State Board of Education — plus editor and edit-date fields. It contains no address information of any kind, and its XML metadata is an unfilled template: the abstract and purpose both still read "REQUIRED: A brief narrative summary of the data set," and the file records no effective date and no plan identification.
+
+The county does, however, publish the address-level data on the same ArcGIS server that serves the precinct layer, and that data is what makes precinct assignment auditable:
+
+| Service | Records | What it is |
+|---|---:|---|
+| `AdMas/AdMas` | 412,053 | the address master: every address with `Precinct`, `Split`, `PrecinctSplit`, all six districts, the appraisal `property_id` and a `CodeCat` jurisdiction string |
+| `VotingAddresses/VA` | 412,016 | the same addresses in the voter-registration layout |
+| `UnregisteredAddresses` | 110,630 | addresses with no registered voter |
+| `AdMas/Splits` | 1,133 | precinct-split polygons, still on the 2021 plan |
+| `Precincts` | 308 | the adopted precinct polygons |
+| `Parcels` | 373,683 | appraisal parcels with `PROP_ID`, situs address, land-use code and values |
+
+Two usability problems in that data are worth correcting. The `Latitude` and `Longitude` *attributes* in the address master are 0 for 410,070 of the 412,053 records, so the point geometry has to be downloaded instead of those columns being read. And the address-level layers are served publicly but are not presented as downloads on the Voter Registration Maps hub's own "GIS Maps and Downloads" page alongside the precinct shapefile.
+
+The appraisal `Parcels` layer settles the empty-precinct question on its own. Assigning all 373,683 parcels to precincts confirms that the nine placeholder precincts of section 6.2 contain no parcel at all, while precinct 369 contains four single-family parcels. The appraisal records also characterise the largest misassigned addresses: 1007 S Congress Avenue is an apartment and commercial-condominium property, state codes B1 and F4, and the four precinct 369 properties are single-family homes.
 
 ## 5. Precinct assignment errors in the registration data
 
@@ -459,19 +485,20 @@ Three of these have many more addresses and parcels than voters and are therefor
 
 Precincts 278 (681 voters at 5 distinct addresses), 303 (498 at 9) and 196 (803 at 10) are the reverse case — few addresses but many voters, because each address is a large apartment or condominium property.
 
-## 8. Recommendations
+## 8. Requested actions
 
-For the county:
+Each action corresponds to one or more numbered items in the section 2 register, and the records to act on are itemised in the supplement.
 
-1. **Correct the nine precinct 369 registrations** and reissue the October 20 Voter List and October 27 OLRV extracts. The published value "P 182.4" is not a precinct number and "P 309" is not a precinct.
-2. **Correct the 97 addresses in records section S3** and the 20 district-code conflicts in section S4, and review the 476 OLRV addresses in section S2. The 23 voters who cast a G26 ballot from a precinct in the wrong congressional district should be identified to the Secretary of State.
-3. **Add a directional-prefix validation rule.** The largest clusters — 8000, 7880 and 7631 US 290; 3501 FM 620; 1007 Congress — all arise from a registration address with no N/S/E/W prefix being resolved onto the wrong side of the county. The address master already flags the wrong-side records as "Rogue"; the registration system should refuse to resolve to a point the address master has flagged, and should require the prefix when the ZIP code contradicts it.
-4. **Migrate the split numbering.** Renumber the address master's `PrecinctSplit` and `Split` fields for the 32,067 affected points, redraw the `Splits` polygon layer for the 2025 plan (it still describes 287 precincts), fix the malformed values at 16336 Cameron Road and in precinct 139, and recode the 5,203 `UnregisteredAddresses` points still on retired 2021 numbers. Because the OLRV precinct field is itself a split designation, stale split numbering is the most plausible mechanism for the precinct values that went wrong in late October.
-5. **Resolve or retire the "99999" precinct value** and the 14 registrations that carried it, several of which have unusable addresses.
-6. **Act on §42.010 for the nine empty precincts.** The Commissioners Court is directed by §42.010(b) to consider eliminating precincts with no population after commissioners or justice precinct redistricting, and may recommend changes to the Secretary of State under §42.010(c). Precinct 239 lies entirely in Lake Austin and precinct 228 entirely in the MoPac right-of-way; neither can ever contain a voter.
-7. **Bring the six oversize precincts back under 5,000** at the March–April 2027 review under §42.031(a), or earlier under §42.031(b)(2), and consider combining the smallest precincts under §42.0051(a).
-8. **Fill in the shapefile metadata.** The published `Election_Precincts.shp.xml` still contains the template text "REQUIRED: A brief narrative summary of the data set" and records no effective date or plan identification. Add the December 4, 2025 order date, the January 1, 2026 effective date and a plan name, and note that `VoterCount` is a point-in-time snapshot.
-9. **Publish the address-level layers from the Voter Registration hub.** `AdMas`, `VotingAddresses` and `UnregisteredAddresses` are the data that make precinct assignment auditable, and they are already served publicly but are not presented as downloads alongside the precinct shapefile. Populating the `Latitude` and `Longitude` columns, which are 0 in 410,070 of 412,053 records, would also help.
+1. **Confirm the nine precinct 369 registrations now read 369, and reissue the two published extracts.** The roster shows the county had the correct value by Election Day; what is requested is confirmation that the registration records themselves are correct, reissue of the October 20 Voter List and the October 27 OLRV with a valid precinct value, and a determination of how "P 182.4" and "P 309" were introduced — the first is a split code rather than a precinct number, and the second is not a precinct in the adopted plan.
+2. **Check the 71 G26 voters in section B against the county's ballot-style records.** These voters appear on the G26 roster in a precinct that carries at least one district other than the one their address lies in, 23 of them a different congressional district. Whether each was issued the ballot for their own districts can be determined from the county's ballot-style and cast vote records but not from the roster alone, so this is the item on which the county's own records are needed most, and the one most time-sensitive given the canvass and any contest period. If any of them was issued a ballot for a congressional, legislative or senate district other than their own, that should be reported to the Secretary of State's Elections Division.
+3. **Correct the 97 addresses in records section S3** and the 20 district-code conflicts in section S4, and review the 476 OLRV addresses in section S2.
+4. **Add a directional-prefix validation rule.** The largest clusters — 8000, 7880 and 7631 US 290; 3501 FM 620; 1007 Congress — all arise from a registration address with no N/S/E/W prefix being resolved onto the wrong side of the county. The address master already flags the wrong-side records as "Rogue"; the registration system should refuse to resolve to a point the address master has flagged, and should require the prefix when the ZIP code contradicts it.
+5. **Migrate the split numbering.** Renumber the address master's `PrecinctSplit` and `Split` fields for the 32,067 affected points, redraw the `Splits` polygon layer for the 2025 plan (it still describes 287 precincts), fix the malformed values at 16336 Cameron Road and in precinct 139, and recode the 5,203 `UnregisteredAddresses` points still on retired 2021 numbers. Because the OLRV precinct field is itself a split designation, stale split numbering is the most plausible mechanism for the precinct values that went wrong in late October.
+6. **Resolve or retire the "99999" precinct value** and the 14 registrations that carried it, several of which have unusable addresses.
+7. **Act on §42.010 for the nine empty precincts.** The Commissioners Court is directed by §42.010(b) to consider eliminating precincts with no population after commissioners or justice precinct redistricting, and may recommend changes to the Secretary of State under §42.010(c). Precinct 239 lies entirely in Lake Austin and precinct 228 entirely in the MoPac right-of-way; neither can ever contain a voter.
+8. **Bring the six oversize precincts back under 5,000** at the March–April 2027 review under §42.031(a), or earlier under §42.031(b)(2), and consider combining the smallest precincts under §42.0051(a).
+9. **Fill in the shapefile metadata.** The published `Election_Precincts.shp.xml` still contains the template text "REQUIRED: A brief narrative summary of the data set" and records no effective date or plan identification. Add the December 4, 2025 order date, the January 1, 2026 effective date and a plan name, and note that `VoterCount` is a point-in-time snapshot.
+10. **Publish the address-level layers from the Voter Registration hub.** `AdMas`, `VotingAddresses` and `UnregisteredAddresses` are the data that make precinct assignment auditable, and they are already served publicly but are not presented as downloads alongside the precinct shapefile. Populating the `Latitude` and `Longitude` columns, which are 0 in 410,070 of 412,053 records, would also help.
 
 ## 9. Full crosswalk, 2021 to 2025
 

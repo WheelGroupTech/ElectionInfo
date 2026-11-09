@@ -2,7 +2,8 @@
 
 **Companion to** `Travis_County_2025_Precinct_Change_Review_2026-11-08.md`  
 **For:** Travis County Tax Office, Voter Registration Division, and the Travis County Clerk, Elections Division  
-**Date:** November 8, 2026
+**Date:** November 8, 2026  
+**Prepared by:** Daniel M. Teal, dan@teals.org
 
 This supplement itemises the data errors found in the review so that each can be corrected. Every finding is derived from Travis County's own published data: the precinct shapefile adopted by the Commissioners Court on December 4, 2025, the ArcGIS services at `taxmaps.traviscountytx.gov` (`Precincts`, `AdMas`, `VotingAddresses`, `UnregisteredAddresses`, `Splits`, `Parcels`), the county's published voter registration lists, and the TEAM Official Lists of Registered Voters the county provided.
 
@@ -18,14 +19,14 @@ Three sources independently determine the precinct an address belongs to:
 2. the county's **address master** (`AdMas`), which assigns a precinct to each of 412,053 addresses;
 3. the **registration lists** — the county Voter List and the TEAM OLRV.
 
-Sources 1 and 2 agree on 411,674 of 412,053 address points (99.91%), and on 96 of the 97 addresses in section A. Where the registration list differs from both, the list is treated as the error. Where sources 1 and 2 differ from each other, the address is listed separately in section D.
+Sources 1 and 2 agree on 411,674 of 412,053 address points (99.91%), and on every one of the 96 resolvable addresses in section A; the 97th has no usable point geometry and is left unresolved. Where the registration list differs from both, the list is treated as the error. Where sources 1 and 2 differ from each other, the address is listed separately in section D.
 
 ## Priority order
 
 | Priority | Item | Count | Section |
 |---|---|---:|---|
-| 1 | Invalid precinct values published for precinct 369 | 9 voters | G |
-| 2 | Voters who cast a G26 ballot from a precinct with the wrong districts | 71 voters | B |
+| 1 | Voters who cast a G26 ballot from a precinct with the wrong districts | 71 voters | B |
+| 2 | Invalid precinct values published for precinct 369 (the roster was correct; the two extracts were not) | 9 voters | G |
 | 3 | Addresses coded to the wrong precinct on the Voter List | 97 addresses | A |
 | 4 | Address district codes conflicting with their precinct (§42.005) | 20 addresses | C |
 | 5 | Address master points coded to a precinct they are not in | 28 addresses | D |
@@ -435,7 +436,9 @@ Precinct 369 consequently shows **0 registered voters** on both files while **6 
 | 1140708900 | P 182.4 | P 309 | no |
 | 2168122786 | P 182.4 | P 309 | yes (roster 369) |
 
-**Requested actions.** Correct all nine registrations to precinct 369; reissue the October 20 Voter List and the October 27 OLRV extract; and determine whether the "182.4" and "309" values were introduced by the manual correction of the roughly 200 incorrect-split voters the county described, so the same defect can be prevented at the next extract.
+**The correct value did reach the November election.** All six of these voters who voted appear on the G26 roster under precinct 369, so the roster the polls worked from carried the right precinct even though both published lists did not. This is a defect in the published extracts, not in the ballots issued.
+
+**Requested actions.** Confirm that all nine registrations now read precinct 369 on any extract taken today; reissue the October 20 Voter List and the October 27 OLRV extract with a valid precinct value; and determine whether the "182.4" and "309" values were introduced by the manual correction of the roughly 200 incorrect-split voters the county described, so the same defect can be prevented at the next extract.
 
 ## H. Precinct "99999"
 

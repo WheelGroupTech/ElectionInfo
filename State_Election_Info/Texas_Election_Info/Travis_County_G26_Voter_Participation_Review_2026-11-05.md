@@ -655,6 +655,11 @@ The pattern fits registrations or transfers from other counties that were proces
 | On no later list | 4,122 | 70 |
 | The county's later vote history credits the vote | 4,056 | 1,397 |
 
+**Limited ballots are outside these counts.** Limited-ballot voters moved from another Texas county and are not on the Travis list, so none of the three comparisons includes them:
+
+- **G24:** 2,603 limited ballots were counted, but the G24 roster has no limited-ballot records.
+- **P26 and G26:** the rosters list limited-ballot voters by name only, without a VUID: 443 in P26 and 3,482 in G26.
+
 **P26:** the gap closed within weeks.
 
 - **Most reappeared on the next list:** 1,425 of the 1,503 are on the P26 runoff OLRV of May 14, 2026.
@@ -749,7 +754,7 @@ An obituary match can be wrong: a person with the same name and birth date, or a
 - **Mail voters under 65:** 2,953 of the 17,155 mail voters with a known age were under 65 on Election Day.
   - They must qualify by disability, absence from the county, or confinement (Election Code §§82.001-82.008).
   - The roster does not say which.
-- **Limited ballots:** 3,482 limited ballots were cast. The county lists these voters by name only, so they cannot be checked here.
+- **Limited ballots:** the G26 roster lists 3,482 limited-ballot voters (3,477 limited ballots counted, unofficial). The county lists these voters by name only, so they cannot be checked here.
 - **9-digit IDs:** two mail rows on the county roster carry 9-digit IDs. Both look like clerical errors: each is a VUID with one digit dropped.
   - **ID 220260776 (October 29 mail list):** restoring a "7" gives VUID 2202607776, a registration with the same name in the same precinct (385).
     - The SOS file lists 2202607776 as a G26 mail voter; the county roster does not, because of the typo.

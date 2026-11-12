@@ -785,7 +785,7 @@ build the Store bundle again.
   - Each package has 19 logo images and only the runFullTrust capability.
 - **Checks:** the smoke suite passes, and Release x64 and ARM64 build clean.
 
-### Batches deleted at the scanner (done 2026-11-12, uncommitted)
+### Batches deleted at the scanner (done 2026-11-12)
 
 Found in Travis G26. The replay counted 554,596 ballots, 367 more than the official 554,229.
 
@@ -840,7 +840,7 @@ Found in Travis G26. The replay counted 554,596 ballots, 367 more than the offic
 - **Smoke tests:** `auditacct` (deletion, rescan, scanner and load context, a deletion of a
   batch never loaded) and `auditnote`.
 
-### Rows printed with text lost at a page break (done 2026-11-12, uncommitted)
+### Rows printed with text lost at a page break (done 2026-11-12)
 
 - **The problem:** the Travis G26 11/10 Election log breaks one event (11/03 6:51:07 PM, Team2,
   "Ballot Review filter applied: …") from page 696 to 697.
@@ -1177,7 +1177,7 @@ reading error.
   150, L26 2,425, PR26 17,181. No results output before Election Day with official ballots read in
   any of them.
 
-### Verity Build logs (done 2026-11-12, uncommitted)
+### Verity Build logs (done 2026-11-12)
 
 At the user's request: Hays G24 (`G24_Audit_Log_Report-11-21-2024_09-39-50_AM.pdf`) was refused.
 

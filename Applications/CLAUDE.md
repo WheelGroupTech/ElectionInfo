@@ -41,6 +41,15 @@ sync. To carry in-flight context across machines:
 Keep SESSION-HANDOFF.md concise and current — it is a live handoff note, not a
 changelog. Git history is the permanent record.
 
+## Change log
+
+- **[ElectionExplorer/CHANGELOG.md](ElectionExplorer/CHANGELOG.md)** is the
+  per-change engineering record: what changed, where (files and functions), how
+  it was checked, the commit, and a link to the design doc. Newest first, by version.
+- **Add a CHANGELOG.md entry as the last step of each change** to Election Explorer,
+  under "Unreleased" until a version is submitted. Search it first when researching a
+  feature.
+
 ## Current focus
 
 Active application: **ElectionExplorer** — a Win32 (C11, no MFC) GUI voter-list

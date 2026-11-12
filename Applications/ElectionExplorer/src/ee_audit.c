@@ -1100,7 +1100,7 @@ const EeAuditLog *EeAudit_Log(const EeAuditElection *el, int kind)
 BOOL EeAudit_IsHart(const EeAuditElection *el)
 {
     int k;
-    for (k = EE_AUDIT_HART_COUNT; el != NULL && k <= EE_AUDIT_HART_DATA; k++)
+    for (k = EE_AUDIT_HART_COUNT; el != NULL && k <= EE_AUDIT_HART_BUILD; k++)
     {
         if (el->logs[k - 1].ncopies > 0)
         {
@@ -1110,10 +1110,10 @@ BOOL EeAudit_IsHart(const EeAuditElection *el)
     return FALSE;
 }
 
-static const char *const k_au_log_names[EE_AUDIT_NLOGS] = {"Election", "Admin", "VerityCount", "VerityCentral",
-                                                            "VerityData"};
-static const wchar_t *const k_au_log_wnames[EE_AUDIT_NLOGS] = {L"Election", L"Admin", L"VerityCount",
-                                                                L"VerityCentral", L"VerityData"};
+static const char *const k_au_log_names[EE_AUDIT_NLOGS] = {"Election",      "Admin",      "VerityCount",
+                                                            "VerityCentral", "VerityData", "VerityBuild"};
+static const wchar_t *const k_au_log_wnames[EE_AUDIT_NLOGS] = {L"Election",      L"Admin",      L"VerityCount",
+                                                                L"VerityCentral", L"VerityData", L"VerityBuild"};
 
 const wchar_t *EeAudit_LogName(int kind)
 {
@@ -1267,6 +1267,7 @@ static BOOL au_merge_copy(EeAuditLog *log, uint32_t ci)
                 merged[o].copy = ci;
                 merged[o].index = ins[k].index;
                 merged[o].copies = bit;
+                merged[o].partial = 0;
                 o++;
                 k++;
             }
@@ -1284,6 +1285,116 @@ done:
     free(ins);
     free(merged);
     return ok;
+}
+
+/* @p s without spaces into @p out (cut to fit); its length. */
+static size_t au_squeeze(const char *s, char *out, size_t cap)
+{
+    size_t n = 0;
+    for (; *s != '\0' && n + 1 < cap; s++)
+    {
+        if (*s != ' ')
+        {
+            out[n++] = *s;
+        }
+    }
+    out[n] = '\0';
+    return n;
+}
+
+/* TRUE when @p part (spaces removed) is @p whole with one piece left out: a common start of at
+ * least 12 characters and a common end (possibly empty) that together cover all of @p part. */
+static BOOL au_lost_piece(const char *part, size_t np, const char *whole, size_t nw)
+{
+    size_t pre = 0, suf = 0;
+    if (np >= nw || np < 12)
+    {
+        return FALSE;
+    }
+    while (pre < np && part[pre] == whole[pre])
+    {
+        pre++;
+    }
+    while (suf < np - pre && part[np - 1 - suf] == whole[nw - 1 - suf])
+    {
+        suf++;
+    }
+    return pre >= 12 && pre + suf == np;
+}
+
+/* A row that continues across a page break can be printed with a line of its text lost (Travis
+ * G26's 11/10 Election log, pages 696-697: "Precincts[ALL] Polls" left out). Such an event held
+ * by one copy, the last row starting on its page there, is the same event as one held only by
+ * other copies with the same time, level, user and module whose text is the same apart from the
+ * piece lost: merge the two, keeping the whole text. */
+static BOOL au_pair_partial(EeAuditLog *log)
+{
+    char *a = NULL, *b = NULL;
+    uint32_t i, o, nmerged = 0;
+    const size_t cap = 8192;
+    if (log->ncopies < 2)
+    {
+        return TRUE;
+    }
+    a = (char *)malloc(cap);
+    b = (char *)malloc(cap);
+    if (a == NULL || b == NULL)
+    {
+        free(a);
+        free(b);
+        return FALSE;
+    }
+    for (i = 0; i < log->nevents; i++)
+    {
+        EeAuditMerged *m = &log->events[i];
+        const EeAuditCopy *c = &log->copies[m->copy];
+        const EeAuditEvent *e = &c->events[m->index];
+        size_t na;
+        uint32_t j, lo, hi;
+        if (m->copies == 0 || (m->copies & (m->copies - 1)) != 0 || m->index + 1 >= c->nevents ||
+            c->events[m->index + 1].page <= e->page)
+        {
+            continue; /* not held by one copy alone, or not the last row starting on its page there */
+        }
+        na = au_squeeze(EeAudit_Desc(c, e), a, cap);
+        lo = i > 64 ? i - 64 : 0;
+        hi = i + 64 < log->nevents ? i + 64 : log->nevents;
+        for (j = lo; j < hi; j++)
+        {
+            EeAuditMerged *w = &log->events[j];
+            const EeAuditCopy *wc = &log->copies[w->copy];
+            const EeAuditEvent *we = &wc->events[w->index];
+            if (j == i || w->copies == 0 || (w->copies & m->copies) != 0 || we->ts != e->ts ||
+                strcmp(EeAudit_Str(c, e->level), EeAudit_Str(wc, we->level)) != 0 ||
+                strcmp(EeAudit_Str(c, e->user), EeAudit_Str(wc, we->user)) != 0 ||
+                strcmp(EeAudit_Str(c, e->module), EeAudit_Str(wc, we->module)) != 0)
+            {
+                continue;
+            }
+            if (au_lost_piece(a, na, b, au_squeeze(EeAudit_Desc(wc, we), b, cap)))
+            {
+                w->copies |= m->copies;
+                w->partial |= m->copies;
+                m->copies = 0; /* dropped below */
+                nmerged++;
+                break;
+            }
+        }
+    }
+    free(a);
+    free(b);
+    for (i = o = 0; nmerged > 0 && i < log->nevents; i++)
+    {
+        if (log->events[i].copies != 0)
+        {
+            log->events[o++] = log->events[i];
+        }
+    }
+    if (nmerged > 0)
+    {
+        log->nevents = o;
+    }
+    return TRUE;
 }
 
 static void au_check_copies(EeAuditLog *log)
@@ -1321,6 +1432,10 @@ static void au_check_copies(EeAuditLog *log)
                 if ((m->copies & earlier) == 0)
                 {
                     log->checks[k].new_events++;
+                }
+                if ((m->partial & bit) != 0)
+                {
+                    log->checks[k].incomplete++;
                 }
             }
             else if ((m->copies & earlier) != 0)
@@ -1371,6 +1486,7 @@ static BOOL au_build_log(EeAuditLog *log)
         log->events[i].copy = last;
         log->events[i].index = i;
         log->events[i].copies = (uint64_t)1 << last;
+        log->events[i].partial = 0;
     }
     log->nevents = log->copies[last].nevents;
     for (i = last; i-- > 0;)
@@ -1387,6 +1503,10 @@ static BOOL au_build_log(EeAuditLog *log)
         {
             log->names_differ = TRUE;
         }
+    }
+    if (!au_pair_partial(log))
+    {
+        return FALSE;
     }
     au_check_copies(log);
     return TRUE;
@@ -2072,6 +2192,12 @@ void EeAudit_FreeAccounting(EeAuditAccounting *a)
     {
         free(a->clears[i].place);
     }
+    for (i = 0; i < a->machine_deleted; i++)
+    {
+        free(a->deletions[i].name);
+        free(a->deletions[i].machine);
+    }
+    free(a->deletions);
     for (i = 0; i < a->ntransfers; i++)
     {
         free(a->transfers[i].device);
@@ -2090,6 +2216,14 @@ typedef struct AuReplay
     size_t cap_batches, cap_sessions, cap_clears;
     uint32_t *sheet_ids; /* open-addressing set of sheet IDs (+1) */
     uint32_t sheet_cap;
+    size_t cap_deletions;
+    uint32_t cur_load; /* the last "Starting Load of Results" (merged event), UINT32_MAX */
+    int64_t cur_load_ts;
+    uint32_t cur_found; /* its "N batch(es) found" */
+    BOOL reload_pending; /* a "Reloading media with images" not yet followed by a commit */
+    char *reload_sn;
+    int64_t reload_poll;
+    int reload_media;
 } AuReplay;
 
 static BOOL au_new_session(AuReplay *rp, int64_t ts, BOOL after_clear)
@@ -2308,8 +2442,128 @@ static BOOL au_add_batch(AuReplay *rp, uint32_t ev, const EeAuditEvent *e, char 
     b->vote_type = EeAudit_VoteTypeOf(b->place);
     b->test = EeAudit_IsTestDeck(b->place);
     b->revision = revision;
+    b->load = update ? UINT32_MAX : rp->cur_load;
+    rp->reload_pending = FALSE;
     a->nbatches++;
     s->nbatches++;
+    return TRUE;
+}
+
+/* "Reloading media with images, Poll ID 2,844 Media ID 6 Machine SN 9522090625.": the tabulator
+ * whose media is loaded; it comes just before a "Machine Deleted" commit. */
+static BOOL au_parse_reload(AuReplay *rp, const char *d)
+{
+    const char *p = strstr(d, "Poll ID "), *m = strstr(d, "Media ID "), *sn = strstr(d, "Machine SN ");
+    int64_t v;
+    rp->reload_poll = p != NULL && au_number(p + 8, &v, NULL) ? v : -1;
+    rp->reload_media = m != NULL && au_number(m + 9, &v, NULL) && v < 1000000 ? (int)v : -1;
+    free(rp->reload_sn);
+    rp->reload_sn = NULL;
+    rp->reload_pending = TRUE;
+    if (sn != NULL)
+    {
+        const char *s = sn + 11, *e = s;
+        while (*e != '\0' && *e != ' ' && *e != '.')
+        {
+            e++;
+        }
+        if (e > s && (rp->reload_sn = au_strdup_n(s, (size_t)(e - s))) == NULL)
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* "Committing Machine Deleted Batch <name> ID <n> Number of Ballots 0": the media was reloaded
+ * after the batch was deleted on the tabulator, so the session's counted batch of that name (the
+ * latest) no longer counts. Takes @p name. */
+static BOOL au_machine_deleted(AuReplay *rp, uint32_t ev, const EeAuditEvent *e, char *name, uint32_t id)
+{
+    EeAuditAccounting *a = rp->a;
+    const EeAuditSession *s = &a->sessions[a->nsessions - 1];
+    EeAuditDeletion *x;
+    uint32_t i;
+    if (!au_grow((void **)&a->deletions, &rp->cap_deletions, (size_t)a->machine_deleted + 1, sizeof(EeAuditDeletion)))
+    {
+        free(name);
+        return FALSE;
+    }
+    x = &a->deletions[a->machine_deleted];
+    memset(x, 0, sizeof(*x));
+    x->event = ev;
+    x->ts = e->ts;
+    x->name = name;
+    x->id = id;
+    x->session = a->nsessions - 1;
+    x->batch = -1;
+    x->rescan = -1;
+    x->poll_id = -1;
+    x->media = -1;
+    x->load = rp->cur_load;
+    x->load_ts = rp->cur_load_ts;
+    x->load_found = rp->cur_found;
+    if (rp->reload_pending)
+    {
+        x->machine = rp->reload_sn;
+        rp->reload_sn = NULL;
+        x->poll_id = rp->reload_poll;
+        x->media = rp->reload_media;
+        rp->reload_pending = FALSE;
+    }
+    for (i = a->nbatches; i-- > s->first_batch;)
+    {
+        EeAuditBatch *b = &a->batches[i];
+        if (b->status == EE_AUDIT_BATCH_COUNTED && strcmp(b->name, name) == 0)
+        {
+            b->status = EE_AUDIT_BATCH_DELETED;
+            b->deleted = a->machine_deleted;
+            x->batch = (int)i;
+            a->machine_deleted_hits++;
+            break;
+        }
+    }
+    a->machine_deleted++;
+    return TRUE;
+}
+
+/* Each deletion's load (the new batches that came with it) and a later batch of the same poll
+ * place and ballot count that may be its ballots scanned again. */
+static BOOL au_finish_deletions(EeAuditAccounting *a)
+{
+    uint8_t *used;
+    uint32_t k, i;
+    if (a->machine_deleted == 0)
+    {
+        return TRUE;
+    }
+    used = (uint8_t *)calloc(a->nbatches + 1, 1);
+    if (used == NULL)
+    {
+        return FALSE;
+    }
+    for (k = 0; k < a->machine_deleted; k++)
+    {
+        EeAuditDeletion *x = &a->deletions[k];
+        const EeAuditSession *s = &a->sessions[x->session];
+        const EeAuditBatch *gone = x->batch >= 0 ? &a->batches[x->batch] : NULL;
+        for (i = s->first_batch; i < s->first_batch + s->nbatches; i++)
+        {
+            const EeAuditBatch *b = &a->batches[i];
+            if (x->load != UINT32_MAX && b->load == x->load)
+            {
+                x->load_new++;
+                x->load_new_ballots += b->ballots;
+            }
+            if (gone != NULL && x->rescan < 0 && !used[i] && b->status == EE_AUDIT_BATCH_COUNTED &&
+                b->ts >= x->ts && b->ballots == gone->ballots && strcmp(b->place, gone->place) == 0)
+            {
+                x->rescan = (int)i;
+                used[i] = 1;
+            }
+        }
+    }
+    free(used);
     return TRUE;
 }
 
@@ -2352,6 +2606,7 @@ BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out)
     memset(out, 0, sizeof(*out));
     memset(&rp, 0, sizeof(rp));
     rp.a = out;
+    rp.cur_load = UINT32_MAX;
     out->election_session = -1;
     if (log == NULL || log->nevents == 0)
     {
@@ -2370,6 +2625,25 @@ BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out)
         if (d[0] == 'C' && au_parse_batch(d, "Committing new Batch ", &name, &id, &n, &rev))
         {
             ok = au_add_batch(&rp, i, e, name, id, n, rev, FALSE);
+        }
+        else if (d[0] == 'C' && au_parse_batch(d, "Committing Machine Deleted Batch ", &name, &id, &n, &rev))
+        {
+            ok = au_machine_deleted(&rp, i, e, name, id);
+        }
+        else if (strncmp(d, "Starting Load of Results", 24) == 0)
+        {
+            rp.cur_load = i;
+            rp.cur_load_ts = e->ts;
+            rp.cur_found = 0;
+            rp.reload_pending = FALSE;
+        }
+        else if (d[0] >= '0' && d[0] <= '9' && strstr(d, " batch(es) found") != NULL && au_number(d, &n, NULL))
+        {
+            rp.cur_found = (uint32_t)n;
+        }
+        else if (strncmp(d, "Reloading media with images", 27) == 0)
+        {
+            ok = au_parse_reload(&rp, d);
         }
         else if (d[0] == 'U' && au_parse_batch(d, "Updating Batch ", &name, &id, &n, &rev))
         {
@@ -2408,8 +2682,20 @@ BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out)
             out->sheet_errors++;
             ok = au_sheet_seen(&rp, (uint32_t)n);
         }
+        if (rp.cur_load != UINT32_MAX &&
+            (strncmp(d, "Finished looking for Results", 28) == 0 || strncmp(d, "Loading of results has been stopped", 35) == 0 ||
+             strstr(d, " will be cleared") != NULL))
+        {
+            rp.cur_load = UINT32_MAX; /* the load is over */
+            rp.reload_pending = FALSE;
+        }
     }
     free(rp.sheet_ids);
+    free(rp.reload_sn);
+    if (ok)
+    {
+        ok = au_finish_deletions(out);
+    }
     if (!ok)
     {
         EeAudit_FreeAccounting(out);
@@ -2468,6 +2754,16 @@ static const struct
      L"override was granted."},
     {EE_AUDIT_SEV_REVIEW, L"Media clears",
      L"The results of one media were cleared (see Ballot Accounting \x2192 Media Clears)."},
+    {EE_AUDIT_SEV_REVIEW, L"Batches deleted at the scanner",
+     L"\"Committing Machine Deleted Batch\": a batch was deleted on the tabulator and its media loaded "
+     L"again. If the batch had been loaded before, its ballots no longer count; ballots scanned again "
+     L"come in as new batches."},
+    {EE_AUDIT_SEV_REVIEW, L"Official ballots printed after Election Day",
+     L"Hart Verity Build: official (numbered) ballots were printed on demand after Election Day. These are "
+     L"usually remakes: the ballot board duplicates ballots that cannot be scanned, such as FPCA ballots "
+     L"returned by email or as a scanned attachment, and mail ballots damaged in transit. Two clerks, one "
+     L"from each party, mark the duplicate, which is kept with the original. Compare the count with the "
+     L"ballot board's record of duplicated ballots. Test and sample ballots are not counted."},
     {EE_AUDIT_SEV_REVIEW, L"Clock anomalies",
      L"An event's time is later than the event printed above it (the log is newest first): the "
      L"workstation's clock was set ahead, or the next one's behind. Hart: a vDrive event logged at a "
@@ -2660,6 +2956,40 @@ static uint8_t *au_election_eras(const EeAuditElection *el, char **other_name)
     return era;
 }
 
+/* The ballots a "Committing Machine Deleted Batch <name>" at merged event @p at removes: those of
+ * the latest earlier commit of that name, unless a full clear or an earlier deletion of the name
+ * comes between (then 0). */
+static int64_t au_deleted_ballots(const EeAuditLog *log, uint32_t at, const char *name)
+{
+    uint32_t i;
+    for (i = at + 1; i < log->nevents; i++) /* newer to older */
+    {
+        const EeAuditCopy *c;
+        const EeAuditEvent *e = EeAudit_MergedEvent(log, i, &c);
+        const char *d = EeAudit_Desc(c, e);
+        char *nm;
+        uint32_t id, rev;
+        int64_t n;
+        BOOL del = FALSE;
+        if (strncmp(d, "All Electionware election results will be cleared", 50) == 0)
+        {
+            return 0;
+        }
+        if (d[0] != 'C' || (!au_parse_batch(d, "Committing new Batch ", &nm, &id, &n, &rev) &&
+                            !(del = au_parse_batch(d, "Committing Machine Deleted Batch ", &nm, &id, &n, &rev))))
+        {
+            continue;
+        }
+        if (strcmp(nm, name) == 0)
+        {
+            free(nm);
+            return del ? 0 : n;
+        }
+        free(nm);
+    }
+    return 0;
+}
+
 static BOOL au_notes_election(const EeAuditElection *el, EeAuditNotes *n, size_t *cap)
 {
     const EeAuditLog *log = &el->logs[0];
@@ -2705,6 +3035,17 @@ static BOOL au_notes_election(const EeAuditElection *el, EeAuditNotes *n, size_t
                 {
                     cat = EE_AUDIT_N_ZERO_BATCHES;
                 }
+            }
+            free(name);
+        }
+        else if (strncmp(d, "Committing Machine Deleted Batch ", 33) == 0 &&
+                 au_parse_batch(d, "Committing Machine Deleted Batch ", &name, &id, &ballots, &rev))
+        {
+            cat = EE_AUDIT_N_MACHINE_DELETED;
+            value = au_deleted_ballots(log, i, name);
+            if (!EeAudit_IsTestDeck(name))
+            {
+                real_ballots -= value;
             }
             free(name);
         }

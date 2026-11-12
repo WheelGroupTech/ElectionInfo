@@ -114,6 +114,7 @@ These Reporting-module events carry the ballot count:
 |---|---|
 | `Committing new Batch <name> ID <n> Number of Ballots <k>` | A batch of k ballots loaded; ID is the EMS batch ID (unique) |
 | `Updating Batch <name> ID <n> Number of Ballots <k> Revision <r>` | Manual results entry (MRE) batch revised (Travis P24 testing) |
+| `Committing Machine Deleted Batch <name> ID <n> Number of Ballots 0`, after `Reloading media with images, Poll ID <p> Media ID <m> Machine SN <sn>` | The batch was deleted on the scanner; the session's counted batch of that name no longer counts (Travis G26, PR20) |
 | `All Electionware election results will be cleared…` + `User Response: Yes` + `Results successfully cleared` | **Full clear**: every batch gone |
 | `Electionware election results for Central Count Media-<m> will be cleared…` + `Results successfully cleared` | **Media clear**: the batches from media m gone |
 | `This batch was previously loaded. Results [and Ballot Images] have not changed.` / `These Results were previously loaded… Batch <name> Media ID <m> Machine SN <sn>` | Reload attempt, no change |
@@ -280,7 +281,7 @@ toward `App_MaybeQuit`, File → Close.
   | Committed | Batch ID | Poll Place | Media | Vote Type | Ballots | User Id | Status |
   |---|---|---|---|---|---|---|---|
 
-  - **Status:** Counted / Removed by media clear at … / Replaced by update / L&A test deck.
+  - **Status:** Counted / Removed by media clear at … / Replaced by update / Deleted at the scanner / L&A test deck.
 - **Status bar:**
   - county, election and date;
   - copies loaded;
@@ -784,6 +785,86 @@ build the Store bundle again.
   - Each package has 19 logo images and only the runFullTrust capability.
 - **Checks:** the smoke suite passes, and Release x64 and ARM64 build clean.
 
+### Batches deleted at the scanner (done 2026-11-12, uncommitted)
+
+Found in Travis G26. The replay counted 554,596 ballots, 367 more than the official 554,229.
+
+- **What happened (from the user, who was at Central Count):**
+  - A box of 117 mail ballots and then one of 250 (several batches) were scanned on an ES&S DS950.
+  - They were exported on two thumb drives, and loaded.
+  - The batches were not cleared from the scanner. After the next box (225 ballots) was scanned,
+    the operator deleted the 367 ballots' batches and exported the 225 on a third drive.
+  - That drive carried the deletions too. Loading it removed the 367 from the EMS.
+  - The two boxes were rescanned and loaded at 9:03 PM.
+- **The log:**
+  - `Committing Machine Deleted Batch <name> ID <n> Number of Ballots 0`, each just after
+    `Reloading media with images, Poll ID <p> Media ID <m> Machine SN <sn>`, in the load that
+    also brought the new batch.
+  - At 8:29 PM, loads of the old drives were refused: "Results not loaded. A more recent version
+    of this batch was previously loaded."
+- **Rule:** a Machine Deleted commit removes the session's latest counted batch of the same name
+  (`EE_AUDIT_BATCH_DELETED`; `EeAuditBatch.deleted` indexes `EeAuditAccounting.deletions`).
+- **Context kept for the report** (`EeAuditDeletion`):
+  - the scanner's serial number, media and poll ID;
+  - the load it came in: "Starting Load of Results", its "N batch(es) found", and the new batches
+    in it; a load ends at "Finished looking for Results", "Loading of results has been stopped"
+    or a clear warning;
+  - the batch it removed;
+  - a later counted batch of the same poll place and ballot count, matched once each: a
+    possible rescan, a hint only.
+- **UI:**
+  - Ballot Batches status "Deleted at the scanner (Machine Deleted Batch at …)".
+  - Ballot Accounting: a summary line with how the deletions arrived, a "Deleted Batches" tab
+    (ES&S only; double-click goes to the event), and a "Deleted at Scanner" column on Poll Places.
+  - Notable Events category "Batches deleted at the scanner" (Review), with the ballots removed.
+- **Validated:**
+
+  | Logs | Replay | Results at the time |
+  |---|---:|---:|
+  | G26 up to 11/10 7:17 PM | 553,862 | Results Final summary, 6:57 PM: 553,862 |
+  | G26 through 11/11 | 554,229 (mail 19,373) | Official results: 554,229 |
+
+  - Each deleted G26 batch is matched to its rescan: F0021 117 ↔ F0032; F0022 70 ↔ F0028;
+    F0025 78 ↔ F0029; F0023 47 ↔ F0030; F0024 55 ↔ F0031.
+- **Every ES&S log scanned (14 elections):**
+  - Machine Deleted commits occur only in Travis G26 (13, of which 5 removed ballots) and Travis
+    PR20 (1: A0016 Vote Center media 1, 100 ballots, loaded at 7:33 PM and deleted at 7:36 PM on
+    7/11/2020).
+  - PR20's log ends on Election Day, before the count was done, so it cannot be checked against
+    the results.
+  - Its "possible rescan" (another 100-ballot batch) is weak: most vote-center batches there hold
+    100.
+  - The other 12 elections replay exactly as before.
+  - The Dallas tabulator logs (Machine_Logs, 22 PDFs) have no deletions. The central count
+    scanner's log shows "Selected: Clear Results" after its exports.
+- **Smoke tests:** `auditacct` (deletion, rescan, scanner and load context, a deletion of a
+  batch never loaded) and `auditnote`.
+
+### Rows printed with text lost at a page break (done 2026-11-12, uncommitted)
+
+- **The problem:** the Travis G26 11/10 Election log breaks one event (11/03 6:51:07 PM, Team2,
+  "Ballot Review filter applied: …") from page 696 to 697.
+  - The PDF itself leaves out the line "Precincts[ALL] Polls" (checked with pdftotext); the
+    other copies print the event whole.
+  - So the copies check counted 1 missing in the 11.10 copy (it lacked the whole text) and 1 in
+    the 11.11 copy (it lacked the short text). Nothing was missing.
+- **The fix (`au_pair_partial`, after all copies are merged):** two merged events are one when:
+  - the first is held by one copy alone and is the last row starting on its page there;
+  - the second is held only by other copies;
+  - their time, level, user and module are equal;
+  - the first's text, spaces removed, is the second's with one piece left out (a common start of
+    12 or more characters plus a common end).
+- **The merged event:** it keeps the whole text (its `copy` is a copy that prints it whole). The
+  short copy's bit goes into `EeAuditMerged.partial`, and `EeAuditCopyCheck.incomplete` counts it.
+- **Copies Check report:** a "Printed Incomplete" column, plus a line naming the event, the copy
+  and the page break.
+- **Regression:** the copies check of every log set is unchanged (Travis 11, Dallas 3, Hays,
+  Parker, Burnet) except G26. There the merged Election log has 150,221 events (the final copy's
+  count) and 0 missing in every copy.
+- **Export round trip:** a reloaded export rebuilds the short copy with the whole text, so it no
+  longer shows as Printed Incomplete.
+- **Smoke test:** `auditpart`.
+
 ## Implementation plan (proposed)
 
 1. **Reader `src/ee_audit.{c,h}`: one PDF → one copy.**
@@ -1095,6 +1176,43 @@ reading error.
   11,003, G23 24,273, P24 35,152, L24 3,292, PR24 6,696, G24 91,317, L25 8,746, P26 33,642, S26
   150, L26 2,425, PR26 17,181. No results output before Election Day with official ballots read in
   any of them.
+
+### Verity Build logs (done 2026-11-12, uncommitted)
+
+At the user's request: Hays G24 (`G24_Audit_Log_Report-11-21-2024_09-39-50_AM.pdf`) was refused.
+
+- **What the log is:** its Component is "Build 2.5.0", Verity Build, the ballot design and
+  election media program. It has 684 pages and 12,129 rows (numbering complete), from
+  9/17/2024 to 11/12/2024, two users, and one device (D1800211505).
+  - **Rows:** "Button pressed" 3,573; ballot generation, printing and export 7,572 in all; "View
+    loaded" 545.
+  - **Media:** "vDrive written" 210: 15 Test on 9/17, 195 Official on 10/8.
+  - **Setup:** "Verity Key write" 5; "Updated election settings" 3; "Device Passcodes settings" 11.
+- **Its own log, not VerityData:**
+  - Verity Data (the election definition) and Verity Build are different programs, each with its
+    own log.
+  - The code had put "VerityBuild" into the VerityData slot. A county posting both logs would then
+    have had them merged as copies of one log, with false missing events.
+  - Now `EE_AUDIT_HART_BUILD` (6) has its own slot (`EE_AUDIT_NLOGS` 6). It accepts "VerityBuild"
+    and "Build <version>".
+  - The UI gets View → Log → VerityBuild and a VerityBuild column in Users and Workstations.
+- **New Notable Events category (Review): "Official ballots printed after Election Day".**
+  - A Build log's "Ballot(s) generated" of an Official ballot (not Test or Sample) on or after the
+    day after Election Day. The note's value is the quantity. Its detail gives the style, the first
+    ballot number and the days after Election Day.
+  - **Hays G24:** 43 printings, 88 ballots, on 11/12/2024 between 12:08 and 3:34 PM. They were 22
+    of "Fed 21" (from #7974), 5 of "Fed 35", and 1–4 each of about 40 precinct styles.
+  - **Likely remakes (from the user, 2026-11-12):** the ballot board duplicates ballots that can't
+    be scanned. These include FPCA ballots that arrive by email or as a scanned attachment, and mail
+    ballots damaged in transit. Under Texas law, two clerks, one from each party, make the
+    duplicate, and it is kept with the original.
+    - That fits the pattern: the "Fed" styles for the FPCA ballots, and 1–4 each of many precinct
+      styles for the damaged ones.
+    - The category's text therefore calls them likely remakes, to compare with the ballot board's
+      count of duplicates. It stays Review, because that comparison is the check to make.
+- **Regression:** the copies check and Notable Events of every other log set are unchanged
+  (Notable Events differ only in G26 and PR20, which gained the scanner-deletion notes).
+- **Smoke test:** `auditbuild`.
 
 ## Appendix — research event counts (2026-10-28)
 

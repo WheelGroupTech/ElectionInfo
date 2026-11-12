@@ -33,13 +33,15 @@ extern "C"
 #define EE_AUDIT_ADMIN    2 /* "Admin Audit Events Report": the whole system */
 #define EE_AUDIT_HART_COUNT   3 /* Hart Verity Audit Log Report, Component VerityCount: tabulation */
 #define EE_AUDIT_HART_CENTRAL 4 /* Component VerityCentral: central scanning */
-#define EE_AUDIT_HART_DATA    5 /* Component VerityData (or VerityBuild): the election definition */
+#define EE_AUDIT_HART_DATA    5 /* Component VerityData: the election definition */
+#define EE_AUDIT_HART_BUILD   6 /* Component VerityBuild ("Build 2.5.0" in Verity 2.5): ballot design
+                                 * and election media */
 
 /** The logs an election can have: EeAuditElection.logs[kind - 1]. */
-#define EE_AUDIT_NLOGS 5
+#define EE_AUDIT_NLOGS 6
 
 /** TRUE for a Hart Verity log kind. */
-#define EE_AUDIT_IS_HART(kind) ((kind) >= EE_AUDIT_HART_COUNT && (kind) <= EE_AUDIT_HART_DATA)
+#define EE_AUDIT_IS_HART(kind) ((kind) >= EE_AUDIT_HART_COUNT && (kind) <= EE_AUDIT_HART_BUILD)
 
     /** One row of the report. Strings are UTF-8 in the copy's pools. */
     typedef struct EeAuditEvent
@@ -128,6 +130,8 @@ extern "C"
         uint32_t copy;   /* the first copy (in print order) that holds it: its strings */
         uint32_t index;  /* the event in that copy */
         uint64_t copies; /* bit i: copy i holds the event */
+        uint64_t partial; /* copies (in copies) that printed it with text lost at a page break: matched to a
+                           * whole printing, whose copy gives the strings */
     } EeAuditMerged;
 
     /** How one copy compares with the copies printed before it. */
@@ -140,6 +144,7 @@ extern "C"
         uint32_t lacks_outside; /* earlier copies' events it lacks, older than its oldest event
                                  * (printed with a start date) or newer than its newest */
         uint32_t lacks_missing; /* earlier copies' events it lacks inside its own time span */
+        uint32_t incomplete;    /* events it printed with text lost at a page break (still held) */
     } EeAuditCopyCheck;
 
     /** One log of an election (Election, Admin or a Hart component): all its copies, merged. */
@@ -161,7 +166,7 @@ extern "C"
         char *election;    /* the election name of the most copies */
         int election_date; /* yyyymmdd */
         EeAuditLog logs[EE_AUDIT_NLOGS]; /* [kind - 1]: [0] Election, [1] Admin, [2] VerityCount,
-                                          * [3] VerityCentral, [4] VerityData */
+                                          * [3] VerityCentral, [4] VerityData, [5] VerityBuild */
     } EeAuditElection;
 
     /** The log of @p kind in @p el. */
@@ -170,7 +175,7 @@ extern "C"
     /** TRUE when @p el's logs are Hart Verity logs. */
     BOOL EeAudit_IsHart(const EeAuditElection *el);
 
-    /** A log's name: "Election", "Admin", "VerityCount", "VerityCentral", "VerityData". */
+    /** A log's name: "Election", "Admin", "VerityCount", "VerityCentral", "VerityData", "VerityBuild". */
     const wchar_t *EeAudit_LogName(int kind);
 
     /** EeAudit_LogName as UTF-8. */
@@ -226,6 +231,9 @@ extern "C"
 #define EE_AUDIT_BATCH_COUNTED  0 /* still loaded when its session ended */
 #define EE_AUDIT_BATCH_CLEARED  1 /* removed by a media clear */
 #define EE_AUDIT_BATCH_REPLACED 2 /* its batch ID was committed again later in the session */
+#define EE_AUDIT_BATCH_DELETED  3 /* deleted at the scanner: a later "Committing Machine Deleted Batch"
+                                   * of its name (the media reloaded after the batch was deleted on
+                                   * the tabulator) */
 
 /** Vote types told from a batch's poll place name (EeAuditBatch.vote_type). */
 #define EE_AUDIT_VT_OTHER        0
@@ -254,6 +262,8 @@ extern "C"
         uint32_t session;
         int status;    /* EE_AUDIT_BATCH_* */
         uint32_t clear; /* EE_AUDIT_BATCH_CLEARED: the media clear that removed it (in clears) */
+        uint32_t deleted; /* EE_AUDIT_BATCH_DELETED: the deletion that removed it (in deletions) */
+        uint32_t load;    /* merged event of the "Starting Load of Results" it came in, UINT32_MAX */
         int vote_type;  /* EE_AUDIT_VT_* */
         BOOL test;     /* a logic and accuracy test deck ("Logic EV", "LA-Mail") */
         uint32_t revision;
@@ -295,6 +305,30 @@ extern "C"
         BOOL test; /* every batch is an L&A test deck (or it has none); Hart: a test task */
     } EeAuditSession;
 
+    /** A batch deleted at the scanner: "Committing Machine Deleted Batch <name> ID <id> Number of
+     *  Ballots 0", logged when media is loaded that carries the deletion (the batch was deleted on
+     *  the tabulator after an earlier export). */
+    typedef struct EeAuditDeletion
+    {
+        uint32_t event;   /* merged event of the "Machine Deleted" commit */
+        int64_t ts;
+        char *name;       /* the batch name */
+        uint32_t id;      /* the EMS batch ID of the deletion record */
+        uint32_t session;
+        int batch;        /* the counted batch it removed (index in batches), -1 when none */
+        char *machine;    /* "Reloading media with images, Poll ID p Media ID m Machine SN s" before it:
+                           * the tabulator's serial number; NULL when not logged */
+        int64_t poll_id;  /* that event's Poll ID, -1 */
+        int media;        /* that event's Media ID, -1 */
+        uint32_t load;    /* merged event of the "Starting Load of Results" it came in, UINT32_MAX */
+        int64_t load_ts;
+        uint32_t load_found;    /* that load's "N batch(es) found", 0 when not logged */
+        uint32_t load_new;      /* new batches committed in that load */
+        int64_t load_new_ballots;
+        int rescan;       /* a later counted batch of the same poll place and ballot count (each matched
+                           * once): possibly the ballots scanned again; -1 */
+    } EeAuditDeletion;
+
 /** EeAuditTransfer.status */
 #define EE_AUDIT_XFER_MATCHED  0 /* VerityCount read the vDrive with the ballots written to it */
 #define EE_AUDIT_XFER_DIFFERS  1 /* read with another ballot count */
@@ -327,7 +361,10 @@ extern "C"
         uint32_t nclears;
         int election_session;       /* the last session that loaded non-test batches; -1 none */
         uint32_t previously_loaded; /* "This batch was previously loaded ..." (no change) */
-        uint32_t sheet_errors;      /* "An error occurred while loading Ballot Sheet ID n" */
+        uint32_t machine_deleted;   /* "Committing Machine Deleted Batch" events (each of 0 ballots) */
+        uint32_t machine_deleted_hits; /* those that deleted a batch still counted (EE_AUDIT_BATCH_DELETED) */
+        EeAuditDeletion *deletions; /* the machine_deleted events, oldest first */
+        uint32_t sheet_errors;     /* "An error occurred while loading Ballot Sheet ID n" */
         uint32_t sheet_error_ids;   /* distinct sheet IDs among them */
         int log;                    /* the log the batches' events are in (index in EeAuditElection.logs) */
         BOOL hart;                  /* from Hart Verity logs: batches are vDrive reads, sessions tasks */
@@ -341,7 +378,9 @@ extern "C"
      * session. A media clear names a device type ("Central Count") and a media number,
      * which each poll place numbers on its own: it removes that device type's batches on
      * that media of the poll place whose batches are loaded next (or of the only poll place
-     * with that media), otherwise nothing (ambiguous).
+     * with that media), otherwise nothing (ambiguous). A "Committing Machine Deleted Batch
+     * <name>" (the media reloaded after a batch was deleted on the tabulator) removes the
+     * session's counted batch of that name.
      */
     BOOL EeAudit_Accounting(const EeAuditLog *log, EeAuditAccounting *out);
 
@@ -407,18 +446,22 @@ extern "C"
 #define EE_AUDIT_N_MANUAL_VOTES    8  /* Hart: a manual vote record created or deleted */
 #define EE_AUDIT_N_OVERRIDES       9  /* Hart: a reporting status set by hand, or an Open vDrive override */
 #define EE_AUDIT_N_MEDIA_CLEARS    10 /* a media clear */
-#define EE_AUDIT_N_CLOCK           11 /* a time later than the event printed above it: a clock off; Hart: a
+#define EE_AUDIT_N_MACHINE_DELETED 11 /* "Committing Machine Deleted Batch": a batch deleted at the
+                                       * scanner (value: the ballots of its earlier load removed) */
+#define EE_AUDIT_N_BALLOTS_AFTER   12 /* Hart Verity Build: official ballots printed after Election Day
+                                       * (value: the quantity) */
+#define EE_AUDIT_N_CLOCK           13 /* a time later than the event printed above it: a clock off; Hart: a
                                        * vDrive event logged at a time other than its Time read */
-#define EE_AUDIT_N_VDRIVE_REJECTED 12 /* Hart: a vDrive rejected */
-#define EE_AUDIT_N_FULL_CLEARS     13 /* a full clear */
-#define EE_AUDIT_N_ZERO_BATCHES    14 /* a batch (not a test deck) of 0 ballots */
-#define EE_AUDIT_N_PREV_LOADED     15 /* "This batch was previously loaded" */
-#define EE_AUDIT_N_RESULTS_TEST    16 /* a results report before Election Day with only test decks or
+#define EE_AUDIT_N_VDRIVE_REJECTED 14 /* Hart: a vDrive rejected */
+#define EE_AUDIT_N_FULL_CLEARS     15 /* a full clear */
+#define EE_AUDIT_N_ZERO_BATCHES    16 /* a batch (not a test deck) of 0 ballots */
+#define EE_AUDIT_N_PREV_LOADED     17 /* "This batch was previously loaded" */
+#define EE_AUDIT_N_RESULTS_TEST    18 /* a results report before Election Day with only test decks or
                                        * no ballots loaded (L&A tests, zero reports) */
-#define EE_AUDIT_N_REG_VOTERS      17 /* Hart: registered voters of a precinct changed */
-#define EE_AUDIT_N_RESTORES        18 /* an election restored */
-#define EE_AUDIT_N_USERS           19 /* a user account created or changed, or passwords viewed */
-#define EE_AUDIT_N_COUNT           20
+#define EE_AUDIT_N_REG_VOTERS      19 /* Hart: registered voters of a precinct changed */
+#define EE_AUDIT_N_RESTORES        20 /* an election restored */
+#define EE_AUDIT_N_USERS           21 /* a user account created or changed, or passwords viewed */
+#define EE_AUDIT_N_COUNT           22
 
 /** Severity of a category (EeAudit_NoteSeverity). */
 #define EE_AUDIT_SEV_INFO   0
@@ -438,7 +481,9 @@ extern "C"
                            * RESULTS_EARLY, test decks for RESULTS_TEST) */
         int64_t value;    /* RESULTS_EARLY, LOADED_EARLY: their ballots; CLOCK: seconds ahead of the
                            * event printed above it (Hart: of the Time read); MANUAL_VOTES: the
-                           * ballots; TRANSFER: the ballots read less those written */
+                           * ballots; TRANSFER: the ballots read less those written;
+                           * MACHINE_DELETED: the ballots of the batch's earlier load it removed;
+                           * BALLOTS_AFTER: the ballots printed */
     } EeAuditNote;
 
     typedef struct EeAuditNotes

@@ -107,6 +107,7 @@
 #define IDM_AUD_LOG_HART_COUNT   40150 /* View -> Log: Hart Verity component logs */
 #define IDM_AUD_LOG_HART_CENTRAL 40151
 #define IDM_AUD_LOG_HART_DATA    40152
+#define IDM_AUD_LOG_HART_BUILD   40153
 /* View -> Copy: one item per copy, IDM_AUD_COPY_FIRST + log * EE_AUDIT_MAX_COPIES + copy
  * (five logs of up to 64 copies: 40200..40519). */
 #define IDM_AUD_COPY_FIRST      40200

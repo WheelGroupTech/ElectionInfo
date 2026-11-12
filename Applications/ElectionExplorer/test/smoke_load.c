@@ -14180,6 +14180,117 @@ done:
     return rc;
 }
 
+/* A row printed across a page break with a line of its text lost (Travis G26's 11/10 Election
+ * log, pages 696-697) is the same event as its whole printing in another copy (tag: auditpart). */
+static int test_audit_partial(void)
+{
+    static const AudRow k_a[] = {
+        {30, "Info", "Ballot Review window Activated"},
+        {20, "Info", "Ballot Review filter applied: Ballot Types[ALL] Precincts[ALL] Polls[ALL] Ballot Styles[ALL]"},
+        {10, "Info", "Ballot Review activated."}};
+    /* "Precincts[ALL] Polls" lost where the row breaks from page 1 to 2 */
+    static const AudRow k_b[] = {{30, "Info", "Ballot Review window Activated"},
+                                 {20, "Info", "Ballot Review filter applied: Ballot Types[ALL] [ALL] Ballot Styles[ALL]"},
+                                 {10, "Info", "Ballot Review activated."}};
+    EeAuditCopy copies[2];
+    EeAuditElection *els = NULL;
+    uint32_t nels = 0;
+    const EeAuditLog *log;
+    const EeAuditCopy *c;
+    int rc = 1;
+
+    if (!aud_copy(&copies[0], EE_AUDIT_ELECTION, "Travis", 20241105, 9, k_a, 3) ||
+        !aud_copy(&copies[1], EE_AUDIT_ELECTION, "Travis", 20241105, 12, k_b, 3))
+    {
+        wprintf(L"auditpart: setup\n");
+        goto done;
+    }
+    copies[1].events[2].page = 2; /* the row after the cut one starts the next page */
+    copies[1].pages = 2;
+    if (!EeAudit_GroupCopies(copies, 2, &els, &nels) || nels != 1)
+    {
+        wprintf(L"auditpart: group\n");
+        goto done;
+    }
+    log = EeAudit_Log(&els[0], EE_AUDIT_ELECTION);
+    if (log->nevents != 3 || log->checks[1].lacks_missing != 0 || log->checks[1].incomplete != 1 ||
+        log->checks[1].new_events != 0 || log->events[1].copies != 3 || log->events[1].partial != 2 ||
+        strstr(EeAudit_Desc(&log->copies[log->events[1].copy],
+                            EeAudit_MergedEvent(log, 1, &c)), "Precincts[ALL] Polls[ALL]") == NULL)
+    {
+        wprintf(L"auditpart: %u events, missing %u, incomplete %u, new %u\n", log->nevents,
+                log->checks[1].lacks_missing, log->checks[1].incomplete, log->checks[1].new_events);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeAudit_FreeElections(els, nels);
+    wprintf(L"auditpart: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
+/* A Hart Verity Build log ("Component: Build 2.5.0" in Verity 2.5): its own log, and official
+ * ballots printed after Election Day are noted (tag: auditbuild). */
+static int test_audit_build(void)
+{
+#define D 86400
+    /* oldest first here; Election Day is November 5, 2024 */
+    static const AudRow k_rows[] = {
+        {-30 * D, "Ballot(s) generated",
+         "1-BS1, N/A, English/Spanish, 8.5x14, quantity: 3, Official, human readable: True, ballot numbering: True, "
+         "starting ballot #: 1, include ballot stub: False"},
+        {7 * D, "Ballot(s) generated",
+         "Fed 21, N/A, English/Spanish, 8.5x14, quantity: 22, Official, human readable: True, ballot numbering: True, "
+         "starting ballot #: 7974, include ballot stub: False"},
+        {7 * D + 60, "Ballot(s) generated",
+         "1-BS1, N/A, English/Spanish, 8.5x14, quantity: 2, Sample, human readable: True, ballot numbering: False, "
+         "include ballot stub: False"}};
+#undef D
+    AudRow rows[ARRAYSIZE(k_rows)];
+    EeAuditCopy copy;
+    EeAuditElection *els = NULL;
+    uint32_t nels = 0, i;
+    EeAuditNotes notes;
+    int rc = 1;
+
+    memset(&notes, 0, sizeof(notes));
+    for (i = 0; i < ARRAYSIZE(k_rows); i++)
+    {
+        rows[i] = k_rows[ARRAYSIZE(k_rows) - 1 - i];
+    }
+    if (!aud_copy(&copy, EE_AUDIT_HART_BUILD, "Hays", 20241105, 9, rows, ARRAYSIZE(rows)) ||
+        !EeAudit_GroupCopies(&copy, 1, &els, &nels) || nels != 1 || !EeAudit_IsHart(&els[0]) ||
+        EeAudit_Log(&els[0], EE_AUDIT_HART_BUILD)->nevents != 3 ||
+        wcscmp(EeAudit_LogName(EE_AUDIT_HART_BUILD), L"VerityBuild") != 0 ||
+        EeAudit_LogKindOf("VerityBuild") != EE_AUDIT_HART_BUILD || !EeAudit_Notable(&els[0], &notes))
+    {
+        wprintf(L"auditbuild: setup\n");
+        goto done;
+    }
+    if (notes.per_category[EE_AUDIT_N_BALLOTS_AFTER] != 1)
+    {
+        wprintf(L"auditbuild: %u notes of ballots after Election Day\n", notes.per_category[EE_AUDIT_N_BALLOTS_AFTER]);
+        goto done;
+    }
+    for (i = 0; i < notes.count; i++)
+    {
+        if (notes.notes[i].category == EE_AUDIT_N_BALLOTS_AFTER &&
+            (notes.notes[i].value != 22 || notes.notes[i].log != EE_AUDIT_HART_BUILD - 1))
+        {
+            wprintf(L"auditbuild: value %lld, log %d\n", (long long)notes.notes[i].value, notes.notes[i].log);
+            goto done;
+        }
+    }
+    rc = 0;
+
+done:
+    EeAudit_FreeNotes(&notes);
+    EeAudit_FreeElections(els, nels);
+    wprintf(L"auditbuild: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 static int test_audit_accounting(void)
 {
     /* oldest first here; reversed into report order below */
@@ -14196,6 +14307,15 @@ static int test_audit_accounting(void)
         {21, "Warning", "User Response: Yes"},
         {22, "Info", "Results successfully cleared"},
         {30, "Info", "Committing new Batch A0004-EV Vote Center - 7 ID 6 Number of Ballots 101"},
+        /* a mail batch deleted at the scanner after it was loaded, then scanned again as a new batch;
+         * and a deletion of a batch never loaded */
+        {31, "Info", "Committing new Batch F0021-Vote By Mail - 6 ID 8 Number of Ballots 117"},
+        {32, "Info", "Starting Load of Results E:"},
+        {33, "Info", "2 batch(es) found. Processing Central Count device type."},
+        {34, "Info", "Reloading media with images, Poll ID 2,844 Media ID 6 Machine SN 9522090625."},
+        {35, "Info", "Committing Machine Deleted Batch F0021-Vote By Mail - 6 ID 9 Number of Ballots 0"},
+        {36, "Info", "Committing Machine Deleted Batch E0030-Vote By Mail - 4 ID 10 Number of Ballots 0"},
+        {37, "Info", "Committing new Batch F0032-Vote By Mail - 6 ID 11 Number of Ballots 117"},
         {40, "Warning", "All Electionware election results will be cleared. You may want to backup the election before proceeding. Do you want to continue?"},
         {41, "Warning", "User Response: No"},
         {50, "Warning", "This batch was previously loaded.  Results and Ballot Images have not changed."},
@@ -14254,7 +14374,7 @@ static int test_audit_accounting(void)
         goto done;
     }
     if (a.nsessions != 3 || a.election_session != 1 || !a.sessions[0].test || !a.sessions[2].test ||
-        a.sessions[1].test || a.nbatches != 8 || a.nclears != 1 || a.previously_loaded != 1 || a.sheet_errors != 3 ||
+        a.sessions[1].test || a.nbatches != 10 || a.nclears != 1 || a.previously_loaded != 1 || a.sheet_errors != 3 ||
         a.sheet_error_ids != 2)
     {
         wprintf(L"auditacct: %u sessions (election %d), %u batches, %u clears, %u reloads, %u sheet errors (%u ids)\n",
@@ -14265,8 +14385,8 @@ static int test_audit_accounting(void)
     s = &a.sessions[1];
     /* the central count clear of media 5 removes the EV Vote Center batch loaded next, not
      * EV Mail's media 5 nor the poll place tabulator's; batch 4 loaded again replaces itself */
-    if (s->ballots != 1394 || s->counted != 4 || s->ballots_vt[EE_AUDIT_VT_EARLY] != 101 ||
-        s->ballots_vt[EE_AUDIT_VT_ELECTION_DAY] != 1250 || s->ballots_vt[EE_AUDIT_VT_MAIL] != 40 ||
+    if (s->ballots != 1511 || s->counted != 5 || s->ballots_vt[EE_AUDIT_VT_EARLY] != 101 ||
+        s->ballots_vt[EE_AUDIT_VT_ELECTION_DAY] != 1250 || s->ballots_vt[EE_AUDIT_VT_MAIL] != 157 ||
         s->ballots_vt[EE_AUDIT_VT_PROVISIONAL] != 3)
     {
         wprintf(L"auditacct: election session %lld ballots, %u counted\n", (long long)s->ballots, s->counted);
@@ -14281,6 +14401,39 @@ static int test_audit_accounting(void)
         a.clears[0].all_ballots != 140)
     {
         wprintf(L"auditacct: batches / media clear\n");
+        goto done;
+    }
+    /* the deleted batch no longer counts; its rescan (a new batch) does */
+    if (a.machine_deleted != 2 || a.machine_deleted_hits != 1 || a.batches[6].status != EE_AUDIT_BATCH_DELETED ||
+        a.batches[6].ballots != 117 || a.batches[7].status != EE_AUDIT_BATCH_COUNTED)
+    {
+        wprintf(L"auditacct: machine deleted %u (%u hits), batch 6 status %d\n", a.machine_deleted,
+                a.machine_deleted_hits, a.batches[6].status);
+        goto done;
+    }
+    {
+        const EeAuditCopy *dc;
+        const EeAuditEvent *de =
+            EeAudit_MergedEvent(EeAudit_Log(&els[0], EE_AUDIT_ELECTION), a.deletions[a.batches[6].deleted].event, &dc);
+        if (strncmp(EeAudit_Desc(dc, de), "Committing Machine Deleted Batch F0021", 38) != 0)
+        {
+            printf("auditacct: deleted by [%s]\n", EeAudit_Desc(dc, de));
+            goto done;
+        }
+    }
+    /* the scanner and load the deletion came in, the new batch in that load, the rescan */
+    if (a.deletions[0].batch != 6 || a.deletions[0].machine == NULL ||
+        strcmp(a.deletions[0].machine, "9522090625") != 0 || a.deletions[0].media != 6 ||
+        a.deletions[0].poll_id != 2844 || a.deletions[0].load_found != 2 || a.deletions[0].load_new != 1 ||
+        a.deletions[0].load_new_ballots != 117 || a.deletions[0].rescan != 7 || a.deletions[1].batch != -1 ||
+        a.deletions[1].machine != NULL || a.deletions[1].rescan != -1 || strcmp(a.deletions[1].name, "E0030-Vote By Mail - 4") != 0)
+    {
+        printf("auditacct: deletion context: batch %d sn %s media %d poll %lld found %u new %u (%lld) rescan %d; "
+               "second batch %d rescan %d\n",
+               a.deletions[0].batch, a.deletions[0].machine ? a.deletions[0].machine : "-", a.deletions[0].media,
+               (long long)a.deletions[0].poll_id, a.deletions[0].load_found, a.deletions[0].load_new,
+               (long long)a.deletions[0].load_new_ballots, a.deletions[0].rescan, a.deletions[1].batch,
+               a.deletions[1].rescan);
         goto done;
     }
     rc = 0;
@@ -14327,7 +14480,8 @@ static int test_audit_notable(void)
         {400, "Info", "Starting Acquire Server."},
         {250, "Info", "Stopping Acquire Server."},
         {3600, "Info", "Committing new Batch ED Vote Center - 7 ID 4 Number of Ballots 100"},
-        {14400, "Info", "Committing new Batch ED Vote Center - 8 ID 5 Number of Ballots 20"}};
+        {14400, "Info", "Committing new Batch ED Vote Center - 8 ID 5 Number of Ballots 20"},
+        {14500, "Info", "Committing Machine Deleted Batch ED Vote Center - 8 ID 6 Number of Ballots 0"}};
     static const AudRow k_admin[] = {
         /* another election's test copy (no backup of this election before it): left out */
         {-6 * D, "Info", "Election Opened: L24 EV CC Tab Test"},
@@ -14344,7 +14498,7 @@ static int test_audit_notable(void)
         {30, "Info", "Election Opened: G24 ED Tab Test"},
         {90, "Info", "Election Closed: G24 ED Tab Test"},
         {5000, "Info", "Election Closed: November 5, 2024 Joint General and Special Elections"}};
-    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 2, 0, 3, 0, 2, 1};
+    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2, 0, 3, 0, 2, 1};
 #undef D
     AudRow el_rows[ARRAYSIZE(k_el)], admin_rows[ARRAYSIZE(k_admin)];
     EeAuditCopy copies[2];
@@ -14389,7 +14543,8 @@ static int test_audit_notable(void)
         if ((n->category == EE_AUDIT_N_RESULTS_EARLY && (n->batches != 3 || n->value != 50)) ||
             (n->category == EE_AUDIT_N_RESULTS_TEST && n->batches > 1) ||
             (n->category == EE_AUDIT_N_CLOCK && n->value != 150) ||
-            (n->category == EE_AUDIT_N_LOADED_EARLY && n->value != 50))
+            (n->category == EE_AUDIT_N_LOADED_EARLY && n->value != 50) ||
+            (n->category == EE_AUDIT_N_MACHINE_DELETED && n->value != 20))
         {
             wprintf(L"auditnote: %s: %u batches, value %lld\n", EeAudit_NoteName(n->category), n->batches,
                     (long long)n->value);
@@ -14673,7 +14828,7 @@ static BOOL hva_is(const EeAuditCopy *c, uint32_t i, const char *level, const ch
 
 static int test_audit_hart(void)
 {
-    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 2, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0};
+    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 2, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0};
     wchar_t dir[MAX_PATH], p_count[MAX_PATH], p_central[MAX_PATH], p_zip[MAX_PATH], p_exp[MAX_PATH];
     wchar_t err[512] = L"";
     const wchar_t *paths[2];
@@ -15075,6 +15230,8 @@ int wmain(void)
     failed |= test_results_view();
     failed |= test_audit();
     failed |= test_audit_merge();
+    failed |= test_audit_partial();
+    failed |= test_audit_build();
     failed |= test_audit_accounting();
     failed |= test_audit_notable();
     failed |= test_audit_export();

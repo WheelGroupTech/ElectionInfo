@@ -399,9 +399,14 @@ static int hv_component_kind(const char *comp)
     {
         return EE_AUDIT_HART_CENTRAL;
     }
-    if (strncmp(comp, "VerityData", 10) == 0 || strncmp(comp, "VerityBuild", 11) == 0)
+    if (strncmp(comp, "VerityData", 10) == 0)
     {
         return EE_AUDIT_HART_DATA;
+    }
+    /* Verity Build, the ballot design program: "Build 2.5.0" in Verity 2.5 (Hays G24) */
+    if (strncmp(comp, "VerityBuild", 11) == 0 || (strncmp(comp, "Build ", 6) == 0 && comp[6] >= '0' && comp[6] <= '9'))
+    {
+        return EE_AUDIT_HART_BUILD;
     }
     return 0;
 }
@@ -691,7 +696,7 @@ EeLoadStatus AuHart_ReadPdf(EePdf *pdf,
             {
                 hv_set_err(err, errcch,
                            L"%s is the audit log of a Hart Verity component other than VerityCount, "
-                           L"VerityCentral or VerityData.",
+                           L"VerityCentral, VerityData or VerityBuild.",
                            path);
                 st = EeLoadStatus_Error;
                 break;
@@ -962,6 +967,7 @@ static BOOL hv_same_id(const char *a, const char *b)
 #define HV_SLOT_COUNT   (EE_AUDIT_HART_COUNT - 1)
 #define HV_SLOT_CENTRAL (EE_AUDIT_HART_CENTRAL - 1)
 #define HV_SLOT_DATA    (EE_AUDIT_HART_DATA - 1)
+#define HV_SLOT_BUILD   (EE_AUDIT_HART_BUILD - 1)
 
 /* A read of the Count log, before the reads are grouped by task. */
 typedef struct HvTaskRead
@@ -1494,10 +1500,13 @@ static BOOL hv_notes_count(const EeAuditElection *el, const EeAuditAccounting *a
     return TRUE;
 }
 
-/* Central and Data logs: errors, deleted tasks, and (Central) vDrives Count read otherwise. */
+/* Central, Data and Build logs: errors, deleted tasks, (Central) vDrives Count read otherwise, and
+ * (Build) official ballots printed after Election Day. */
 static BOOL hv_notes_other(const EeAuditElection *el, const EeAuditAccounting *a, int slot, HvNotes *hn)
 {
     const EeAuditLog *log = &el->logs[slot];
+    int d0 = el->election_date;
+    int64_t eday = d0 > 0 ? EeAudit_MakeTime(d0 / 10000, d0 / 100 % 100, d0 % 100, 0, 0, 0) : 0;
     uint32_t i, k;
     for (i = log->nevents; i-- > 0;)
     {
@@ -1522,6 +1531,14 @@ static BOOL hv_notes_other(const EeAuditElection *el, const EeAuditAccounting *a
         else if (strncmp(level, "Task deleted", 12) == 0)
         {
             cat = EE_AUDIT_N_DELETED;
+        }
+        else if (slot == HV_SLOT_BUILD && eday != 0 && e->ts >= eday + 86400 &&
+                 strncmp(level, "Ballot(s) generated", 19) == 0 && strstr(d, ", Official,") != NULL)
+        {
+            /* "Fed 21, N/A, English/Spanish, 8.5x14, quantity: 22, Official, ..., starting ballot #: 7974" */
+            const char *q = strstr(d, "quantity: ");
+            cat = EE_AUDIT_N_BALLOTS_AFTER;
+            value = q != NULL ? _atoi64(q + 10) : 0;
         }
         else if (hv_is_error(level, d))
         {
@@ -1548,7 +1565,7 @@ BOOL EeAudit_HartNotable(const EeAuditElection *el, EeAuditNotes *out)
     hn.n = out;
     hn.cap = 0;
     ok = hv_notes_count(el, &a, &hn) && hv_notes_other(el, &a, HV_SLOT_CENTRAL, &hn) &&
-         hv_notes_other(el, &a, HV_SLOT_DATA, &hn);
+         hv_notes_other(el, &a, HV_SLOT_DATA, &hn) && hv_notes_other(el, &a, HV_SLOT_BUILD, &hn);
     EeAudit_FreeAccounting(&a);
     if (!ok)
     {

@@ -30,6 +30,28 @@ a bullet each.
 
 ## Unreleased (after 1.6.0.0)
 
+### 2026-11-13 — Results Compare: same-named choices summed, "For (A Favor)" = "For"
+- **What:**
+  - Compare sums a contest's choices of the same name as one choice (totals, vote types,
+    precincts). Dallas's Clarity results list each CFBISD at-large candidate twice; the CVR once.
+  - The Clarity summary.csv reader keeps a repeated choice name in its contest when its percentage
+    still fits under 100 (it had split that contest in five).
+  - Choices left unpaired pair when their names differ only by a parenthesis or "NP" at the end
+    ("For (A Favor)" / "Against (En Contra)" vs a CVR's "For" / "Against"), when the pairing is
+    unique. Help → Compare says so.
+- **Where:** `src/ee_results.c` `cmp_contests`, `cmp_precincts`, `cmp_choice_groups`,
+  `cmp_group_sum`, `cmp_group_cell`, `cmp_choice_core`, `cmp_choice_loose`, `sum_sink`
+  (summary.csv contest split); `src/ee_results.h` `EeResults_Compare` comment; `main.c`
+  `k_ResHelpCompare`.
+- **Checked:** Dallas L26 CVR ↔ each of its four results files: 330 contest totals match, 3
+  differ (Wilmer Council, a real count difference), none on one side only (before: 144 match, 368
+  one side only). Of 497 summary files only five Dallas ones load differently, now with their
+  detail.xml's contest count (L24's stays split by its own figures). CVR ↔ results sweep of the 50
+  cross-checked elections (old vs new build): only Dallas changes, L26 as above and G24's
+  propositions (113 → 188 match, one-side-only 156 → 6, no new differences); the other 112
+  results groups are identical. Smoke test `rescmpgroup`; full suite passes.
+- **Details:** [Step 8, "Same-named choices and translated choice names"](docs/election-results-design.md#step-8--ess-and-hart-results-report-pdfs-done-2026-10-26)
+
 ### 2026-11-12 — Audit logs: scanner-deleted batches, lines lost at a page break, Verity Build logs
 - **What:**
   - ES&S "Committing Machine Deleted Batch" events now remove ballots. A batch deleted at the

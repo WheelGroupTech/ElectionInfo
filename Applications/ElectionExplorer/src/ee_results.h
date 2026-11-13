@@ -309,8 +309,10 @@ extern "C"
 
     /**
      * Compare two results: contests by name (repeated names in order), choices by name
-     * (EeResults_NamesMatch), over/under votes, ballots cast and registered voters. When
-     * both sides have precinct detail, each choice is also compared precinct by precinct
+     * (EeResults_NamesMatch; choices of one contest with the same name are summed as one,
+     * and choices left unpaired pair when their names differ only by a parenthesis or "NP"
+     * at the end, "For (A Favor)" = "For"), over/under votes, ballots cast and registered
+     * voters. When both sides have precinct detail, each choice is also compared precinct by precinct
      * and, when both have the same vote types, by vote type; only differing precinct and
      * vote-type rows are listed. A choice with no votes and a missing choice are equal.
      *

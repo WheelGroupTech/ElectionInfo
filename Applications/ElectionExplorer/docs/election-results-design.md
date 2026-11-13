@@ -613,6 +613,31 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
   break ("Donald J. Trump JD Vance" = "Donald J. Trump/JD Vance", Parker's Hart CVR). Tarrant
   P26 now pairs all 677 contest totals (all equal), PR26 40, P24 458 (one precinct chair race
   only in the results). Smoke test `rescmpparty`.
+- **Same-named choices and translated choice names (2026-11-13):** found comparing Dallas L26's
+  CVR with its Clarity results.
+  - Dallas's Clarity files list each CFBISD at-large candidate twice in one contest (Carolyn
+    Benavides 1,970 + 1,216; the CVR has 3,186). `EeResults_Compare` now sums a contest's
+    same-named choices as one (`cmp_choice_groups`): the total, each vote type, and each precinct
+    and precinct × vote-type row (`cmp_group_sum`, `cmp_group_cell`). The results window still
+    shows both rows as the file gives them.
+  - The summary.csv reader had split that contest in five, starting a new contest at each
+    repeated choice name. A repeated name now stays in the contest when its percentage still
+    fits under 100 (the CFBISD shares add to 100.00); back-to-back same-named contests still
+    split, since the second one's first share passes 100. Of 497 summary files only five Dallas
+    ones change (G20, L23, L25, L26 now give their detail.xml's contest count; L24's summary
+    still splits on its own registered / ballots figures).
+  - Dallas writes proposition choices "For (A Favor)" / "Against (En Contra)"; the CVR writes
+    "For" / "Against". After exact pairing, choices left over pair when their names differ only by
+    a parenthesis or "NP" at the end (`cmp_choice_core`, `cmp_choice_loose`), and only when each
+    has exactly one such partner (a results "For (A Favor)" and "For (Bond)" against one CVR "For"
+    stay apart). The row shows the first window's name.
+  - Dallas L26 CVR ↔ detail.xml / .txt / .xlsx / summary.csv: 330 contest totals match, 3
+    differ (Wilmer Council, CVR 10 more for each candidate), none on one side only; before,
+    144 matched and 368 were on one side only. The CVR ↔ results sweep of the 50 cross-checked
+    elections changes only Dallas: L26, and G24's propositions (113 → 188 match, one side only
+    156 → 6, no new differences; the 6 are two contests whose titles differ, "District 13-
+    Unexpired" vs "… Unexpired Term"). The other 112 results groups are identical. Smoke test
+    `rescmpgroup`.
 - **Results-wide figures:** `adopt_figures` now also takes registered voters, ballots cast and
   ballots by vote type from another file when the shown one lacks them (an ES&S precinct report
   whose statistics give only turnout).

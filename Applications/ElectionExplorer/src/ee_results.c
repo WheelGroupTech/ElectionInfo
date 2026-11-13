@@ -1450,13 +1450,16 @@ static BOOL sum_sink(void *ctx, const char *const *cells, uint32_t n)
 
     /* A new contest starts when the name changes, or (for back-to-back contests with the
      * same name) when a choice repeats, the contest figures change or the percentages
-     * pass 100. */
+     * pass 100. A repeated choice whose percentage still fits under 100 stays: Dallas's L26
+     * lists each CFBISD at-large candidate twice in one contest (the shares add to 100). */
     fresh = sc->cur_raw == NULL || strcmp(sc->cur_raw, raw) != 0;
     if (!fresh && r->ncontests > 0)
     {
         const EeResultsContest *c = &r->contests[r->ncontests - 1];
+        double cap = 100.0 + 0.01 + 0.006 * (double)c->nchoices;
+        BOOL fits = sc->col_pct >= 0 && pct > 0.0 && sc->pct_sum > 0.0 && sc->pct_sum + pct <= cap;
         uint32_t k;
-        for (k = 0; k < c->nchoices && !fresh; k++)
+        for (k = 0; k < c->nchoices && !fresh && !fits; k++)
         {
             if (wcscmp(r->choices[c->first_choice + k].name, wchoice) == 0)
             {
@@ -1467,8 +1470,7 @@ static BOOL sum_sink(void *ctx, const char *const *cells, uint32_t n)
         {
             fresh = TRUE;
         }
-        if (sc->col_pct >= 0 && pct > 0.0 &&
-            sc->pct_sum + pct > 100.0 + 0.01 + 0.006 * (double)c->nchoices)
+        if (sc->col_pct >= 0 && pct > 0.0 && sc->pct_sum + pct > cap)
         {
             fresh = TRUE;
         }
@@ -7232,10 +7234,163 @@ typedef struct CmpCtx
     uint32_t *blocal;  /* b precinct -> local index in the current b contest */
     uint8_t *bseen;    /* b local precincts matched in the current choice */
     uint32_t *vmap;    /* a vote type -> b vote type, or NULL when not comparable */
+    const uint32_t *ga, *gb; /* the current contests' choice groups (cmp_choice_groups) */
     DiffList *l;
 } CmpCtx;
 
-/* Precinct (and vote type) rows of one matched choice: only the differing ones. */
+/* Each choice's group in a contest: the first choice of the same name (EeResults_NamesMatch).
+ * A group is compared as one choice: Dallas's Clarity results list each CFBISD at-large
+ * candidate twice (two ballot styles order the contest differently), the CVR once. */
+static uint32_t *cmp_choice_groups(const EeResults *r, const EeResultsContest *ct)
+{
+    uint32_t *g = (uint32_t *)malloc(((size_t)ct->nchoices + 1) * sizeof(uint32_t));
+    uint32_t i, k;
+    if (g == NULL)
+    {
+        return NULL;
+    }
+    for (i = 0; i < ct->nchoices; i++)
+    {
+        const wchar_t *name = r->choices[ct->first_choice + i].name;
+        for (k = 0; k < i; k++)
+        {
+            if (g[k] == k && EeResults_NamesMatch(name, r->choices[ct->first_choice + k].name))
+            {
+                break;
+            }
+        }
+        g[i] = k;
+    }
+    return g;
+}
+
+/* A group's figure: t holds stride figures per choice (contest-wide), off picks one. */
+static int64_t cmp_group_sum(const int64_t *t,
+                             const EeResultsContest *ct,
+                             const uint32_t *grp,
+                             uint32_t lead,
+                             size_t stride,
+                             size_t off)
+{
+    int64_t s = 0;
+    uint32_t k;
+    for (k = lead; k < ct->nchoices; k++)
+    {
+        if (grp[k] == lead)
+        {
+            int64_t v = t[(size_t)(ct->first_choice + k) * stride + off];
+            if (v == EE_RES_UNKNOWN)
+            {
+                return EE_RES_UNKNOWN;
+            }
+            s += v;
+        }
+    }
+    return s;
+}
+
+/* A group's votes in one precinct (local p): over the included vote types, or in vote type
+ * vt when vt >= 0. */
+static int64_t cmp_group_cell(const EeResults *r,
+                              const EeResultsContest *ct,
+                              const uint32_t *grp,
+                              uint32_t lead,
+                              uint32_t p,
+                              const uint8_t *vmask,
+                              int vt)
+{
+    uint32_t nvt = EE_RESULTS_NVT(r), k;
+    int64_t s = 0;
+    for (k = lead; k < ct->nchoices; k++)
+    {
+        if (grp[k] == lead)
+        {
+            s += vt < 0 ? cell_votes(r, ct, k, p, vmask)
+                        : ct->counts[((size_t)k * ct->npre + p) * nvt + (uint32_t)vt];
+        }
+    }
+    return s;
+}
+
+/* A choice name without what one source adds to it: a translation in parentheses at the end
+ * (Dallas's Clarity results "For (A Favor)" / "Against (En Contra)", its CVR "For" /
+ * "Against") and a no-party mark at the end ("NP", "(NP)"). FALSE when nothing was dropped
+ * or nothing would be left. */
+static BOOL cmp_choice_core(const wchar_t *s, wchar_t *buf, size_t cch)
+{
+    BOOL cut = FALSE;
+    if (s == NULL || FAILED(StringCchCopyW(buf, cch, s)))
+    {
+        return FALSE;
+    }
+    for (;;)
+    {
+        size_t n = wcslen(buf);
+        while (n > 0 && is_ws(buf[n - 1]))
+        {
+            n--;
+        }
+        buf[n] = L'\0';
+        if (n > 1 && buf[n - 1] == L')')
+        {
+            size_t o = n - 1;
+            int depth = 0;
+            for (;;)
+            {
+                if (buf[o] == L')')
+                {
+                    depth++;
+                }
+                else if (buf[o] == L'(' && --depth == 0)
+                {
+                    break;
+                }
+                if (o == 0)
+                {
+                    break;
+                }
+                o--;
+            }
+            if (depth == 0 && o > 0 && is_ws(buf[o - 1]))
+            {
+                buf[o] = L'\0';
+                cut = TRUE;
+                continue;
+            }
+        }
+        else if (n > 3 && towupper(buf[n - 2]) == L'N' && towupper(buf[n - 1]) == L'P' && is_ws(buf[n - 3]))
+        {
+            buf[n - 2] = L'\0';
+            cut = TRUE;
+            continue;
+        }
+        break;
+    }
+    {
+        const wchar_t *t = buf;
+        while (is_ws(*t))
+        {
+            t++;
+        }
+        return cut && *t != L'\0';
+    }
+}
+
+/* Do two choice names match once what one source adds is dropped (cmp_choice_core)? */
+static BOOL cmp_choice_loose(const wchar_t *a, const wchar_t *b)
+{
+    wchar_t ka[512], kb[512];
+    BOOL ca = cmp_choice_core(a, ka, ARRAYSIZE(ka));
+    BOOL cb = cmp_choice_core(b, kb, ARRAYSIZE(kb));
+    if (!ca && !cb)
+    {
+        return FALSE;
+    }
+    return EeResults_NamesMatch(ca ? ka : a, cb ? kb : b);
+}
+
+/* Precinct (and vote type) rows of one matched choice (choice groups i and j): only the
+ * differing ones. */
 static void cmp_precincts(CmpCtx *x,
                           const EeResultsContest *pc,
                           uint32_t i,
@@ -7257,8 +7412,8 @@ static void cmp_precincts(CmpCtx *x,
         uint32_t lq = bg != UINT32_MAX ? x->blocal[bg] : UINT32_MAX;
         BOOL ain = x->apm == NULL || x->apm[ag];
         BOOL bin = lq != UINT32_MAX && (x->bpm == NULL || x->bpm[bg]);
-        int64_t va = ain ? cell_votes(a, pc, i, p, x->avm) : EE_RES_UNKNOWN;
-        int64_t vb = bin ? cell_votes(b, qc, j, lq, x->bvm) : EE_RES_UNKNOWN;
+        int64_t va = ain ? cmp_group_cell(a, pc, x->ga, i, p, x->avm, -1) : EE_RES_UNKNOWN;
+        int64_t vb = bin ? cmp_group_cell(b, qc, x->gb, j, lq, x->bvm, -1) : EE_RES_UNKNOWN;
         if (lq != UINT32_MAX)
         {
             x->bseen[lq] = 1;
@@ -7298,7 +7453,6 @@ static void cmp_precincts(CmpCtx *x,
         }
         if (x->vmap != NULL)
         {
-            uint32_t anvt = EE_RESULTS_NVT(a), bnvt = EE_RESULTS_NVT(b);
             for (v = 0; v < a->nvt; v++)
             {
                 int64_t ca, cb;
@@ -7306,8 +7460,8 @@ static void cmp_precincts(CmpCtx *x,
                 {
                     continue;
                 }
-                ca = pc->counts[((size_t)i * pc->npre + p) * anvt + v];
-                cb = qc->counts[((size_t)j * qc->npre + lq) * bnvt + x->vmap[v]];
+                ca = cmp_group_cell(a, pc, x->ga, i, p, NULL, (int)v);
+                cb = cmp_group_cell(b, qc, x->gb, j, lq, NULL, (int)x->vmap[v]);
                 if (ca != cb)
                 {
                     dl_add(x->l,
@@ -7328,7 +7482,7 @@ static void cmp_precincts(CmpCtx *x,
         uint32_t bg = qc->pre[q];
         if (!x->bseen[q] && (x->bpm == NULL || x->bpm[bg]))
         {
-            int64_t vb = cell_votes(b, qc, j, q, x->bvm);
+            int64_t vb = cmp_group_cell(b, qc, x->gb, j, q, x->bvm, -1);
             if (vb != 0)
             {
                 dl_add(x->l,
@@ -7352,25 +7506,86 @@ static void cmp_contests(CmpCtx *x, uint32_t c, uint32_t k)
     const EeResultsContest *pc = &a->contests[c];
     const EeResultsContest *qc = &b->contests[k];
     uint8_t *used = (uint8_t *)calloc((size_t)qc->nchoices + 1, 1);
+    uint32_t *pair = (uint32_t *)malloc(((size_t)pc->nchoices + 1) * sizeof(uint32_t));
+    uint32_t *ga = cmp_choice_groups(a, pc), *gb = cmp_choice_groups(b, qc);
     BOOL detail = pc->counts != NULL && qc->counts != NULL;
     uint32_t i, j, v;
-    if (used == NULL)
+    if (used == NULL || pair == NULL || ga == NULL || gb == NULL)
     {
         x->l->oom = TRUE;
+        free(used);
+        free(pair);
+        free(ga);
+        free(gb);
         return;
+    }
+    x->ga = ga;
+    x->gb = gb;
+    /* Pair the choice groups by name; then the ones left whose names differ only by what one
+     * source adds (cmp_choice_loose), when each has just one such partner. */
+    for (i = 0; i < pc->nchoices; i++)
+    {
+        const wchar_t *name = a->choices[pc->first_choice + i].name;
+        pair[i] = UINT32_MAX;
+        if (ga[i] != i)
+        {
+            continue;
+        }
+        for (j = 0; j < qc->nchoices; j++)
+        {
+            if (gb[j] == j && !used[j] && EeResults_NamesMatch(name, b->choices[qc->first_choice + j].name))
+            {
+                pair[i] = j;
+                used[j] = 1;
+                break;
+            }
+        }
     }
     for (i = 0; i < pc->nchoices; i++)
     {
         const wchar_t *name = a->choices[pc->first_choice + i].name;
-        int64_t va = x->ta[pc->first_choice + i];
+        uint32_t found = UINT32_MAX, n = 0, i2, back = 0;
+        if (ga[i] != i || pair[i] != UINT32_MAX)
+        {
+            continue;
+        }
         for (j = 0; j < qc->nchoices; j++)
         {
-            if (!used[j] && EeResults_NamesMatch(name, b->choices[qc->first_choice + j].name))
+            if (gb[j] == j && !used[j] && cmp_choice_loose(name, b->choices[qc->first_choice + j].name))
             {
-                break;
+                found = j;
+                n++;
             }
         }
-        if (j == qc->nchoices)
+        if (n != 1)
+        {
+            continue;
+        }
+        for (i2 = 0; i2 < pc->nchoices; i2++)
+        {
+            if (ga[i2] == i2 && pair[i2] == UINT32_MAX &&
+                cmp_choice_loose(a->choices[pc->first_choice + i2].name, b->choices[qc->first_choice + found].name))
+            {
+                back++;
+            }
+        }
+        if (back == 1)
+        {
+            pair[i] = found;
+            used[found] = 1;
+        }
+    }
+    for (i = 0; i < pc->nchoices; i++)
+    {
+        const wchar_t *name = a->choices[pc->first_choice + i].name;
+        int64_t va;
+        if (ga[i] != i)
+        {
+            continue;
+        }
+        va = cmp_group_sum(x->ta, pc, ga, i, 1, 0);
+        j = pair[i];
+        if (j == UINT32_MAX)
         {
             dl_add(x->l,
                    pc->title,
@@ -7383,9 +7598,8 @@ static void cmp_contests(CmpCtx *x, uint32_t c, uint32_t k)
                    va == 0 ? EE_DIFF_MATCH : EE_DIFF_ONLY_A);
             continue;
         }
-        used[j] = 1;
         {
-            int64_t vb = x->tb[qc->first_choice + j];
+            int64_t vb = cmp_group_sum(x->tb, qc, gb, j, 1, 0);
             dl_add(x->l,
                    pc->title,
                    name,
@@ -7405,8 +7619,8 @@ static void cmp_contests(CmpCtx *x, uint32_t c, uint32_t k)
                 {
                     continue;
                 }
-                ca = x->tva[(size_t)(pc->first_choice + i) * a->nvt + v];
-                cb = x->tvb[(size_t)(qc->first_choice + j) * b->nvt + x->vmap[v]];
+                ca = cmp_group_sum(x->tva, pc, ga, i, a->nvt, v);
+                cb = cmp_group_sum(x->tvb, qc, gb, j, b->nvt, x->vmap[v]);
                 if (ca != cb)
                 {
                     dl_add(x->l,
@@ -7428,9 +7642,9 @@ static void cmp_contests(CmpCtx *x, uint32_t c, uint32_t k)
     }
     for (j = 0; j < qc->nchoices; j++)
     {
-        if (!used[j])
+        if (gb[j] == j && !used[j])
         {
-            int64_t vb = x->tb[qc->first_choice + j];
+            int64_t vb = cmp_group_sum(x->tb, qc, gb, j, 1, 0);
             dl_add(x->l,
                    pc->title,
                    b->choices[qc->first_choice + j].name,
@@ -7467,7 +7681,12 @@ static void cmp_contests(CmpCtx *x, uint32_t c, uint32_t k)
                ub,
                diff_status(ua, ub));
     }
+    x->ga = NULL;
+    x->gb = NULL;
     free(used);
+    free(pair);
+    free(ga);
+    free(gb);
 }
 
 /* All rows of a contest only one side has. */

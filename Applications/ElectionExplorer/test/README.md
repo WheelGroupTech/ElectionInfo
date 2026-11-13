@@ -45,7 +45,7 @@ compound file to `EeXls_ReadAllSheetsMem`), and a voter-list and a Jefferson Cou
   result with no differences, the XML shown;
 - detail.xls as an Excel 2003 XML Spreadsheet (MergeAcross, ss:Index), and each other detail file alone,
   give the XML's counts;
-- summary.csv alone splits two back-to-back contests with the same name;
+- summary.csv alone splits two back-to-back contests with the same name (the shares pass 100);
 - a changed total is flagged;
 - ballots by vote type and contest figures are taken from the other files;
 - over/under votes, and precinct and vote-type tabulation;
@@ -119,6 +119,13 @@ file name.
   two contests with the same name told apart by their key) matches the results;
 - a per-precinct tally with one precinct changed flags that choice's total and that precinct;
 - precinct masks on both sides leave no differences.
+`rescmpgroup` covers choices that name the same candidate another way (Dallas L26):
+- a summary.csv listing each candidate twice in one contest (the shares add to 100) loads as one
+  contest, and its rows are summed against a CVR's single row;
+- "For (A Favor)" pairs with "For" and "Dee Doe" with "Dee Doe NP", but a CVR "For" that fits two
+  results choices pairs with neither;
+- a detail.xml with a candidate twice compared with one listing it once: only the differing
+  precinct (and its vote type) is flagged, from the summed counts.
 `resview` covers the results window's displayed-view export read back:
 - a Totals file (CSV) and a By Precinct file (TSV, with vote type columns) load back;
 - the two same-named contests are told apart;

@@ -13355,6 +13355,150 @@ done:
     return rc;
 }
 
+/* Dallas L26: a summary.csv listing each candidate of one contest twice (the shares add to
+ * 100), "For (A Favor)" / "Against (En Contra)" for a CVR's "For" / "Against", and "NP". */
+static const char k_res_dup_summary[] =
+    "\"line number\",\"contest name\",\"choice name\",\"party name\",\"total votes\",\"percent of votes\","
+    "\"registered voters\",\"ballots cast\",\"num Precinct total\",\"num Precinct rptg\",\"over votes\","
+    "\"under votes\"\r\n"
+    "1,\"ISD Trustees, At- Large (Vote For 2)\",\"Ann\",\"NON\",30,30.00,900,60,2,2,\"0\",\"0\"\r\n"
+    "2,\"ISD Trustees, At- Large (Vote For 2)\",\"Ann\",\"NON\",20,20.00,900,60,2,2,\"0\",\"0\"\r\n"
+    "3,\"ISD Trustees, At- Large (Vote For 2)\",\"Bo\",\"NON\",25,25.00,900,60,2,2,\"0\",\"0\"\r\n"
+    "4,\"ISD Trustees, At- Large (Vote For 2)\",\"Bo\",\"NON\",15,15.00,900,60,2,2,\"0\",\"0\"\r\n"
+    "5,\"ISD Trustees, At- Large (Vote For 2)\",\"Cy\",\"NON\",10,10.00,900,60,2,2,\"0\",\"0\"\r\n"
+    "6,\"Town Proposition R (Vote For 1)\",\"For (A Favor)\",\"NON\",236,97.52,900,243,2,2,\"0\",\"0\"\r\n"
+    "7,\"Town Proposition R (Vote For 1)\",\"Against (En Contra)\",\"NON\",6,2.48,900,243,2,2,\"0\",\"0\"\r\n"
+    "8,\"Town Proposition S (Vote For 1)\",\"For (A Favor)\",\"NON\",5,50.00,900,10,2,2,\"0\",\"0\"\r\n"
+    "9,\"Town Proposition S (Vote For 1)\",\"For (Bond)\",\"NON\",5,50.00,900,10,2,2,\"0\",\"0\"\r\n"
+    "10,\"Town Mayor (Vote For 1)\",\"Dee Doe\",\"NON\",7,100.00,900,8,2,2,\"0\",\"0\"\r\n";
+
+/* detail.xml with a candidate listed twice (precincts 101 and 102), and one with it once. */
+#define RES_DUP_XML_HEAD                                                                            \
+    "\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"                                    \
+    "<ElectionResult><Timestamp>5/11/2026 2:00:00 PM CDT</Timestamp>"                               \
+    "<ElectionName>Joint Election</ElectionName><ElectionDate>5/2/2026</ElectionDate>"              \
+    "<Region>Test</Region><VoterTurnout totalVoters=\"900\" ballotsCast=\"60\" voterTurnout=\"6.67\">" \
+    "<Precincts><Precinct name=\"101\" totalVoters=\"500\" ballotsCast=\"40\" voterTurnout=\"8.00\" />" \
+    "<Precinct name=\"102\" totalVoters=\"400\" ballotsCast=\"20\" voterTurnout=\"5.00\" />"          \
+    "</Precincts></VoterTurnout>"                                                                   \
+    "<Contest key=\"1\" text=\"ISD Trustees, At- Large\" voteFor=\"2\" isQuestion=\"false\">"
+#define RES_DUP_XML_CHOICE(key, name, p101, p102, tot)                                              \
+    "<Choice key=\"" key "\" text=\"" name "\" party=\"NON\" totalVotes=\"" tot "\">"               \
+    "<VoteType name=\"Early\" votes=\"" tot "\"><Precinct name=\"101\" votes=\"" p101 "\" />"       \
+    "<Precinct name=\"102\" votes=\"" p102 "\" /></VoteType></Choice>"
+static const char k_res_dup_xml[] = RES_DUP_XML_HEAD RES_DUP_XML_CHOICE("1", "Ann", "3", "1", "4")
+    RES_DUP_XML_CHOICE("2", "Bo", "4", "0", "4") RES_DUP_XML_CHOICE("3", "Ann", "2", "2", "4")
+        "</Contest></ElectionResult>\r\n";
+static const char k_res_one_xml[] = RES_DUP_XML_HEAD RES_DUP_XML_CHOICE("1", "Ann", "5", "4", "9")
+    RES_DUP_XML_CHOICE("2", "Bo", "4", "0", "4") "</Contest></ElectionResult>\r\n";
+
+/* Compare sums a contest's same-named choices (summary.csv keeps them in one contest when the
+ * shares fit under 100; precinct and vote-type rows sum too) and pairs choices left over whose
+ * names differ only by a parenthesis or "NP" at the end, when the pairing is unique
+ * (tag: rescmpgroup). */
+static int test_results_compare_groups(void)
+{
+    static const EeResultsTallyItem k_cvr[] = {
+        {1, L"ISD Trustees, At- Large", L"Ann", NULL, 50},
+        {1, L"ISD Trustees, At- Large", L"Bo", NULL, 40},
+        {1, L"ISD Trustees, At- Large", L"Cy", NULL, 10},
+        {2, L"Town Proposition R", L"For", NULL, 236},
+        {2, L"Town Proposition R", L"Against", NULL, 6},
+        {3, L"Town Proposition S", L"For", NULL, 10},
+        {4, L"Town Mayor", L"Dee Doe NP", NULL, 7},
+    };
+    wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_dup[MAX_PATH], p_one[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *paths[1];
+    EeResults *s = NULL, *xd = NULL, *xo = NULL;
+    EeResults t;
+    uint32_t ns = 0, nxd = 0, nxo = 0, nd = 0;
+    EeResultsDiff *d = NULL;
+    const EeResultsDiff *r;
+    int rc = 1;
+
+    EeResults_Init(&t);
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_sum, MAX_PATH, L"%sCMPG_summary.csv", dir);
+    StringCchPrintfW(p_dup, MAX_PATH, L"%sCMPG_dup_detail.xml", dir);
+    StringCchPrintfW(p_one, MAX_PATH, L"%sCMPG_one_detail.xml", dir);
+    if (!cvr_write_bytes(p_sum, k_res_dup_summary, strlen(k_res_dup_summary)) ||
+        !cvr_write_bytes(p_dup, k_res_dup_xml, strlen(k_res_dup_xml)) ||
+        !cvr_write_bytes(p_one, k_res_one_xml, strlen(k_res_one_xml)) ||
+        !EeResults_FromTally(k_cvr, ARRAYSIZE(k_cvr), EE_RES_UNKNOWN, &t))
+    {
+        wprintf(L"rescmpgroup: fixtures\n");
+        goto done;
+    }
+    paths[0] = p_sum;
+    if (!res_load(paths, 1, &s, &ns, err) || ns != 1 || s->ncontests != 4 || s->contests[0].nchoices != 5)
+    {
+        wprintf(L"rescmpgroup: summary (%u contests) %s\n", s != NULL ? s->ncontests : 0, err);
+        goto done;
+    }
+    /* Ann 30 + 20 = 50 and Bo 25 + 15 = 40 as the CVR's; "For (A Favor)" = "For", "Dee Doe" =
+     * "Dee Doe NP"; Proposition S's "For" fits two choices, so none pairs. */
+    if (!EeResults_Compare(s, NULL, NULL, &t, NULL, NULL, &d, &nd) || rescmp_count(d, nd, EE_DIFF_DIFFERS) != 0 ||
+        rescmp_count(d, nd, EE_DIFF_ONLY_A) != 2 || rescmp_count(d, nd, EE_DIFF_ONLY_B) != 1 ||
+        (r = rescmp_find(d, nd, L"ISD Trustees, At- Large", 0, L"Ann", NULL, NULL)) == NULL || r->a != 50 ||
+        r->b != 50 || rescmp_find(d, nd, L"ISD Trustees, At- Large", 1, L"Ann", NULL, NULL) != NULL ||
+        (r = rescmp_find(d, nd, L"Town Proposition R", 0, L"For (A Favor)", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH || r->b != 236 ||
+        (r = rescmp_find(d, nd, L"Town Mayor", 0, L"Dee Doe", NULL, NULL)) == NULL || r->status != EE_DIFF_MATCH ||
+        (r = rescmp_find(d, nd, L"Town Proposition S", 0, L"For", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_ONLY_B)
+    {
+        wprintf(L"rescmpgroup: summary vs CVR (%u rows: %u only results, %u only CVR, %u differ)\n", nd,
+                rescmp_count(d, nd, EE_DIFF_ONLY_A), rescmp_count(d, nd, EE_DIFF_ONLY_B),
+                rescmp_count(d, nd, EE_DIFF_DIFFERS));
+        goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+
+    /* Ann twice (101: 3 + 2, 102: 1 + 2) against Ann once (101: 5, 102: 4): only 102 differs. */
+    paths[0] = p_dup;
+    if (!res_load(paths, 1, &xd, &nxd, err) || nxd != 1)
+    {
+        wprintf(L"rescmpgroup: dup xml %s\n", err);
+        goto done;
+    }
+    paths[0] = p_one;
+    if (!res_load(paths, 1, &xo, &nxo, err) || nxo != 1)
+    {
+        wprintf(L"rescmpgroup: one xml %s\n", err);
+        goto done;
+    }
+    if (!EeResults_Compare(xd, NULL, NULL, xo, NULL, NULL, &d, &nd) || rescmp_count(d, nd, EE_DIFF_ONLY_A) != 0 ||
+        rescmp_count(d, nd, EE_DIFF_ONLY_B) != 0 ||
+        (r = rescmp_find(d, nd, L"ISD Trustees, At- Large", 0, L"Ann", NULL, NULL)) == NULL || r->a != 8 ||
+        r->b != 9 || (r = rescmp_find(d, nd, L"ISD Trustees, At- Large", 0, L"Ann", L"102", NULL)) == NULL ||
+        r->a != 3 || r->b != 4 ||
+        (r = rescmp_find(d, nd, L"ISD Trustees, At- Large", 0, L"Ann", L"102", L"Early")) == NULL || r->a != 3 ||
+        r->b != 4 || rescmp_find(d, nd, L"ISD Trustees, At- Large", 0, L"Ann", L"101", NULL) != NULL ||
+        (r = rescmp_find(d, nd, L"ISD Trustees, At- Large", 0, L"Bo", NULL, NULL)) == NULL ||
+        r->status != EE_DIFF_MATCH)
+    {
+        wprintf(L"rescmpgroup: dup vs one (%u rows: %u only, %u differ)\n", nd,
+                rescmp_count(d, nd, EE_DIFF_ONLY_A) + rescmp_count(d, nd, EE_DIFF_ONLY_B),
+                rescmp_count(d, nd, EE_DIFF_DIFFERS));
+        goto done;
+    }
+    rc = 0;
+
+done:
+    EeResults_FreeDiff(d, nd);
+    EeResults_FreeArray(s, ns);
+    EeResults_FreeArray(xd, nxd);
+    EeResults_FreeArray(xo, nxo);
+    EeResults_Clear(&t);
+    DeleteFileW(p_sum);
+    DeleteFileW(p_dup);
+    DeleteFileW(p_one);
+    wprintf(L"rescmpgroup: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* Compare: results with themselves (all match), with a summary whose total differs, and
  * with CVR-style tallies (contest "(digits)" and choice "(EC n)" ids dropped, same-named
  * contests kept apart, over/under votes, ballots; precinct rows when a precinct differs)
@@ -15227,6 +15371,7 @@ int wmain(void)
     failed |= test_results_glyphs();
     failed |= test_results_compare();
     failed |= test_results_compare_party();
+    failed |= test_results_compare_groups();
     failed |= test_results_view();
     failed |= test_audit();
     failed |= test_audit_merge();

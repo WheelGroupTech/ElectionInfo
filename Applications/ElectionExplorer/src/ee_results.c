@@ -7816,6 +7816,81 @@ static const wchar_t *cmp_party_title(const EeResults *r, const EeResultsContest
     return with * 2 >= c->nchoices ? party : NULL;
 }
 
+/* Is long_t the title s plus one or more whole words at the end (EeResults_NamesMatch)?
+ * Dallas G24: the CVR's "State Senator, District 23 State" is the results' "State Senator,
+ * District 23"; "… District 13- Unexpired Term" is "… District 13- Unexpired". */
+static BOOL cmp_title_extends(const wchar_t *s, const wchar_t *long_t)
+{
+    wchar_t buf[512];
+    size_t i, n;
+    if (s == NULL || long_t == NULL || FAILED(StringCchCopyW(buf, ARRAYSIZE(buf), long_t)))
+    {
+        return FALSE;
+    }
+    n = wcslen(buf);
+    for (i = n; i-- > 1;)
+    {
+        if (is_ws(buf[i]) && !is_ws(buf[i - 1]))
+        {
+            buf[i] = L'\0';
+            if (EeResults_NamesMatch(s, buf))
+            {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+/* Do two contests carry the same choices: at least one in common, and every choice of the
+ * one with fewer choices found in the other (by name, or cmp_choice_loose)? */
+static BOOL cmp_choices_agree(const EeResults *a,
+                              const EeResultsContest *pc,
+                              const EeResults *b,
+                              const EeResultsContest *qc)
+{
+    const EeResults *sr = a, *lr = b;
+    const EeResultsContest *sc = pc, *lc = qc;
+    uint32_t i, j;
+    if (qc->nchoices < pc->nchoices)
+    {
+        sr = b;
+        lr = a;
+        sc = qc;
+        lc = pc;
+    }
+    if (sc->nchoices == 0)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < sc->nchoices; i++)
+    {
+        const wchar_t *name = sr->choices[sc->first_choice + i].name;
+        for (j = 0; j < lc->nchoices; j++)
+        {
+            const wchar_t *other = lr->choices[lc->first_choice + j].name;
+            if (EeResults_NamesMatch(name, other) || cmp_choice_loose(name, other))
+            {
+                break;
+            }
+        }
+        if (j == lc->nchoices)
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* May contests c (of a) and k (of b), both unpaired, pair by a title that adds words at the
+ * end, their choices agreeing? */
+static BOOL cmp_title_fits(const EeResults *a, uint32_t c, const EeResults *b, uint32_t k)
+{
+    const EeResultsContest *pc = &a->contests[c], *qc = &b->contests[k];
+    return (cmp_title_extends(pc->title, qc->title) || cmp_title_extends(qc->title, pc->title)) &&
+           cmp_choices_agree(a, pc, b, qc);
+}
+
 BOOL EeResults_Compare(const EeResults *a,
                        const uint8_t *a_pmask,
                        const uint8_t *a_vmask,
@@ -7828,6 +7903,7 @@ BOOL EeResults_Compare(const EeResults *a,
     DiffList l;
     CmpCtx x;
     uint8_t *bused = NULL;
+    uint32_t *apair = NULL; /* a contest -> its b contest, or UINT32_MAX */
     uint32_t c, k, p;
     BOOL ok = FALSE;
 
@@ -7854,9 +7930,10 @@ BOOL EeResults_Compare(const EeResults *a,
     x.blocal = (uint32_t *)malloc(((size_t)b->nprecincts + 1) * sizeof(uint32_t));
     x.bseen = (uint8_t *)calloc((size_t)b->nprecincts + 1, 1);
     bused = (uint8_t *)calloc((size_t)b->ncontests + 1, 1);
+    apair = (uint32_t *)malloc(((size_t)a->ncontests + 1) * sizeof(uint32_t));
     if (x.ta == NULL || x.tb == NULL || x.tva == NULL || x.tvb == NULL || x.oa == NULL ||
         x.ua == NULL || x.ob == NULL || x.ub == NULL || x.a2b_pre == NULL || x.blocal == NULL ||
-        x.bseen == NULL || bused == NULL)
+        x.bseen == NULL || bused == NULL || apair == NULL)
     {
         goto done;
     }
@@ -7929,9 +8006,10 @@ BOOL EeResults_Compare(const EeResults *a,
         }
     }
     /* Contests by name, repeated names in order. */
-    for (c = 0; c < a->ncontests && !l.oom; c++)
+    for (c = 0; c < a->ncontests; c++)
     {
         const EeResultsContest *pc = &a->contests[c];
+        apair[c] = UINT32_MAX;
         if (!contest_counted(pc, a_pmask))
         {
             continue;
@@ -7972,13 +8050,61 @@ BOOL EeResults_Compare(const EeResults *a,
                 }
             }
         }
-        if (k == b->ncontests)
+        if (k < b->ncontests)
+        {
+            apair[c] = k;
+            bused[k] = 1;
+        }
+    }
+    /* Then the contests left whose titles differ only by words added at the end, when their
+     * choices agree and each has just one such partner (after all exact pairs, so none is
+     * taken from a contest whose exact title comes later). */
+    for (c = 0; c < a->ncontests; c++)
+    {
+        uint32_t found = UINT32_MAX, n = 0, c2, back = 0;
+        if (apair[c] != UINT32_MAX || !contest_counted(&a->contests[c], a_pmask))
+        {
+            continue;
+        }
+        for (k = 0; k < b->ncontests; k++)
+        {
+            if (!bused[k] && contest_counted(&b->contests[k], b_pmask) && cmp_title_fits(a, c, b, k))
+            {
+                found = k;
+                n++;
+            }
+        }
+        if (n != 1)
+        {
+            continue;
+        }
+        for (c2 = 0; c2 < a->ncontests; c2++)
+        {
+            if (apair[c2] == UINT32_MAX && contest_counted(&a->contests[c2], a_pmask) &&
+                cmp_title_fits(a, c2, b, found))
+            {
+                back++;
+            }
+        }
+        if (back == 1)
+        {
+            apair[c] = found;
+            bused[found] = 1;
+        }
+    }
+    for (c = 0; c < a->ncontests && !l.oom; c++)
+    {
+        const EeResultsContest *pc = &a->contests[c];
+        if (!contest_counted(pc, a_pmask))
+        {
+            continue;
+        }
+        if (apair[c] == UINT32_MAX)
         {
             cmp_one_side(&l, a, pc, x.ta, x.oa, x.ua, c, TRUE);
             continue;
         }
-        bused[k] = 1;
-        cmp_contests(&x, c, k);
+        cmp_contests(&x, c, apair[c]);
     }
     for (k = 0; k < b->ncontests && !l.oom; k++)
     {
@@ -8012,6 +8138,7 @@ done:
     free(x.bseen);
     free(x.vmap);
     free(bused);
+    free(apair);
     return ok;
 }
 

@@ -13394,8 +13394,8 @@ static const char k_res_one_xml[] = RES_DUP_XML_HEAD RES_DUP_XML_CHOICE("1", "An
 
 /* Compare sums a contest's same-named choices (summary.csv keeps them in one contest when the
  * shares fit under 100; precinct and vote-type rows sum too) and pairs choices left over whose
- * names differ only by a parenthesis or "NP" at the end, when the pairing is unique
- * (tag: rescmpgroup). */
+ * names differ only by a parenthesis or "NP" at the end, when the pairing is unique; contests
+ * left pair when one title adds words at the end and their choices agree (tag: rescmpgroup). */
 static int test_results_compare_groups(void)
 {
     static const EeResultsTallyItem k_cvr[] = {
@@ -13483,6 +13483,57 @@ static int test_results_compare_groups(void)
                 rescmp_count(d, nd, EE_DIFF_ONLY_A) + rescmp_count(d, nd, EE_DIFF_ONLY_B),
                 rescmp_count(d, nd, EE_DIFF_DIFFERS));
         goto done;
+    }
+    EeResults_FreeDiff(d, nd);
+    d = NULL;
+
+    /* Titles with words added at the end (Dallas G24) pair; "Place 1" / "Place 10", other
+     * choices, two partners, and a title whose exact partner comes later do not. */
+    {
+        static const EeResultsTallyItem k_tres[] = {
+            {1, L"State Senator, District 23", L"Royce West", NULL, 10},
+            {2, L"Member, District 13- Unexpired", L"Tiffany Clark", NULL, 5},
+            {3, L"Council Place 1", L"Cy", NULL, 4},
+            {4, L"Judge", L"Dee", NULL, 1},
+            {5, L"Constable", L"Fay", NULL, 2},
+            {6, L"Clerk", L"Gus", NULL, 1},
+            {7, L"Clerk Extra", L"Gus", NULL, 1},
+        };
+        static const EeResultsTallyItem k_tcvr[] = {
+            {1, L"State Senator, District 23 State", L"Royce West", NULL, 10},
+            {2, L"Member, District 13- Unexpired Term", L"Tiffany Clark", NULL, 5},
+            {2, L"Member, District 13- Unexpired Term", L"write-in", NULL, 0},
+            {3, L"Council Place 10", L"Cy", NULL, 4},
+            {4, L"Judge Court 2", L"Eve", NULL, 1},
+            {5, L"Constable Pct 1", L"Fay", NULL, 2},
+            {6, L"Constable Pct 2", L"Fay", NULL, 2},
+            {7, L"Clerk Extra", L"Gus", NULL, 1},
+        };
+        EeResults tr, tc;
+        BOOL okc;
+        EeResults_Init(&tr);
+        EeResults_Init(&tc);
+        okc = EeResults_FromTally(k_tres, ARRAYSIZE(k_tres), EE_RES_UNKNOWN, &tr) &&
+              EeResults_FromTally(k_tcvr, ARRAYSIZE(k_tcvr), EE_RES_UNKNOWN, &tc) &&
+              EeResults_Compare(&tr, NULL, NULL, &tc, NULL, NULL, &d, &nd);
+        EeResults_Clear(&tr);
+        EeResults_Clear(&tc);
+        if (!okc || rescmp_count(d, nd, EE_DIFF_DIFFERS) != 0 || rescmp_count(d, nd, EE_DIFF_ONLY_A) != 4 ||
+            rescmp_count(d, nd, EE_DIFF_ONLY_B) != 4 ||
+            (r = rescmp_find(d, nd, L"State Senator, District 23", 0, L"Royce West", NULL, NULL)) == NULL ||
+            r->status != EE_DIFF_MATCH ||
+            (r = rescmp_find(d, nd, L"Member, District 13- Unexpired", 0, L"Tiffany Clark", NULL, NULL)) == NULL ||
+            r->status != EE_DIFF_MATCH ||
+            (r = rescmp_find(d, nd, L"Clerk Extra", 0, L"Gus", NULL, NULL)) == NULL || r->status != EE_DIFF_MATCH ||
+            (r = rescmp_find(d, nd, L"Clerk", 0, L"Gus", NULL, NULL)) == NULL || r->status != EE_DIFF_ONLY_A ||
+            (r = rescmp_find(d, nd, L"Council Place 1", 0, L"Cy", NULL, NULL)) == NULL ||
+            r->status != EE_DIFF_ONLY_A)
+        {
+            wprintf(L"rescmpgroup: titles (%u rows: %u only results, %u only CVR, %u differ)\n", nd,
+                    rescmp_count(d, nd, EE_DIFF_ONLY_A), rescmp_count(d, nd, EE_DIFF_ONLY_B),
+                    rescmp_count(d, nd, EE_DIFF_DIFFERS));
+            goto done;
+        }
     }
     rc = 0;
 

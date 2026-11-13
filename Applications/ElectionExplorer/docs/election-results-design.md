@@ -638,6 +638,21 @@ Stein 5,886 / Oliver 4,631 / write-in 3,690.
     156 → 6, no new differences; the 6 are two contests whose titles differ, "District 13-
     Unexpired" vs "… Unexpired Term"). The other 112 results groups are identical. Smoke test
     `rescmpgroup`.
+- **Contest titles with words added at the end (2026-11-13):** Dallas G24's CVR titles two
+  contests with more words than its results: "Member, State Board of Education, District 13-
+  Unexpired Term" (results "… Unexpired") and "State Senator, District 23 State" (results "…
+  District 23"). `EeResults_Compare` now pairs contests in two passes: first every exact and
+  party-title pair, as before; then each contest left pairs with one whose title is its own plus
+  whole words at the end (`cmp_title_extends`; "Place 1" is not "Place 10"), when every choice of
+  the contest with fewer choices is in the other (`cmp_choices_agree`) and the pairing is unique
+  both ways (`cmp_title_fits`). The second pass runs after all exact pairs, so a contest whose
+  exact partner comes later keeps it. The rows show the first window's title.
+  - Check: the CVR ↔ results sweep of the 50 cross-checked elections changes only Dallas. G24's
+    two contests pair (188 totals match, none on one side only). P26 also pairs two Democratic
+    contests whose CVR titles add the district, "DEM Member, State Board of Education, District 9
+    Dem District 09" (results "Dem Member, State Board of Education, District 9") and "DEM Justice
+    of the Peace, Precinct No. 1, Place 2 Dem District 1"; counts equal. The other 114 results
+    groups are identical. Smoke test `rescmpgroup`.
 - **Results-wide figures:** `adopt_figures` now also takes registered voters, ballots cast and
   ballots by vote type from another file when the shown one lacks them (an ES&S precinct report
   whose statistics give only turnout).

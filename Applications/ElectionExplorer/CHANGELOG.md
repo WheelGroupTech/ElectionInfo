@@ -30,6 +30,21 @@ a bullet each.
 
 ## Unreleased (after 1.6.0.0)
 
+### 2026-11-13 — Results Compare: contest titles with words added at the end
+- **What:** a contest left unpaired pairs with one whose title is its own plus words at the end,
+  when their choices agree and the pairing is unique (Dallas G24's CVR "State Senator, District 23
+  State" = results "State Senator, District 23"; "… District 13- Unexpired Term" = "… Unexpired").
+  Exact titles pair first. Help → Compare says so.
+- **Where:** `src/ee_results.c` `EeResults_Compare` (two pairing passes, `apair`),
+  `cmp_title_extends`, `cmp_choices_agree`, `cmp_title_fits`; `src/ee_results.h` comment;
+  `main.c` `k_ResHelpCompare`.
+- **Checked:** CVR ↔ results sweep of the 50 cross-checked elections (before vs after): only
+  Dallas changes. G24 pairs its two contests (now 188 totals match, none on one side only); P26
+  pairs "Dem Member, State Board of Education, District 9" with the CVR's "DEM Member, State Board
+  of Education, District 9 Dem District 09" and a Justice of the Peace contest likewise (equal
+  counts). The other 114 results groups are identical. Smoke test `rescmpgroup` (title cases added); full suite passes.
+- **Details:** [Step 8, "Contest titles with words added at the end"](docs/election-results-design.md#step-8--ess-and-hart-results-report-pdfs-done-2026-10-26)
+
 ### 2026-11-13 — Results Compare: same-named choices summed, "For (A Favor)" = "For"
 - **What:**
   - Compare sums a contest's choices of the same name as one choice (totals, vote types,
@@ -50,6 +65,7 @@ a bullet each.
   cross-checked elections (old vs new build): only Dallas changes, L26 as above and G24's
   propositions (113 → 188 match, one-side-only 156 → 6, no new differences); the other 112
   results groups are identical. Smoke test `rescmpgroup`; full suite passes.
+- **Commit:** 03552f2
 - **Details:** [Step 8, "Same-named choices and translated choice names"](docs/election-results-design.md#step-8--ess-and-hart-results-report-pdfs-done-2026-10-26)
 
 ### 2026-11-12 — Audit logs: scanner-deleted batches, lines lost at a page break, Verity Build logs

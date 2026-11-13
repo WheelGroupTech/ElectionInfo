@@ -308,7 +308,9 @@ extern "C"
     } EeResultsDiff;
 
     /**
-     * Compare two results: contests by name (repeated names in order), choices by name
+     * Compare two results: contests by name (repeated names in order; then contests left
+     * pair when one title is the other plus words at the end, their choices agree and the
+     * pairing is unique: "State Senator, District 23 State"), choices by name
      * (EeResults_NamesMatch; choices of one contest with the same name are summed as one,
      * and choices left unpaired pair when their names differ only by a parenthesis or "NP"
      * at the end, "For (A Favor)" = "For"), over/under votes, ballots cast and registered

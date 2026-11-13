@@ -125,7 +125,10 @@ file name.
 - "For (A Favor)" pairs with "For" and "Dee Doe" with "Dee Doe NP", but a CVR "For" that fits two
   results choices pairs with neither;
 - a detail.xml with a candidate twice compared with one listing it once: only the differing
-  precinct (and its vote type) is flagged, from the summed counts.
+  precinct (and its vote type) is flagged, from the summed counts;
+- contest titles with words added at the end pair ("State Senator, District 23" and "… District 23
+  State"), but not "Place 1" with "Place 10", contests whose choices differ, a title with two such
+  partners, or a title whose exact partner comes later.
 `resview` covers the results window's displayed-view export read back:
 - a Totals file (CSV) and a By Precinct file (TSV, with vote type columns) load back;
 - the two same-named contests are told apart;

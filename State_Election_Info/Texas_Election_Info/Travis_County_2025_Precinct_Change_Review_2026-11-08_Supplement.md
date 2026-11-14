@@ -415,16 +415,16 @@ Precinct 369 is a 1.68-acre precinct created by splitting 2021 precinct 382. Its
 
 The address master places nine address points in precinct 369 (those four plus 5300 and 5306 Hanging Cliff Cove, 10703 Watering Rock Lane, and 10725 and 10727 Floral Park Drive), all nine coded `PrecinctSplit` 382.01.
 
-These nine registrations were in precinct 369 on every county Voter List from February 10, 2026 to October 13, 2026, on the September 16, 2026 OLRV, and on the October 27, 2026 **initial** OLRV. Then:
+These nine registrations were in precinct 369 on every county Voter List from February 10, 2026 to October 13, 2026, on the September 16, 2026 OLRV, and on the **initial** OLRV. Then:
 
 - the **October 20, 2026 Voter List** gives their precinct as **"P 182.4"** — a precinct-split code, not a precinct number. Precinct 182 exists in both the 2021 and 2025 plans and lies about 7 miles east, in congressional district G10 rather than G37, house district L50 rather than L47 and commissioners precinct P01 rather than P03. These are the only nine values of the form `nnn.n` in a `Precinct` column of 950,019 rows;
-- the **October 27, 2026 OLRV** (`2026-10-27_G26_journal_gen_voter.csv`) gives their precinct as **"P 309"**. There is no precinct 309 in the 308-precinct plan.
+- the **October 20, 2026 OLRV** (`2026-10-27_G26_journal_gen_voter.csv`, the October 20 pollbook load provided October 27) gives their precinct as **"P 309"**. There is no precinct 309 in the 308-precinct plan.
 
 Precinct 369 consequently shows **0 registered voters** on both files while **6 of these voters appear on the G26 roster in precinct 369** — the only precinct in the county where roster voters exceed registrations.
 
 **VUIDs to correct to precinct 369:**
 
-| VUID | Oct 20 Voter List | Oct 27 OLRV | Voted G26 |
+| VUID | Oct 20 Voter List | Oct 20 OLRV | Voted G26 |
 |---|---|---|---|
 | 1139710425 | P 182.4 | P 309 | yes (roster 369) |
 | 1139750188 | P 182.4 | P 309 | no |
@@ -438,13 +438,13 @@ Precinct 369 consequently shows **0 registered voters** on both files while **6 
 
 **The correct value did reach the November election.** All six of these voters who voted appear on the G26 roster under precinct 369, so the roster the polls worked from carried the right precinct even though both published lists did not. This is a defect in the published extracts, not in the ballots issued.
 
-**Requested actions.** Confirm that all nine registrations now read precinct 369 on any extract taken today; reissue the October 20 Voter List and the October 27 OLRV extract with a valid precinct value; and determine whether the "182.4" and "309" values were introduced by the manual correction of the roughly 200 incorrect-split voters the county described, so the same defect can be prevented at the next extract.
+**Requested actions.** Confirm that all nine registrations now read precinct 369 on any extract taken today; reissue the October 20 Voter List and the October 20 OLRV extract with a valid precinct value; and determine whether the "182.4" and "309" values were introduced by the manual correction of the roughly 200 incorrect-split voters the county described, so the same defect can be prevented at the next extract.
 
 ## H. Precinct "99999"
 
-The **October 13, 2026** Voter List places 14 registrations in precinct **"P 99999"**. The value matches no precinct in the 2021 or 2025 plan. Eight are in suspense status. None carries that value on the October 20 list, and all but two have a real precinct on the October 27 OLRV.
+The **October 13, 2026** Voter List places 14 registrations in precinct **"P 99999"**. The value matches no precinct in the 2021 or 2025 plan. Eight are in suspense status. None carries that value on the October 20 list, and all but two have a real precinct on the October 20 OLRV.
 
-| VUID | Status Oct 13 | Precinct on the Oct 27 OLRV | Address problem |
+| VUID | Status Oct 13 | Precinct on the Oct 20 OLRV | Address problem |
 |---|---|---|---|
 | 1143223655 | Active | S 154.7 | residence address reads "8915 MISSING ADDRESS" |
 | 2134244409 | Suspense | not on the OLRV | residence address is in Fort Worth |
@@ -461,7 +461,7 @@ The **October 13, 2026** Voter List places 14 registrations in precinct **"P 999
 | 2222389089 | Suspense | P 312 | — |
 | 3382352206 | Suspense | P 400 | — |
 
-**Requested actions.** Confirm what "99999" denotes in the extract, resolve the two registrations that reach no precinct on the OLRV, and correct the two unusable residence addresses. The county previously told us that "P99999 voters were not pulled in" to the October 27 initial OLRV and that the current OLRV "first included P99999 voters, which should not be on the OLRV and were deleted"; these 14 records are the population that statement refers to.
+**Requested actions.** Confirm what "99999" denotes in the extract, resolve the two registrations that reach no precinct on the OLRV, and correct the two unusable residence addresses. The county previously told us that "P99999 voters were not pulled in" to the initial OLRV and that the current OLRV (the October 20 pollbook load) "first included P99999 voters, which should not be on the OLRV and were deleted"; these 14 records are the population that statement refers to.
 
 ## I. Precinct size and empty precincts
 
@@ -526,14 +526,14 @@ Any precinct the county keeps should also be flagged in the registration system 
 
 ## J. TEAM OLRV precinct disagreements
 
-The October 27, 2026 OLRV has **489 voters at 476 addresses** whose precinct disagrees with the county address master. They are listed by VUID in records section S2.
+The October 20, 2026 OLRV has **489 voters at 476 addresses** whose precinct disagrees with the county address master. They are listed by VUID in records section S2.
 
 Two groups need different handling:
 
 - **The same clusters that are wrong on the county Voter List**, which should be corrected outright: split `131.3` where the address master says 357 (17 voters), `121.2` against 357 (7), `370.3` against 292 (8), `309` against 369 (9), `300` against 411 (4), `411` against 301 (4).
 - **Dense student-housing addresses** around the University of Texas, in precincts 204, 206, 308, 311, 312, 313 and 314. One street address there can genuinely span precincts, and the OLRV gives only a single free-text address line with no separate unit field, so these need the county's unit-level data to resolve. They are reported for confirmation, not asserted as errors.
 
-One OLRV precinct value is corrupt outright: **VUID 3383028111** appears in split **"0864.02"**. The September 16 OLRV and the October 27 initial OLRV both place the same voter in split **308.3**, and the October 13 and October 20 county Voter Lists both give precinct **308**.
+One OLRV precinct value is corrupt outright: **VUID 3383028111** appears in split **"0864.02"**. The September 16 OLRV and the initial OLRV both place the same voter in split **308.3**, and the October 13 and October 20 county Voter Lists both give precinct **308**.
 
 ## Suggested systemic fixes
 

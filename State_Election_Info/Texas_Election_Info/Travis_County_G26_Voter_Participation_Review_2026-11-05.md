@@ -344,7 +344,7 @@ What explains the differences:
   - it still showed about 200 voters with the incorrect split, whom the county was updating by hand;
   - it first included P99999 voters, which should not be on the OLRV and were deleted.
 
-**Note:** we do not know what "P99999" refers to. It may be a precinct designation, such as a placeholder precinct for voters not yet assigned, or some other value. No precinct or other field with that value appears in the lists reviewed, so these voters cannot be identified.
+**The "P99999" voters:** P99999 is a precinct value that matches no precinct in any plan. The county's October 13, 2026 Voter List places 14 voters in precinct "P 99999"; the *Travis County 2025 Precinct Change Review* (November 8, 2026, section 5.6 and its records section S10) identifies them. Several have addresses that cannot be assigned to a precinct. None of the 14 is on the initial OLRV, as the county said ("P99999 voters were not pulled in"). 13 are on at least one pollbook load, all with a real precinct, and 11 on the November 2 OLRV. 5 of them voted in G26.
 
 **What the lists show:**
 

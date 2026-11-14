@@ -30,6 +30,14 @@ a bullet each.
 
 ## Unreleased (after 1.6.0.0)
 
+### 2026-11-13 — Voter lists: "PERMANENT VUID (SC91)" is the VUID
+- **What:** a voter list whose Voter ID column is titled "PERMANENT VUID (SC91)" (Travis County's TEAM
+  FPCA spreadsheet of federal voters not intending to return) now loads with that column as the VUID,
+  so it compares with a roster. Before, the file loaded with no Voter ID.
+- **Where:** `src/voter_table.c` `classify_field` ("PERMANENTVUID", "PERMANENTVUIDSC91").
+- **Checked:** the county's `2026 TEAM Spreadsheets - FPCA.csv` loads 1,449 rows. Smoke test `fpca`
+  (FPCA layout with a redacted DOB); full suite passes.
+
 ### 2026-11-13 — Results Compare: contest titles with words added at the end
 - **What:** a contest left unpaired pairs with one whose title is its own plus words at the end,
   when their choices agree and the pairing is unique (Dallas G24's CVR "State Senator, District 23
@@ -43,6 +51,7 @@ a bullet each.
   pairs "Dem Member, State Board of Education, District 9" with the CVR's "DEM Member, State Board
   of Education, District 9 Dem District 09" and a Justice of the Peace contest likewise (equal
   counts). The other 114 results groups are identical. Smoke test `rescmpgroup` (title cases added); full suite passes.
+- **Commit:** 7748a0d
 - **Details:** [Step 8, "Contest titles with words added at the end"](docs/election-results-design.md#step-8--ess-and-hart-results-report-pdfs-done-2026-10-26)
 
 ### 2026-11-13 — Results Compare: same-named choices summed, "For (A Favor)" = "For"

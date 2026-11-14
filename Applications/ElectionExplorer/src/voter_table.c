@@ -3439,8 +3439,10 @@ static FieldRole classify_field(const char *norm, BOOL *loose)
 
     /* Voter ID. Texas's statewide unique voter ID (VUID) also appears under names
      * like "State ID" (Dallas County in-person rosters) or "State Voter ID"; match
-     * those here BEFORE the residence-"STATE" address rule below would claim them. */
+     * those here BEFORE the residence-"STATE" address rule below would claim them.
+     * Travis County's TEAM FPCA spreadsheet titles it "PERMANENT VUID (SC91)". */
     if (strcmp(norm, "VUID") == 0 || strcmp(norm, "VUIDNO") == 0 ||
+        strcmp(norm, "PERMANENTVUID") == 0 || strcmp(norm, "PERMANENTVUIDSC91") == 0 ||
         strcmp(norm, "SOSVOTERID") == 0 || strcmp(norm, "BARCODEVUID") == 0 ||
         strcmp(norm, "SOSVOTERIDNUMBER") == 0 || strcmp(norm, "IDVOTER") == 0 ||
         strcmp(norm, "STATEID") == 0 || strcmp(norm, "STATEIDNUMBER") == 0 ||

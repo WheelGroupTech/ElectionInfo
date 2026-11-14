@@ -778,6 +778,64 @@ done:
     return rc;
 }
 
+/* Travis County's TEAM FPCA spreadsheet titles the VUID "PERMANENT VUID (SC91)" and redacts the
+ * birth date (tag: fpca). */
+static int test_fpca_layout(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t err[256];
+    wchar_t buf[220];
+    FILE *fp = NULL;
+    EeVoterTable t;
+    EeLoadStatus s;
+    DWORD n;
+    int rc = 1;
+
+    n = GetTempPathW(ARRAYSIZE(path), path);
+    if (n == 0 || n >= ARRAYSIZE(path) || FAILED(StringCchCatW(path, ARRAYSIZE(path), L"ee_fpca.csv")))
+    {
+        wprintf(L"fpca: temp path failed\n");
+        return 1;
+    }
+    if (_wfopen_s(&fp, path, L"wb") != 0 || fp == NULL)
+    {
+        wprintf(L"fpca: could not create %s\n", path);
+        return 1;
+    }
+    fputs("PERMANENT VUID (SC91),Last Name,First Name,DOB,FPCA RECEIVED DATE,VOTER REG. STATUS WHEN "
+          "PREP'ING,FPCA ELIGIBILITY REASON,Precinct,Precinct Split,Ballot type,BBM DELIVERY METHOD\r\n"
+          "3300000001,DOE,JANE,<REDACTED>,9/1/2026,Applicant was already registered to vote,Affirmation C,"
+          "101,P 101.1,Federal,Email\r\n",
+          fp);
+    fclose(fp);
+
+    EeVoterTable_Init(&t);
+    err[0] = L'\0';
+    s = EeVoterTable_LoadFromFile(path, &t, NULL, NULL, NULL, err, ARRAYSIZE(err));
+    if (s != EeLoadStatus_Ok || t.row_count != 1)
+    {
+        wprintf(L"fpca: load failed %s\n", err);
+        goto done;
+    }
+    EeVoterTable_GetViewCellW(&t, 0, EE_COL_VOTER_ID, buf, ARRAYSIZE(buf));
+    if (wcscmp(buf, L"3300000001") != 0)
+    {
+        wprintf(L"fpca: PERMANENT VUID not used (%s)\n", buf);
+        goto done;
+    }
+    rc = 0;
+    wprintf(L"fpca ok\n");
+
+done:
+    DeleteFileW(path);
+    EeVoterTable_Clear(&t);
+    if (rc != 0)
+    {
+        wprintf(L"fpca test failed\n");
+    }
+    return rc;
+}
+
 static int test_res_addr_zip_dash_and_unit(void)
 {
     wchar_t path[MAX_PATH];
@@ -15349,6 +15407,7 @@ int wmain(void)
     failed |= test_district_codes_not_appended();
     failed |= test_infer_residence_state();
     failed |= test_el_paso_layout();
+    failed |= test_fpca_layout();
     failed |= test_voter_roster();
     failed |= test_roster_revisions();
     failed |= test_tarrant_roster();

@@ -4,14 +4,16 @@
 **County:** Travis County, Texas\
 **Data:**
 
-- Travis County's own voter rosters and the Texas Secretary of State's (SOS) roster files for all four elections. The SOS G26 Election Day files were downloaded again on November 5, 2026.
-- Travis County voter registration lists from March 2024 to October 27, 2026:
+- Travis County's own voter rosters and the Texas Secretary of State's (SOS) roster files for all four elections.
+  - **G26:** the county's roster ZIP of November 9, 2026 (`G26-Voter-Rosters_2026-11-09.zip`) and the SOS G26 files as downloaded again on November 12, 2026.
+- Travis County voter registration lists from March 2024 to November 2, 2026:
   - the county's published lists (`Registered_Voter_List`, `Registered_Voters_With_History`);
-  - Official Lists of Registered Voters (OLRV) from the state's Texas Election Administration Management (TEAM) system, which Travis County provided under an Open Records Request.
+  - Official Lists of Registered Voters (OLRV) from the state's Texas Election Administration Management (TEAM) system, which Travis County provided under an Open Records Request;
+  - every OLRV loaded to the pollbooks for G26 (October 19 to November 2), the voters the county added to the pollbooks by hand, and the county's TEAM spreadsheet of Federal Post Card Application (FPCA) voters, all received November 13, 2026.
   - Sources are in section 3.
 - Ballot counts from the Central Count reconciliation records, the tabulation audit logs and the official results (section 2.1).
 
-**Date:** November 5, 2026
+**Date:** November 5, 2026. **Rebuilt November 13, 2026** with the November 9 roster, the November 12 SOS files, the official G26 canvass and the pollbook OLRV files. Every figure in this version comes from that data.
 
 This review uses public rosters (Texas Election Code §87.121) and county voter registration lists. Records are identified only by VUID (state voter ID). No voter names, home addresses or dates of birth are reproduced. Ages and mailing-address states appear only as counts. Section 5 describes properties by TCAD property type, ZIP code and precinct, not by street address. The records behind the anomalies in section 9 and the commercial-address registrations in section 5.3 are listed by VUID in the companion file **Travis_County_G26_Voter_Participation_Review_2026-11-05_Records.csv**.
 
@@ -19,43 +21,50 @@ The companion file has one row per record, with the columns `section`, `category
 
 | Section | Records | What it lists | Report section |
 |------|------:|------------------------------------------------------|--------|
-| A1 | 4,938 | G26 voters on no 2026 Travis registration list | 9.1 |
-| A2 | 558 | Registration date after the October 5 deadline, and on no earlier Travis list | 9.2 |
+| A1 | 651 | G26 voters on no 2026 Travis registration list or pollbook load (633 of them on the county's FPCA sheet) | 9.1 |
+| A2 | 560 | Registration date after the October 5 deadline, and on no earlier Travis list | 9.2 |
 | A3 | 6 | G26 voters on the Elly deceased-voter list of May 1, 2026 | 9.3 |
 | A4 | 4 | Age 105 or older on Election Day (one is listed as 118) | 9.5 |
-| A5 | 3 | Two voting methods on the county roster | 9.5 |
-| A6 | 7 | Also on another county's own G26 roster | 9.5 |
+| A5 | 0 | Two voting methods on the county roster (the 3 of the first version were corrected by the county) | 9.5 |
+| A6 | 6 | Also on another county's own G26 roster | 9.5 |
 | A7 | 81 | Also in another county's G26 SOS file, but not on that county's roster | 9.5 |
-| A8 | 9 | Repeated roster entries: 6 mail ballots listed as received on two days, 3 voters listed twice on the same day | 9.5 |
-| A9 | 99 | On the September 16 OLRV but on no October list | 9.4 |
+| A8 | 49 | Repeated roster entries: 35 mail ballots listed as received on two days, 14 voters listed twice on the same day | 9.5 |
+| A9 | 90 | On the September 16 OLRV but on no October list or pollbook load (87 of them on the FPCA sheet) | 9.4 |
 | A10 | 350 | No vote in P24, G24 or P26, and registered at a property with a commercial or industrial improvement (TCAD property ID in `detail`) | 5.3 |
-| **Total** | **6,055** | | |
+| **Total** | **1,797** | | |
+
+**What changed in the rebuild:**
+
+- **Roster:** the county's November 9 roster replaces the November 4 one. It adds 1,758 mail voters (late-arriving and corrected mail lists) and replaces 20 original files with corrected (`_UPDATED`) ones.
+- **Registration lists:** the file the first version called the "October 27 OLRV" is byte-for-byte the county's **October 20** pollbook load; it was provided on October 27. This version calls it the **October 20 OLRV** and uses the last load before Election Day, the **November 2 OLRV**, as the current list.
+- **The 4,938 "on no list" voters of the first version are explained:** nearly all are on the pollbook loads of October 21 to November 2, on the county's manual adds, or on its FPCA sheet. 18 remain unexplained (section 9.1).
+- **Ballots:** the official canvass (554,229) replaces the unofficial count.
 
 ## 1. Summary
 
-**Earlier participation of the G26 voters.** The county's G26 roster has 550,572 records. Of these, 547,076 are distinct voters with a VUID. The other 3,496 are:
+**Earlier participation of the G26 voters.** The county's G26 roster has 552,364 records. Of these, 548,831 are distinct voters with a VUID. The other 3,533 are:
 
 - 3,482 limited-ballot voters, whom the county lists by name only;
 - two mail rows with 9-digit IDs, both apparently VUIDs with one digit dropped (section 9.5);
-- 12 repeated rows.
+- 49 repeated rows (section 9.5).
 
-Of the 547,076 voters:
+Of the 548,831 voters:
 
 | Earlier election | Voted | Share of G26 voters |
 |---|---:|---:|
-| P26 (March 2026 primary), Democratic | 203,166 | 37.1% |
-| P26, Republican | 52,925 | 9.7% |
-| P26, either party | 256,091 | 46.8% |
-| G24 (November 2024 general) | 433,942 | 79.3% |
-| P24 (March 2024 primary), Democratic | 87,721 | 16.0% |
-| P24, Republican | 43,793 | 8.0% |
-| P24, either party | 131,514 | 24.0% |
-| None of P24, G24, P26 | 92,537 | 16.9% |
+| P26 (March 2026 primary), Democratic | 203,491 | 37.1% |
+| P26, Republican | 53,019 | 9.7% |
+| P26, either party | 256,510 | 46.7% |
+| G24 (November 2024 general) | 434,907 | 79.2% |
+| P24 (March 2024 primary), Democratic | 87,929 | 16.0% |
+| P24, Republican | 43,885 | 8.0% |
+| P24, either party | 131,814 | 24.0% |
+| None of P24, G24, P26 | 93,194 | 17.0% |
 
-**92,537 G26 voters (16.9%) did not vote in P24, G24 or P26.** Section 5 looks at them in the registration lists:
+**93,194 G26 voters (17.0%) did not vote in P24, G24 or P26.** Section 5 looks at them in the registration lists:
 
 - **Timing:** 60% registered in Travis after the November 2024 election, and 38% after the March 2026 primary, so most could not have voted in those elections in Travis.
-- **Who they are:** 43% are under 30, and a third have first-time Texas VUIDs.
+- **Who they are:** 47% are under 30, and a third have first-time Texas VUIDs.
 - **Where they live:** they are concentrated around the University of Texas campus and in east and southeast Travis County, but nearly every precinct has some.
 - **Addresses:** 0.4% (350) are registered at commercial or industrial properties. The three largest, looked up in TCAD, are two apartment buildings and a church used as a homeless registration address.
 
@@ -66,9 +75,9 @@ Of the 547,076 voters:
 | P24 (March 2024 primaries) | 155,143 | 152,217 | 2,926 | 2,455 Election Day voters missing from the county's roster; 256 provisional ballots |
 | G24 (November 2024 general) | 587,090 | 583,202 | 3,888 | 2,603 limited ballots and 960 provisional ballots not on the roster; 615 mail ballots without a roster record |
 | P26 (March 2026 primaries) | 274,443 | 274,183 | 260 | 485 provisional ballots, less 184 mail voters on the roster whose ballots were rejected |
-| G26 (November 2026 general, unofficial) | 552,560 | 550,572 | 1,988 | 1,238 early voting provisional ballots; 833 mail ballots without a roster record |
+| G26 (November 2026 general, official) | 554,229 | 552,364 | 1,865 | 2,231 provisional ballots, less 284 more mail voters on the roster than mail ballots counted |
 
-- **The audit logs match:** replaying the tabulation audit logs gives exactly the ballots tabulated in P24, G24 and P26, for every vote type. The CVRs match for G24 and P26.
+- **The audit logs match:** replaying the tabulation audit logs gives exactly the ballots tabulated in P24, G24, P26 and G26, for every vote type. For G26 that holds after the 367 mail ballots deleted at a scanner were rescanned (see the separate *Travis County G26 Audit Log Review*). The CVRs match for G24 and P26.
 - **P24 Republican mail ballots were hand counted:** the Travis County Republican Party hand counted all 1,553 of its P24 mail ballots, outside the county's tabulation system. They are in the 155,143 ballots counted but not in the results' 153,590 ballots cast, the audit log or the Republican CVR.
 - **The county's P24 Election Day roster is incomplete:** it lists 74,763 voters, while the SOS files have 77,219 entries, the same as the county's reconciliation. This review therefore counts P24 voters from the county roster and the SOS files together (section 2.1).
 
@@ -76,8 +85,8 @@ Of the 547,076 voters:
 
 | Primary voters | Voted in the primary | Did not vote in the next general |
 |---|---:|---:|
-| P26 Republicans → G26 | 56,729 | 3,766 (6.6%) |
-| P26 Democrats → G26 | 217,010 | 13,689 (6.3%) |
+| P26 Republicans → G26 | 56,729 | 3,702 (6.5%) |
+| P26 Democrats → G26 | 217,010 | 13,438 (6.2%) |
 | P24 Republicans → G24 | 52,704 | 2,492 (4.7%) |
 | P24 Democrats → G24 | 101,989 | 4,445 (4.4%) |
 
@@ -85,35 +94,36 @@ Of the 547,076 voters:
 
 | | P26 Rep. | P26 Dem. | P24 Rep. | P24 Dem. |
 |---|---:|---:|---:|---:|
-| Did not vote in the general | 3,766 | 13,689 | 2,492 | 4,445 |
-| Voted in the general in another tracked county (moved) | 672 | 3,129 | 692 | 1,117 |
-| Still registered in Travis at the general (active or suspense) | 2,649 | 9,295 | 1,433 | 2,745 |
-| Removed from the Travis lists before the general | 445 | 1,265 | 367 | 582 |
+| Did not vote in the general | 3,702 | 13,438 | 2,492 | 4,445 |
+| Voted in the general in another tracked county (moved) | 681 | 3,173 | 692 | 1,117 |
+| Still registered in Travis at the general (active or suspense) | 2,558 | 8,955 | 1,433 | 2,745 |
+| Removed from the Travis lists before the general | 463 | 1,310 | 367 | 582 |
 | On the Elly deceased-voter list | 0 | 0 | 0 | 1 |
 
 **Voters who voted by mail in the primary and have a mailing address outside Texas** (section 8):
 
 | | P26 Rep. | P26 Dem. | P24 Rep. | P24 Dem. |
 |---|---:|---:|---:|---:|
-| Voted by mail in the primary | 154 | 525 | 115 | 394 |
+| Voted by mail in the primary | 131 | 466 | 115 | 394 |
 | Outside Texas on the list at the time (P26 list / Oct 2024 list) | 0 | 0 | 3 | 4 |
-| Outside Texas on the October 27 OLRV | 5 | 27 | 9 | 6 |
+| Outside Texas on the November 2 OLRV | 3 | 20 | 9 | 5 |
 
-Of all 17,854 G26 mail voters, 1,244 have a registration mailing address outside Texas:
+Of all 19,606 G26 mail voters, 1,520 have a registration mailing address outside Texas:
 
-- 928 in a foreign country (70 countries);
-- 242 in another state;
-- 74 at a military (APO/FPO) address.
+- 1,078 in a foreign country (73 countries);
+- 343 in another state;
+- 99 at a military (APO/FPO) address.
+
+Another 785 G26 mail voters are on the county's FPCA sheet only: overseas voters who do not intend to return, whom TEAM has in cancelled status. The sheet gives no mailing address.
 
 **Anomalies in the G26 data** (section 9):
 
-- 4,938 G26 voters are on no 2026 Travis registration list, including the county's own Voter Lists through October 20. Earlier elections had the same gap: 8,804 G24 voters and 1,503 P26 voters were missing from the list at the time. Nearly all the P26 voters appeared on the next list (section 9.1).
-- 558 have a registration date after the October 5 deadline and are on no earlier Travis list. The date may be when the record was entered in TEAM, not when the application was received.
-- 99 are on the September 16 OLRV but on no October list. 72 of them voted by mail.
+- 651 G26 voters are on no 2026 Travis registration list or pollbook load. 633 of them are on the county's FPCA sheet, which the county explained. **18 are on neither** (section 9.1). The first version found 4,938, because it had only the pollbook load of October 20.
+- 560 have a registration date after the October 5 deadline and are on no earlier Travis list. The date may be when the record was entered in TEAM, not when the application was received.
+- 90 are on the September 16 OLRV but on no October list or pollbook load. 87 of them are on the FPCA sheet; 3 are not.
 - 6 voters were flagged as deceased (obituary findings) in a May 1, 2026 review of the Travis voter list by Elly (theelectorlist.com).
-- 7 voters are also on another county's own G26 roster.
-- 3 voters are on the roster under two voting methods.
-- 6 mail ballots are listed as received on two different days.
+- 6 voters are also on another county's own G26 roster.
+- The roster lists 35 mail ballots as received on two days and 14 voters twice on the same day, mostly from the county's new November 2 mail list.
 - One woman is listed as 118 years old and voted early in person in G24 and G26. There is no record of her on LongeviQuest's list of validated supercentenarians, so either her birth date is wrong or someone else voted as her.
 - No two registrations with the same full name and date of birth both voted.
 
@@ -126,18 +136,18 @@ Of all 17,854 G26 mail voters, 1,244 have a registration mailing address outside
 | P24 | 152,217 | 152,931 | 150,455 | 1,762 | 2,476 |
 | G24 | 583,188 | 579,124 | 577,701 | 5,487 | 1,423 |
 | P26 | 273,739 | 272,188 | 271,238 | 2,501 | 950 |
-| G26 | 547,076 | 544,120 | 542,926 | 4,150 | 1,194 |
+| G26 | 548,831 | 544,473 | 543,429 | 5,402 | 1,044 |
 
 - **County rosters:** Travis County's posted roster ZIPs:
   - `P24_Voter_Rosters_2024-03-14.zip`, `G24_Voter_Rosters_2024-11-10.zip` and `P26_Voter_Rosters_2026-03-11.zip`;
-  - for G26, `G26-Voter-Rosters_2026-11-04.zip` (early voting, mail and Election Day).
+  - for G26, `G26-Voter-Rosters_2026-11-09.zip` (early voting, mail and Election Day). Where it has a corrected file (`_UPDATED`, `_UPDATED_2`), the correction replaces the original. A blank template in the ZIP adds no voters.
 - **SOS files:** the per-day early voting files and the Election Day file.
   - **2024:** from the SOS's older portal, earlyvoting.texas-election.com.
-  - **2026:** from the current portal.
-- **The SOS G26 Election Day file is now complete:**
-  - **Count:** 101,867 voters, against the county's 101,814. On November 4 it held 45,857.
-  - **Mail ballots:** most of the remaining "county only" voters are mail ballots (3,969). The county's mail lists run past the state's.
-  - **State only:** the state's file lists 1,194 voters the county roster does not (589 mail, 513 early in person, 92 Election Day).
+  - **2026:** from the current portal; the G26 files as downloaded again on November 12.
+- **The SOS G26 files:**
+  - **Election Day:** 101,879 voters, against the county's 101,814.
+  - **Mail ballots:** most of the "county only" voters are mail ballots (5,224). The county's mail lists run past the state's.
+  - **State only:** the state's files list 1,044 voters the county roster does not (854 early in person, 106 Election Day, 84 mail).
 - **Who counts as having voted:**
   - **Voted:** a voter counts as voting in an election when on the county roster. For P24, a voter on the county roster or the SOS files counts, because the county's P24 Election Day roster is incomplete (section 2.1).
   - **Did not vote:** a voter counts as not voting only when on neither the county roster nor the SOS file.
@@ -148,14 +158,17 @@ Of all 17,854 G26 mail voters, 1,244 have a registration mailing address outside
   - **A misnamed file is handled:** the county's `03.05.2024 Early Vote.xlsx` holds the same 74,763 voters as its Election Day roster and was read as Election Day.
   - **Missing voters:** both files lack 2,455 Election Day voters that the SOS files list, so P24 voters are taken from both sources (section 2.1).
 - **Other counties:** voters were looked up in the other 49 of the 50 largest Texas counties.
-  - **G26:** those counties' own rosters and their SOS files, with the Election Day files downloaded November 5.
+  - **G26:** those counties' own rosters and their SOS files, as downloaded through November 12.
   - **G24:** the SOS's G24 files for those counties.
   - **Not covered:** voters who moved to the other 204 counties cannot be seen.
 - **Mailing address:**
   - **Meaning:** the registration record's mailing address. A mail ballot can be sent to another address named on the application, so this measures the registration, not where each ballot went.
+  - **Source:** the November 2 OLRV; for voters not on it, the October 20 OLRV, the initial OLRV, the September 16 OLRV or the October 20 Voter List, in that order.
   - **Foreign addresses:** the OLRV leaves the state (`MAIL_PROVINCE`) and ZIP code blank for a foreign mailing address. A blank state **with** a mailing address is counted as foreign, and the country is taken from the county Voter List's `Mail Country Code`.
+  - **Unless the Voter List gives a U.S. state:** the November 2 OLRV also leaves the state blank for some voters whose October 20 Voter List and October 20 OLRV say Texas (88 G26 mail voters). Where the Voter List has a U.S. state, that state is used.
   - **Counted as Texas:** a voter with no separate mailing address (blank state and no mailing address).
   - **Masked addresses:** `*****` (protected voters) are counted separately.
+  - **FPCA voters:** the FPCA sheet gives no mailing address; its voters are counted separately.
 
 ### 2.1 Official ballots cast compared with the rosters
 
@@ -167,9 +180,9 @@ The rosters list voters; the official counts are of ballots. They do not match e
   - **P24:** the signed *Election Reconciliation - Official Totals* (SOS form 12-2), `20240305 P24-Reconciliation.pdf`.
   - **G24:** `Polling Locations and Ballot Counts.xlsx`.
   - **P26:** `P26 Ballot Canvas.xlsx`, the official reconciliation in total and by party.
-  - **G26:** `G26 Ballot Canvas.xlsx`, unofficial: the canvass has not happened yet.
-- **Tabulation audit logs (P24, G24, P26).** The ES&S Electionware *Election Audit Events* reports in `Audit_Logs/TX_Travis_County` were replayed with Election Explorer.
-  - **What the replay counts:** every ballot batch committed in the election session, less the batches removed by media clears.
+  - **G26:** `G26 Ballot Canvas.xlsx`, updated for the canvass.
+- **Tabulation audit logs.** The ES&S Electionware *Election Audit Events* reports in `Audit_Logs/TX_Travis_County` were replayed with Election Explorer.
+  - **What the replay counts:** every ballot batch committed in the election session, less the batches removed by media clears and the batches deleted at a scanner.
   - **Test sessions are left out:** the logic and accuracy test decks loaded before each count are excluded.
 - **Official results and CVRs:**
   - **Results:** ballots cast from the county's results exports (Clarity `*_detailxml.zip`).
@@ -177,24 +190,25 @@ The rosters list voters; the official counts are of ballots. They do not match e
 
 **Ballots counted by vote type:**
 
-| Vote type | P24 | G24 | P26 | G26 (unofficial) |
+| Vote type | P24 | G24 | P26 | G26 (official) |
 |---|---:|---:|---:|---:|
 | Early voting in person | 69,248 | 460,326 | 164,973 | 427,382 |
 | Limited ballots | (in early voting) | 2,603 | 447 | 3,477 |
 | Election Day | 77,198 | 97,925 | 101,066 | 101,766 |
-| Mail | 8,441 | 25,276 | 7,472 | 18,697 |
-| Provisional | 256 (74 early voting, 182 Election Day) | 960 (710 early voting, 250 Election Day) | 485 (299 early voting, 186 Election Day) | 1,238 early voting (batches of 370 and 868); Election Day not yet counted |
-| **Total ballots counted** | **155,143** | **587,090** | **274,443** | **552,560** |
-| Audit log replay (tabulated ballots) | 153,590 | 587,090 | 274,443 | (log not yet available) |
-| Results: ballots cast | 153,590 | 587,090 | 274,443 | 552,560 |
+| Mail | 8,441 | 25,276 | 7,472 | 19,373 |
+| Provisional | 256 (74 early voting, 182 Election Day) | 960 (710 early voting, 250 Election Day) | 485 (299 early voting, 186 Election Day) | 2,231 (1,735 early voting in batches of 370, 868 and 497; 496 Election Day) |
+| **Total ballots counted** | **155,143** | **587,090** | **274,443** | **554,229** |
+| Audit log replay (tabulated ballots) | 153,590 | 587,090 | 274,443 | 554,229 |
+| Results: ballots cast | 153,590 | 587,090 | 274,443 | 554,229 |
 | CVR records | Republican only: 52,183 | 587,090 | 274,443 | (not yet released) |
 
-- **The audit log matches every vote type:** limited ballots are counted as early voting ballots. With that, the audit log's early voting, Election Day, mail and provisional totals equal the reconciliation's for all three elections.
+- **The audit log matches every vote type:** limited ballots are counted as early voting ballots. With that, the audit log's early voting, Election Day, mail and provisional totals equal the reconciliation's for all four elections.
 - **The P24 difference is the Republican mail hand count:** the 1,553 ballots are counted in the reconciliation but were never tabulated (below).
 - **The G24 log shows batches reloaded at the canvass:**
   - Four early voting provisional batches (697 ballots), first loaded November 2 and 5, were cleared and loaded again with the same counts on November 13.
   - A 12-ballot batch loaded as early voting provisional was cleared and loaded again as Election Day provisional.
   - The final totals are unchanged.
+- **The G26 log shows 367 mail ballots deleted at a scanner and rescanned:** they were left out of the 6:57 PM November 10 count and are in the official 554,229 (*Travis County G26 Audit Log Review*).
 
 **Ballots counted minus county roster records, by vote type:**
 
@@ -203,28 +217,29 @@ The rosters list voters; the official counts are of ballots. They do not match e
 | P24 | +37 (limited included) | | **+2,435** | +198 | +256 | **+2,926** |
 | G24 | −201 | +2,603 (not on the roster) | −89 | +615 | +960 | **+3,888** |
 | P26 | −21 | +4 | −24 | −184 | +485 | **+260** |
-| G26 (unofficial) | −30 | −5 | −48 | +833 | +1,238 | **+1,988** |
+| G26 | −29 | −5 | −48 | −284 | +2,231 | **+1,865** |
 
 The roster records are:
 
 - **P24:** early voting 69,211; Election Day 74,763; mail 8,243.
 - **G24:** early voting 460,527; Election Day 98,014; mail 24,661.
 - **P26:** early voting 164,994; limited 443; Election Day 101,090; mail 7,656.
-- **G26:** early voting 427,412; limited 3,482; Election Day 101,814; mail 17,864.
+- **G26:** early voting 427,411; limited 3,482; Election Day 101,814; mail 19,657.
 
 What explains the differences:
 
 - **Provisional ballots:** the rosters do not list provisional voters.
   - **P24:** 461 provisional ballots were submitted; 205 were rejected and 256 counted.
   - **P26:** 1,094 were submitted; 609 were rejected and 485 counted.
-  - **G26:** early voting provisional ballots are already in the unofficial count. Election Day provisional ballots will be added at the canvass.
+  - **G26:** 1,735 early voting and 496 Election Day provisional ballots were counted.
 - **Limited ballots:** the G24 roster has no limited-ballot records. The P26 and G26 rosters list these voters by name only.
 - **Voters who checked in but whose ballot was not counted:** the small negative in-person differences are these voters.
   - **P24:** the reconciliation gives the reasons for its 33-voter difference as "confidential voters, fleeing voters, empty carrier envelope voters".
   - **G24:** the early voting sheet records 203 more check-ins than ballots counted.
 - **Mail voters on the roster:**
-  - **P26:** the county's mail roster lists 184 more voters than mail ballots counted. The reconciliation shows 189 mail ballots rejected, so the mail roster includes voters whose ballots were rejected.
-  - **G24 and G26:** the opposite happens. 615 (G24) and 833 (G26, unofficial) counted mail ballots have no record on the county's mail roster. The G26 roster may still be completed.
+  - **P26 and G26:** the county's mail roster lists more voters than mail ballots counted: 184 in P26 and 284 in G26. The P26 reconciliation shows 189 mail ballots rejected, so its mail roster includes voters whose ballots were rejected; the G26 roster likely does too. The G26 roster also repeats 35 mail voters on two days (section 9.5).
+  - **G24:** the opposite happens. 615 counted mail ballots have no record on the county's mail roster.
+  - **The November 4 G26 roster** had 833 counted mail ballots with no roster record. The November 9 roster added 1,758 mail voters, mostly from lists posted after Election Day.
 - **P24 Election Day roster:** the county's posted roster is missing 2,455 voters (below).
 
 **P24: the county roster and the SOS files compared** (distinct VUIDs):
@@ -249,8 +264,8 @@ What explains the differences:
   - **Against the ballots:** the county's mail roster (8,243) is closer to the 8,441 mail ballots counted, which include the Republican hand count.
 - **How this review counts P24 voters:** a P24 voter counts as having voted when on the county roster or the SOS files. The 2,476 voters found only on the SOS files take their party and method from those files.
   - **The totals:** this gives 154,693 P24 voters, 101,989 Democratic and 52,704 Republican.
-  - **G26 voters:** 2,060 more of them count as P24 voters than on the county roster alone (131,514 instead of 129,454).
-  - **The group with no earlier vote:** 22 of its members are on the SOS files only, so it is 92,537.
+  - **G26 voters:** 2,065 more of them count as P24 voters than on the county roster alone (131,814 instead of 129,749).
+  - **The group with no earlier vote:** 25 of its members are on the SOS files only, so it is 93,194.
   - **Non-returning primary voters:** the P24 groups in section 6 grow by 37 Republicans and 90 Democrats.
 
 **P24 Republican mail ballots were counted by hand:**
@@ -290,16 +305,24 @@ What explains the differences:
   - Travis County provides them on request under the Texas Public Information Act (Open Records Request).
   - They include each voter's date of birth and mailing address.
   - In this review the date of birth is used only to compute ages and to match two registrations of the same person; it is never reproduced.
-  - The OLRV files are the September 16 OLRV, the October 27 initial OLRV, the October 27 OLRV and the P26 primary list (`p26_olvr_primary_voter_data_rep.csv`).
+  - The OLRV files are the September 16 OLRV, the initial OLRV, the pollbook loads of October 19 to November 2 (among them the October 20 OLRV and the November 2 OLRV) and the P26 primary list (`p26_olvr_primary_voter_data_rep.csv`).
 - **County voter registration lists.** The `Registered_Voter_List` and `Registered_Voters_With_History` files are published by the Travis County Tax Office (voter registration).
   - They were downloaded from its data page, <https://voter-registration-maps-traviscountytx.hub.arcgis.com/pages/data-files-and-reference>, on the dates in their file names.
   - They carry registration and effective dates, status and mailing address, and the history files carry each voter's past elections. They have no dates of birth.
+- **Pollbook files received November 13, 2026.** Travis County sent every OLRV loaded to the pollbooks during G26, with two supplements (folder `County Data - OLRV`):
+  - **Daily loads:** `MMDD2026_journal_gen_voter.csv` for October 19 (two versions), 20, 21, 22, 24, 25, 26, 27 and 29 and November 2. There is no load dated October 23, October 28, October 30 to November 1, or November 3.
+  - **`Manual add only.csv`:** 539 voters the county's team pushed to the pollbooks by hand "once we confirmed the voter was eligible in TEAM". `Olrv Plus Manual add.csv` is the initial OLRV with these added.
+  - **`2026 TEAM Spreadsheets - FPCA.csv`:** 1,449 Federal Post Card Application voters. According to the county, the OLRV "does not include international voters that participate in the FPCA program, that select 'do not intend to return'". TEAM has them in cancelled status, so they get a federal ballot only. All 1,449 have FPCA eligibility "Affirmation C"; 1,371 receive their ballot by email or online.
 
 | List (file name prefix) | Date | Registered VUIDs | Used for |
 |---|---|---:|---|
-| `2026-10-27_G26_journal_gen_voter.csv` (October 27 OLRV: the current OLRV from TEAM) | Oct 27, 2026 | 950,042 | status (active / suspense), mailing state, age on Nov 3 |
-| `2026-10-27_G26_Olrv INITIAL .csv` (ePollbook L&A) | Oct 27, 2026 | 940,396 | presence |
-| `2026-10-20_Registered_Voter_List.csv` (county Voter List) | Oct 20, 2026 | 950,016 | status, registration date, effective date (EDR) |
+| `11022026_journal_gen_voter.csv` (November 2 OLRV: the last pollbook load before Election Day) | Nov 2, 2026 | 955,677 | status (active / suspense), mailing state, age on Nov 3 |
+| `10202026_journal_gen_voter.csv` = `2026-10-27_G26_journal_gen_voter.csv` (October 20 OLRV; the first version's "October 27 OLRV") | Oct 20, 2026 | 950,042 | presence, mailing state |
+| The other pollbook loads (October 19 to 29) | Oct 19-29, 2026 | 949,394-954,751 | presence |
+| `Manual add only.csv` | Oct-Nov 2026 | 539 | presence |
+| `2026 TEAM Spreadsheets - FPCA.csv` (FPCA voters, cancelled in TEAM) | 2026 | 1,449 | FPCA status |
+| `2026-10-27_G26_Olrv INITIAL .csv` (initial OLRV, ePollbook L&A) | provided Oct 27, 2026 | 940,396 | presence |
+| `2026-10-20_Registered_Voter_List.csv` (county Voter List) | Oct 20, 2026 | 950,016 | status, registration date, effective date (EDR), residence address |
 | `2026-10-05_Registered_Voter_List.csv` | Oct 5, 2026 (registration deadline) | 944,288 | presence |
 | `2026-09-16 OFFICIAL-LIST-OF-REGISTERED-VOTERS_...csv` (September OLRV) | Sept 16, 2026 | 933,778 | presence, mailing state |
 | `2026-07-06_Registered_Voters_With_History.csv` | July 6, 2026 | 929,662 | presence; vote history (section 10) |
@@ -309,14 +332,14 @@ What explains the differences:
 | `TRAVIS-OLRV-Homeless Voters.csv` (voters registered as homeless, in OLRV layout) | 2026 | 1,497 | homeless registration addresses (section 5.3) |
 | `TRAVIS-VR 5_1_26 Deceased Voters.csv` (generated by Elly, <https://theelectorlist.com/>; not provided by Travis County or the State) and `TRAVIS-OLRV-Deceased Voters.csv` (the Elly list compared with the OLRV in Election Explorer: the 555 of its 556 voters found on the OLRV, in OLRV layout) | May 1, 2026 / Oct 2026 | 556 / 555 | deceased-voter review |
 
-**What Travis County said about the October 27 files.** The OLRV files come from the state's Texas Election Administration Management (TEAM) system, which is fairly new and has had problems.
+**What Travis County said about the files it provided on October 27.** The OLRV files come from the state's Texas Election Administration Management (TEAM) system, which is fairly new and has had problems.
 
-- **October 27 initial OLRV** (`Olrv INITIAL`), pulled to complete the ePollbook logic and accuracy test:
+- **Initial OLRV** (`Olrv INITIAL`), pulled to complete the ePollbook logic and accuracy test:
   - it was missing the voters of two precinct splits;
   - it included voters with incorrect splits, whom the county removed;
   - P99999 voters were not pulled in;
   - about 4,000 voters with active EDRs on the county's Voter List were not included.
-- **October 27 OLRV** (`journal_gen_voter`), the current version of the OLRV:
+- **October 20 OLRV** (`journal_gen_voter`), the version of the OLRV current when provided:
   - it includes the missing splits;
   - it still showed about 200 voters with the incorrect split, whom the county was updating by hand;
   - it first included P99999 voters, which should not be on the OLRV and were deleted.
@@ -325,25 +348,46 @@ What explains the differences:
 
 **What the lists show:**
 
+**The pollbook loads grew through early voting.** Each daily load added registrations and dropped others:
+
+| Load | Added since the previous load | Dropped |
+|---|---:|---:|
+| October 20 | 812 | 164 |
+| October 21 | 726 | 157 |
+| October 22 | 651 | 168 |
+| October 24 | 1,143 | 399 |
+| October 25 | 355 | 151 |
+| October 26 | 464 | 136 |
+| October 27 | 809 | 191 |
+| October 29 | 2,362 | 599 |
+| November 2 | 1,438 | 512 |
+
+- From October 20 to November 2 the list gained 7,768 registrations and lost 2,133.
+- 6,513 voters on an earlier load, the initial OLRV or the manual adds are not on the November 2 OLRV; 269 of them voted in G26.
+
 **Gaps in the OLRV files:**
 
-- **Sept 16 OLRV:** 12,515 voters on the October 20 Voter List with an EDR on or before September 16 are not on the September 16 OLRV, and 11,207 of them are active. All but 2 of them are on the October 27 OLRV, and 5,642 of them voted in G26.
-- **Oct 27 initial OLRV:** 12,176 active voters with an EDR on the October 20 Voter List are not on the October 27 initial OLRV. 11,897 of them are on the October 27 OLRV, 279 are on neither, and 101 of those 279 voted in G26.
+- **Sept 16 OLRV:** 12,515 voters on the October 20 Voter List with an EDR on or before September 16 are not on the September 16 OLRV, and 11,207 of them are active. All 12,515 are on a pollbook load, and 5,672 of them voted in G26.
+- **Initial OLRV:** 12,176 active voters with an EDR on the October 20 Voter List are not on the initial OLRV. 11,946 of them are on a later pollbook load; 230 are on none, and 8 of those voted in G26.
 
 **Voters dropped between files:**
 
-- 4,380 voters on the October 27 initial OLRV are not on the October 27 OLRV (the removed incorrect splits and deletions).
-- 9,463 voters on the September 16 OLRV are on no October list (section 9.4).
+- 4,380 voters on the initial OLRV are not on the October 20 OLRV (the removed incorrect splits and deletions), and 6,392 are not on the November 2 OLRV.
+- 9,415 voters on the September 16 OLRV are on no October list or pollbook load; 141 of them are on the FPCA sheet (section 9.4).
 
-**G26 voters found on each list:**
+**G26 voters found on each list** (548,831 G26 voters with a VUID):
 
 | List | G26 voters found |
 |---|---:|
-| September 16 OLRV | 521,414 |
-| October 27 initial OLRV | 532,992 |
-| October 20 Voter List | 541,432 |
-| October 27 OLRV | 541,711 |
-| Any of these | 541,964 of 547,076 |
+| September 16 OLRV | 523,006 |
+| Initial OLRV | 534,598 |
+| October 5 Voter List | 534,160 |
+| October 20 Voter List | 543,039 |
+| October 20 OLRV | 543,315 |
+| November 2 OLRV | 547,642 |
+| Any pollbook load or manual add | 547,911 |
+| Any of these | 548,029 |
+| Any of these or the FPCA sheet | 548,813 |
 
 Because the OLRV files had these gaps, this review treats a voter as registered when found on **any** 2026 list. A record's registration date may be the date it was entered in TEAM rather than the date the application was received.
 
@@ -351,43 +395,43 @@ Because the OLRV files had these gaps, this review treats a voter as registered 
 
 | P24 | G24 | P26 | G26 voters |
 |---|---|---|---:|
-| – | voted | – | 174,399 |
-| – | voted | DEM | 110,611 |
-| – | – | – | 92,537 |
-| DEM | voted | DEM | 69,679 |
-| REP | voted | REP | 26,939 |
-| – | voted | REP | 18,861 |
-| – | – | DEM | 16,944 |
-| DEM | voted | – | 12,309 |
-| REP | voted | – | 10,997 |
-| REP | voted | DEM | 5,403 |
-| DEM | voted | REP | 4,744 |
-| – | – | REP | 2,210 |
-| DEM | – | DEM | 487 |
-| DEM | – | – | 482 |
-| REP | – | – | 261 |
-| REP | – | REP | 151 |
-| REP | – | DEM | 42 |
+| – | voted | – | 174,928 |
+| – | voted | DEM | 110,756 |
+| – | – | – | 93,194 |
+| DEM | voted | DEM | 69,770 |
+| REP | voted | REP | 26,974 |
+| – | voted | REP | 18,890 |
+| – | – | DEM | 17,022 |
+| DEM | voted | – | 12,397 |
+| REP | voted | – | 11,035 |
+| REP | voted | DEM | 5,408 |
+| DEM | voted | REP | 4,749 |
+| – | – | REP | 2,227 |
+| DEM | – | – | 501 |
+| DEM | – | DEM | 492 |
+| REP | – | – | 266 |
+| REP | – | REP | 159 |
+| REP | – | DEM | 43 |
 | DEM | – | REP | 20 |
-| **Total** | | | **547,076** |
+| **Total** | | | **548,831** |
 
-- **Republican 2024, Democratic 2026:** 5,445 G26 voters voted in the Republican primary in 2024 and the Democratic primary in 2026.
-- **Democratic 2024, Republican 2026:** 4,764 did the reverse.
-- **None of the three:** 92,537 G26 voters (16.9%) voted in none of the three earlier elections.
+- **Republican 2024, Democratic 2026:** 5,451 G26 voters voted in the Republican primary in 2024 and the Democratic primary in 2026.
+- **Democratic 2024, Republican 2026:** 4,769 did the reverse.
+- **None of the three:** 93,194 G26 voters (17.0%) voted in none of the three earlier elections.
   - Most are new registrants or voters new to Travis (section 5).
-  - Among all G26 voters, 34,966 have VUIDs from the newest numbering range (33xxxxxxxx).
-- **Counting the county or SOS files** (548,270 G26 voters) changes these counts by under 1%:
-  - P26: Democratic 203,986, Republican 53,102.
-  - G24: 434,992.
-  - P24: Democratic 87,806, Republican 43,831.
+  - Among all G26 voters, 35,176 have VUIDs from the newest numbering range (33xxxxxxxx).
+- **Counting the county or SOS files** (549,875 G26 voters) changes these counts by under 1%:
+  - P26: Democratic 204,242, Republican 53,169.
+  - G24: 435,762.
+  - P24: Democratic 87,953, Republican 43,896.
 
-## 5. The 92,537 G26 voters who did not vote in P24, G24 or P26
+## 5. The 93,194 G26 voters who did not vote in P24, G24 or P26
 
-92,537 G26 voters (16.9%) are on none of the rosters for the March 2024 primaries (county or SOS, section 2.1), the November 2024 general election or the March 2026 primaries. This section looks at them in the registration lists.
+93,194 G26 voters (17.0%) are on none of the rosters for the March 2024 primaries (county or SOS, section 2.1), the November 2024 general election or the March 2026 primaries. This section looks at them in the registration lists.
 
 **How the comparison was made:**
 
-- **The comparison group:** the group is compared with the 454,539 "returning" G26 voters who voted in at least one of the three.
+- **The comparison group:** the group is compared with the 455,637 "returning" G26 voters who voted in at least one of the three.
 - **Addresses:** residence addresses come from the October 20 Voter List.
 - **Property records:** each address was matched to the Travis Central Appraisal District (TCAD) 2026 property records.
   - The property list is `travis_properties_2026.csv`, derived from the TCAD appraisal exports.
@@ -398,35 +442,35 @@ Because the OLRV files had these gaps, this review treats a voter as registered 
 
 Most of them could not have voted in those elections in Travis, because their registration took effect later.
 
-The tables compare the group with **returning voters**: the 454,539 G26 voters who voted in at least one of P24, G24 and P26. Both groups are on the county's G26 roster and together make up its 547,076 voters with a VUID. Percentages are of each group.
+The tables compare the group with **returning voters**: the 455,637 G26 voters who voted in at least one of P24, G24 and P26. Both groups are on the county's G26 roster and together make up its 548,831 voters with a VUID. Percentages are of each group.
 
 | Effective registration date (October 20 Voter List) | Did not vote in P24, G24, P26 | Returning voters |
 |---|---:|---:|
-| After the P26 primary (March 3, 2026): could not vote in any of the three | 34,808 (37.6%) | 1,639 (0.4%) |
-| Between G24 and P26: could vote only in P26 | 20,849 (22.5%) | 18,074 (4.0%) |
-| Between P24 and G24: could vote in G24 and P26 | 3,941 (4.3%) | 37,753 (8.3%) |
-| By the P24 primary (March 5, 2024): could vote in all three | 27,635 (29.9%) | 396,733 (87.3%) |
-| Not on the October 20 Voter List (section 9.1) | 5,304 (5.7%) | 340 (0.1%) |
+| After the P26 primary (March 3, 2026): could not vote in any of the three | 34,929 (37.5%) | 1,645 (0.4%) |
+| Between G24 and P26: could vote only in P26 | 20,957 (22.5%) | 18,138 (4.0%) |
+| Between P24 and G24: could vote in G24 and P26 | 3,985 (4.3%) | 37,864 (8.3%) |
+| By the P24 primary (March 5, 2024): could vote in all three | 27,911 (29.9%) | 397,610 (87.3%) |
+| Not on the October 20 Voter List (registered later; section 9.1) | 5,412 (5.8%) | 380 (0.1%) |
 
 - **Effective date:** the effective date is the date of the voter's current Travis registration. A voter who moved from another Texas county may have voted there; those votes are not in the Travis rosters.
-- **No earlier vote despite being eligible:** 27,635 voters (29.9% of the group) were registered in Travis before March 2024 and still voted in none of the three earlier elections. These are infrequent voters who turned out in G26.
+- **No earlier vote despite being eligible:** 27,911 voters (29.9% of the group) were registered in Travis before March 2024 and still voted in none of the three earlier elections. These are infrequent voters who turned out in G26.
 
 | Profile | Did not vote in P24, G24, P26 | Returning voters |
 |---|---:|---:|
-| VUID from the newest range (33xxxxxxxx: first registered in Texas recently) | 33.3% | 0.9% |
-| Age 18-21 on Election Day | 17.3% | 2.9% |
-| Age 22-29 | 26.0% | 10.7% |
-| Age 65 or older | 7.1% | 22.3% |
-| Voted on Election Day | 31.7% | 15.9% |
-| Voted early in person | 65.2% | 80.8% |
-| Voted by mail | 3.1% | 3.3% |
-| In suspense on the October 27 OLRV | 4.6% | 2.8% |
-| Not on the October 27 OLRV | 5.4% | 0.1% |
+| VUID from the newest range (33xxxxxxxx: first registered in Texas recently) | 33.2% | 0.9% |
+| Age 18-21 on Election Day | 19.5% | 2.9% |
+| Age 22-29 | 27.3% | 10.7% |
+| Age 65 or older | 7.2% | 22.3% |
+| Voted on Election Day | 31.5% | 15.9% |
+| Voted early in person | 64.8% | 80.6% |
+| Voted by mail | 3.8% | 3.5% |
+| In suspense on the November 2 OLRV | 4.1% | 2.6% |
+| Not on the November 2 OLRV | 0.9% | 0.1% |
 
 - **Young and new:** the group is young and new to Texas voter rolls.
-- **How they voted:** like returning voters, most of the group voted early in person (65.2%).
-  - **Election Day:** the group's share voting on Election Day is twice the returning voters' share: 31.7% against 15.9%.
-  - **Early voting:** its share voting early in person is lower: 65.2% against 80.8%.
+- **How they voted:** like returning voters, most of the group voted early in person (64.8%).
+  - **Election Day:** the group's share voting on Election Day is twice the returning voters' share: 31.5% against 15.9%.
+  - **Early voting:** its share voting early in person is lower: 64.8% against 80.6%.
   - **What "more likely" means:** a voter in the group was about twice as likely as a returning voter to vote on Election Day. It does not mean more of the group voted on Election Day than early.
 
 ### 5.2 Where they live
@@ -434,63 +478,63 @@ The tables compare the group with **returning voters**: the 454,539 G26 voters w
 **Spread:** the group is spread across the whole county.
 
 - 296 of the 298 precincts and 64 of the 68 ZIP codes with G26 voters have some. The exceptions have only 9 and 30 G26 voters in all.
-- **By precinct:** in precincts with at least 300 G26 voters, their share ranges from 5.7% to 64.0%, against 16.1% county-wide.
+- **By precinct:** in precincts with at least 300 G26 voters, their share ranges from 5.9% to 63.9%, against 16.2% county-wide.
 - **Top 10 precincts:** the 10 precincts with the most hold 11.0% of the group, against 5.5% of all G26 voters.
 
 **Concentrations:**
 
 - **The University of Texas campus area.**
-  - ZIP 78705 (West Campus and the UT residence halls) has 7,530 of the group: 39.8% of its G26 voters.
-  - Precincts 312 (64.0%), 315 (48.3%), 311 (41.0%), 313 (35.1%) and 314 (34.3%) cover the campus and West Campus.
+  - ZIP 78705 (West Campus and the UT residence halls) has 7,536 of the group: 39.8% of its G26 voters.
+  - Precincts 312 (63.9%), 315 (48.3%), 311 (41.0%), 313 (35.1%) and 314 (34.3%) cover the campus and West Campus.
 - **East and southeast Travis County:**
 
   | ZIP | Share of G26 voters in the group |
   |---|---:|
-  | 78741 | 24.5% |
-  | 78724 | 24.6% |
+  | 78741 | 24.6% |
+  | 78724 | 24.7% |
   | 78744 | 22.3% |
   | 78617 | 25.9% |
   | 78653 | 21.5% |
-  | 78610 | 26.9% |
+  | 78610 | 27.0% |
   | 78621 | 24.4% |
 
 - **Downtown:** 78701, 25.6%.
-- **Fewest:** the western ZIPs, 78733, 78737, 78739 and 78620, at 8.4-9.5%.
+- **Fewest:** the western ZIPs, 78733, 78737, 78739 and 78620, at 8.6-9.5%.
 
 ZIP codes with the most voters in the group:
 
 | ZIP | Did not vote in P24, G24, P26 | All G26 voters | Share |
 |---|---:|---:|---:|
-| 78705 | 7,530 | 18,912 | 39.8% |
-| 78660 | 7,094 | 43,174 | 16.4% |
-| 78704 | 3,719 | 22,303 | 16.7% |
-| 78745 | 3,703 | 26,293 | 14.1% |
-| 78744 | 3,521 | 15,804 | 22.3% |
-| 78748 | 3,399 | 24,383 | 13.9% |
-| 78653 | 3,022 | 14,061 | 21.5% |
-| 78758 | 2,764 | 13,546 | 20.4% |
-| 78741 | 2,741 | 11,174 | 24.5% |
-| 78759 | 2,557 | 19,903 | 12.8% |
+| 78705 | 7,536 | 18,942 | 39.8% |
+| 78660 | 7,128 | 43,263 | 16.5% |
+| 78704 | 3,750 | 22,393 | 16.7% |
+| 78745 | 3,712 | 26,352 | 14.1% |
+| 78744 | 3,532 | 15,832 | 22.3% |
+| 78748 | 3,411 | 24,420 | 14.0% |
+| 78653 | 3,035 | 14,089 | 21.5% |
+| 78758 | 2,776 | 13,575 | 20.4% |
+| 78741 | 2,754 | 11,201 | 24.6% |
+| 78759 | 2,579 | 19,978 | 12.9% |
 
 ### 5.3 What kind of address they are registered at
 
 | Residence address matched to TCAD | Did not vote in P24, G24, P26 | Returning voters |
 |---|---:|---:|
-| Residential property | 77,003 (83.2%) | 429,287 (94.4%) |
-| Not matched to a TCAD property | 6,727 (7.3%) | 18,470 (4.1%) |
-| Non-residential: parcel with no improvement recorded | 3,134 (3.4%) | 5,020 (1.1%) |
-| Non-residential: commercial or industrial improvement | 350 (0.4%) | 784 (0.2%) |
-| Confidential (protected address) | 19 | 638 |
-| Not on the October 20 Voter List | 5,304 (5.7%) | 340 (0.1%) |
+| Residential property | 77,520 (83.2%) | 430,285 (94.4%) |
+| Not matched to a TCAD property | 6,751 (7.2%) | 18,512 (4.1%) |
+| Non-residential: parcel with no improvement recorded | 3,142 (3.4%) | 5,032 (1.1%) |
+| Non-residential: commercial or industrial improvement | 350 (0.4%) | 788 (0.2%) |
+| Confidential (protected address) | 19 | 640 |
+| Not on the October 20 Voter List | 5,412 (5.8%) | 380 (0.1%) |
 
 **Multi-unit housing:** more of the group live in large multi-unit buildings.
 
-- **Big buildings:** 26.0% of them are at a building where 25 or more of the group are registered, against 16.1% of returning voters at buildings where 25 or more returning voters are registered.
+- **Big buildings:** 26.0% of those with an address are at a building where 25 or more of the group are registered, against 16.1% of returning voters at buildings where 25 or more returning voters are registered.
 - **Building types:** among residential matches, the group makes up a larger share of G26 voters in some types.
 
   | Building type | Share of G26 voters in the group |
   |---|---:|
-  | Luxury high-rise apartments (100+ units) | 37.1% |
+  | Luxury high-rise apartments (100+ units) | 37.0% |
   | Apartments with 100+ units | 33.5% |
   | Mobile homes | 32-36% |
   | Single-family homes | 11.6% |
@@ -502,35 +546,35 @@ ZIP codes with the most voters in the group:
   - The others are private West Campus dormitories, state-exempt parcels, and new apartment complexes that the 2026 export still records as land.
 - **Why they show as non-residential:** the matching script classifies a parcel with no improvement record as non-residential. Campus housing on state land is exempt and has no TCAD improvement record, so it either matches such a parcel or does not match at all.
 
-**Commercial or industrial properties.** 350 voters in the group (0.4%) are registered at a property whose TCAD improvement is commercial or industrial. That is about twice the rate of returning voters (0.2%). They are listed by VUID and TCAD property ID in the records file (A10). Three properties account for 154 of them. Each has hundreds of registered voters, so they were looked up in the TCAD 2026 certified appraisal export:
+**Commercial or industrial properties.** 350 voters in the group (0.4%) are registered at a property whose TCAD improvement is commercial or industrial. That is about twice the rate of returning voters (0.2%). They are listed by VUID and TCAD property ID in the records file (A10). Three properties account for 156 of them. Each has hundreds of registered voters, so they were looked up in the TCAD 2026 certified appraisal export:
 
-| TCAD property (type) | ZIP | Did not vote in P24, G24, P26 | All G26 voters there | All registered voters there | TCAD record |
+| TCAD property (type) | ZIP | Did not vote in P24, G24, P26 | All G26 voters there | All registered voters there (October 20 Voter List) | TCAD record |
 |---|---|---:|---:|---:|---|
-| 283712 (small store, under 10,000 sq ft) | 78741 | 73 | 189 | 530 | Owner: 1620 East Riverside Drive LLC, in care of AMLI Residential. An apartment property: the 530 registrations use 299 different unit numbers. The parcel carries the retail improvement; the same owner holds a second parcel (283714). |
-| 937607 (industrial, 20,000+ sq ft) | 78745 | 47 | 154 | 256 | Owner: MTP-St Elmo Market LLC. The "market unit" of the St. Elmo Market Place Master Condominium, a mixed-use development. The same address has an "APARTMENT 100+" parcel (937606). The 256 registrations use 204 unit numbers, so these voters live in the apartments. |
-| 171435 (medical office, 10,000-35,000 sq ft) | 78759 | 34 | 49 | 677 | Owner: Mosaic Church Austin. 662 of the 677 registrations have no unit number. 601 of them are on the Travis homeless-voters list (`TRAVIS-OLRV-Homeless Voters.csv`), the most common registration address on that list. |
+| 283712 (small store, under 10,000 sq ft) | 78741 | 75 | 195 | 539 | Owner: 1620 East Riverside Drive LLC, in care of AMLI Residential. An apartment property: the 539 registrations use 302 different unit numbers. The parcel carries the retail improvement; the same owner holds a second parcel (283714). |
+| 937607 (industrial, 20,000+ sq ft) | 78745 | 47 | 154 | 256 | Owner: MTP-St Elmo Market LLC. The "market unit" of the St. Elmo Market Place Master Condominium, a mixed-use development. The same address has an "APARTMENT 100+" parcel (937606). The 256 registrations use 203 unit numbers, so these voters live in the apartments. |
+| 171435 (medical office, 10,000-35,000 sq ft) | 78759 | 34 | 49 | 679 | Owner: Mosaic Church Austin. 664 of the 679 registrations have no unit number. 601 of them are on the Travis homeless-voters list (`TRAVIS-OLRV-Homeless Voters.csv`), the most common registration address on that list. |
 
 - **Apartments:** two of the three are apartment buildings. The voters' street address matched a commercial parcel at the same address (an address-matching limitation).
 - **Homeless registration address:** the church is used as a registration address by voters experiencing homelessness. The registrations at this address go back to 2019; 49 of these voters cast a G26 ballot, and 34 of them are in the group.
 - **Context:** shelters, retirement homes, condominiums and similar residences are legitimate registration addresses. A voter experiencing homelessness may register at the place where they regularly stay or receive services.
-- **Next step:** the other commercial-coded addresses in A10 are smaller (fewer than 25 of the group each) and can be reviewed the same way.
+- **Next step:** the other commercial-coded addresses in A10 are smaller (fewer than 10 of the group each) and can be reviewed the same way.
 
 ### 5.4 Patterns
 
 - **Explained by timing:** 60% of the group registered in Travis after G24, and 38% after the March 2026 primary. That alone explains most of the "no earlier vote".
-- **Who they are:** the group is young, with 43% under 30. A third have first-time Texas VUIDs.
+- **Who they are:** the group is young, with 47% under 30. A third have first-time Texas VUIDs.
 - **Where they live:** they are concentrated around the University of Texas and in east and southeast Travis County, mostly in apartments, dormitories and mobile-home communities.
 - **Concentrated, but still widespread:** nearly every precinct has some.
 - **No sign of mass registration at one address:** the commercial-address share is small (0.4%). The only large concentrations are student housing.
 - **The three largest commercial-coded addresses:** on review in TCAD, two are apartment buildings and one is a church used as a homeless registration address (section 5.3).
-- **Needing review:** the 5,304 voters not on the October 20 Voter List (section 9.1).
+- **Registered late, not unregistered:** the 5,412 voters not on the October 20 Voter List are nearly all on the later pollbook loads or the FPCA sheet (section 9.1).
 
 ## 6. Primary voters who did not vote in the following general election
 
 | Group | Primary voters (county roster; P24 also the SOS files) | Not on the county's general-election roster | Not on the county roster or the SOS file |
 |---|---:|---:|---:|
-| P26 Republican → G26 | 56,729 | 3,804 | **3,766 (6.6%)** |
-| P26 Democratic → G26 | 217,010 | 13,844 | **13,689 (6.3%)** |
+| P26 Republican → G26 | 56,729 | 3,710 | **3,702 (6.5%)** |
+| P26 Democratic → G26 | 217,010 | 13,519 | **13,438 (6.2%)** |
 | P24 Republican → G24 | 52,704 | 2,535 | **2,492 (4.7%)** |
 | P24 Democratic → G24 | 101,989 | 4,598 | **4,445 (4.4%)** |
 
@@ -538,19 +582,19 @@ How they voted in the primary:
 
 | Group | Early in person | Election Day | Mail |
 |---|---:|---:|---:|
-| P26 Republican, not G26 | 1,841 | 1,771 | 154 |
-| P26 Democratic, not G26 | 7,022 | 6,142 | 525 |
+| P26 Republican, not G26 | 1,815 | 1,756 | 131 |
+| P26 Democratic, not G26 | 6,915 | 6,057 | 466 |
 | P24 Republican, not G24 | 957 | 1,420 | 115 |
 | P24 Democratic, not G24 | 1,660 | 2,391 | 394 |
 
-Age on November 3, 2026 (from the October 27 OLRV; "no record" = not on that list):
+Age on November 3, 2026 (from the November 2 OLRV, or an earlier 2026 OLRV; "no record" = on none of them):
 
 | Group | 18-29 | 30-44 | 45-64 | 65-79 | 80+ | no record |
 |---|---:|---:|---:|---:|---:|---:|
-| P26 Republican, not G26 | 530 | 777 | 963 | 689 | 305 | 502 |
-| P26 Democratic, not G26 | 4,366 | 3,607 | 2,131 | 1,229 | 461 | 1,895 |
-| P24 Republican, not G24 | 239 | 271 | 362 | 293 | 116 | 1,211 |
-| P24 Democratic, not G24 | 600 | 910 | 512 | 420 | 164 | 1,839 |
+| P26 Republican, not G26 | 526 | 773 | 960 | 657 | 285 | 501 |
+| P26 Democratic, not G26 | 4,291 | 3,563 | 2,110 | 1,168 | 421 | 1,885 |
+| P24 Republican, not G24 | 239 | 273 | 362 | 294 | 115 | 1,209 |
+| P24 Democratic, not G24 | 601 | 911 | 512 | 420 | 164 | 1,837 |
 
 ## 7. Finding these voters in the registration lists
 
@@ -558,13 +602,13 @@ Age on November 3, 2026 (from the October 27 OLRV; "no record" = not on that lis
 
 | Where found | Republican | Democratic |
 |---|---:|---:|
-| Voted in G26 in another tracked county (moved) | 672 | 3,129 |
-| On the October 27 OLRV, active | 2,565 | 8,628 |
-| On the October 27 OLRV, in suspense | 84 | 667 |
-| On a fall 2026 list (Sept 16, Oct 5 or Oct 20) but not the October 27 OLRV | 177 | 449 |
-| On the July 2026 list only (removed before the fall) | 112 | 406 |
-| On no 2026 list after the primary | 156 | 410 |
-| **Total** | **3,766** | **13,689** |
+| Voted in G26 in another tracked county (moved) | 681 | 3,173 |
+| On the November 2 OLRV, active | 2,478 | 8,313 |
+| On the November 2 OLRV, in suspense | 80 | 642 |
+| On a fall 2026 list (Sept 16, Oct 5 or Oct 20, an earlier pollbook load or the manual adds) but not the November 2 OLRV | 196 | 505 |
+| On the July 2026 list only (removed before the fall) | 112 | 400 |
+| On no 2026 list after the primary | 155 | 405 |
+| **Total** | **3,702** | **13,438** |
 
 **P24 primary voters not on a Travis G24 roster** (first category that applies):
 
@@ -576,14 +620,14 @@ Age on November 3, 2026 (from the October 27 OLRV; "no record" = not on that lis
 | Not on the October 24, 2024 list | 367 | 582 |
 | On the Elly deceased-voter list | 0 | 1 |
 | **Total** | **2,492** | **4,445** |
-| Still registered in Travis on the October 27 OLRV | 1,258 | 2,571 |
+| Still registered in Travis on the November 2 OLRV | 1,259 | 2,573 |
 
 - **Moved:** a sizeable share of the non-returning primary voters voted in another county in the general election:
 
   | Group | Share that voted in another county |
   |---|---:|
   | P26 Republicans | 18% |
-  | P26 Democrats | 23% |
+  | P26 Democrats | 24% |
   | P24 Republicans | 28% |
   | P24 Democrats | 25% |
 - **The rest:** most were still registered in Travis and did not vote. A smaller number had been removed from the list or put in suspense.
@@ -592,67 +636,81 @@ Age on November 3, 2026 (from the October 27 OLRV; "no record" = not on that lis
 
 **The non-returning primary voters who voted by mail in the primary:**
 
-| Group | Voted by mail in the primary | Outside Texas, list at the time (P26 list / Oct 2024 list) | Outside Texas, October 27 OLRV | Not on the Oct 2026 lists |
+| Group | Voted by mail in the primary | Outside Texas, list at the time (P26 list / Oct 2024 list) | Outside Texas, November 2 OLRV | Not on the fall 2026 lists |
 |---|---:|---:|---:|---:|
-| P26 Republican, not G26 | 154 | 0 | 5 (AZ, MD; military AE; abroad 2: Thailand, United Kingdom) | 41 |
-| P26 Democratic, not G26 | 525 | 0 | 27 (FL, HI, KY, NV, OK, WA; military 4; abroad or U.S. territory 17: United Kingdom 5, Fiji 2, France 2, Guam 2, Spain 2, and one each in Germany, Indonesia, the Netherlands, Portugal) | 112 |
-| P24 Republican, not G24 | 115 | 3 (CA, NC, OK) | 9 (CA, NC, NM 2, OK, VA; military AP 2; abroad 1: Germany) | 60 |
-| P24 Democratic, not G24 | 394 | 4 (GA, MA, NY, WI) | 6 (NY, WI; abroad 4: Australia, Portugal, 2 with no country code) | 203 |
+| P26 Republican, not G26 | 131 | 0 | 3 (MD; abroad 2: Thailand, United Kingdom) | 40 (and 1 on the FPCA sheet) |
+| P26 Democratic, not G26 | 466 | 0 | 20 (FL, KY, NV, WA; military 2; abroad or U.S. territory 14: United Kingdom 5, Fiji 2, Guam 2, Spain 2, and one each in Germany, Indonesia, the Netherlands) | 107 (and 4 on the FPCA sheet) |
+| P24 Republican, not G24 | 115 | 3 (CA, NC, OK) | 9 (CA, NC, NM 2, OK, VA; military AP 2; abroad 1: Germany) | 59 (and 1 on the FPCA sheet) |
+| P24 Democratic, not G24 | 394 | 4 (GA, MA, NY, WI) | 5 (NY, WI; abroad 3: Australia, Portugal, 1 with no country code) | 196 (and 7 on the FPCA sheet) |
 
-**All G26 mail voters (17,854)**, by registration mailing address:
+**All G26 mail voters (19,606)**, by registration mailing address:
 
 | Mailing address | Voters |
 |---|---:|
-| Texas, or no separate mailing address | 15,909 |
-| Foreign country | 928 |
-| Another U.S. state | 242 |
-| Military (APO/FPO: AE 59, AP 10, AA 5) | 74 |
+| Texas, or no separate mailing address | 17,278 |
+| Foreign country | 1,078 |
+| Another U.S. state | 343 |
+| Military (APO/FPO: AE 76, AP 16, AA 7) | 99 |
 | Masked (protected address) | 8 |
-| Not on the fall 2026 lists (see section 9.1) | 693 |
-| **Total** | **17,854** |
-| **Outside Texas (foreign, another state or military)** | **1,244** |
+| On the FPCA sheet only (federal ballot; the sheet gives no address) | 785 |
+| On no list (section 9.1) | 15 |
+| **Total** | **19,606** |
+| **Outside Texas (foreign, another state or military)** | **1,520** |
 
-- **Foreign countries:** 70 countries. The most common are the United Kingdom 106, Mexico 94, Spain 79, France 73, Germany 63, Canada 57 and Portugal 50, then Italy 30, the Netherlands 28, Australia 26, Japan 24, Switzerland 24 and New Zealand 23. 20 have no country code on the Voter List.
-- **Other states:** the most common are Virginia 36, California 33, Maryland 18, Colorado 16, New York 13, the District of Columbia 12 and North Carolina 11, then 29 other states with 1-9 each.
+- **Foreign countries:** 73 countries. The most common are the United Kingdom 123, Mexico 115, Spain 94, France 89, Germany 79, Canada 69 and Portugal 55, then Italy 36, Japan 32, the Netherlands 29, Australia 27, Switzerland 26 and New Zealand 26. 17 have no country code on the county Voter List.
+- **Other states:** the most common are Virginia 51, California 43, Maryland 23, Colorado 22, New York 20, the District of Columbia 17 and North Carolina 12, then Florida 11, Arizona, Georgia and Massachusetts 10 each, and 31 other states with 1-9 each.
+- **FPCA voters:** the 785 are overseas voters who do not intend to return (section 3). They are outside Texas by definition but cannot be placed by country.
 - **Lawful reasons:** mail voting from outside Texas is lawful for voters who are temporarily away, such as students, military personnel and their families, or travelers (Election Code §82.001).
 - **Residence:** an out-of-state mailing address does not show that the voter has given up Texas residence.
+- **Late mail:** the November 9 roster added 1,758 mail voters, and 388 of them (22.1%) have a mailing address outside Texas or are on the FPCA sheet, twice the share of the earlier mail voters (10.7%): mail ballots from abroad may arrive after Election Day.
 
-**All registered voters** on the October 27 OLRV with a mailing address outside Texas:
+**All registered voters** on the November 2 OLRV with a mailing address outside Texas:
 
 | Group | Registered | Voted in G26 | By mail | Early in person | Election Day |
 |---|---:|---:|---:|---:|---:|
-| Foreign country | 2,200 | 1,460 | 923 | 445 | 92 |
-| Another U.S. state | 4,248 | 680 | 239 | 317 | 124 |
-| Military (APO/FPO) | 422 | 97 | 73 | 20 | 4 |
+| Foreign country | 2,218 | 1,635 | 1,069 | 459 | 107 |
+| Another U.S. state | 4,274 | 774 | 339 | 311 | 124 |
+| Military (APO/FPO) | 433 | 121 | 97 | 20 | 4 |
 
 ## 9. Anomalies in the G26 data
 
-### 9.1 Voters on no 2026 registration list (4,938; records A1)
+### 9.1 Voters on no 2026 registration list or pollbook load (651; records A1)
 
-4,938 G26 voters with a VUID are on none of the 2026 Travis lists in section 3. That includes the county's own Voter Lists of October 5 and 20, as well as the TEAM OLRV files of September 16 and October 27. These voters are:
+651 G26 voters with a VUID are on none of the 2026 Travis lists in section 3, including every pollbook load and the manual adds.
 
-- 0.9% of all G26 voters;
-- 2,228 early in person, 2,147 on Election Day and 563 by mail;
-- in the state's files too, for 4,793 of them (145 are on the county roster only).
+- **On the FPCA sheet (633):** all voted by mail, with a federal ballot (Affirmation C). The county explained them: these overseas voters do not intend to return, TEAM has them in cancelled status, and so they are on no OLRV.
+- **On neither (18):** 14 mail voters, 2 early in person and 2 on Election Day.
+  - **Mail (14):** 1206016249, 2134592390, 2148092107, 3382776836, 3382811542, 3383223565, 3383382958, 3383469428, 3383471005, 3383588869, 3383593399, 3383595723, 3383603060, 3383610167.
+  - **Early in person:** 3383450312 (October 22), 3383532309 (October 26).
+  - **Election Day:** 3383271066, 3383543577.
+  - **Who they are:** 15 of the 18 have new-range VUIDs (33xxxxxxxx). Mail voters missing from the FPCA sheet may be FPCA voters left off it; the in-person voters should have been on a pollbook load or a manual add.
+  - **Recommendation:** the county should confirm each one's registration status on the day the ballot was cast.
 
-Pointers to the cause:
+**What the first version found, and why it was incomplete.** The first version had only the pollbook load of October 20 (then called the "October 27 OLRV") and the initial OLRV. 5,027 voters of the November 9 roster are on none of the lists it had. With the files received November 13:
 
-- **New VUIDs:** 2,996 have VUIDs from the newest range (33xxxxxxxx), against 6% of all G26 voters.
-- **Late in the voting period:** 3,106 voted on October 30, the last day of early voting, or on Election Day.
-- **New to Travis:** only 124 had voted in Travis in P24, G24 or P26, and 140 are on a 2024-25 Travis list.
-- **Not one of the OLRV gaps the county described:** these voters are not on the county's Voter List either.
+| Where they are now | Voters |
+|---|---:|
+| On a daily pollbook load dated on or before the day they voted | 4,241 |
+| On the FPCA sheet only (mail) | 633 |
+| Manually added, and on a daily load 1 to 7 days after they voted early | 123 |
+| Manually added only (7 early voting, 3 Election Day) | 10 |
+| First on a daily load after they voted, with no manual add | 2 |
+| On none of these files | 18 |
 
-The pattern fits registrations or transfers from other counties that were processed or entered in TEAM after October 20. It does not show ineligible voting. It should be checked against the county's post-election registration list: a G26 voter still on no Travis list after the canvass would need an explanation.
+- **Pollbook loads:** the most common first load is October 29 (1,232 voters), then October 24 (749). A load dated on a voting day is taken as the list in use that day; there is no load for October 23, 28, 30 or 31 or November 1.
+- **Manual adds:** the county pushed these voters to the pollbooks by hand after confirming them in TEAM. They appear on a later daily load, usually 1-3 days after they checked in.
+- **The two without a manual add:** 2215142617 voted October 20 and first appears on the October 25 load; 3383534601 voted October 22 and first appears on October 29.
+- **The pattern the first version described** (new VUIDs, late in the voting period, new to Travis) fits: these were registrations processed or entered in TEAM after October 20.
 
-**The same gap in earlier elections.** No registration list on file has a record for every G26 voter. To see whether that is unusual, the G24 and P26 rosters (county or SOS) were compared in the same way with the list in use at the time. Missing voters were then looked up on every later Travis list through October 27, 2026: 24 lists in all, from March 2024 on.
+**The same gap in earlier elections.** To see whether a gap like this is unusual, the G24 and P26 rosters (county or SOS) were compared in the same way with the list in use at the time. Missing voters were then looked up on every later Travis list through November 2, 2026, including the pollbook loads and the FPCA sheet: 38 lists in all, from March 2024 on.
 
 | | G24 | P26 |
 |---|---:|---:|
 | Voters on the roster (VUIDs) | 584,611 | 274,689 |
 | List(s) at the time | the county's "2024-10-24" lists | the county's February 10, 2026 list and the P26 OLRV |
 | **Missing from the list at the time** | **8,804 (1.5%)** | **1,503 (0.5%)** |
-| Found on a later list | 4,682 | 1,433 |
-| On no later list | 4,122 | 70 |
+| Found on a later list | 4,697 | 1,484 |
+| On no later list | 4,107 | 19 |
 | The county's later vote history credits the vote | 4,056 | 1,397 |
 
 **Limited ballots are outside these counts.** Limited-ballot voters moved from another Texas county and are not on the Travis list, so none of the three comparisons includes them:
@@ -663,42 +721,37 @@ The pattern fits registrations or transfers from other counties that were proces
 **P26:** the gap closed within weeks.
 
 - **Most reappeared on the next list:** 1,425 of the 1,503 are on the P26 runoff OLRV of May 14, 2026.
+- **FPCA voters:** 51 of the rest are on the 2026 FPCA sheet, so only 19 never reappear.
 - **The list at the time was the official one:** the P26 OLRV has 920,114 records, exactly the official registered-voter count for P26.
 - **Who they are:** mostly early (940) and Election Day (495) voters, many with new VUIDs (33xxxxxxxx).
-- **Registration timing:** among the 1,433 found later, 1,271 had applied by the February 2 registration deadline and 147 after it but before Election Day.
+- **Registration timing:** among the 1,433 found later on a county list or OLRV, 1,215 have a registration date on the October 20, 2026 Voter List on or before the February 2 registration deadline, and 135 after it but before Election Day.
 
 **G24:** two different groups.
 
-- **4,682 found on a later list:**
-  - **New registrations (3,563):** mostly early and Election Day voters; 2,927 had applied by the October 7 deadline.
-  - **Absent from the October list only (1,119):** on the March 2024 list and on later lists.
-    - 1,045 of these are mail voters listed only in the SOS file, not on the county's roster.
+- **4,697 found on a later list** (4,682 on a later county list or OLRV, 15 more only on the 2026 FPCA sheet):
+  - **New registrations (3,566; 3,563 on a county list):** mostly early and Election Day voters. 2,751 of the 3,563 have a registration date on the October 20, 2026 Voter List on or before the October 7 deadline.
+  - **Absent from the October list only (1,131; 1,119 on a county list):** on the March 2024 list and on later lists.
+    - 1,045 of the 1,119 are mail voters listed only in the SOS file, not on the county's roster.
     - The county's own later vote history credits 1,077 of the 1,119 with a G24 vote.
   - **When they reappear:** most first reappear on the October 25, 2025 list, because no list between October 2024 and October 2025 is on file.
-- **4,081 on no Travis list at all:** from March 2024 through October 27, 2026.
-  - **Who they are:** 4,012 are mail voters, and 4,054 have VUIDs beginning with 22.
+- **4,078 on no Travis list at all:** from March 2024 through November 2, 2026, including the pollbook loads and the FPCA sheet.
+  - **Who they are:** 4,009 are mail voters, and 4,053 have VUIDs beginning with 22.
   - **When their ballots arrived:** they make up almost all of the county's earliest mail lists, before regular mail ballots went out: 87 of 88 voters on September 30, all 216 on October 7 and all 41 on October 8. They are most of the lists after Election Day: 110 of 135 on November 7 and 46 of 53 on November 8. 156 of their mail ballots were logged after Election Day.
-  - **G26:** 4,009 of them did not vote in G26.
-  - **Likely explanation (not confirmed by the county):** this fits overseas and military voters registered by Federal Post Card Application, whom the county's published lists appear not to include.
+  - **G26:** none of them voted in G26.
+  - **Likely explanation (not confirmed by the county):** this fits overseas and military voters registered by Federal Post Card Application. The county now confirms that FPCA voters who do not intend to return are cancelled in TEAM and left off the OLRV (section 3). The 2026 FPCA sheet does not settle it for G24: it lists 2026 FPCA voters, and only 15 of the G24 group are on it.
 - **The G24 list was older than its name:**
   - **Its real date:** the files named "2024-10-24" carry a file date of October 14, 2024, and their G24 vote history ends with mail ballots received October 11.
   - **What that means:** they show the list about three weeks before Election Day, a week after the registration deadline, so registrations processed after that are missing.
 
-**What this means for G26:** the 4,938 G26 voters (0.9%) look like the P26 group and the G24 new registrations, not the G24 mail group.
-
-- **Who they are:** mostly early and Election Day voters with new VUIDs.
-- **Comparison with G24:** without the 4,081 never-listed mail voters, G24's gap is 4,723 voters (0.8%), close to G26's.
-- **What to expect:** if G26 follows P26, most of the 4,938 should appear on the first Travis list after the election.
-
 **History files not refreshed:** the county's `Registered_Voters_With_History` downloads dated October 25, 2025, January 17, 2026 and February 10, 2026 are byte-for-byte the same file. The county did not refresh it for four months.
 
-### 9.2 Registration dated after the deadline (558; records A2)
+### 9.2 Registration dated after the deadline (560; records A2)
 
-558 G26 voters are on the October 20 Voter List with a registration date after October 5, 2026 (the registration deadline), and on no earlier Travis list.
+560 G26 voters are on the October 20 Voter List with a registration date after October 5, 2026 (the registration deadline), and on no earlier Travis list.
 
-- **How they voted:** 419 early in person, 131 on Election Day and 8 by mail.
-- **Effective date:** 149 of them have an EDR after November 3.
-- **VUIDs:** 139 have new-range VUIDs. Most of the others have older VUIDs, so they were probably registered elsewhere in Texas before.
+- **How they voted:** 419 early in person, 131 on Election Day and 10 by mail.
+- **Effective date:** 150 of them have an EDR after November 3.
+- **VUIDs:** 140 have new-range VUIDs. Most of the others have older VUIDs, so they were probably registered elsewhere in Texas before.
 
 **Caution:** with TEAM's problems, this registration date may be the date the record was entered, not the date the application was received or postmarked. An application received by October 5 but entered later would look like this. These records need the county's application dates before any conclusion.
 
@@ -712,31 +765,35 @@ Six G26 voters are on `TRAVIS-VR 5_1_26 Deceased Voters.csv`:
 
 An obituary match can be wrong: a person with the same name and birth date, or a wrong obituary. These six need verification by the county before any conclusion.
 
-### 9.4 On the September OLRV but on no October list (99; records A9)
+### 9.4 On the September OLRV but on no October list or pollbook load (90; records A9)
 
-99 G26 voters are on the September 16 OLRV but on none of the October lists (October 5, October 20, and the October 27 initial OLRV and the October 27 OLRV).
+90 G26 voters are on the September 16 OLRV but on none of the October lists (October 5 and October 20 Voter Lists, the initial OLRV, every pollbook load and the manual adds).
 
-- **How they voted:** 72 by mail, 23 early in person and 4 on Election Day.
-- **Status on Sept 16:** 22 were in suspense.
-- **Interpretation:** their registrations appear to have been cancelled or moved after September 16, yet a ballot was counted. The removal may have been one of the TEAM corrections the county describes. The county should confirm each voter's registration status on the day the ballot was cast.
+- **On the FPCA sheet (87):** all voted by mail; 86 are marked "Applicant was already registered to vote". These are registered voters who filed an FPCA as not intending to return, after which TEAM cancelled them (section 3).
+- **On neither (3):** mail voters 1139526658 (October 13), 2191566625 (November 2) and 3382615717 (October 15).
+- **Status on Sept 16:** 24 were in suspense.
+- **The first version found 99:** 27 of them are on the later pollbook loads and 70 on the FPCA sheet; 2 are among the 3 above.
+- **Interpretation:** for the 3 not on the FPCA sheet, the registration appears to have been cancelled or moved after September 16, yet a ballot was counted. The county should confirm their registration status on the day the ballot was cast.
 
 ### 9.5 Other findings
 
 | Finding | Voters | Records |
 |---|---:|---|
-| Also on another county's own G26 roster (Bexar 2, Collin, Dallas, Harris 2, Hidalgo) | 7 | A6 |
+| Also on another county's own G26 roster (Bexar 2, Collin, Dallas, Harris, Hidalgo) | 6 | A6 |
 | Also in another county's G26 SOS file, but not on that county's roster | 81 | A7 |
-| Two voting methods on the county roster (early in person + mail 2, Election Day + mail 1) | 3 | A5 |
-| Mail ballot listed as received on two different days | 6 | A8 |
-| Listed twice on the same day | 3 | A8 |
+| Two voting methods on the county roster | 0 | A5 |
+| Mail ballot listed as received on two different days | 35 | A8 |
+| Listed twice on the same day | 14 | A8 |
 | Age 105 or older on Election Day (registration birth date) | 4 | A4 |
 | Under 18 on Election Day | 0 | |
 
-- **Another county's own roster:** for the 7 voters on another county's own roster, both counties' records should be compared, starting with the dates and voting methods in the records file.
+- **Another county's own roster:** for the 6 voters on another county's own roster, both counties' records should be compared, starting with the dates and voting methods in the records file.
 - **Another county's SOS file only:** the 81 SOS-file-only cases are more likely SOS file errors, since the state's file lists a voter the county did not.
+- **Two voting methods, corrected:** the November 4 roster listed 3 voters under two methods (early in person + mail 2, Election Day + mail 1). In the November 9 roster the corrected (`_UPDATED`) mail lists no longer list them, so each has only the in-person vote.
+- **Repeated entries come from the new November 2 mail list:** `11.02.2026 Ballot by Mail.xlsx` first appears in the November 9 ZIP. 26 of its voters are also on the corrected November 3 mail list, and 9 are listed twice in the file itself. The other repeats are older mail lists, as in the first version.
 - **Ages:** ages of 105 and over are plausible, but birth dates entered as placeholders show up this way.
 - **One woman is listed as 118 years old** (VUID 1167992321, records A4):
-  - **What the records show:** the same birth date appears on all four registration lists that carry one (the September 16 OLRV, the October 27 initial OLRV, the October 27 OLRV and the P26 primary list).
+  - **What the records show:** the same birth date appears on every registration list that carries one, from the September 16 OLRV to the November 2 OLRV and the P26 primary list.
     - The registration is active and not in suspense.
     - No other Travis registration has the same first and last name.
   - **How she voted:** early in person, on October 28, 2024 (G24) and again on October 28, 2026 (G26). Both the county roster and the SOS files list both votes.
@@ -747,21 +804,21 @@ An obituary match can be wrong: a person with the same name and birth date, or a
 
 **Patterns that are not anomalies by themselves:**
 
-- **Duplicate registrations:** 225 people are registered twice on the October 27 OLRV, under two VUIDs (450 VUIDs) with the same first, middle and last name and date of birth.
-  - In 165 of these, one of the two VUIDs voted in G26; in none did both.
+- **Duplicate registrations:** 383 people are registered twice on the November 2 OLRV, under two VUIDs (766 VUIDs) with the same first, middle and last name and date of birth.
+  - In 301 of these, one of the two VUIDs voted in G26; in none did both.
   - This is list maintenance, not a double vote.
-- **Suspense voters:** 17,099 G26 voters (3.1%) were in suspense on the October 27 OLRV. A suspense voter may vote after confirming the address on a Statement of Residence.
-- **Mail voters under 65:** 2,953 of the 17,155 mail voters with a known age were under 65 on Election Day.
+- **Suspense voters:** 15,648 G26 voters (2.9%) were in suspense on the November 2 OLRV. A suspense voter may vote after confirming the address on a Statement of Residence.
+- **Mail voters under 65:** 3,954 of the 18,800 mail voters with a known age were under 65 on Election Day.
   - They must qualify by disability, absence from the county, or confinement (Election Code §§82.001-82.008).
   - The roster does not say which.
-- **Limited ballots:** the G26 roster lists 3,482 limited-ballot voters (3,477 limited ballots counted, unofficial). The county lists these voters by name only, so they cannot be checked here.
+- **Limited ballots:** the G26 roster lists 3,482 limited-ballot voters (3,477 limited ballots counted). The county lists these voters by name only, so they cannot be checked here.
 - **9-digit IDs:** two mail rows on the county roster carry 9-digit IDs. Both look like clerical errors: each is a VUID with one digit dropped.
-  - **ID 220260776 (October 29 mail list):** restoring a "7" gives VUID 2202607776, a registration with the same name in the same precinct (385).
-    - The SOS file lists 2202607776 as a G26 mail voter; the county roster does not, because of the typo.
-    - This was reported to Travis County Elections.
   - **ID 113332465 (October 31 mail list):** adding a final "1" gives VUID 1133324651, a registration with the same name in the same precinct (232).
     - Neither the county roster nor the SOS files list 1133324651.
-  - **Effect on this review:** neither row is counted among the 547,076 G26 voters with a VUID.
+  - **ID 338333325 (November 2 mail list, precinct 334):** restoring a "0" gives VUID 3383303325, an FPCA voter in precinct split 334.3.
+    - The SOS files list 3383303325 as a G26 mail voter; the county roster does not, because of the typo.
+  - **Corrected since the first version:** ID 220260776 on the October 29 mail list (VUID 2202607776). The county's corrected list now carries the full VUID.
+  - **Effect on this review:** neither row is counted among the 548,831 G26 voters with a VUID.
 
 ## 10. Checks
 
@@ -773,24 +830,22 @@ An obituary match can be wrong: a person with the same name and birth date, or a
   | G24 | 556,039 | 4,514 | 1,359 | |
   | P24 | 145,511 (same party) | | | 1 |
 
-- **County vs state:** the state's files list 98.8% (P24), 99.1% (G24), 99.1% (P26) and 99.2% (G26) of the voters on the county's rosters.
-- **Mail voters outside Texas:** an independent comparison in Election Explorer matched the G26 mail roster with the October 27 OLRV records whose mailing address is not in Texas. It found 1,232 voters.
-  - For the same voters, the October 27 OLRV has 1,243 records without a Texas mailing address: 312 in another state or military, 923 foreign and 8 masked.
-  - The 1,244 in section 8 is the 1,235 non-masked OLRV records plus 9 voters who are not on the October 27 OLRV, taken from earlier lists.
-  - The remaining gap of 11 likely reflects how the two methods pair records. The roster lists 8 VUIDs twice.
-- **Ballot counts:** the replayed tabulation audit logs equal the ballots tabulated in P24 (153,590), G24 (587,090) and P26 (274,443), by vote type. The Central Count reconciliation records agree, once the 1,553 hand-counted P24 Republican mail ballots are added (section 2.1).
+- **County vs state:** the state's files list 98.8% (P24), 99.1% (G24), 99.1% (P26) and 99.0% (G26) of the voters on the county's rosters.
+- **Mail voters outside Texas:** in the first version, an independent comparison in Election Explorer of the G26 mail roster with the October 20 OLRV's out-of-Texas mailing addresses found 1,232 voters, against that version's 1,244. It has not been repeated with the November 9 roster and the November 2 OLRV.
+- **Ballot counts:** the replayed tabulation audit logs equal the ballots tabulated in P24 (153,590), G24 (587,090), P26 (274,443) and G26 (554,229), by vote type. The Central Count reconciliation records agree, once the 1,553 hand-counted P24 Republican mail ballots are added (section 2.1).
 - **Same-person rule:** two registrations are treated as the same person only when the first, middle and last name and the date of birth all match (Election Explorer's rule). Twins can differ only in the middle name.
 
 ## 11. Limitations
 
-- **Registration lists:** the newest lists (the October 27 initial OLRV and the October 27 OLRV) were provided October 27, 2026. TEAM problems are documented for them (section 3). Registrations processed or entered after that date look missing (section 9.1).
+- **Registration lists:** the newest list is the November 2 pollbook load. TEAM problems are documented for the OLRV files (section 3). Registrations entered after November 2 look missing, and FPCA voters who do not intend to return are on no OLRV by design (section 9.1).
 - **Registration dates:** a registration date may be a TEAM entry date (section 9.2).
+- **Load dates:** a pollbook load dated on a voting day is taken as the list in use that day; the county did not say when each load reached the pollbooks.
 - **P24 rosters:** the county's P24 Election Day roster lacks 2,455 voters, and the SOS P24 files lack 1,761 mail voters. P24 voters are therefore taken from both (section 2.1).
 - **Other counties:** only the 50 largest Texas counties were checked for other-county votes.
 - **Property matching:** matches use the TCAD 2026 property list and the county's address rules.
   - A parcel with no improvement record is classified non-residential, even when it is campus or new apartment housing.
-  - 7.3% of the group's addresses could not be matched.
+  - 7.2% of the group's addresses could not be matched.
   - A property's type does not by itself show whether a voter lives there.
-- **Mailing address:** this is the registration mailing address, not necessarily the address on the mail ballot application.
-- **G26 rosters are not final:** they will still change with late mail ballots, provisional ballots and corrections.
+- **Mailing address:** this is the registration mailing address, not necessarily the address on the mail ballot application. The FPCA sheet gives none.
+- **G26 mail roster:** the November 9 roster lists 284 more mail voters than mail ballots counted, and repeats 35 mail voters on two days (sections 2.1 and 9.5).
 - **This review reports patterns that need checking, not findings of wrongdoing.**

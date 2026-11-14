@@ -37,6 +37,7 @@ a bullet each.
 - **Where:** `src/voter_table.c` `classify_field` ("PERMANENTVUID", "PERMANENTVUIDSC91").
 - **Checked:** the county's `2026 TEAM Spreadsheets - FPCA.csv` loads 1,449 rows. Smoke test `fpca`
   (FPCA layout with a redacted DOB); full suite passes.
+- **Commit:** c83193f
 
 ### 2026-11-13 — Results Compare: contest titles with words added at the end
 - **What:** a contest left unpaired pairs with one whose title is its own plus words at the end,

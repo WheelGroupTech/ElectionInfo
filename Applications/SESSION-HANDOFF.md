@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-15. **1.6.1.0 is ready to submit**: version bumped, RELEASES.md
+**Last updated:** 2026-11-15. **1.6.1.0 submitted to the Store 2026-11-15**: version bumped, RELEASES.md
 "What's new" note, STORE-LISTING.txt and Help updated, Store bundle
 `Build/msix/ElectionExplorer.Package_1.6.1.0_x64_arm64_bundle.msixupload` built and checked. It
 adds what was committed after 1.6.0.0: ES&S batches deleted at the scanner, Verity Build logs,

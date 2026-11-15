@@ -30,7 +30,7 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
-## 1.6.1.0 (built 2026-11-15)
+## 1.6.1.0 (submitted 2026-11-15)
 
 New in 1.6.1: ES&S batches deleted at the scanner, Verity Build logs, Verity logs printed again from a
 browser, Results Compare title and choice pairing, "PERMANENT VUID", Collin / Fort Bend / Bexar

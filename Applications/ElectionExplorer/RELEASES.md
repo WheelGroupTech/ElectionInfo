@@ -3,7 +3,7 @@
 Microsoft Store releases, newest first. Each entry's text is the Store listing's
 "What's new in this version" note and can be pasted into Partner Center as is.
 
-## 1.6.1.0 (built 2026-11-15)
+## 1.6.1.0 (submitted 2026-11-15)
 
 New in 1.6.1: Audit logs: batches deleted at an ES&S scanner are now taken out of the ballot count and listed in the Ballot Accounting report, Hart Verity Build logs load as their own log, and Hart Verity audit logs a county printed again from a web browser now load. The Copies Check matches an event printed with a line lost at a page break to its other copies, and Notable Events lists official ballots printed after Election Day, such as ballot board remakes. Election results: Compare pairs contests whose titles add words at the end, sums the choices a results file lists twice under one name, and pairs choices such as "For (A Favor)" with "For". Clarity summary files that list a choice name twice keep the contest whole. Voter lists: a "PERMANENT VUID" column is read as the Voter ID. Voter rosters: Collin County's combined list after the election takes each voter's voting method from its Voted Phase column, Fort Bend County's mail ballot files are no longer read as early voting, and Bexar County files named with a spaced date are dated.
 

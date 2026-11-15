@@ -4,25 +4,21 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-10-30. Election Explorer **1.5.0.0 certified and published on the
-Microsoft Store**. Committed for 1.6: Dominion results, scanned/ASCII85 results PDFs (`ae7eb01`),
-Webb certificate-number mail lists (`5ed8228`), Hart HVS "Votes by Precinct" CVRs (`2c0fbd3`).
-**Uncommitted: Hart Verity audit logs (1.6, decisions H1–H5 confirmed by the user)** —
-`src/ee_audit_hart.{c,h}` (new), `ee_audit.{c,h}` (5 log slots, zips, Hart accounting / notes /
-timeline / export), `main.c` audit window, `settings.{c,h}` (test task words), `resource.h`,
-.vcxproj(+filters), smoke `hartaud`, docs (`docs/audit-log-design.md` "Hart Verity audit logs"),
-RELEASES.md 1.6 note (1,454 of 1,500 characters, now naming Hart Verity logs and HVS CVRs) and
-STORE-LISTING.txt.
-**1.6.0.0 is not final:** the user has more changes first; then rebuild the Store bundle (the
-one built on 2026-10-29 predates Dominion, OCR, HVS and Hart audit logs).
+**Last updated:** 2026-11-15. **1.6.1.0 is ready to submit**: version bumped, RELEASES.md
+"What's new" note, STORE-LISTING.txt and Help updated, Store bundle
+`Build/msix/ElectionExplorer.Package_1.6.1.0_x64_arm64_bundle.msixupload` built and checked. It
+adds what was committed after 1.6.0.0: ES&S batches deleted at the scanner, Verity Build logs,
+Verity logs printed again from a browser, Results Compare pairing fixes, "PERMANENT VUID", and
+the Collin / Fort Bend / Bexar roster fixes (see `ElectionExplorer/CHANGELOG.md`).
 This note was condensed from a long changelog on 2026-10-27; the old text is in git history.
+The sections below this header were last revised on 2026-10-30 and may be out of date.
 
 ## Current state
 
-- **Released:** 1.5.0.0, submitted 2026-10-27, certified and published on the Store by
-  2026-10-28. 1.4.1.0 (submitted 2026-10-22) is the version before it. Per-version notes:
+- **Released:** 1.6.0.0, submitted 2026-10-30. 1.5.0.0 (submitted 2026-10-27, published
+  2026-10-28) is the version before it. Per-version notes:
   `ElectionExplorer/RELEASES.md`; Store description: `ElectionExplorer/STORE-LISTING.txt`.
-- **Store bundle:** `Build/msix/ElectionExplorer.Package_1.5.0.0_x64_arm64_bundle.msixupload`.
+- **Store bundle:** `Build/msix/ElectionExplorer.Package_1.6.1.0_x64_arm64_bundle.msixupload`.
   After a version bump, delete the package's `bin/`, `obj/`, `BundleArtifacts/` and build with
   `/t:Rebuild`, then check every inner `AppxManifest.xml` version (stale-manifest trap).
   `ElectionExplorer.Package/README.md` has the build command.

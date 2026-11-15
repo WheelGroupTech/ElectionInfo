@@ -28,7 +28,29 @@ a bullet each.
 - **Details:** link to the design doc section, when there is one.
 ```
 
-## Unreleased (after 1.6.0.0)
+## Unreleased (after 1.6.1.0)
+
+## 1.6.1.0 (built 2026-11-15)
+
+New in 1.6.1: ES&S batches deleted at the scanner, Verity Build logs, Verity logs printed again from a
+browser, Results Compare title and choice pairing, "PERMANENT VUID", Collin / Fort Bend / Bexar
+roster fixes.
+
+### 2026-11-15 — 1.6.1.0: help, version, release notes, Store bundle
+- **What:** version 1.6.1.0. Help → Loading in the audit window says a Verity report printed again
+  from a web browser loads, and no longer names a county ("some counties post it with an XML
+  signature"); Help → Reports lists the VerityBuild log's official ballots printed after Election
+  Day among Hart's Notable Events. RELEASES.md 1.6.1.0 "What's new" note (1,051 of 1,500
+  characters). STORE-LISTING.txt names Verity Build logs, browser reprints and batches deleted at
+  the scanner.
+- **Where:** `main.c` `k_AudHelpLoading`, `k_AudHelpReports`; `res/ElectionExplorer.rc`,
+  `res/app.manifest`, `ElectionExplorer.Package/Package.appxmanifest`; `RELEASES.md`,
+  `STORE-LISTING.txt`; `../SESSION-HANDOFF.md`.
+- **Checked:** bundle `ElectionExplorer.Package_1.6.1.0_x64_arm64_bundle.msixupload` (6.4 MB) built
+  with `/t:Rebuild` after clearing the package's `bin`, `obj` and `BundleArtifacts`; bundle and both
+  packages `WheelGroupTech.ElectionExplorer` 1.6.1.0, both EXEs 1.6.1.0 with the new help text;
+  19 logo images and only runFullTrust in each package. Release x64 and ARM64 build clean. The
+  smoke suite does not build `main.c`; nothing it covers changed since its full pass on dd12f1b.
 
 ### 2026-11-14 — Audit logs: Hart Verity reports printed again from a browser
 - **What:** a Verity audit log report printed again through a web browser now loads. Hays County's G26
@@ -46,6 +68,7 @@ a bullet each.
     events, copies checks and notes against HEAD.
   - **Smoke test:** `hartaud` writes the Verity fixture a glyph at a time (helper `hva_count_pages`,
     `g_rpdf_glyphs`, `g_tpdf_widths`) and gets the same 12 events. The full suite passes.
+- **Commit:** dd12f1b
 - **Details:** the review `State_Election_Info/Texas_Election_Info/Hays_County_G26_Audit_Log_Review_2026-11-14.md`.
 
 ### 2026-11-13 — Voter lists: "PERMANENT VUID (SC91)" is the VUID

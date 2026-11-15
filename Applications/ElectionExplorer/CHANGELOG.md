@@ -30,6 +30,24 @@ a bullet each.
 
 ## Unreleased (after 1.6.0.0)
 
+### 2026-11-14 — Audit logs: Hart Verity reports printed again from a browser
+- **What:** a Verity audit log report printed again through a web browser now loads. Hays County's G26
+  VerityCount log is a Firefox (Skia) reprint, and 1.6.0.0 rejected it as "not a Hart Verity audit
+  log report". In that file each glyph is its own text run and no spaces are drawn, and "Component:"
+  is joined to its value. The Hart reader now rebuilds the words: on a page where most runs are single
+  characters, it joins glyphs along a line by their widths. A gap over 0.15 em is a space; 0.6 em or
+  more starts a new run. It also accepts "Component: VerityCount 2.7.5" as one run.
+- **Where:** `src/ee_audit_hart.c` `hv_collect` (glyph joining, `hv_one_char`), new `hv_component`,
+  used by `hv_header`, `AuHart_IsReport` and `hv_page_rows`.
+- **Checked:**
+  - **Hays G26:** 3,018 rows with no row numbers missing, equal in every field to an independent
+    PyMuPDF column reading. The official task replays to 120,880 ballots, the official ballots cast.
+  - **Regression:** all 35 other audit log sets (Travis, Dallas, Hays, Parker, Burnet) give identical
+    events, copies checks and notes against HEAD.
+  - **Smoke test:** `hartaud` writes the Verity fixture a glyph at a time (helper `hva_count_pages`,
+    `g_rpdf_glyphs`, `g_tpdf_widths`) and gets the same 12 events. The full suite passes.
+- **Details:** the review `State_Election_Info/Texas_Election_Info/Hays_County_G26_Audit_Log_Review_2026-11-14.md`.
+
 ### 2026-11-13 — Voter lists: "PERMANENT VUID (SC91)" is the VUID
 - **What:** a voter list whose Voter ID column is titled "PERMANENT VUID (SC91)" (Travis County's TEAM
   FPCA spreadsheet of federal voters not intending to return) now loads with that column as the VUID,

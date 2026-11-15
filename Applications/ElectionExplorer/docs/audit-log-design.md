@@ -1165,9 +1165,15 @@ reading error.
   place) and, for every log, adds the log's print time and newest event and the results file's
   timestamp.
 - **Export:** the Log column names the component; a Copy record keeps the component in Module.
+- **Browser reprints (2026-11-14):** Hays County's G26 VerityCount log was posted as a Firefox
+  (Skia) reprint of the report: same layout, but every glyph its own text run, no spaces drawn, and
+  "Component: VerityCount 2.7.5" one run. On a page where most runs are one character, `hv_collect`
+  joins glyphs along a line by their widths (a gap over 0.15 em is a space, 0.6 em or more a new
+  run); `hv_component` takes the Component label with or without its value attached. The 3,018 rows
+  equal an independent PyMuPDF reading; the other 35 log sets are unchanged.
 - **Tests:** smoke `hartaud` (a synthetic 3-page VerityCount report with a row continued across a
-  page and a row printed again, a VerityCentral report, the zip, accounting, transfers, notes,
-  timeline, export round trip, test words). ES&S regression: the committed and the new engine give
+  page and a row printed again, the same report written a glyph at a time, a VerityCentral report,
+  the zip, accounting, transfers, notes, timeline, export round trip, test words). ES&S regression: the committed and the new engine give
   identical logs, accounting, timeline, notes and export hashes for the 13 Travis and Dallas
   elections (only the renamed category "Elections or tasks deleted" differs).
 - **Validation sweep (19 files):** every row numbering complete; official task totals Burnet P26

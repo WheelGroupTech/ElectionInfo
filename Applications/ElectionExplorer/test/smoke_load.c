@@ -5238,6 +5238,9 @@ static const char *g_tpdf_title = NULL;
 static const char *g_tpdf_creator = NULL;
 /* tpdf_write: content streams as /Filter [/ASCII85Decode /FlateDecode] (ReportLab). */
 static BOOL g_tpdf_a85 = FALSE;
+/* tpdf_write: font F5 carries Helvetica /Widths (glyph runs then have widths). */
+static BOOL g_tpdf_widths = FALSE;
+static double rpdf_w(const char *s, double size);
 
 /* ASCII85-encode @p n bytes into @p out (with the "~>" end mark). */
 static BOOL tpdf_a85(TBuf *out, const unsigned char *d, size_t n)
@@ -5308,7 +5311,18 @@ static BOOL tpdf_write(const wchar_t *path, TBuf *pages, int npages, BOOL break_
     ok = ok && tb_printf(&b, " ] >>\r\nendobj\r\n");
     OBJ(3);
     ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /TrueType /BaseFont /ABCDEE+Segoe#20UI "
-                             "/Encoding /WinAnsiEncoding >>\r\nendobj\r\n");
+                             "/Encoding /WinAnsiEncoding");
+    if (g_tpdf_widths)
+    {
+        char ch[2] = {0, 0};
+        ok = ok && tb_printf(&b, " /FirstChar 32 /LastChar 126 /Widths [");
+        for (ch[0] = ' '; ch[0] <= '~' && ok; ch[0]++)
+        {
+            ok = tb_printf(&b, " %d", (int)(rpdf_w(ch, 1000.0) + 0.5));
+        }
+        ok = ok && tb_printf(&b, " ]");
+    }
+    ok = ok && tb_printf(&b, " >>\r\nendobj\r\n");
     OBJ(4);
     ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEE+Segoe#20UI "
                              "/Encoding /Identity-H /ToUnicode 5 0 R >>\r\nendobj\r\n");
@@ -11838,6 +11852,11 @@ typedef struct T3Chars
 /* Set: rpdf_text_at shows text as PScript5 does, one glyph at a time in font T1. */
 static T3Chars *g_rpdf_t3 = NULL;
 
+/* Set: rpdf_text_at shows text as Firefox's Skia prints it, each glyph on its own at its
+ * Helvetica advance and no spaces drawn (Hays G26's audit log printed again from a browser;
+ * write with g_tpdf_widths so the glyphs have widths). */
+static BOOL g_rpdf_glyphs = FALSE;
+
 static int rpdf_t3_code(char ch)
 {
     int i;
@@ -11870,6 +11889,21 @@ static BOOL rpdf_text_at(TBuf *c, double x, double y, double size, const char *s
             ok = tb_printf(c, "(\\%03o)Tj %.4f 0 TD\n", rpdf_t3_code(*s), rpdf_w(one, 1.0));
         }
         return ok && tb_printf(c, "ET\n");
+    }
+    if (g_rpdf_glyphs && !rot90)
+    {
+        ok = TRUE;
+        for (; *s != '\0' && ok; s++)
+        {
+            char one[2] = {*s, '\0'};
+            if (*s != ' ')
+            {
+                ok = tb_printf(c, "BT /F5 %.1f Tf %.3f %.2f Td (%s%c) Tj ET\n", size, x, y,
+                               (*s == '(' || *s == ')' || *s == '\\') ? "\\" : "", *s);
+            }
+            x += rpdf_w(one, size);
+        }
+        return ok;
     }
     ok = rot90 ? tb_printf(c, "BT /F5 %.1f Tf 0 1 -1 0 %.2f %.2f Tm (", size, x, y)
                : tb_printf(c, "BT /F5 %.1f Tf %.2f %.2f Td (", size, x, y);
@@ -15037,14 +15071,20 @@ done:
 /* A Verity "Audit Log Report" page's header and table heading (Reporting Services layout). */
 static BOOL hva_page(TBuf *c, const char *component, int page, int pages)
 {
-    char pg[32];
+    char pg[32], joined[64];
     StringCchPrintfA(pg, sizeof(pg), "Page %d of %d", page, pages);
+    StringCchPrintfA(joined, sizeof(joined), "Component: %s", component);
+    if (g_rpdf_glyphs && !rpdf_text(c, 20.0, 500.1, 10.0, joined))
+    {
+        return FALSE; /* printed from a browser, the label and its value touch: one run */
+    }
     return rpdf_text(c, 423.4, 581.2, 10.0, "Test County, Texas") && rpdf_text(c, 22.9, 578.0, 10.0, "Audit Log Report") &&
            rpdf_text(c, 407.7, 563.2, 10.0, "March 2026 Primary | 17075") &&
            rpdf_text(c, 22.8, 548.4, 8.0, "Run Time") && rpdf_text(c, 137.9, 548.4, 8.0, "3:03 PM") &&
            rpdf_text(c, 452.4, 545.2, 10.0, "3/3/2026") && rpdf_text(c, 22.8, 534.0, 8.0, "Run Date") &&
            rpdf_text(c, 125.6, 534.0, 8.0, "03/12/2026") && rpdf_text(c, 452.0, 530.9, 8.0, pg) &&
-           rpdf_text(c, 20.0, 500.1, 10.0, "Component:") && rpdf_text(c, 85.4, 500.1, 10.0, component) &&
+           (g_rpdf_glyphs ||
+            (rpdf_text(c, 20.0, 500.1, 10.0, "Component:") && rpdf_text(c, 85.4, 500.1, 10.0, component))) &&
            rpdf_text(c, 286.4, 500.1, 10.0, "Election ID:") && rpdf_text(c, 347.6, 500.1, 10.0, "17075") &&
            rpdf_text(c, 25.2, 478.1, 8.5, "Row") && rpdf_text(c, 59.4, 478.1, 8.5, "Log Date & Time") &&
            rpdf_text(c, 146.4, 478.1, 8.5, "Device ID") && rpdf_text(c, 217.1, 478.1, 8.5, "User") &&
@@ -15079,57 +15119,13 @@ static BOOL hva_is(const EeAuditCopy *c, uint32_t i, const char *level, const ch
     return TRUE;
 }
 
-static int test_audit_hart(void)
+/* VerityCount, 3 pages: a test task, an official task with a vDrive read early and a
+ * results report exported early, a vDrive read again, a row whose Event Data runs onto
+ * page 2's top, a row printed again in full above page 3's table heading, a vDrive saved
+ * an hour before its Time read. */
+static BOOL hva_count_pages(TBuf cnt[3])
 {
-    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 2, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0};
-    wchar_t dir[MAX_PATH], p_count[MAX_PATH], p_central[MAX_PATH], p_zip[MAX_PATH], p_exp[MAX_PATH];
-    wchar_t err[512] = L"";
-    const wchar_t *paths[2];
-    TBuf cnt[3] = {{0}, {0}, {0}}, cen = {0};
-    EeAuditCopy c, *more = NULL;
-    EeAuditElection *els = NULL, *back = NULL;
-    uint32_t nels = 0, nback = 0, nmore = 0, i, k;
-    EeAuditAccounting a, a2;
-    EeAuditNotes n;
-    EeAuditTimeline tl;
-    char t[40], *buf = NULL;
-    size_t len = 0;
     BOOL ok;
-    int rc = 1;
-
-    EeAudit_InitCopy(&c);
-    memset(&a, 0, sizeof(a));
-    memset(&a2, 0, sizeof(a2));
-    memset(&n, 0, sizeof(n));
-    memset(&tl, 0, sizeof(tl));
-    GetTempPathW(MAX_PATH, dir);
-    StringCchPrintfW(p_count, MAX_PATH, L"%sHVA_count.pdf", dir);
-    StringCchPrintfW(p_central, MAX_PATH, L"%sHVA_central.pdf", dir);
-    StringCchPrintfW(p_zip, MAX_PATH, L"%sHVA_count.zip", dir);
-    StringCchPrintfW(p_exp, MAX_PATH, L"%sHVA_export.csv", dir);
-
-    /* test task words */
-    if (!EeAudit_IsTestTask("PreLAT") || !EeAudit_IsTestTask("PLAT") || !EeAudit_IsTestTask("LAT2a") ||
-        !EeAudit_IsTestTask("Pre-LAT") || !EeAudit_IsTestTask("L&A Main Test 10 Apr 2024") ||
-        !EeAudit_IsTestTask("Training V-drive Report") || EeAudit_IsTestTask("Election 3.3.26") ||
-        EeAudit_IsTestTask("Platform") || EeAudit_IsTestTask("Translation") || EeAudit_IsTestTask("Latino Outreach"))
-    {
-        wprintf(L"hartaud: test task words\n");
-        goto done;
-    }
-    EeAudit_SetTestTaskWords(L"Drill, Mock");
-    ok = EeAudit_IsTestTask("Drill 1") && EeAudit_IsTestTask("MOCK election") && !EeAudit_IsTestTask("LAT1");
-    EeAudit_SetTestTaskWords(NULL);
-    if (!ok || !EeAudit_IsTestTask("LAT1"))
-    {
-        wprintf(L"hartaud: set test task words\n");
-        goto done;
-    }
-
-    /* VerityCount, 3 pages: a test task, an official task with a vDrive read early and a
-     * results report exported early, a vDrive read again, a row whose Event Data runs onto
-     * page 2's top, a row printed again in full above page 3's table heading, a vDrive saved
-     * an hour before its Time read */
     ok = hva_page(&cnt[0], "VerityCount 2.7.5", 1, 3) &&
          hva_row(&cnt[0], 461.3, 1, "2026-02-20T10:00:00-", "Task opened", "Task: 'Pre-LAT'", NULL, TRUE) &&
          hva_row(&cnt[0], 436.0, 2, "2026-02-20T10:01:00-", "vDrive read",
@@ -15168,6 +15164,60 @@ static int test_audit_hart(void)
                  "3/10/2026 10:00:00 AM, State- Read, Election Id- 1, vDrive ID- C2", TRUE) &&
          hva_row(&cnt[2], 435.0, 12, "2026-03-10T10:00:00-", "Error occurred", "Invalid signature for root folder!", NULL,
                  TRUE);
+    return ok;
+}
+
+static int test_audit_hart(void)
+{
+    static const uint32_t k_expect[EE_AUDIT_N_COUNT] = {1, 1, 2, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0};
+    wchar_t dir[MAX_PATH], p_count[MAX_PATH], p_central[MAX_PATH], p_zip[MAX_PATH], p_exp[MAX_PATH];
+    wchar_t p_glyph[MAX_PATH];
+    wchar_t err[512] = L"";
+    const wchar_t *paths[2];
+    TBuf cnt[3] = {{0}, {0}, {0}}, cen = {0}, gl[3] = {{0}, {0}, {0}};
+    EeAuditCopy c, g, *more = NULL;
+    EeAuditElection *els = NULL, *back = NULL;
+    uint32_t nels = 0, nback = 0, nmore = 0, i, k;
+    EeAuditAccounting a, a2;
+    EeAuditNotes n;
+    EeAuditTimeline tl;
+    char t[40], *buf = NULL;
+    size_t len = 0;
+    BOOL ok;
+    int rc = 1;
+
+    EeAudit_InitCopy(&c);
+    EeAudit_InitCopy(&g);
+    memset(&a, 0, sizeof(a));
+    memset(&a2, 0, sizeof(a2));
+    memset(&n, 0, sizeof(n));
+    memset(&tl, 0, sizeof(tl));
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_count, MAX_PATH, L"%sHVA_count.pdf", dir);
+    StringCchPrintfW(p_central, MAX_PATH, L"%sHVA_central.pdf", dir);
+    StringCchPrintfW(p_zip, MAX_PATH, L"%sHVA_count.zip", dir);
+    StringCchPrintfW(p_exp, MAX_PATH, L"%sHVA_export.csv", dir);
+    StringCchPrintfW(p_glyph, MAX_PATH, L"%sHVA_glyphs.pdf", dir);
+
+    /* test task words */
+    if (!EeAudit_IsTestTask("PreLAT") || !EeAudit_IsTestTask("PLAT") || !EeAudit_IsTestTask("LAT2a") ||
+        !EeAudit_IsTestTask("Pre-LAT") || !EeAudit_IsTestTask("L&A Main Test 10 Apr 2024") ||
+        !EeAudit_IsTestTask("Training V-drive Report") || EeAudit_IsTestTask("Election 3.3.26") ||
+        EeAudit_IsTestTask("Platform") || EeAudit_IsTestTask("Translation") || EeAudit_IsTestTask("Latino Outreach"))
+    {
+        wprintf(L"hartaud: test task words\n");
+        goto done;
+    }
+    EeAudit_SetTestTaskWords(L"Drill, Mock");
+    ok = EeAudit_IsTestTask("Drill 1") && EeAudit_IsTestTask("MOCK election") && !EeAudit_IsTestTask("LAT1");
+    EeAudit_SetTestTaskWords(NULL);
+    if (!ok || !EeAudit_IsTestTask("LAT1"))
+    {
+        wprintf(L"hartaud: set test task words\n");
+        goto done;
+    }
+
+    ok = hva_count_pages(cnt);
     /* VerityCentral: a vDrive written with 536 ballots (read as 524), and one never read */
     ok = ok && hva_page(&cen, "VerityCentral 2.7.7", 1, 1) &&
          hva_row(&cen, 461.3, 1, "2026-03-03T19:30:00-", "Batch saved",
@@ -15220,6 +15270,42 @@ static int test_audit_hart(void)
         wprintf(L"hartaud: rows\n");
         goto done;
     }
+
+    /* the same report printed again from a browser (Hays G26 through Firefox): each glyph its own
+     * run, no spaces drawn, "Component: VerityCount 2.7.5" one run; it reads as the same events */
+    g_rpdf_glyphs = TRUE;
+    g_tpdf_widths = TRUE;
+    g_tpdf_title = "Audit Log Report 20260303 Primary.pdf";
+    g_tpdf_producer = "Skia/PDF m149";
+    ok = hva_count_pages(gl) && tpdf_write(p_glyph, gl, 3, FALSE);
+    g_rpdf_glyphs = FALSE;
+    g_tpdf_widths = FALSE;
+    g_tpdf_title = NULL;
+    g_tpdf_producer = NULL;
+    if (!ok || !EeAudit_IsAuditPdf(p_glyph) ||
+        EeAudit_LoadCopy(p_glyph, &g, NULL, NULL, NULL, err, ARRAYSIZE(err)) != EeLoadStatus_Ok ||
+        g.kind != EE_AUDIT_HART_COUNT || g.nevents != c.nevents || g.missing_rows != 0 || g.printed != c.printed ||
+        g.election_date != c.election_date || g.component == NULL || strcmp(g.component, c.component) != 0 ||
+        g.customer == NULL || strcmp(g.customer, c.customer) != 0 || g.election == NULL ||
+        strcmp(g.election, c.election) != 0)
+    {
+        printf("hartaud: glyph runs: %d, kind %d, %u events, component [%s]\n", ok, g.kind, g.nevents,
+               g.component ? g.component : "");
+        goto done;
+    }
+    for (i = 0; i < c.nevents; i++)
+    {
+        const EeAuditEvent *x = &c.events[i], *y = &g.events[i];
+        if (x->ts != y->ts || x->page != y->page || strcmp(EeAudit_Desc(&c, x), EeAudit_Desc(&g, y)) != 0 ||
+            strcmp(EeAudit_Str(&c, x->level), EeAudit_Str(&g, y->level)) != 0 ||
+            strcmp(EeAudit_Str(&c, x->user), EeAudit_Str(&g, y->user)) != 0 ||
+            strcmp(EeAudit_Str(&c, x->module), EeAudit_Str(&g, y->module)) != 0)
+        {
+            printf("hartaud: glyph runs: event %u [%s] [%s]\n", i, EeAudit_Str(&g, y->level), EeAudit_Desc(&g, y));
+            goto done;
+        }
+    }
+    EeAudit_FreeCopy(&g);
     EeAudit_FreeCopy(&c);
 
     /* the zipped report (with an XML signature beside it), and the Central log: one election */
@@ -15368,6 +15454,7 @@ done:
     g_tpdf_producer = NULL;
     EeAudit_SetTestTaskWords(NULL);
     EeAudit_FreeCopy(&c);
+    EeAudit_FreeCopy(&g);
     free(more);
     free(buf);
     EeAudit_FreeAccounting(&a);
@@ -15379,15 +15466,20 @@ done:
     for (k = 0; k < 3; k++)
     {
         free(cnt[k].p);
+        free(gl[k].p);
     }
     free(cen.p);
+    g_rpdf_glyphs = FALSE;
+    g_tpdf_widths = FALSE;
+    g_tpdf_title = NULL;
     DeleteFileW(p_count);
+    DeleteFileW(p_glyph);
     DeleteFileW(p_central);
     DeleteFileW(p_zip);
     DeleteFileW(p_exp);
     if (rc == 0)
     {
-        wprintf(L"hartaud: OK (Verity rows across pages, zip, tasks, Central to Count, notes, timeline, export)\n");
+        wprintf(L"hartaud: OK (Verity rows across pages, glyph runs, zip, tasks, Central to Count, notes, timeline, export)\n");
     }
     return rc;
 }

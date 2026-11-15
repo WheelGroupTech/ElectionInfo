@@ -285,16 +285,35 @@ static int hv_cmp_run(const void *pa, const void *pb)
     return a->x < b->x ? -1 : (a->x > b->x ? 1 : 0);
 }
 
-/* The page's upright runs, trimmed (empty ones and no-break-space runs dropped), top down. */
+/* TRUE when one UTF-8 character */
+static BOOL hv_one_char(const char *t, size_t n)
+{
+    return n == 1 || (n > 1 && n <= 4 && ((unsigned char)t[0] & 0xC0) == 0xC0 &&
+                      (n == 2 || ((unsigned char)t[0] & 0xF0) >= 0xE0));
+}
+
+/* The page's upright runs, trimmed (empty ones and no-break-space runs dropped), top down.
+ * A report printed again from a browser (Hays G26, through Firefox's Skia) shows each glyph on
+ * its own and draws no spaces: on such a page (most runs one character) glyphs drawn one after
+ * another on a line are joined into one run while the next starts within 0.6 em of where the
+ * last ends, with a space where the gap is wider than 0.15 em (a space is about 0.28 em). */
 static BOOL hv_collect(HvPage *pg, const EePdfPageText *pt)
 {
-    uint32_t i;
+    uint32_t i, ones = 0;
     size_t need = 1, pos = 0;
+    BOOL glyphs;
+    float cur_end = 0.0f, cur_size = 0.0f;
+    HvRun *cur = NULL;
     pg->nruns = 0;
     for (i = 0; i < pt->nruns; i++)
     {
-        need += pt->runs[i].text_len + 1;
+        need += pt->runs[i].text_len + 2; /* + a NUL, or a space when joined */
+        if (hv_one_char(pt->text + pt->runs[i].text_off, pt->runs[i].text_len))
+        {
+            ones++;
+        }
     }
+    glyphs = pt->nruns >= 20 && ones * 2 > pt->nruns;
     if (!hv_grow((void **)&pg->buf, &pg->buf_cap, need, 1) ||
         !hv_grow((void **)&pg->runs, &pg->cap_runs, (size_t)pt->nruns + 1, sizeof(HvRun)))
     {
@@ -342,7 +361,28 @@ static BOOL hv_collect(HvPage *pg, const EePdfPageText *pt)
         {
             continue;
         }
+        if (glyphs && cur != NULL && r->has_width && fabsf(r->y - cur->y) < 0.3f &&
+            fabsf(r->font_size - cur_size) < 0.5f && r->x - cur_end > -0.3f * cur_size &&
+            r->x - cur_end < 0.6f * cur_size)
+        {
+            /* the next glyph of the run: pos - 1 is the run's NUL */
+            pos--;
+            if (r->x - cur_end > 0.15f * cur_size)
+            {
+                pg->buf[pos++] = ' ';
+                cur->n++;
+            }
+            memcpy(pg->buf + pos, t, n);
+            pg->buf[pos + n] = '\0';
+            cur->n += n;
+            pos += n + 1;
+            cur_end = r->x + r->width;
+            continue;
+        }
         h = &pg->runs[pg->nruns++];
+        cur = glyphs && r->has_width ? h : NULL;
+        cur_end = r->x + r->width;
+        cur_size = r->font_size;
         memcpy(pg->buf + pos, t, n);
         pg->buf[pos + n] = '\0';
         h->t = pg->buf + pos;
@@ -388,6 +428,48 @@ static const HvRun *hv_value_of(const HvPage *pg, const HvRun *label)
     return best;
 }
 
+/* The header's "Component:" label and its value ("VerityCount 2.7.5"). Reporting Services prints
+ * them as two runs; a copy printed again from a browser (Hays G26, Firefox) joins them in one
+ * "Component: VerityCount 2.7.5" run. The label is NULL when the page has none; the value is NULL
+ * when the label has none. */
+static const HvRun *hv_component(const HvPage *pg, const char **value, size_t *value_n)
+{
+    const HvRun *label = hv_find(pg, "Component:");
+    size_t i;
+    *value = NULL;
+    *value_n = 0;
+    if (label != NULL)
+    {
+        const HvRun *v = hv_value_of(pg, label);
+        if (v != NULL)
+        {
+            *value = v->t;
+            *value_n = v->n;
+        }
+        return label;
+    }
+    for (i = 0; i < pg->nruns; i++)
+    {
+        const HvRun *r = &pg->runs[i];
+        if (r->n > 11 && strncmp(r->t, "Component: ", 11) == 0)
+        {
+            *value = r->t + 11;
+            *value_n = r->n - 11;
+            while (*value_n > 0 && **value == ' ')
+            {
+                (*value)++;
+                (*value_n)--;
+            }
+            if (*value_n == 0)
+            {
+                *value = NULL;
+            }
+            return r;
+        }
+    }
+    return NULL;
+}
+
 /* The log kind a Component names ("VerityCount 2.7.5"), or 0. */
 static int hv_component_kind(const char *comp)
 {
@@ -414,16 +496,18 @@ static int hv_component_kind(const char *comp)
 /* Page 1's header into @p c. FALSE when it is not a Verity audit log report. */
 static BOOL hv_header(EeAuditCopy *c, const HvPage *pg)
 {
-    const HvRun *comp = hv_find(pg, "Component:");
+    const char *ct;
+    size_t cn;
+    const HvRun *comp = hv_component(pg, &ct, &cn);
     const HvRun *v, *top = NULL;
     int run_date = 0, run_secs = -1;
     size_t i;
-    if (comp == NULL || hv_find(pg, "Audit Log Report") == NULL || (v = hv_value_of(pg, comp)) == NULL)
+    if (comp == NULL || hv_find(pg, "Audit Log Report") == NULL || ct == NULL)
     {
         return FALSE;
     }
-    c->kind = hv_component_kind(v->t);
-    c->component = hv_strdup_n(v->t, v->n);
+    c->kind = hv_component_kind(ct);
+    c->component = hv_strdup_n(ct, cn);
     if ((v = hv_value_of(pg, hv_find(pg, "Run Date"))) != NULL)
     {
         run_date = hv_mdy(v->t, NULL);
@@ -497,9 +581,10 @@ BOOL AuHart_IsReport(EePdf *pdf)
     memset(&pg, 0, sizeof(pg));
     if (EePdf_ExtractPageText(pdf, 0, &pt) && hv_collect(&pg, &pt))
     {
-        const HvRun *comp = hv_find(&pg, "Component:");
-        const HvRun *v = hv_value_of(&pg, comp);
-        yes = hv_find(&pg, "Audit Log Report") != NULL && v != NULL && strncmp(v->t, "Verity", 6) == 0;
+        const char *ct;
+        size_t cn;
+        yes = hv_component(&pg, &ct, &cn) != NULL && hv_find(&pg, "Audit Log Report") != NULL && ct != NULL &&
+              strncmp(ct, "Verity", 6) == 0;
     }
     free(pg.runs);
     free(pg.buf);
@@ -555,7 +640,9 @@ static BOOL hv_all_digits(const char *s, size_t n)
 static BOOL hv_page_rows(EeAuditCopy *c, const HvPage *pg, uint32_t page_no, HvRow *row, uint32_t *last_row,
                          int64_t *last_ts)
 {
-    const HvRun *comp = hv_find(pg, "Component:");
+    const char *ct;
+    size_t cn;
+    const HvRun *comp = hv_component(pg, &ct, &cn);
     const HvRun *head = hv_find(pg, "Row");
     float top;
     size_t i;

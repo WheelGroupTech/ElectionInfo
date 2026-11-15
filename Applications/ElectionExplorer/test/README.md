@@ -182,7 +182,9 @@ holding quotes, a comma and a line break, the copies lists ("1-3 of 3", "\"1,3 o
   election was closed.
 `hartaud` covers Hart Verity "Audit Log Report" PDFs (`src\ee_audit_hart.c`): a synthetic 3-page
 VerityCount report (header, wrapped times and Event Data, a row continued at the next page's top, a row
-printed again in full above the next page's table heading) zipped beside an XML signature, and a
+printed again in full above the next page's table heading; written again a glyph at a time with no
+spaces drawn and "Component:" joined to its value, as a browser reprint is (Hays G26), it reads the
+same events) zipped beside an XML signature, and a
 VerityCentral report, loaded as one election: a test task and an official task (a vDrive read again
 replaces its first read, 624 ballots), a vDrive written by Central with 536 ballots and read with 524, one
 never read, the notable events (results exported early, ballots read early, a manual vote record, a

@@ -2913,6 +2913,24 @@ static int test_settings_roundtrip(void)
         wprintf(L"settings: cvr_merge_writeins / results_show_vote_types default should be TRUE\n");
         rc = 1;
     }
+    /* The Windows… dialog's remembered placement starts out "not saved" (all zero), which
+     * is what makes the dialog center itself on the window that opened it. */
+    {
+        int i;
+        if (b.winlist_x != 0 || b.winlist_y != 0 || b.winlist_w != 0 || b.winlist_h != 0)
+        {
+            wprintf(L"settings: window-list placement should default to 0\n");
+            rc = 1;
+        }
+        for (i = 0; i < EE_WINLIST_NCOLS; i++)
+        {
+            if (b.winlist_cols[i] != 0)
+            {
+                wprintf(L"settings: window-list column %d should default to 0\n", i);
+                rc = 1;
+            }
+        }
+    }
 
     /* Round-trip a non-default set of options. */
     a.zoom_percent = 175;
@@ -2921,6 +2939,17 @@ static int test_settings_roundtrip(void)
     a.name_surname_first = FALSE;
     a.cvr_merge_writeins = FALSE;
     a.results_show_vote_types = FALSE;
+    a.winlist_x = -1280; /* a saved position on a monitor left of the primary */
+    a.winlist_y = 40;
+    a.winlist_w = 1024;
+    a.winlist_h = 512;
+    {
+        int i;
+        for (i = 0; i < EE_WINLIST_NCOLS; i++)
+        {
+            a.winlist_cols[i] = 90 + 10 * i; /* each column its own width */
+        }
+    }
     if (!EeSettings_SaveTo(k_TestKey, &a))
     {
         wprintf(L"settings: SaveTo failed\n");
@@ -2942,6 +2971,25 @@ static int test_settings_roundtrip(void)
                 (int)b.name_surname_first,
                 (int)b.cvr_merge_writeins);
         rc = 1;
+    }
+    if (b.winlist_x != -1280 || b.winlist_y != 40 || b.winlist_w != 1024 || b.winlist_h != 512)
+    {
+        wprintf(L"settings: window-list placement round-trip mismatch (%d,%d %dx%d)\n", b.winlist_x,
+                b.winlist_y, b.winlist_w, b.winlist_h);
+        rc = 1;
+    }
+    {
+        /* One registry value per column, so a width must come back on its own column. */
+        int i;
+        for (i = 0; i < EE_WINLIST_NCOLS; i++)
+        {
+            if (b.winlist_cols[i] != 90 + 10 * i)
+            {
+                wprintf(L"settings: window-list column %d round-trip mismatch (%d)\n", i,
+                        b.winlist_cols[i]);
+                rc = 1;
+            }
+        }
     }
 
     RegDeleteKeyW(HKEY_CURRENT_USER, k_TestKey);

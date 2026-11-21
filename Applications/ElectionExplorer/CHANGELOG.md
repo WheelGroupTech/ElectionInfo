@@ -30,6 +30,46 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-18 — Window menu and the Windows… dialog
+- **What:** a **Window** menu between Compare and Help in every window that has a menu bar. It
+  numbers the open Election Explorer windows, most recently used first (so the current window is
+  1 and the one you came from is 2), and a number — or Alt+W then the digit — brings that window
+  to the front. The numbers are positions, so closing a window renumbers the rest; past ten
+  windows the menu points at **Windows…**. The menu also cascades, tiles horizontally or
+  vertically, minimizes all, and closes all windows of one type or all but the current one
+  (asking first before it closes more than one). **Windows…** opens a resizable, sortable list of
+  every open window: Name, Path (the folder of its first file), Type (Voter List, Voter Roster,
+  Cast Vote Record, Election Results, Audit Logs, Report, Comparison), that file's Size and
+  Modified time, and the Records loaded. A Find box narrows it; Activate brings a window forward
+  and closes the dialog; Close window(s) closes every selected window and stays open; closing the
+  window it was opened from closes the dialog too; OK just closes it. Right-clicking a row offers
+  the same actions plus Close All of that row's type, Close All But This, and Copy Path (the full
+  path of the window's file, to the clipboard). The dialog's size, position and column widths are
+  remembered between runs. Report and comparison windows are listed under their own types and
+  report the file of the window they belong to. New **Help → Managing Windows** in each Help menu.
+- **Where:** `main.c` new "Window list" section (`EeWin_Describe`, `EeWin_Collect`,
+  `EeWin_ShortTitle`, `EeWin_BuildWindowPopup`, `EeWin_OnCommand`, `EeWin_Arrange`,
+  `EeWin_CloseSet`, `WinListWndProc`, `EeWin_ShowDialog`, `k_HelpWindows`), the `&Window` popup in
+  `App_CreateMenu` / `App_CreateRosterMenu` / `App_CreateCvrMenu` / `App_CreateResultsMenu` /
+  `App_CreateAuditMenu` / `App_CreateResCompareMenu`, two lines in each of the five window procs'
+  `WM_INITMENUPOPUP` / `WM_COMMAND`, `App_RouteDialogMessage`, the new class in `wWinMain`, and a
+  `load_path` field on `CvrWindow` / `ResultsWindow` / `AuditWindow`; `resource.h` `IDM_WINDOW_*`,
+  `IDM_HELP_WINDOWS`, `IDC_WINLIST_*`; `settings.{c,h}` `winlist_x/y/w/h` and `winlist_cols[6]`;
+  `test/smoke_load.c` `test_settings_roundtrip`.
+- **Checked:** Release x64 and ARM64 build clean at /W4 with no warnings; the full smoke suite
+  passes, including the settings round-trip extended for the dialog placement and the six column
+  widths. The live feature was driven from another process against the Release x64 build: the menu
+  bar reads File | Edit | Filter | Reports | Compare | Window | Help; the rebuilt popup reads
+  Windows…, the numbered current window (check-marked), Cascade / Tile / Minimize All, and the two
+  close-many items (Close All But This greyed with one window open); with a voter list, voter
+  roster, CVR, election results window and a precinct report open, the dialog listed all five with
+  the right Type and with Path, Size and Modified matching `Get-Item` on each file, and Records
+  matching each window's own status bar; Find narrowed 5 rows to 1; Close window(s) closed one
+  window and kept the dialog open, asked "Close 2 Election Explorer windows?" for two, and closed
+  the dialog along with the window it was opened from; Cascade, the tiles and Minimize All moved
+  the windows and a numbered item restored and activated one.
+- **Details:** [docs/window-management-design.md](docs/window-management-design.md).
+
 ## 1.6.1.0 (submitted 2026-11-15)
 
 New in 1.6.1: ES&S batches deleted at the scanner, Verity Build logs, Verity logs printed again from a

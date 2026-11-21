@@ -4,7 +4,29 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-15. **1.6.1.0 submitted to the Store 2026-11-15**: version bumped, RELEASES.md
+**Last updated:** 2026-11-18. **In progress (uncommitted): window management.** A **Window** menu
+between Compare and Help in every window with a menu bar (numbered windows, most recently used
+first; cascade / tile / minimize all; close all of a type or all but this), plus a resizable,
+sortable **Windows…** dialog listing every open window with Name, Path, Type, Size, Records and
+Modified, a Find box, and Activate / Close window(s) / OK. Help → Managing Windows added to the
+five Help menus. Design, decisions D1–D8 and the verification log:
+`ElectionExplorer/docs/window-management-design.md`; CHANGELOG entry under "Unreleased". Release
+x64 and ARM64 build clean, smoke suite passes, the live feature was driven from another process.
+**Next steps:** review and commit; consider the design doc's "Possible next steps" (Ctrl+Tab
+cycling, a Records figure while a window is still loading, remembering the sort column).
+
+**Noticed while testing, left as is by the user's decision (2026-11-19):**
+`File → Load Cast Vote Records…` opens an *empty* Cast Vote Records window when the file holds no
+ballot records, instead of saying it could not read it — `App_BeginOpenCvr` creates the window on
+`EeLoadStatus_Ok` without checking `table.nrows`. Do not re-propose a guard for it.
+Found with `Election_CVRs/IL_DeKalb_County/28Jun2022_IL_Primary_DeKalb_Ballot Table-8-15-2022.xlsx`,
+which is **not a CVR**: it is a Dominion-style "Ballots" listing (title rows 1–5, header on row 6:
+Type, Poll Place, Poll Place ID, Precinct, Precinct ID, Ballot Style, Cast Vote Record, Serial
+Number, Write-in Type, Print Version (Official/Facsimile)) with 13,497 ballots and no contest or
+selection columns — so a 0-record CVR window is the right answer for it. The file stays where it
+is; ask before moving or renaming it.
+
+**1.6.1.0 submitted to the Store 2026-11-15**: version bumped, RELEASES.md
 "What's new" note, STORE-LISTING.txt and Help updated, Store bundle
 `Build/msix/ElectionExplorer.Package_1.6.1.0_x64_arm64_bundle.msixupload` built and checked. It
 adds what was committed after 1.6.0.0: ES&S batches deleted at the scanner, Verity Build logs,

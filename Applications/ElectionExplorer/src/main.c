@@ -334,6 +334,14 @@ static AppState *App_OtherViewerByIndex(const AppState *app, int index);
 static LRESULT CALLBACK CompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 static LRESULT CALLBACK DiffWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+/* Window menu and the Windows… dialog; see "Window list" at the end of this file.
+ * Every window with a menu bar offers them through these four calls. */
+static HMENU EeWin_CreateWindowPopup(void);
+static BOOL EeWin_IsWindowPopup(HMENU popup);
+static void EeWin_BuildWindowPopup(HMENU popup, HWND self);
+static BOOL EeWin_OnCommand(HWND self, int cmd);
+static HWND EeWin_DialogHwnd(void);
+
 /* Position of the "Compare" popup in the menu bar (File, Edit, Filter, Reports,
  * Compare); rebuilt on demand in WM_INITMENUPOPUP. */
 #define k_CompareMenuPos 4
@@ -530,6 +538,14 @@ static BOOL App_RouteDialogMessage(MSG *msg)
     for (i = 0; i < g_cvr_filter_count; i++)
     {
         if (IsDialogMessageW(g_cvr_filter_windows[i], msg))
+        {
+            return TRUE;
+        }
+    }
+    {
+        /* The Windows… dialog is modeless too: Tab, Esc and Enter must reach it. */
+        HWND winlist = EeWin_DialogHwnd();
+        if (winlist != NULL && IsDialogMessageW(winlist, msg))
         {
             return TRUE;
         }
@@ -2832,6 +2848,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_WINDOWS, L"&Managing Windows");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
@@ -2839,6 +2856,7 @@ static HMENU App_CreateMenu(void)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)EeWin_CreateWindowPopup(), L"&Window");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -9391,6 +9409,31 @@ static const wchar_t k_HelpCompare[] =
     L"Voter ID repeated, Identical or Changed) and changed fields. Both write UTF-8 CSV "
     L"or TSV.";
 
+static const wchar_t k_HelpWindows[] =
+    L"The Window menu switches between the Election Explorer windows you have open \u2014 voter "
+    L"lists, voter rosters, cast vote records, election results, audit logs, and the report and "
+    L"comparison windows they open.\r\n\r\n"
+    L"The menu numbers the windows, most recently used first, so the window you are in is 1 and "
+    L"the one you came from is 2. Choose a number (or press Alt+W then the digit) to bring that "
+    L"window to the front. The numbers are positions, not names: they always run from 1 with no "
+    L"gaps, so closing a window renumbers the rest. Past ten windows the menu stops numbering and "
+    L"Windows\u2026 lists them all.\r\n\r\n"
+    L"Windows\u2026 opens the full list: the window's Name (its title), the Path of the folder its "
+    L"file came from, its Type, that file's Size and Modified time, and the Records loaded into it. "
+    L"Click a column heading to sort by it, drag the headings to set the column widths, and resize "
+    L"the dialog \u2014 its size and column widths are remembered for the next run. Type in the Find "
+    L"box to narrow the list by name, folder or type.\r\n\r\n"
+    L"In the list, Activate brings the selected window to the front and closes the dialog "
+    L"(double-clicking a row does the same). Close window(s) closes every selected window and "
+    L"leaves the dialog open, so you can clear several in a row; selecting more than one asks "
+    L"first. Closing the window you opened the dialog from closes the dialog with it. OK just "
+    L"closes the dialog. Right-click a row for the same actions, Close All of a type, Close All "
+    L"But This, and Copy Path.\r\n\r\n"
+    L"Cascade, Tile Horizontally and Tile Vertically arrange the open windows over the monitor "
+    L"holding this window; a window you minimized stays minimized. Minimize All puts them all "
+    L"away.\r\n\r\n"
+    L"Closing a window never changes a file on disk. Reopening the window loads its file again.";
+
 static const wchar_t k_RosterHelpOptions[] =
     L"Options (Edit → Options) control how the roster is shown. Settings apply to this "
     L"window and become the defaults for windows opened afterward.\r\n\r\n"
@@ -10704,6 +10747,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
 
         case WM_INITMENUPOPUP:
+            if (EeWin_IsWindowPopup((HMENU)wParam))
+            {
+                EeWin_BuildWindowPopup((HMENU)wParam, hwnd);
+                return 0;
+            }
             EnableMenuItem((HMENU)wParam,
                            IDM_EDIT_COPY,
                            MF_BYCOMMAND |
@@ -10770,6 +10818,11 @@ static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_COMMAND:
+            /* Window menu: switch to, arrange or close windows. */
+            if (EeWin_OnCommand(hwnd, (int)LOWORD(wParam)))
+            {
+                return 0;
+            }
             switch (LOWORD(wParam))
             {
                 case IDM_FILE_OPEN_VOTER_LIST:
@@ -11372,6 +11425,7 @@ typedef struct CvrWindow
     BOOL vreport_avail[EE_CVRREP_COUNT];
     uint32_t vreport_col[EE_CVRREP_COUNT];
     wchar_t base_name[192]; /* initial CVR file base name (no extension), for exports */
+    wchar_t load_path[MAX_PATH]; /* its first (or only) file, for the window list */
     HWND cmp_targets[32];   /* Compare menu: results windows by command offset */
 } CvrWindow;
 
@@ -11576,6 +11630,7 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_WINDOWS, L"&Managing Windows");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
@@ -11584,6 +11639,7 @@ static HMENU App_CreateCvrMenu(void)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(open a results window to compare)");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)EeWin_CreateWindowPopup(), L"&Window");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -12069,6 +12125,11 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return 0;
 
         case WM_INITMENUPOPUP:
+            if (EeWin_IsWindowPopup((HMENU)wParam))
+            {
+                EeWin_BuildWindowPopup((HMENU)wParam, hwnd);
+                return 0;
+            }
             /* Grey a per-column report unless its column exists and holds real
              * (non-blank, non-redacted) data. Availability is cached at load, so this
              * is O(1) per menu open. Enabling by command on other popups is harmless
@@ -12106,6 +12167,11 @@ static LRESULT CALLBACK CvrWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             break;
 
         case WM_COMMAND:
+            /* Window menu: switch to, arrange or close windows. */
+            if (EeWin_OnCommand(hwnd, (int)LOWORD(wParam)))
+            {
+                return 0;
+            }
             if (cw == NULL)
             {
                 break;
@@ -12419,6 +12485,7 @@ static void App_CreateCvrWindow(AppState *app,
     cw->multi_card = cw->cards.continuation > 0;
     cw->rcv_count = EeCvr_FindRcvContests(&cw->table, NULL, 0);
     App_BaseNameNoExt(first_path, cw->base_name, ARRAYSIZE(cw->base_name));
+    StringCchCopyW(cw->load_path, ARRAYSIZE(cw->load_path), (first_path != NULL) ? first_path : L"");
 
     /* Resolve which per-column reports are available once, up front. */
     {
@@ -16378,6 +16445,7 @@ typedef struct ResultsWindow
     ResTurnoutWindow *turnout;     /* open turnout report, or NULL */
     HWND cmp_targets[32];          /* Compare menu: windows by command offset */
     wchar_t base_name[192]; /* first file's base name (no extension), for exports */
+    wchar_t load_path[MAX_PATH]; /* its first (or only) file, for the window list */
 } ResultsWindow;
 
 static void App_ExportResults(ResultsWindow *rw, BOOL selection_only);
@@ -18681,6 +18749,7 @@ static HMENU App_CreateResCompareMenu(void)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)edit_menu, L"&Edit");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)view_menu, L"&View");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)EeWin_CreateWindowPopup(), L"&Window");
     return menu;
 }
 
@@ -18774,6 +18843,11 @@ static LRESULT CALLBACK ResCompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         return 0;
 
     case WM_INITMENUPOPUP:
+        if (EeWin_IsWindowPopup((HMENU)wParam))
+        {
+            EeWin_BuildWindowPopup((HMENU)wParam, hwnd);
+            return 0;
+        }
         if (cw != NULL)
         {
             CheckMenuItem((HMENU)wParam, IDM_RESCMP_DIFFONLY,
@@ -18782,6 +18856,11 @@ static LRESULT CALLBACK ResCompareWndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         break;
 
     case WM_COMMAND:
+        /* Window menu: switch to, arrange or close windows. */
+        if (EeWin_OnCommand(hwnd, (int)LOWORD(wParam)))
+        {
+            return 0;
+        }
         if (cw == NULL)
         {
             break;
@@ -19817,6 +19896,7 @@ static HMENU App_CreateResultsMenu(void)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_WINDOWS, L"&Managing Windows");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(no other window to compare)");
@@ -19826,6 +19906,7 @@ static HMENU App_CreateResultsMenu(void)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)EeWin_CreateWindowPopup(), L"&Window");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -19924,6 +20005,11 @@ static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         return 0;
 
     case WM_INITMENUPOPUP:
+        if (EeWin_IsWindowPopup((HMENU)wParam))
+        {
+            EeWin_BuildWindowPopup((HMENU)wParam, hwnd);
+            return 0;
+        }
         if (rw != NULL)
         {
             HMENU m = (HMENU)wParam;
@@ -19948,6 +20034,11 @@ static LRESULT CALLBACK ResultsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         break;
 
     case WM_COMMAND:
+        /* Window menu: switch to, arrange or close windows. */
+        if (EeWin_OnCommand(hwnd, (int)LOWORD(wParam)))
+        {
+            return 0;
+        }
         if (rw == NULL)
         {
             break;
@@ -20173,6 +20264,7 @@ static void App_CreateResultsWindow(AppState *app, EeResults *res, const wchar_t
     rw->filt_hidden[RF_PRECINCT] = (uint8_t)!EeResults_HasPrecinctDetail(&rw->res);
     rw->filt_hidden[RF_VOTETYPE] = (uint8_t)(rw->res.nvt == 0);
     App_BaseNameNoExt(first_path, rw->base_name, ARRAYSIZE(rw->base_name));
+    StringCchCopyW(rw->load_path, ARRAYSIZE(rw->load_path), (first_path != NULL) ? first_path : L"");
     if (!Res_Tabulate(rw))
     {
         EeResults_Clear(&rw->res);
@@ -20544,6 +20636,7 @@ typedef struct AuditWindow
     struct AudRule *rules;
     uint32_t nrules;
     wchar_t base_name[192]; /* first copy's file name without extension, for filter files */
+    wchar_t load_path[MAX_PATH]; /* its first copy's file, for the window list */
     HWND cmp_targets[32];   /* Compare menu: windows by command offset */
 } AuditWindow;
 
@@ -25824,6 +25917,7 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
     AppendMenuW(compare_menu, MF_STRING | MF_GRAYED, 0, L"(open a CVR or results window to check ballot counts)");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_WINDOWS, L"&Managing Windows");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
@@ -25832,6 +25926,7 @@ static HMENU App_CreateAuditMenu(const AuditWindow *aw)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)EeWin_CreateWindowPopup(), L"&Window");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -25927,6 +26022,11 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         return 0;
 
     case WM_INITMENUPOPUP:
+        if (EeWin_IsWindowPopup((HMENU)wParam))
+        {
+            EeWin_BuildWindowPopup((HMENU)wParam, hwnd);
+            return 0;
+        }
         if (aw != NULL)
         {
             HMENU m = (HMENU)wParam;
@@ -25989,6 +26089,11 @@ static LRESULT CALLBACK AuditWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         break;
 
     case WM_COMMAND:
+        /* Window menu: switch to, arrange or close windows. */
+        if (EeWin_OnCommand(hwnd, (int)LOWORD(wParam)))
+        {
+            return 0;
+        }
         if (aw == NULL)
         {
             break;
@@ -26288,6 +26393,9 @@ static void App_CreateAuditWindow(AppState *app, EeAuditElection *el)
         if (mine->logs[li].ncopies > 0 && aw->base_name[0] == L'\0')
         {
             App_BaseNameNoExt(mine->logs[li].copies[0].path, aw->base_name, ARRAYSIZE(aw->base_name));
+            StringCchCopyW(aw->load_path, ARRAYSIZE(aw->load_path),
+                           (mine->logs[li].copies[0].path != NULL) ? mine->logs[li].copies[0].path
+                                                                   : L"");
         }
     }
     for (li = 0; li < EE_AUDIT_NLOGS; li++)
@@ -26919,6 +27027,7 @@ static HMENU App_CreateRosterMenu(void)
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_REPORTS, L"&Reports");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_COMPARE, L"&Compare");
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_EXPORT, L"&Export");
+    AppendMenuW(help_menu, MF_STRING, IDM_HELP_WINDOWS, L"&Managing Windows");
     AppendMenuW(help_menu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(help_menu, MF_STRING, IDM_HELP_ABOUT, L"&About Election Explorer…");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)file_menu, L"&File");
@@ -26926,6 +27035,7 @@ static HMENU App_CreateRosterMenu(void)
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)filter_menu, L"F&ilter");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)reports_menu, L"&Reports");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)compare_menu, L"&Compare");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)EeWin_CreateWindowPopup(), L"&Window");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)help_menu, L"&Help");
     return menu;
 }
@@ -27877,6 +27987,1809 @@ static void App_ShowRosterTotals(AppState *app)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Window list (the Window menu and the Windows… dialog)                      */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * One place that knows every Election Explorer window the user can switch to, so the
+ * Window menu and the Windows… dialog always agree.
+ *
+ * Membership is read from the live windows rather than kept in a registry of its own:
+ * this thread's top-level windows are walked in Z-order and each one is recognized by
+ * its class. That stays correct however a window was opened or closed, and the Z-order
+ * delivers them most-recently-used first (the active window is always the first), which
+ * is the order the Window menu numbers and the order the dialog opens in.
+ *
+ * Per-window facts — the file behind it and how many records it holds — come from the
+ * struct behind GWLP_USERDATA, one case per class.
+ */
+
+/* Windows the list can hold. Far above any realistic number of open windows; a run with
+ * more lists the first EE_WIN_MAX in Z-order. */
+#define EE_WIN_MAX 256
+
+/* Numbered entries in the Window menu. Beyond this the user takes Windows…. */
+#define EE_WIN_MENU_MAX (IDM_WINDOW_LAST - IDM_WINDOW_FIRST + 1)
+
+/* Kinds of window the list shows. The data kinds come first; see EeWin_IsDataKind. */
+enum
+{
+    EE_WIN_VOTER_LIST = 0,
+    EE_WIN_VOTER_ROSTER,
+    EE_WIN_CVR,
+    EE_WIN_RESULTS,
+    EE_WIN_AUDIT,
+    EE_WIN_REPORT,
+    EE_WIN_COMPARISON,
+    EE_WIN_KIND_COUNT
+};
+
+/* One listed window. */
+typedef struct EeWinInfo
+{
+    HWND hwnd;
+    int kind;               /* EE_WIN_* */
+    AppState *app;          /* its AppState (fonts, DPI); never NULL once described */
+    wchar_t title[192];     /* the window title, as the title bar shows it */
+    wchar_t path[MAX_PATH]; /* its first (or only) file, "" when it has none */
+    int64_t records;        /* data rows it holds, -1 when it has none to report */
+    BOOL have_file;         /* path names a file that could be read */
+    int64_t size;           /* that file's size in bytes (have_file only) */
+    FILETIME mtime;         /* that file's last-write time (have_file only) */
+} EeWinInfo;
+
+/* Display name of a window kind, as the dialog's Type column shows it. */
+static const wchar_t *EeWin_KindName(int kind)
+{
+    static const wchar_t *const k_names[EE_WIN_KIND_COUNT] = {
+        L"Voter List",       L"Voter Roster", L"Cast Vote Record", L"Election Results",
+        L"Audit Logs",       L"Report",       L"Comparison"};
+    return (kind >= 0 && kind < EE_WIN_KIND_COUNT) ? k_names[kind] : L"";
+}
+
+/* TRUE for the kinds that hold a loaded election file, rather than reporting on one.
+ * "Close All of This Type" and the help call these the data windows. */
+static BOOL EeWin_IsDataKind(int kind)
+{
+    return kind >= EE_WIN_VOTER_LIST && kind <= EE_WIN_AUDIT;
+}
+
+/* TRUE when @p h belongs to this thread. Every Election Explorer window is created on
+ * the main thread, so a window of another thread is never one of ours. */
+static BOOL EeWin_IsOurs(HWND h)
+{
+    DWORD pid = 0;
+    return h != NULL && GetWindowThreadProcessId(h, &pid) == GetCurrentThreadId();
+}
+
+/* The directory holding @p path, without a trailing separator ("" when @p path has no
+ * directory part). "C:\file.csv" keeps its root as "C:\". */
+static void EeWin_DirOf(const wchar_t *path, wchar_t *out, size_t cch)
+{
+    const wchar_t *base;
+    size_t n;
+
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (path == NULL || path[0] == L'\0')
+    {
+        return;
+    }
+    base = App_PathBaseName(path);
+    n = (size_t)(base - path);
+    while (n > 1 && (path[n - 1] == L'\\' || path[n - 1] == L'/') && path[n - 2] != L':')
+    {
+        n--;
+    }
+    if (n >= cch)
+    {
+        n = cch - 1;
+    }
+    memcpy(out, path, n * sizeof(wchar_t));
+    out[n] = L'\0';
+}
+
+/* TRUE when @p needle appears anywhere in @p hay, ignoring case. An empty needle matches
+ * everything, so an empty type-to-find box shows every window. */
+static BOOL EeWin_ContainsCI(const wchar_t *hay, const wchar_t *needle)
+{
+    size_t n;
+
+    if (needle == NULL || needle[0] == L'\0')
+    {
+        return TRUE;
+    }
+    if (hay == NULL)
+    {
+        return FALSE;
+    }
+    n = wcslen(needle);
+    for (; *hay != L'\0'; hay++)
+    {
+        if (_wcsnicmp(hay, needle, n) == 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*
+ * The window title with its own file's full path shortened to the file name.
+ *
+ * A voter list window titles itself "Election Explorer — <full path>", so its title
+ * alone would fill a menu item or the Name column and repeat what the Path column
+ * already says. Every other window already titles itself by file name. The title bar
+ * itself is untouched.
+ */
+static void EeWin_ShortTitle(const wchar_t *title, const wchar_t *path, wchar_t *out, size_t cch)
+{
+    const wchar_t *at = NULL;
+    const wchar_t *p;
+    size_t plen;
+
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    StringCchCopyW(out, cch, (title != NULL) ? title : L"");
+    if (title == NULL || path == NULL || path[0] == L'\0')
+    {
+        return;
+    }
+    plen = wcslen(path);
+    for (p = title; *p != L'\0'; p++)
+    {
+        if (_wcsnicmp(p, path, plen) == 0)
+        {
+            at = p;
+            break;
+        }
+    }
+    if (at == NULL)
+    {
+        return; /* the title does not name the file: leave it as it is */
+    }
+    out[0] = L'\0';
+    StringCchCopyNW(out, cch, title, (size_t)(at - title));
+    StringCchCatW(out, cch, App_PathBaseName(path));
+    StringCchCatW(out, cch, at + plen);
+}
+
+/*
+ * Fill @p out for @p h. FALSE when @p h is not a window the list shows: a modal dialog,
+ * the load progress window, a filter or options window, a window still inside WM_CREATE
+ * or already torn down, or a window of another application.
+ *
+ * One case per window class. A report or comparison window reports the file of the data
+ * window it belongs to, because that file is what identifies it to the user.
+ */
+static BOOL EeWin_Describe(HWND h, EeWinInfo *out)
+{
+    wchar_t cls[64];
+    LONG_PTR ud;
+    const wchar_t *path = L"";
+    AppState *app = NULL;
+    int64_t records = -1;
+    int kind;
+
+    if (out == NULL || h == NULL || !IsWindow(h))
+    {
+        return FALSE;
+    }
+    if (GetClassNameW(h, cls, ARRAYSIZE(cls)) <= 0)
+    {
+        return FALSE;
+    }
+    ud = GetWindowLongPtrW(h, GWLP_USERDATA);
+    if (ud == 0)
+    {
+        return FALSE;
+    }
+
+    if (wcscmp(cls, k_WindowClassName) == 0)
+    {
+        AppState *w = (AppState *)ud;
+        kind = w->is_roster ? EE_WIN_VOTER_ROSTER : EE_WIN_VOTER_LIST;
+        app = w;
+        path = w->load_path;
+        records = (int64_t)w->table.row_count;
+    }
+    else if (wcscmp(cls, k_CvrClassName) == 0)
+    {
+        CvrWindow *w = (CvrWindow *)ud;
+        kind = EE_WIN_CVR;
+        app = w->app;
+        path = w->load_path;
+        records = (int64_t)w->table.nrows;
+    }
+    else if (wcscmp(cls, k_ResultsClassName) == 0)
+    {
+        ResultsWindow *w = (ResultsWindow *)ud;
+        kind = EE_WIN_RESULTS;
+        app = w->app;
+        path = w->load_path;
+        records = (int64_t)w->nrows;
+    }
+    else if (wcscmp(cls, k_AuditClassName) == 0)
+    {
+        AuditWindow *w = (AuditWindow *)ud;
+        kind = EE_WIN_AUDIT;
+        app = w->app;
+        path = w->load_path;
+        records = (int64_t)w->nrows;
+    }
+    else if (wcscmp(cls, k_ReportClassName) == 0)
+    {
+        ReportWindow *w = (ReportWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = w->app;
+        path = (w->app != NULL) ? w->app->load_path : L"";
+        records = (int64_t)w->count;
+    }
+    else if (wcscmp(cls, k_CvrReportClassName) == 0)
+    {
+        CvrReportWindow *w = (CvrReportWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = w->app;
+        path = (w->owner != NULL) ? w->owner->load_path : L"";
+        records = (int64_t)w->count;
+    }
+    else if (wcscmp(cls, k_CvrValueReportClassName) == 0)
+    {
+        CvrValueReportWindow *w = (CvrValueReportWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = w->app;
+        path = (w->owner != NULL) ? w->owner->load_path : L"";
+        records = (int64_t)w->count;
+    }
+    else if (wcscmp(cls, k_CvrRcvClassName) == 0)
+    {
+        CvrRcvWindow *w = (CvrRcvWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = w->app;
+        path = (w->owner != NULL) ? w->owner->load_path : L"";
+        records = (int64_t)w->nrows;
+    }
+    else if (wcscmp(cls, k_RosterTotalsClassName) == 0)
+    {
+        RosterTotalsWindow *w = (RosterTotalsWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = w->app;
+        path = (w->app != NULL) ? w->app->load_path : L"";
+        records = (int64_t)w->nrows;
+    }
+    else if (wcscmp(cls, k_ResTurnoutClassName) == 0)
+    {
+        ResTurnoutWindow *w = (ResTurnoutWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = w->app;
+        path = (w->owner != NULL) ? w->owner->load_path : L"";
+        records = (int64_t)w->nrows;
+    }
+    else if (wcscmp(cls, k_AuditReportClassName) == 0)
+    {
+        AudReportWindow *w = (AudReportWindow *)ud;
+        kind = EE_WIN_REPORT;
+        app = (w->aw != NULL) ? w->aw->app : NULL;
+        path = (w->aw != NULL) ? w->aw->load_path : L"";
+        records = (int64_t)w->nrows;
+    }
+    else if (wcscmp(cls, k_CompareClassName) == 0)
+    {
+        CompareWindow *w = (CompareWindow *)ud;
+        kind = EE_WIN_COMPARISON;
+        app = w->a;
+        path = (w->a != NULL) ? w->a->load_path : L"";
+        records = (int64_t)w->rows_a + (int64_t)w->rows_b;
+    }
+    else if (wcscmp(cls, k_DiffClassName) == 0)
+    {
+        DiffWindow *w = (DiffWindow *)ud;
+        kind = EE_WIN_COMPARISON;
+        app = w->a;
+        path = (w->a != NULL) ? w->a->load_path : L"";
+        records = (int64_t)w->row_count;
+    }
+    else if (wcscmp(cls, k_ResCompareClassName) == 0)
+    {
+        ResCompareWindow *w = (ResCompareWindow *)ud;
+        kind = EE_WIN_COMPARISON;
+        app = w->app;
+        records = (int64_t)w->nd;
+    }
+    else
+    {
+        return FALSE;
+    }
+    if (app == NULL)
+    {
+        return FALSE; /* mid-teardown: no resources left to draw it with */
+    }
+
+    ZeroMemory(out, sizeof(*out));
+    out->hwnd = h;
+    out->kind = kind;
+    out->app = app;
+    out->records = records;
+    StringCchCopyW(out->path, ARRAYSIZE(out->path), (path != NULL) ? path : L"");
+    {
+        /* Read the title whole (a voter list's carries a full path), then shorten it. */
+        wchar_t raw[MAX_PATH + 192];
+        raw[0] = L'\0';
+        GetWindowTextW(h, raw, ARRAYSIZE(raw));
+        EeWin_ShortTitle(raw, out->path, out->title, ARRAYSIZE(out->title));
+    }
+    if (out->path[0] != L'\0')
+    {
+        WIN32_FILE_ATTRIBUTE_DATA fad;
+        if (GetFileAttributesExW(out->path, GetFileExInfoStandard, &fad))
+        {
+            out->have_file = TRUE;
+            out->size = ((int64_t)fad.nFileSizeHigh << 32) | (int64_t)fad.nFileSizeLow;
+            out->mtime = fad.ftLastWriteTime;
+        }
+    }
+    return TRUE;
+}
+
+/*
+ * Collect the listed windows into @p out (at most @p max), most recently used first.
+ *
+ * The desktop's children are walked in Z-order (GetTopWindow / GW_HWNDNEXT), so the
+ * active window comes first, the one before it second, and minimized windows sink to
+ * the end. Hidden windows are skipped: one that has not been shown is not one the user
+ * can switch to.
+ */
+static int EeWin_Collect(EeWinInfo *out, int max)
+{
+    int n = 0;
+    HWND h;
+
+    if (out == NULL || max <= 0)
+    {
+        return 0;
+    }
+    for (h = GetTopWindow(NULL); h != NULL && n < max; h = GetWindow(h, GW_HWNDNEXT))
+    {
+        if (!EeWin_IsOurs(h) || !IsWindowVisible(h))
+        {
+            continue;
+        }
+        if (EeWin_Describe(h, &out[n]))
+        {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The listed windows' handles only, in the same order as EeWin_Collect. The dialog's
+ * idle check uses this: it reads no files, so it costs nothing on a timer. */
+static int EeWin_CollectHandles(HWND *out, int max)
+{
+    int n = 0;
+    HWND h;
+
+    if (out == NULL || max <= 0)
+    {
+        return 0;
+    }
+    for (h = GetTopWindow(NULL); h != NULL && n < max; h = GetWindow(h, GW_HWNDNEXT))
+    {
+        EeWinInfo info;
+        if (!EeWin_IsOurs(h) || !IsWindowVisible(h))
+        {
+            continue;
+        }
+        if (EeWin_Describe(h, &info))
+        {
+            out[n++] = h;
+        }
+    }
+    return n;
+}
+
+/* Bring @p h to the front, restoring it first when it is minimized. */
+static void EeWin_Activate(HWND h)
+{
+    if (h == NULL || !IsWindow(h))
+    {
+        return;
+    }
+    if (IsIconic(h))
+    {
+        ShowWindow(h, SW_RESTORE);
+    }
+    BringWindowToTop(h);
+    SetForegroundWindow(h);
+}
+
+/* "12.4 MB" / "843 KB" / "512 bytes" for the dialog's Size column. */
+static void EeWin_FormatSize(int64_t bytes, wchar_t *out, size_t cch)
+{
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    if (bytes < 1024)
+    {
+        StringCchPrintfW(out, cch, L"%lld bytes", (long long)bytes);
+    }
+    else if (bytes < 1024 * 1024)
+    {
+        StringCchPrintfW(out, cch, L"%.0f KB", (double)bytes / 1024.0);
+    }
+    else if (bytes < 1024LL * 1024LL * 1024LL)
+    {
+        StringCchPrintfW(out, cch, L"%.1f MB", (double)bytes / (1024.0 * 1024.0));
+    }
+    else
+    {
+        StringCchPrintfW(out, cch, L"%.2f GB", (double)bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+}
+
+/* "2026-11-18 14:05" in local time for the dialog's Modified column. */
+static void EeWin_FormatTime(FILETIME ft, wchar_t *out, size_t cch)
+{
+    FILETIME local;
+    SYSTEMTIME st;
+
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (!FileTimeToLocalFileTime(&ft, &local) || !FileTimeToSystemTime(&local, &st))
+    {
+        return;
+    }
+    StringCchPrintfW(out, cch, L"%04u-%02u-%02u %02u:%02u", st.wYear, st.wMonth, st.wDay, st.wHour,
+                     st.wMinute);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Windows… dialog                                                            */
+/* -------------------------------------------------------------------------- */
+
+static const wchar_t k_WinListClassName[] = L"ElectionExplorerWindowList";
+
+/* Columns of the list, in order. EE_WINLIST_NCOLS (settings.h) counts them. */
+enum
+{
+    WL_COL_NAME = 0,
+    WL_COL_PATH,
+    WL_COL_TYPE,
+    WL_COL_SIZE,
+    WL_COL_RECORDS,
+    WL_COL_MODIFIED
+};
+
+/*
+ * The Windows… dialog: one at a time, modeless, owned by the window it was opened from
+ * (so it closes with that window, which is what the user expects when they close it
+ * from the list).
+ */
+typedef struct WinListWindow
+{
+    AppState *app; /* the opener's AppState: fonts and DPI. The opener owns this window,
+                    * so these resources outlive it. */
+    HWND hwnd;
+    HWND find_label;
+    HWND find;
+    HWND list;
+    HWND activate_btn;
+    HWND close_btn;
+    HWND ok_btn;
+    HWND opener;          /* the window Windows… was chosen in */
+    EeWinInfo *items;     /* EE_WIN_MAX collected windows, owned */
+    int nitems;
+    int *shown;           /* nshown indexes into items, in display order, owned */
+    int nshown;
+    wchar_t find_text[96]; /* type-to-find text; "" shows every window */
+    int sort_col;          /* -1 = as collected (most recently used first) */
+    BOOL sort_asc;
+} WinListWindow;
+
+static WinListWindow *g_winlist = NULL;
+static WNDPROC g_old_winlist_list_proc = NULL;
+
+static void WinList_Refresh(WinListWindow *wl);
+static void EeWin_ShowDialog(HWND self);
+
+/* The open Windows… dialog, or NULL. The message loop routes dialog keys to it. */
+static HWND EeWin_DialogHwnd(void)
+{
+    return (g_winlist != NULL) ? g_winlist->hwnd : NULL;
+}
+
+/* One cell of the list as text. */
+static void WinList_CellText(const WinListWindow *wl, int row, int col, wchar_t *out, size_t cch)
+{
+    const EeWinInfo *it;
+
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (wl == NULL || row < 0 || row >= wl->nshown)
+    {
+        return;
+    }
+    it = &wl->items[wl->shown[row]];
+    switch (col)
+    {
+        case WL_COL_NAME:
+            StringCchCopyW(out, cch, it->title);
+            break;
+        case WL_COL_PATH:
+            EeWin_DirOf(it->path, out, cch);
+            break;
+        case WL_COL_TYPE:
+            StringCchCopyW(out, cch, EeWin_KindName(it->kind));
+            break;
+        case WL_COL_SIZE:
+            if (it->have_file)
+            {
+                EeWin_FormatSize(it->size, out, cch);
+            }
+            break;
+        case WL_COL_RECORDS:
+            if (it->records >= 0)
+            {
+                fmt_count_w(it->records, out, cch);
+            }
+            break;
+        case WL_COL_MODIFIED:
+            if (it->have_file)
+            {
+                EeWin_FormatTime(it->mtime, out, cch);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+typedef struct WinListSortCtx
+{
+    const WinListWindow *wl;
+    int col;
+    BOOL asc;
+} WinListSortCtx;
+
+static int winlist_sort_cmp(void *ctxv, const void *pa, const void *pb)
+{
+    const WinListSortCtx *ctx = (const WinListSortCtx *)ctxv;
+    const EeWinInfo *a = &ctx->wl->items[*(const int *)pa];
+    const EeWinInfo *b = &ctx->wl->items[*(const int *)pb];
+    int c = 0;
+
+    switch (ctx->col)
+    {
+        case WL_COL_NAME:
+            c = _wcsicmp(a->title, b->title);
+            break;
+        case WL_COL_PATH:
+        {
+            wchar_t da[MAX_PATH];
+            wchar_t db[MAX_PATH];
+            EeWin_DirOf(a->path, da, ARRAYSIZE(da));
+            EeWin_DirOf(b->path, db, ARRAYSIZE(db));
+            c = _wcsicmp(da, db);
+            break;
+        }
+        case WL_COL_TYPE:
+            c = (a->kind < b->kind) ? -1 : (a->kind > b->kind ? 1 : 0);
+            break;
+        case WL_COL_SIZE:
+        {
+            int64_t sa = a->have_file ? a->size : -1;
+            int64_t sb = b->have_file ? b->size : -1;
+            c = (sa < sb) ? -1 : (sa > sb ? 1 : 0);
+            break;
+        }
+        case WL_COL_RECORDS:
+            c = (a->records < b->records) ? -1 : (a->records > b->records ? 1 : 0);
+            break;
+        case WL_COL_MODIFIED:
+        {
+            LONG ca = a->have_file ? 1 : 0;
+            LONG cb = b->have_file ? 1 : 0;
+            if (ca != cb)
+            {
+                c = (ca < cb) ? -1 : 1;
+            }
+            else if (ca != 0)
+            {
+                c = (int)CompareFileTime(&a->mtime, &b->mtime);
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    if (c == 0)
+    {
+        /* Same key: fall back on the title so the order never jitters. */
+        c = _wcsicmp(a->title, b->title);
+    }
+    return ctx->asc ? c : -c;
+}
+
+/* Show the sort arrow on the active column, and on none when the list is in
+ * most-recently-used order. */
+static void WinList_UpdateHeaderArrows(WinListWindow *wl)
+{
+    HWND hdr;
+    int i;
+    int n;
+
+    if (wl == NULL || wl->list == NULL)
+    {
+        return;
+    }
+    hdr = ListView_GetHeader(wl->list);
+    if (hdr == NULL)
+    {
+        return;
+    }
+    n = Header_GetItemCount(hdr);
+    for (i = 0; i < n; i++)
+    {
+        HDITEMW it;
+        ZeroMemory(&it, sizeof(it));
+        it.mask = HDI_FORMAT;
+        Header_GetItem(hdr, i, &it);
+        it.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+        if (i == wl->sort_col)
+        {
+            it.fmt |= wl->sort_asc ? HDF_SORTUP : HDF_SORTDOWN;
+        }
+        Header_SetItem(hdr, i, &it);
+    }
+}
+
+/* Rebuild shown[] from items[] (type-to-find, then the chosen sort). */
+static void WinList_BuildShown(WinListWindow *wl)
+{
+    int i;
+
+    wl->nshown = 0;
+    for (i = 0; i < wl->nitems; i++)
+    {
+        wchar_t dir[MAX_PATH];
+        const EeWinInfo *it = &wl->items[i];
+        EeWin_DirOf(it->path, dir, ARRAYSIZE(dir));
+        if (wl->find_text[0] == L'\0' || EeWin_ContainsCI(it->title, wl->find_text) ||
+            EeWin_ContainsCI(dir, wl->find_text) ||
+            EeWin_ContainsCI(EeWin_KindName(it->kind), wl->find_text))
+        {
+            wl->shown[wl->nshown++] = i;
+        }
+    }
+    if (wl->sort_col >= 0 && wl->nshown > 1)
+    {
+        WinListSortCtx ctx;
+        ctx.wl = wl;
+        ctx.col = wl->sort_col;
+        ctx.asc = wl->sort_asc;
+        qsort_s(wl->shown, (size_t)wl->nshown, sizeof(wl->shown[0]), winlist_sort_cmp, &ctx);
+    }
+}
+
+/* The windows selected in the list, into @p out (at most @p max). */
+static int WinList_Selected(const WinListWindow *wl, HWND *out, int max)
+{
+    int n = 0;
+    int i;
+
+    if (wl == NULL || wl->list == NULL || out == NULL)
+    {
+        return 0;
+    }
+    for (i = 0; i < wl->nshown && n < max; i++)
+    {
+        if (ListView_GetItemState(wl->list, i, LVIS_SELECTED) & LVIS_SELECTED)
+        {
+            out[n++] = wl->items[wl->shown[i]].hwnd;
+        }
+    }
+    return n;
+}
+
+/* Activate and Close window(s) stay grey until a row is selected; the status line
+ * reports how many windows the list holds. */
+static void WinList_UpdateButtons(WinListWindow *wl)
+{
+    int sel;
+
+    if (wl == NULL)
+    {
+        return;
+    }
+    sel = (wl->list != NULL) ? ListView_GetSelectedCount(wl->list) : 0;
+    if (wl->activate_btn != NULL)
+    {
+        EnableWindow(wl->activate_btn, sel == 1);
+    }
+    if (wl->close_btn != NULL)
+    {
+        EnableWindow(wl->close_btn, sel >= 1);
+    }
+}
+
+/* Refill the list from items[]/shown[], keeping the selection on the same windows. */
+static void WinList_Populate(WinListWindow *wl)
+{
+    HWND keep[EE_WIN_MAX];
+    int nkeep;
+    int i;
+    int c;
+
+    if (wl == NULL || wl->list == NULL)
+    {
+        return;
+    }
+    nkeep = WinList_Selected(wl, keep, (int)ARRAYSIZE(keep));
+    SendMessageW(wl->list, WM_SETREDRAW, FALSE, 0);
+    ListView_DeleteAllItems(wl->list);
+    for (i = 0; i < wl->nshown; i++)
+    {
+        LVITEMW item;
+        wchar_t text[MAX_PATH];
+
+        ZeroMemory(&item, sizeof(item));
+        item.mask = LVIF_TEXT;
+        item.iItem = i;
+        WinList_CellText(wl, i, WL_COL_NAME, text, ARRAYSIZE(text));
+        item.pszText = text;
+        if (ListView_InsertItem(wl->list, &item) < 0)
+        {
+            continue;
+        }
+        for (c = 1; c < EE_WINLIST_NCOLS; c++)
+        {
+            WinList_CellText(wl, i, c, text, ARRAYSIZE(text));
+            ListView_SetItemText(wl->list, i, c, text);
+        }
+    }
+    for (i = 0; i < wl->nshown; i++)
+    {
+        int k;
+        for (k = 0; k < nkeep; k++)
+        {
+            if (wl->items[wl->shown[i]].hwnd == keep[k])
+            {
+                ListView_SetItemState(wl->list, i, LVIS_SELECTED, LVIS_SELECTED);
+                break;
+            }
+        }
+    }
+    SendMessageW(wl->list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(wl->list, NULL, TRUE);
+    WinList_UpdateHeaderArrows(wl);
+    WinList_UpdateButtons(wl);
+}
+
+/* Re-read the open windows and redraw the list. */
+static void WinList_Refresh(WinListWindow *wl)
+{
+    if (wl == NULL)
+    {
+        return;
+    }
+    wl->nitems = EeWin_Collect(wl->items, EE_WIN_MAX);
+    WinList_BuildShown(wl);
+    WinList_Populate(wl);
+}
+
+/*
+ * Close the @p n windows in @p hwnds, asking first when there is more than one.
+ *
+ * When one of them is the window the Windows… dialog was opened from, that window goes
+ * last and the dialog goes with it, as the user asked for by listing it. Returns FALSE
+ * when the user declined.
+ */
+static BOOL EeWin_CloseSet(const HWND *hwnds, int n, HWND prompt_owner)
+{
+    HWND opener = (g_winlist != NULL) ? g_winlist->opener : NULL;
+    BOOL opener_listed = FALSE;
+    int i;
+
+    if (hwnds == NULL || n <= 0)
+    {
+        return FALSE;
+    }
+    if (n > 1)
+    {
+        wchar_t msg[200];
+        StringCchPrintfW(msg, ARRAYSIZE(msg),
+                         L"Close %d Election Explorer windows?\r\n\r\nTheir loaded files are not "
+                         L"changed; reopening a window loads its file again.",
+                         n);
+        if (MessageBoxW(prompt_owner, msg, k_WindowTitle, MB_ICONQUESTION | MB_YESNO) != IDYES)
+        {
+            return FALSE;
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (hwnds[i] == opener)
+        {
+            opener_listed = TRUE;
+            continue;
+        }
+        if (hwnds[i] != NULL && IsWindow(hwnds[i]))
+        {
+            SendMessageW(hwnds[i], WM_CLOSE, 0, 0);
+        }
+    }
+    if (opener_listed && opener != NULL)
+    {
+        /* The dialog lives in that window; close the dialog, then the window. */
+        if (g_winlist != NULL)
+        {
+            DestroyWindow(g_winlist->hwnd);
+        }
+        if (IsWindow(opener))
+        {
+            SendMessageW(opener, WM_CLOSE, 0, 0);
+        }
+        return TRUE;
+    }
+    if (g_winlist != NULL)
+    {
+        WinList_Refresh(g_winlist);
+    }
+    return TRUE;
+}
+
+/* Close every listed window of @p kind (including @p self when it is one of them). */
+static void EeWin_CloseAllOfKind(int kind, HWND prompt_owner)
+{
+    EeWinInfo *items;
+    HWND hwnds[EE_WIN_MAX];
+    int n;
+    int k = 0;
+    int i;
+
+    items = (EeWinInfo *)calloc(EE_WIN_MAX, sizeof(EeWinInfo));
+    if (items == NULL)
+    {
+        return;
+    }
+    n = EeWin_Collect(items, EE_WIN_MAX);
+    for (i = 0; i < n; i++)
+    {
+        if (items[i].kind == kind)
+        {
+            hwnds[k++] = items[i].hwnd;
+        }
+    }
+    free(items);
+    EeWin_CloseSet(hwnds, k, prompt_owner);
+}
+
+/* Close every listed window except @p keep. */
+static void EeWin_CloseAllBut(HWND keep, HWND prompt_owner)
+{
+    EeWinInfo *items;
+    HWND hwnds[EE_WIN_MAX];
+    int n;
+    int k = 0;
+    int i;
+
+    items = (EeWinInfo *)calloc(EE_WIN_MAX, sizeof(EeWinInfo));
+    if (items == NULL)
+    {
+        return;
+    }
+    n = EeWin_Collect(items, EE_WIN_MAX);
+    for (i = 0; i < n; i++)
+    {
+        if (items[i].hwnd != keep)
+        {
+            hwnds[k++] = items[i].hwnd;
+        }
+    }
+    free(items);
+    EeWin_CloseSet(hwnds, k, prompt_owner);
+}
+
+/* How Window → Cascade / Tile / Minimize All arranges the listed windows. */
+enum
+{
+    EE_ARRANGE_CASCADE = 0,
+    EE_ARRANGE_TILE_H,
+    EE_ARRANGE_TILE_V,
+    EE_ARRANGE_MINIMIZE
+};
+
+/* Arrange the listed windows over the work area of @p self's monitor (EE_ARRANGE_*).
+ * A window the user minimized stays minimized. */
+static void EeWin_Arrange(HWND self, int how)
+{
+    EeWinInfo *items;
+    HWND *hwnds;
+    MONITORINFO mi;
+    RECT work;
+    int n;
+    int k = 0;
+    int i;
+
+    items = (EeWinInfo *)calloc(EE_WIN_MAX, sizeof(EeWinInfo));
+    hwnds = (HWND *)calloc(EE_WIN_MAX, sizeof(HWND));
+    if (items == NULL || hwnds == NULL)
+    {
+        free(items);
+        free(hwnds);
+        return;
+    }
+    n = EeWin_Collect(items, EE_WIN_MAX);
+    if (how == EE_ARRANGE_MINIMIZE)
+    {
+        for (i = 0; i < n; i++)
+        {
+            if (!IsIconic(items[i].hwnd))
+            {
+                ShowWindow(items[i].hwnd, SW_MINIMIZE);
+            }
+        }
+        free(items);
+        free(hwnds);
+        return;
+    }
+    for (i = 0; i < n; i++)
+    {
+        /* A minimized window stays minimized: the user put it away on purpose. */
+        if (!IsIconic(items[i].hwnd))
+        {
+            hwnds[k++] = items[i].hwnd;
+        }
+    }
+    ZeroMemory(&mi, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(MonitorFromWindow(self, MONITOR_DEFAULTTONEAREST), &mi))
+    {
+        work = mi.rcWork;
+    }
+    else
+    {
+        SetRect(&work, 0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+    }
+    if (k > 0)
+    {
+        if (how == EE_ARRANGE_CASCADE)
+        {
+            CascadeWindows(NULL, MDITILE_SKIPDISABLED, &work, (UINT)k, hwnds);
+        }
+        else
+        {
+            UINT tile = (how == EE_ARRANGE_TILE_H) ? MDITILE_HORIZONTAL : MDITILE_VERTICAL;
+            TileWindows(NULL, tile | MDITILE_SKIPDISABLED, &work, (UINT)k, hwnds);
+        }
+    }
+    free(items);
+    free(hwnds);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Window menu                                                                */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The windows the Window menu's numbered items stand for, by command offset. Refilled
+ * on every WM_INITMENUPOPUP. One global serves every window because Windows tracks one
+ * menu at a time, and it is tracked modally: the numbered item is chosen (or the menu
+ * dismissed) before any other window can open its own.
+ */
+static HWND g_win_menu_targets[EE_WIN_MENU_MAX];
+static int g_win_menu_count;
+
+/* Copy @p in into @p out with every '&' doubled, so a file name's ampersand draws as
+ * one instead of underlining the next letter. */
+static void EeWin_EscapeAmp(const wchar_t *in, wchar_t *out, size_t cch)
+{
+    size_t k = 0;
+
+    if (out == NULL || cch == 0)
+    {
+        return;
+    }
+    out[0] = L'\0';
+    if (in == NULL)
+    {
+        return;
+    }
+    for (; *in != L'\0' && k + 2 < cch; in++)
+    {
+        out[k++] = *in;
+        if (*in == L'&')
+        {
+            out[k++] = L'&';
+        }
+    }
+    out[k] = L'\0';
+}
+
+/* The Window popup as it starts out: one "Windows…" item, which is also how
+ * EeWin_IsWindowPopup recognizes it. Filled in on WM_INITMENUPOPUP. */
+static HMENU EeWin_CreateWindowPopup(void)
+{
+    HMENU popup = CreatePopupMenu();
+
+    if (popup != NULL)
+    {
+        AppendMenuW(popup, MF_STRING, IDM_WINDOW_LIST, L"&Windows…");
+    }
+    return popup;
+}
+
+/* TRUE for the Window popup of any of the menu bars: its first item is Windows….
+ * Recognizing it by content rather than by position keeps the menu bars free to differ
+ * (the Results Compare window has no Compare or Help menu). */
+static BOOL EeWin_IsWindowPopup(HMENU popup)
+{
+    return popup != NULL && GetMenuItemCount(popup) > 0 &&
+           GetMenuItemID(popup, 0) == (UINT)IDM_WINDOW_LIST;
+}
+
+/*
+ * Rebuild the Window popup of @p self: Windows…, then up to EE_WIN_MENU_MAX numbered
+ * windows (most recently used first, so @p self is always 1), then the arrange and
+ * close-many commands.
+ *
+ * The numbers are positional, not identities: they always run from 1 with no gaps, so
+ * closing a window renumbers the rest the next time the menu opens.
+ */
+static void EeWin_BuildWindowPopup(HMENU popup, HWND self)
+{
+    EeWinInfo *items;
+    int n;
+    int i;
+    int self_kind = -1;
+    int same_kind = 0;
+
+    if (popup == NULL)
+    {
+        return;
+    }
+    while (GetMenuItemCount(popup) > 0)
+    {
+        DeleteMenu(popup, 0, MF_BYPOSITION);
+    }
+    AppendMenuW(popup, MF_STRING, IDM_WINDOW_LIST, L"&Windows…");
+    AppendMenuW(popup, MF_SEPARATOR, 0, NULL);
+
+    g_win_menu_count = 0;
+    items = (EeWinInfo *)calloc(EE_WIN_MAX, sizeof(EeWinInfo));
+    n = (items != NULL) ? EeWin_Collect(items, EE_WIN_MAX) : 0;
+    for (i = 0; i < n; i++)
+    {
+        if (items[i].hwnd == self)
+        {
+            self_kind = items[i].kind;
+        }
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (items[i].kind == self_kind)
+        {
+            same_kind++;
+        }
+    }
+    for (i = 0; i < n && i < EE_WIN_MENU_MAX; i++)
+    {
+        wchar_t title[2 * ARRAYSIZE(items[0].title)];
+        wchar_t text[2 * ARRAYSIZE(items[0].title) + 16];
+        int number = i + 1;
+
+        EeWin_EscapeAmp(items[i].title, title, ARRAYSIZE(title));
+        /* The mnemonic is the number: "&1:" … "&9:", and "1&0:" for the tenth. */
+        if (number < 10)
+        {
+            StringCchPrintfW(text, ARRAYSIZE(text), L"&%d: %s", number, title);
+        }
+        else
+        {
+            StringCchPrintfW(text, ARRAYSIZE(text), L"1&0: %s", title);
+        }
+        AppendMenuW(popup, MF_STRING, (UINT_PTR)(IDM_WINDOW_FIRST + i), text);
+        if (items[i].hwnd == self)
+        {
+            CheckMenuItem(popup, (UINT)(IDM_WINDOW_FIRST + i), MF_BYCOMMAND | MF_CHECKED);
+        }
+        g_win_menu_targets[i] = items[i].hwnd;
+        g_win_menu_count++;
+    }
+    if (g_win_menu_count == 0)
+    {
+        AppendMenuW(popup, MF_STRING | MF_GRAYED, 0, L"(no other windows)");
+    }
+    else if (n > EE_WIN_MENU_MAX)
+    {
+        wchar_t more[96];
+        StringCchPrintfW(more, ARRAYSIZE(more), L"(%d more \x2014 choose Windows\x2026)",
+                         n - EE_WIN_MENU_MAX);
+        AppendMenuW(popup, MF_STRING | MF_GRAYED, 0, more);
+    }
+
+    AppendMenuW(popup, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(popup, MF_STRING, IDM_WINDOW_CASCADE, L"&Cascade");
+    AppendMenuW(popup, MF_STRING, IDM_WINDOW_TILE_H, L"Tile &Horizontally");
+    AppendMenuW(popup, MF_STRING, IDM_WINDOW_TILE_V, L"Tile &Vertically");
+    AppendMenuW(popup, MF_STRING, IDM_WINDOW_MINIMIZE_ALL, L"Mi&nimize All");
+    AppendMenuW(popup, MF_SEPARATOR, 0, NULL);
+    {
+        wchar_t item[96];
+        StringCchPrintfW(item, ARRAYSIZE(item), L"Close All %s Windows",
+                         (self_kind >= 0) ? EeWin_KindName(self_kind) : L"of This Type");
+        AppendMenuW(popup, MF_STRING, IDM_WINDOW_CLOSE_TYPE, item);
+    }
+    AppendMenuW(popup, MF_STRING, IDM_WINDOW_CLOSE_OTHERS, L"Close All &But This");
+    EnableMenuItem(popup, IDM_WINDOW_CLOSE_TYPE,
+                   MF_BYCOMMAND | ((self_kind >= 0 && same_kind > 0) ? MF_ENABLED : MF_GRAYED));
+    {
+        UINT any = MF_BYCOMMAND | ((n > 0) ? MF_ENABLED : MF_GRAYED);
+        EnableMenuItem(popup, IDM_WINDOW_CLOSE_OTHERS,
+                       MF_BYCOMMAND | ((n > 1) ? MF_ENABLED : MF_GRAYED));
+        EnableMenuItem(popup, IDM_WINDOW_CASCADE, any);
+        EnableMenuItem(popup, IDM_WINDOW_TILE_H, any);
+        EnableMenuItem(popup, IDM_WINDOW_TILE_V, any);
+        EnableMenuItem(popup, IDM_WINDOW_MINIMIZE_ALL, any);
+    }
+    free(items);
+}
+
+/*
+ * Handle a Window menu command sent to @p self. TRUE when @p cmd was one of them, so
+ * every window proc can offer the menu with one line in its WM_COMMAND.
+ */
+static BOOL EeWin_OnCommand(HWND self, int cmd)
+{
+    if (cmd == IDM_WINDOW_LIST)
+    {
+        EeWin_ShowDialog(self);
+        return TRUE;
+    }
+    if (cmd >= IDM_WINDOW_FIRST && cmd <= IDM_WINDOW_LAST)
+    {
+        int i = cmd - IDM_WINDOW_FIRST;
+        if (i < g_win_menu_count)
+        {
+            EeWin_Activate(g_win_menu_targets[i]);
+        }
+        return TRUE;
+    }
+    switch (cmd)
+    {
+        case IDM_WINDOW_CASCADE:
+            EeWin_Arrange(self, EE_ARRANGE_CASCADE);
+            return TRUE;
+        case IDM_WINDOW_TILE_H:
+            EeWin_Arrange(self, EE_ARRANGE_TILE_H);
+            return TRUE;
+        case IDM_WINDOW_TILE_V:
+            EeWin_Arrange(self, EE_ARRANGE_TILE_V);
+            return TRUE;
+        case IDM_WINDOW_MINIMIZE_ALL:
+            EeWin_Arrange(self, EE_ARRANGE_MINIMIZE);
+            return TRUE;
+        case IDM_WINDOW_CLOSE_TYPE:
+        {
+            EeWinInfo info;
+            if (EeWin_Describe(self, &info))
+            {
+                EeWin_CloseAllOfKind(info.kind, self);
+            }
+            return TRUE;
+        }
+        case IDM_WINDOW_CLOSE_OTHERS:
+            EeWin_CloseAllBut(self, self);
+            return TRUE;
+        case IDM_HELP_WINDOWS:
+        {
+            /* Help → Managing Windows, from whichever window's Help menu it was chosen. */
+            EeWinInfo info;
+            if (EeWin_Describe(self, &info))
+            {
+                App_ShowHelpTopicOn(info.app, self, L"Managing Windows", k_HelpWindows);
+            }
+            return TRUE;
+        }
+        default:
+            break;
+    }
+    return FALSE;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Windows… dialog implementation                                             */
+/* -------------------------------------------------------------------------- */
+
+/* Default column widths at 96 dpi, used until the user drags one. */
+static const int k_WinListColWidth[EE_WINLIST_NCOLS] = {230, 230, 110, 80, 80, 125};
+static const wchar_t *const k_WinListColTitle[EE_WINLIST_NCOLS] = {
+    L"Name", L"Path", L"Type", L"Size", L"Records", L"Modified"};
+
+/* Place the children: Find box on top, list in the middle, buttons along the bottom
+ * (Activate and Close window(s) at the left, OK at the right). */
+static void WinList_Layout(WinListWindow *wl, int width, int height)
+{
+    int pad;
+    int gap;
+    int row_h;
+    int btn_h;
+    int label_w;
+    int btn_w;
+    int ok_w;
+    int close_w;
+    int list_top;
+    int list_h;
+    int btn_y;
+
+    if (wl == NULL || wl->app == NULL)
+    {
+        return;
+    }
+    pad = Scale(wl->app, 10);
+    gap = Scale(wl->app, 8);
+    row_h = Scale(wl->app, 24);
+    btn_h = Scale(wl->app, 28);
+    label_w = Scale(wl->app, 36);
+    btn_w = Scale(wl->app, 96);
+    close_w = Scale(wl->app, 132);
+    ok_w = Scale(wl->app, 96);
+    list_top = pad + row_h + gap;
+    btn_y = height - pad - btn_h;
+    list_h = btn_y - gap - list_top;
+    if (list_h < row_h)
+    {
+        list_h = row_h;
+    }
+    if (wl->find_label != NULL)
+    {
+        MoveWindow(wl->find_label, pad, pad + Scale(wl->app, 3), label_w, row_h, TRUE);
+    }
+    if (wl->find != NULL)
+    {
+        int w = width - 2 * pad - label_w - gap;
+        MoveWindow(wl->find, pad + label_w + gap, pad, (w > 0) ? w : 0, row_h, TRUE);
+    }
+    if (wl->list != NULL)
+    {
+        int w = width - 2 * pad;
+        MoveWindow(wl->list, pad, list_top, (w > 0) ? w : 0, list_h, TRUE);
+    }
+    if (wl->activate_btn != NULL)
+    {
+        MoveWindow(wl->activate_btn, pad, btn_y, btn_w, btn_h, TRUE);
+    }
+    if (wl->close_btn != NULL)
+    {
+        MoveWindow(wl->close_btn, pad + btn_w + gap, btn_y, close_w, btn_h, TRUE);
+    }
+    if (wl->ok_btn != NULL)
+    {
+        MoveWindow(wl->ok_btn, width - pad - ok_w, btn_y, ok_w, btn_h, TRUE);
+    }
+}
+
+/* Activate the one selected window and close the dialog. */
+static void WinList_ActivateSelected(WinListWindow *wl)
+{
+    HWND sel[EE_WIN_MAX];
+    int n;
+
+    if (wl == NULL)
+    {
+        return;
+    }
+    n = WinList_Selected(wl, sel, (int)ARRAYSIZE(sel));
+    if (n != 1)
+    {
+        return;
+    }
+    /* Destroy the dialog first: it is owned by the window Windows… was chosen in, and
+     * an owned window would otherwise stay above the window being activated. */
+    {
+        HWND target = sel[0];
+        DestroyWindow(wl->hwnd);
+        EeWin_Activate(target);
+    }
+}
+
+/* Close window(s): close every selected window, leaving the dialog open unless the
+ * window it was opened from is one of them. */
+static void WinList_CloseSelected(WinListWindow *wl)
+{
+    HWND sel[EE_WIN_MAX];
+    int n;
+
+    if (wl == NULL)
+    {
+        return;
+    }
+    n = WinList_Selected(wl, sel, (int)ARRAYSIZE(sel));
+    if (n > 0)
+    {
+        EeWin_CloseSet(sel, n, wl->hwnd);
+    }
+}
+
+/* Right-click in the list: the same actions as the buttons, plus the close-many
+ * commands for the clicked row's type and the file path. */
+static void WinList_OnContextMenu(WinListWindow *wl, int row, POINT screen)
+{
+    HMENU menu;
+    int sel;
+    int cmd;
+    int kind = -1;
+    HWND row_hwnd = NULL;
+    wchar_t close_type[96];
+
+    if (wl == NULL)
+    {
+        return;
+    }
+    if (row >= 0 && row < wl->nshown)
+    {
+        kind = wl->items[wl->shown[row]].kind;
+        row_hwnd = wl->items[wl->shown[row]].hwnd;
+    }
+    sel = (wl->list != NULL) ? ListView_GetSelectedCount(wl->list) : 0;
+    menu = CreatePopupMenu();
+    if (menu == NULL)
+    {
+        return;
+    }
+    AppendMenuW(menu, MF_STRING | (sel == 1 ? MF_ENABLED : MF_GRAYED), IDC_WINLIST_ACTIVATE,
+                L"&Activate");
+    AppendMenuW(menu, MF_STRING | (sel >= 1 ? MF_ENABLED : MF_GRAYED), IDC_WINLIST_CLOSE,
+                L"&Close window(s)");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    StringCchPrintfW(close_type, ARRAYSIZE(close_type), L"Close All %s Windows",
+                     (kind >= 0) ? EeWin_KindName(kind) : L"of This Type");
+    AppendMenuW(menu, MF_STRING | (kind >= 0 ? MF_ENABLED : MF_GRAYED), IDM_WINDOW_CLOSE_TYPE,
+                close_type);
+    AppendMenuW(menu, MF_STRING | (row_hwnd != NULL && wl->nitems > 1 ? MF_ENABLED : MF_GRAYED),
+                IDM_WINDOW_CLOSE_OTHERS, L"Close All &But This");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING | (row >= 0 ? MF_ENABLED : MF_GRAYED), IDC_WINLIST_COPY_PATH,
+                L"Copy &Path");
+    cmd = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, screen.x,
+                              screen.y, 0, wl->hwnd, NULL);
+    DestroyMenu(menu);
+    switch (cmd)
+    {
+        case IDC_WINLIST_ACTIVATE:
+            WinList_ActivateSelected(wl);
+            break;
+        case IDC_WINLIST_CLOSE:
+            WinList_CloseSelected(wl);
+            break;
+        case IDM_WINDOW_CLOSE_TYPE:
+            if (kind >= 0)
+            {
+                EeWin_CloseAllOfKind(kind, wl->hwnd);
+            }
+            break;
+        case IDM_WINDOW_CLOSE_OTHERS:
+            if (row_hwnd != NULL)
+            {
+                EeWin_CloseAllBut(row_hwnd, wl->hwnd);
+            }
+            break;
+        case IDC_WINLIST_COPY_PATH:
+            if (row >= 0 && row < wl->nshown)
+            {
+                const wchar_t *path = wl->items[wl->shown[row]].path;
+                char utf8[4 * MAX_PATH];
+                int cb = WideCharToMultiByte(CP_UTF8, 0, path, -1, utf8, (int)sizeof(utf8), NULL,
+                                             NULL);
+                if (path[0] != L'\0' && cb > 0)
+                {
+                    App_SetClipboardUtf8(wl->hwnd, utf8);
+                }
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+/* Remember the dialog's placement and column widths for the next run. */
+static void WinList_SaveLayout(WinListWindow *wl)
+{
+    RECT rc;
+    int i;
+
+    if (wl == NULL || wl->hwnd == NULL || IsIconic(wl->hwnd) || IsZoomed(wl->hwnd))
+    {
+        return;
+    }
+    if (!GetWindowRect(wl->hwnd, &rc))
+    {
+        return;
+    }
+    g_settings.winlist_x = rc.left;
+    g_settings.winlist_y = rc.top;
+    g_settings.winlist_w = rc.right - rc.left;
+    g_settings.winlist_h = rc.bottom - rc.top;
+    if (wl->list != NULL)
+    {
+        for (i = 0; i < EE_WINLIST_NCOLS; i++)
+        {
+            g_settings.winlist_cols[i] = ListView_GetColumnWidth(wl->list, i);
+        }
+    }
+    EeSettings_Save(&g_settings);
+}
+
+/* Subclass so the list draws its header bold on the grey header background, like every
+ * other list in the application. */
+static LRESULT CALLBACK WinListListSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_NOTIFY)
+    {
+        NMHDR *nm = (NMHDR *)lParam;
+        HWND header = ListView_GetHeader(hwnd);
+        WinListWindow *wl = (WinListWindow *)GetWindowLongPtrW(GetParent(hwnd), GWLP_USERDATA);
+        if (wl != NULL && wl->app != NULL && nm != NULL && header != NULL &&
+            nm->hwndFrom == header && nm->code == NM_CUSTOMDRAW)
+        {
+            return App_HeaderCustomDraw(wl->app, (NMCUSTOMDRAW *)lParam, FALSE);
+        }
+    }
+    return CallWindowProcW(g_old_winlist_list_proc, hwnd, msg, wParam, lParam);
+}
+
+static LRESULT CALLBACK WinListWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    WinListWindow *wl = (WinListWindow *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            CREATESTRUCTW *cs = (CREATESTRUCTW *)lParam;
+            const DWORD btn = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON;
+            HINSTANCE inst;
+            RECT rc;
+            int i;
+
+            wl = (WinListWindow *)cs->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)wl);
+            wl->hwnd = hwnd;
+            inst = wl->app->instance;
+            GetClientRect(hwnd, &rc);
+
+            wl->find_label =
+                CreateWindowExW(0, L"STATIC", L"&Find:",
+                                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE, 0, 0, 0, 0, hwnd,
+                                (HMENU)(INT_PTR)IDC_WINLIST_FIND_LABEL, inst, NULL);
+            wl->find =
+                CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 0, 0, 0, 0,
+                                hwnd, (HMENU)(INT_PTR)IDC_WINLIST_FIND, inst, NULL);
+            if (wl->find != NULL)
+            {
+                SendMessageW(wl->find, EM_SETLIMITTEXT, (WPARAM)(ARRAYSIZE(wl->find_text) - 1), 0);
+            }
+            wl->list =
+                CreateWindowExW(0, WC_LISTVIEWW, L"",
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS,
+                                0, 0, 0, 0, hwnd, (HMENU)(INT_PTR)IDC_WINLIST_LIST, inst, NULL);
+            if (wl->list == NULL)
+            {
+                /* EeWin_ShowDialog frees the state when creation fails, so hand it back. */
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                return -1;
+            }
+            ListView_SetExtendedListViewStyle(wl->list,
+                                              LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
+                                                  LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
+            for (i = 0; i < EE_WINLIST_NCOLS; i++)
+            {
+                LVCOLUMNW col;
+                int w = g_settings.winlist_cols[i];
+                ZeroMemory(&col, sizeof(col));
+                col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT;
+                col.fmt = (i == WL_COL_SIZE || i == WL_COL_RECORDS) ? LVCFMT_RIGHT : LVCFMT_LEFT;
+                col.pszText = (wchar_t *)k_WinListColTitle[i];
+                col.cx = (w > 0) ? w : Scale(wl->app, k_WinListColWidth[i]);
+                ListView_InsertColumn(wl->list, i, &col);
+            }
+            g_old_winlist_list_proc =
+                (WNDPROC)SetWindowLongPtrW(wl->list, GWLP_WNDPROC, (LONG_PTR)WinListListSubclass);
+
+            wl->activate_btn = CreateWindowExW(0, L"BUTTON", L"&Activate", btn, 0, 0, 0, 0, hwnd,
+                                               (HMENU)(INT_PTR)IDC_WINLIST_ACTIVATE, inst, NULL);
+            wl->close_btn =
+                CreateWindowExW(0, L"BUTTON", L"&Close window(s)", btn, 0, 0, 0, 0, hwnd,
+                                (HMENU)(INT_PTR)IDC_WINLIST_CLOSE, inst, NULL);
+            wl->ok_btn = CreateWindowExW(0, L"BUTTON", L"OK", btn, 0, 0, 0, 0, hwnd,
+                                         (HMENU)(INT_PTR)IDC_WINLIST_OK, inst, NULL);
+            if (wl->app->font_ui != NULL)
+            {
+                HWND children[6];
+                int k;
+                children[0] = wl->find_label;
+                children[1] = wl->find;
+                children[2] = wl->list;
+                children[3] = wl->activate_btn;
+                children[4] = wl->close_btn;
+                children[5] = wl->ok_btn;
+                for (k = 0; k < (int)ARRAYSIZE(children); k++)
+                {
+                    if (children[k] != NULL)
+                    {
+                        SendMessageW(children[k], WM_SETFONT, (WPARAM)wl->app->font_ui, TRUE);
+                    }
+                }
+            }
+            WinList_Refresh(wl);
+            WinList_Layout(wl, rc.right, rc.bottom);
+            /* Pick up windows opened or closed elsewhere while the dialog is open. */
+            SetTimer(hwnd, 1, 1000, NULL);
+            return 0;
+        }
+
+        case WM_SIZE:
+            if (wl != NULL)
+            {
+                WinList_Layout(wl, LOWORD(lParam), HIWORD(lParam));
+            }
+            return 0;
+
+        case WM_GETMINMAXINFO:
+            if (wl != NULL && wl->app != NULL)
+            {
+                MINMAXINFO *mm = (MINMAXINFO *)lParam;
+                mm->ptMinTrackSize.x = Scale(wl->app, 560);
+                mm->ptMinTrackSize.y = Scale(wl->app, 260);
+                return 0;
+            }
+            break;
+
+        case WM_SETFOCUS:
+            if (wl != NULL && wl->list != NULL)
+            {
+                SetFocus(wl->list);
+            }
+            return 0;
+
+        case WM_ACTIVATE:
+            if (wl != NULL && LOWORD(wParam) != WA_INACTIVE)
+            {
+                WinList_Refresh(wl);
+            }
+            break;
+
+        case WM_TIMER:
+            if (wl != NULL && wParam == 1)
+            {
+                HWND now[EE_WIN_MAX];
+                int n = EeWin_CollectHandles(now, (int)ARRAYSIZE(now));
+                BOOL changed = (n != wl->nitems);
+                int i;
+                for (i = 0; !changed && i < n; i++)
+                {
+                    if (now[i] != wl->items[i].hwnd)
+                    {
+                        changed = TRUE;
+                    }
+                }
+                if (changed)
+                {
+                    WinList_Refresh(wl);
+                }
+                return 0;
+            }
+            break;
+
+        case WM_COMMAND:
+            if (wl == NULL)
+            {
+                break;
+            }
+            switch (LOWORD(wParam))
+            {
+                case IDC_WINLIST_ACTIVATE:
+                    WinList_ActivateSelected(wl);
+                    return 0;
+                case IDC_WINLIST_CLOSE:
+                    WinList_CloseSelected(wl);
+                    return 0;
+                case IDC_WINLIST_OK:
+                case IDCANCEL:
+                    DestroyWindow(hwnd);
+                    return 0;
+                case IDOK:
+                    /* Enter: activate the one selected window, else just close. */
+                    if (wl->list != NULL && ListView_GetSelectedCount(wl->list) == 1)
+                    {
+                        WinList_ActivateSelected(wl);
+                    }
+                    else
+                    {
+                        DestroyWindow(hwnd);
+                    }
+                    return 0;
+                case IDC_WINLIST_FIND:
+                    if (HIWORD(wParam) == EN_CHANGE && wl->find != NULL)
+                    {
+                        GetWindowTextW(wl->find, wl->find_text, ARRAYSIZE(wl->find_text));
+                        WinList_BuildShown(wl);
+                        WinList_Populate(wl);
+                        return 0;
+                    }
+                    break;
+                default:
+                    break;
+            }
+            break;
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (wl == NULL || hdr == NULL || hdr->hwndFrom != wl->list)
+            {
+                break;
+            }
+            if (hdr->code == LVN_ITEMCHANGED)
+            {
+                WinList_UpdateButtons(wl);
+                return 0;
+            }
+            if (hdr->code == NM_DBLCLK)
+            {
+                WinList_ActivateSelected(wl);
+                return 0;
+            }
+            if (hdr->code == LVN_COLUMNCLICK)
+            {
+                LPNMLISTVIEW nlv = (LPNMLISTVIEW)lParam;
+                if (nlv->iSubItem == wl->sort_col)
+                {
+                    wl->sort_asc = !wl->sort_asc;
+                }
+                else
+                {
+                    wl->sort_col = nlv->iSubItem;
+                    wl->sort_asc = TRUE;
+                }
+                WinList_BuildShown(wl);
+                WinList_Populate(wl);
+                return 0;
+            }
+            if (hdr->code == NM_RCLICK)
+            {
+                LPNMITEMACTIVATE ia = (LPNMITEMACTIVATE)lParam;
+                POINT screen = ia->ptAction;
+                ClientToScreen(wl->list, &screen);
+                WinList_OnContextMenu(wl, ia->iItem, screen);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_CLOSE:
+            DestroyWindow(hwnd);
+            return 0;
+
+        case WM_DESTROY:
+            if (wl != NULL)
+            {
+                KillTimer(hwnd, 1);
+                WinList_SaveLayout(wl);
+                if (g_winlist == wl)
+                {
+                    g_winlist = NULL;
+                }
+                free(wl->items);
+                free(wl->shown);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                free(wl);
+            }
+            return 0;
+
+        default:
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* Window → Windows…: open the window list, or bring it forward when it is already up. */
+static void EeWin_ShowDialog(HWND self)
+{
+    WinListWindow *wl;
+    EeWinInfo info;
+    DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_CLIPCHILDREN |
+                  WS_CLIPSIBLINGS;
+    DWORD ex_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+    int x;
+    int y;
+    int w;
+    int h;
+
+    if (g_winlist != NULL)
+    {
+        WinList_Refresh(g_winlist);
+        SetForegroundWindow(g_winlist->hwnd);
+        return;
+    }
+    if (!EeWin_Describe(self, &info))
+    {
+        return;
+    }
+    wl = (WinListWindow *)calloc(1, sizeof(WinListWindow));
+    if (wl == NULL)
+    {
+        return;
+    }
+    wl->items = (EeWinInfo *)calloc(EE_WIN_MAX, sizeof(EeWinInfo));
+    wl->shown = (int *)calloc(EE_WIN_MAX, sizeof(int));
+    if (wl->items == NULL || wl->shown == NULL)
+    {
+        free(wl->items);
+        free(wl->shown);
+        free(wl);
+        return;
+    }
+    wl->app = info.app;
+    wl->opener = self;
+    wl->sort_col = -1; /* most recently used first, as the Window menu numbers them */
+    wl->sort_asc = TRUE;
+
+    w = (g_settings.winlist_w > 0) ? g_settings.winlist_w : Scale(wl->app, 880);
+    h = (g_settings.winlist_h > 0) ? g_settings.winlist_h : Scale(wl->app, 460);
+    if (g_settings.winlist_w > 0 && g_settings.winlist_h > 0)
+    {
+        RECT saved;
+        SetRect(&saved, g_settings.winlist_x, g_settings.winlist_y, g_settings.winlist_x + w,
+                g_settings.winlist_y + h);
+        x = g_settings.winlist_x;
+        y = g_settings.winlist_y;
+        /* A monitor may have gone away since the size was saved. */
+        if (MonitorFromRect(&saved, MONITOR_DEFAULTTONULL) == NULL)
+        {
+            x = CW_USEDEFAULT;
+            y = CW_USEDEFAULT;
+        }
+    }
+    else
+    {
+        RECT pr;
+        x = CW_USEDEFAULT;
+        y = CW_USEDEFAULT;
+        if (GetWindowRect(self, &pr))
+        {
+            x = pr.left + ((pr.right - pr.left) - w) / 2;
+            y = pr.top + ((pr.bottom - pr.top) - h) / 2;
+        }
+    }
+
+    if (CreateWindowExW(ex_style, k_WinListClassName, L"Windows", style, x, y, w, h, self, NULL,
+                        wl->app->instance, wl) == NULL)
+    {
+        free(wl->items);
+        free(wl->shown);
+        free(wl);
+        return;
+    }
+    g_winlist = wl;
+    ShowWindow(wl->hwnd, SW_SHOW);
+    SetForegroundWindow(wl->hwnd);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Entry                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -28207,6 +30120,23 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         arc.hIcon = wc.hIcon;
         arc.hIconSm = wc.hIconSm;
         if (RegisterClassExW(&arc) == 0)
+        {
+            return 1;
+        }
+    }
+
+    {
+        WNDCLASSEXW wlc;
+        ZeroMemory(&wlc, sizeof(wlc));
+        wlc.cbSize = sizeof(wlc);
+        wlc.lpfnWndProc = WinListWndProc;
+        wlc.hInstance = hInstance;
+        wlc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+        wlc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+        wlc.lpszClassName = k_WinListClassName;
+        wlc.hIcon = wc.hIcon;
+        wlc.hIconSm = wc.hIconSm;
+        if (RegisterClassExW(&wlc) == 0)
         {
             return 1;
         }

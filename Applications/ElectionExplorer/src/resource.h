@@ -112,6 +112,19 @@
  * (five logs of up to 64 copies: 40200..40519). */
 #define IDM_AUD_COPY_FIRST      40200
 
+/* Window menu (between Compare and Help). */
+#define IDM_WINDOW_LIST         40600
+#define IDM_WINDOW_CASCADE      40601
+#define IDM_WINDOW_TILE_H       40602
+#define IDM_WINDOW_TILE_V       40603
+#define IDM_WINDOW_MINIMIZE_ALL 40604
+#define IDM_WINDOW_CLOSE_TYPE   40605
+#define IDM_WINDOW_CLOSE_OTHERS 40606
+#define IDM_HELP_WINDOWS        40607
+/* One item per listed window, most recently used first: IDM_WINDOW_FIRST + 0..9. */
+#define IDM_WINDOW_FIRST        40610
+#define IDM_WINDOW_LAST         40619
+
 /* Election Results options dialog. */
 #define IDC_RES_ZOOM      41600
 #define IDC_RES_ZOOM_SPIN 41601
@@ -136,6 +149,15 @@
 /* Sheet-picker dialog (XLSX). */
 #define IDC_SHEET_LIST  41300
 #define IDC_SHEET_LABEL 41301
+
+/* Windows… dialog child controls. */
+#define IDC_WINLIST_FIND_LABEL 41800
+#define IDC_WINLIST_FIND       41801
+#define IDC_WINLIST_LIST       41802
+#define IDC_WINLIST_ACTIVATE   41803
+#define IDC_WINLIST_CLOSE      41804
+#define IDC_WINLIST_OK         41805
+#define IDC_WINLIST_COPY_PATH  41806
 
 /* Compare / Differences window child controls. */
 #define IDC_CMP_DIFF 41210

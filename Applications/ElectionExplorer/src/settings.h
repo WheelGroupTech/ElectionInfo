@@ -21,6 +21,9 @@ extern "C"
     /** Registry subkey (under HKEY_CURRENT_USER) holding user options. */
 #define EE_SETTINGS_SUBKEY L"Software\\WheelGroupTech\\ElectionExplorer"
 
+    /** Columns of the Windows… dialog list: Name, Path, Type, Size, Records, Modified. */
+#define EE_WINLIST_NCOLS 6
+
     /** User-configurable options persisted between runs. */
     typedef struct EeSettings
     {
@@ -35,6 +38,13 @@ extern "C"
         BOOL results_show_vote_types; /**< Election Results: one column per vote type. */
         wchar_t audit_test_words[128]; /**< Audit logs: the words that make a Hart task a test
                                         *   task, comma separated; "" = the built-in list. */
+        /** Windows… dialog placement in screen pixels; all zero = not saved yet. */
+        int winlist_x;
+        int winlist_y;
+        int winlist_w;
+        int winlist_h;
+        /** Windows… dialog column widths in pixels (EE_WINLIST_NCOLS); 0 = use the default. */
+        int winlist_cols[EE_WINLIST_NCOLS];
     } EeSettings;
 
     /** Values for EeSettings.cvr_tab_party_first. */

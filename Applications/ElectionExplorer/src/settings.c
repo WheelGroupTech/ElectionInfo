@@ -20,9 +20,19 @@ static const wchar_t k_ValCvrMergeWriteins[] = L"CvrMergeWriteins";
 static const wchar_t k_ValCvrTabPartyFirst[] = L"CvrTabPartyFirst";
 static const wchar_t k_ValResultsShowVoteTypes[] = L"ResultsShowVoteTypes";
 static const wchar_t k_ValAuditTestWords[] = L"AuditTestTaskWords";
+static const wchar_t k_ValWinListX[] = L"WindowListX";
+static const wchar_t k_ValWinListY[] = L"WindowListY";
+static const wchar_t k_ValWinListW[] = L"WindowListWidth";
+static const wchar_t k_ValWinListH[] = L"WindowListHeight";
+/* One value per column: "WindowListCol0" .. "WindowListCol5". The name carries a single
+ * digit, so a tenth column would be the last that could have its own value. */
+static const wchar_t k_ValWinListCol[] = L"WindowListCol0";
+_Static_assert(EE_WINLIST_NCOLS <= 10, "a column-width value name holds one digit");
 
 void EeSettings_Defaults(EeSettings *out)
 {
+    int i;
+
     if (out == NULL)
     {
         return;
@@ -35,6 +45,28 @@ void EeSettings_Defaults(EeSettings *out)
     out->cvr_tab_party_first = EE_TAB_PARTY_REP;
     out->results_show_vote_types = TRUE;
     out->audit_test_words[0] = L'\0';
+    out->winlist_x = 0;
+    out->winlist_y = 0;
+    out->winlist_w = 0;
+    out->winlist_h = 0;
+    for (i = 0; i < EE_WINLIST_NCOLS; i++)
+    {
+        out->winlist_cols[i] = 0;
+    }
+}
+
+/* Name of the Windows… dialog's column-width value for column @p index: the stem
+ * "WindowListCol0" with its trailing digit replaced. */
+static void winlist_col_name(int index, wchar_t *out, size_t cch)
+{
+    size_t n = ARRAYSIZE(k_ValWinListCol);
+
+    if (out == NULL || cch < n)
+    {
+        return;
+    }
+    memcpy(out, k_ValWinListCol, n * sizeof(wchar_t));
+    out[n - 2] = (wchar_t)(L'0' + (index % 10));
 }
 
 /* Read one REG_DWORD into *value; leave it unchanged if the value is absent or
@@ -87,6 +119,7 @@ static BOOL write_dword(HKEY key, const wchar_t *name, int value)
 BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
 {
     HKEY key = NULL;
+    int i;
     int prepend;
     int surname;
     int merge_wi;
@@ -121,6 +154,20 @@ BOOL EeSettings_LoadFrom(const wchar_t *subkey, EeSettings *out)
     read_dword(key, k_ValResultsShowVoteTypes, &show_vt);
     out->results_show_vote_types = (show_vt != 0);
     read_string(key, k_ValAuditTestWords, out->audit_test_words, (DWORD)ARRAYSIZE(out->audit_test_words));
+    read_dword(key, k_ValWinListX, &out->winlist_x);
+    read_dword(key, k_ValWinListY, &out->winlist_y);
+    read_dword(key, k_ValWinListW, &out->winlist_w);
+    read_dword(key, k_ValWinListH, &out->winlist_h);
+    for (i = 0; i < EE_WINLIST_NCOLS; i++)
+    {
+        wchar_t name[32];
+        winlist_col_name(i, name, ARRAYSIZE(name));
+        read_dword(key, name, &out->winlist_cols[i]);
+        if (out->winlist_cols[i] < 0)
+        {
+            out->winlist_cols[i] = 0;
+        }
+    }
     RegCloseKey(key);
     return TRUE;
 }
@@ -129,6 +176,7 @@ BOOL EeSettings_SaveTo(const wchar_t *subkey, const EeSettings *in)
 {
     HKEY key = NULL;
     BOOL ok = TRUE;
+    int i;
 
     if (subkey == NULL || in == NULL)
     {
@@ -154,6 +202,16 @@ BOOL EeSettings_SaveTo(const wchar_t *subkey, const EeSettings *in)
     ok &= write_dword(key, k_ValCvrTabPartyFirst, in->cvr_tab_party_first);
     ok &= write_dword(key, k_ValResultsShowVoteTypes, in->results_show_vote_types ? 1 : 0);
     ok &= write_string(key, k_ValAuditTestWords, in->audit_test_words);
+    ok &= write_dword(key, k_ValWinListX, in->winlist_x);
+    ok &= write_dword(key, k_ValWinListY, in->winlist_y);
+    ok &= write_dword(key, k_ValWinListW, in->winlist_w);
+    ok &= write_dword(key, k_ValWinListH, in->winlist_h);
+    for (i = 0; i < EE_WINLIST_NCOLS; i++)
+    {
+        wchar_t name[32];
+        winlist_col_name(i, name, ARRAYSIZE(name));
+        ok &= write_dword(key, name, in->winlist_cols[i]);
+    }
     RegCloseKey(key);
     return ok;
 }

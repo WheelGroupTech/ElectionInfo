@@ -4,32 +4,26 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **In progress (uncommitted): Texas Secretary of State canvass reports.**
-Election Explorer now reads, by OCR, the signed canvass report a county files with the SOS (county
-totals only). Eight files that were refused now load: Angelina G24/G25 (two copies), Brazos G25,
-and Henderson G20/G21/L22/S21.
-- **Scans with a text layer:** Acrobat Paper Capture text layers are garbled. A Paper Capture scan
-  whose text is no known report is read by OCR for this form only; any other such scan is still
-  refused. `EePdf_GetPageImage` now looks inside form XObjects (Brazos).
-- **Checked:**
-  - The Windows smoke suite passes with new test `ressos`; the Linux build is clean and its smoke
-    suite passes.
-  - Counts were checked against the scans and against Henderson's own reports.
-  - Old vs new `data_check` differs only on the 8 forms.
-- **Where to read more:** `ElectionExplorer/docs/election-results-design.md`, "Texas Secretary of
-  State canvass reports", and the CHANGELOG entry under "Unreleased".
-- **Next steps:** review and commit.
-- **Committed since the last note:**
-  - the macOS / Linux port, step 1 (74c0bd1);
+**Last updated:** 2026-11-22. **Nothing in progress; everything is committed.**
+- **Recent commits:**
+  - Texas Secretary of State canvass reports, read by OCR (cc12ac8). Eight files that were
+    refused now load (Angelina G24/G25, Brazos G25, Henderson G20/G21/L22/S21). A Paper Capture
+    scan whose text layer is no known report is read by OCR for this form only. See
+    `ElectionExplorer/docs/election-results-design.md`, "Texas Secretary of State canvass
+    reports".
   - Brazos vote-center reports as one election (f12a33e).
+  - The macOS / Linux port, step 1 (74c0bd1).
 - **Port, next steps** (see `ElectionExplorer/docs/cross-platform-design.md`):
   - the macOS build (needs a Mac);
   - OCR (Apple Vision / Tesseract);
   - a wxWidgets prototype;
   - CI;
   - a `.gitattributes`.
-- **Linux builds:** run `cmake --preset linux-x64-debug` from `ElectionExplorer/`. The WSL clone at
-  `~/dev/WheelGroupTech/ElectionInfo` needs a pull.
+- **Linux builds:** the WSL clone at `~/dev/WheelGroupTech/ElectionInfo` is up to date with
+  cc12ac8. From its `Applications/ElectionExplorer/`, run `cmake --preset linux-x64-debug`,
+  `cmake --build --preset linux-x64-debug` and `ctest --preset linux-x64-debug`.
+- **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
+  court order followed by scanned ES&S reports with an OCR text layer.
 
 **Noticed while testing, left as is by the user's decision (2026-11-19):**
 `File → Load Cast Vote Records…` opens an *empty* Cast Vote Records window when the file holds no

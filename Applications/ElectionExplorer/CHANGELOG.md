@@ -30,6 +30,41 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — Texas Secretary of State canvass reports (scanned) load
+- **What:**
+  - **The form:** the canvass report a county files with the Secretary of State, printed, signed and scanned. It gives county totals only: the voters voted, provisional votes, then ballot measures (FOR / AGAINST) and contests of candidate, party and votes. It is now read by OCR.
+  - **Eight files load that were refused:**
+    - Brazos G25, the only whole-county G25 result Brazos posted: 17 measures and 34 counts.
+    - Angelina G25 (two copies), Angelina G24 (23 pages, 23 contests), and Henderson G20, G21, L22 and S21 (August 31).
+  - **Format:** shown as "Texas SOS canvass report (PDF)".
+  - **Scans with an OCR text layer:** five of the files are scans that Acrobat's Paper Capture gave a text layer with letters doubled and numbers on the wrong rows. When such a file's text is no report Election Explorer knows, its page images are now read by OCR for this form. Any other such scan is refused as before.
+  - **Load Summary:** rows OCR could not read (a lone faint "0" or "1"), which show as 0. Also contests with more votes than voters voted.
+  - **What the form says is kept:** Henderson's G21 form gives the county's registered voters (56,413) as its "Total # of Voters Voted".
+- **Where:**
+  - `src/ee_results_ocr.c`:
+    - new `ro_sos_*` functions read the form: the heading, the fixed columns, rows across pages, and a measure's wording skipped;
+    - `ro_sos_deskew` takes out a scan's slope, and the grouping is split out of `ro_build_rows` into `ro_group_rows`;
+    - a page with rows missing their count is read again at 1.6x;
+    - `EeRocr_Parse` checks the first three pages for the form;
+    - new `EeRocr_ParseSosCanvass` (`src/ee_results_ocr.h`) reads only this form.
+  - `src/ee_results_pdf.c`: new `rp_ocr_layer`; `EeRpdf_ParseEx` turns to `EeRocr_ParseSosCanvass` for a Paper Capture scan it cannot read.
+  - New `EE_RPDF_SOS_CANVASS` (`src/ee_results_pdf.h`) and `EE_RES_FMT_SOS_CANVASS` (`src/ee_results.{h,c}`).
+  - `src/pdf_reader.c`: `EePdf_GetPageImage` takes the largest image inside a form XObject (Brazos's scan is drawn through one).
+  - `test/smoke_load.c`: new `test_results_sos` (tag `ressos`) and `tpdf_write_paper_capture`; `test/README.md`.
+- **Checked:**
+  - **Smoke suite:**
+    - Windows x64: passes, including `ressos` (a GDI-drawn form loaded as a plain scan and as a Paper Capture file).
+    - Linux: passes with no warnings; `ressos` is skipped there (no OCR yet).
+  - **Against the scans:** every count of Brazos G25, Angelina G25 and Henderson G21 and S21.
+  - **Against the counties' own reports:**
+    - Henderson L22: its 4 counts equal the official summary's.
+    - Henderson G21: the official report's text agrees where it can be read.
+  - **Counts not read:** Angelina G24 misses 3 lone write-in zeros and Henderson G20 misses 6 write-in counts; the Load Summary says so.
+  - **Old and new `data_check` builds:**
+    - **The 30 Paper Capture results PDFs and Angelina's G24 scan:** only the 8 forms change.
+    - **The 27 files whose page image now reads differently** (Collin, Ellis, Travis PR20; text pages): all load as before.
+- **Details:** [docs/election-results-design.md](docs/election-results-design.md), "Texas Secretary of State canvass reports".
+
 ### 2026-11-22 — Brazos vote-center precinct reports load as one election
 - **What:**
   - **Titles:** Brazos's "accessible" Hart precinct reports draw a wrapped contest title as pieces on one line: the first piece at the margin, and every other piece from the point where the first one ends. The words split at places that differ from file to file ("COMMISSIONER OF THE GENERAL LAND O FFICE - Republican Pa rty"), so each vote center's file named the same contest differently. Those pieces now join into the whole title. Its party suffix then reads too, so the title is "REP COMMISSIONER OF THE GENERAL LAND OFFICE".

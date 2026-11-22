@@ -235,6 +235,19 @@ typedef struct RoCx
     BOOL pre_placeholder; /* the current precinct's name was not read (yet) */
     size_t turnout_mark;  /* the current part's first turnout entry */
     int64_t reg_base, bal_base; /* the precinct's registered / ballots before this part */
+    /* a Texas Secretary of State canvass report (ro_sos_*) */
+    BOOL sos;
+    int sos_mode;                 /* SOS_* */
+    uint32_t sos_contest;         /* the contest rows go to, UINT32_MAX for none */
+    int64_t sos_voters, sos_prov; /* Total # of Voters Voted, Provisional Votes Counted */
+    uint32_t sos_voters_differ;   /* pages whose Total # of Voters Voted is not the first page's */
+    uint32_t sos_unread, sos_untitled;
+    wchar_t sos_unread_first[200];
+    double sos_scale; /* > 0: read the page this much larger (faint counts) */
+    uint32_t sos_enlarged;
+    BOOL sos_started; /* the form's heading was seen (a court order may come first) */
+    BOOL sos_desc;    /* the current measure's wording follows its title */
+    uint32_t sos_first; /* the first page with the form's heading */
 } RoCx;
 
 /* -------------------------------------------------------------------------- */
@@ -1201,6 +1214,8 @@ static BOOL ro_split_word(const RoPage *pg, uint32_t k)
     return n > 0 && iswalpha(a->t[n - 1]) && iswlower(b->t[0]) && b->x0 - a->x1 < 0.55f * pg->space;
 }
 
+static BOOL ro_group_rows(RoPage *pg);
+
 /* Turn an OCR result into words in page units and group them into rows (RoPage.ln). */
 static BOOL ro_build_rows(RoCx *cx, const EeOcrText *t)
 {
@@ -1287,6 +1302,26 @@ static BOOL ro_build_rows(RoCx *cx, const EeOcrText *t)
     for (i = 0; i < n; i++)
     {
         pg->w[i].yc -= slope * ((pg->w[i].x0 + pg->w[i].x1) * 0.5f - 500.0f);
+    }
+    free(tmp);
+    return ro_group_rows(pg);
+}
+
+/* Group the page's words (RoPage.w, their centres straightened) into rows (RoPage.ln) with their
+ * text, and find the page's usual gap between words and distance between rows. */
+static BOOL ro_group_rows(RoPage *pg)
+{
+    float *tmp;
+    uint32_t i, n = pg->nw;
+    pg->nl = 0;
+    if (n == 0)
+    {
+        return TRUE;
+    }
+    tmp = (float *)malloc((size_t)n * sizeof(float));
+    if (tmp == NULL)
+    {
+        return FALSE;
     }
     qsort(pg->w, n, sizeof(RoWord), ro_word_y_cmp);
     /* rows: words whose centres are within half a word height of the row's */
@@ -1425,6 +1460,10 @@ static BOOL ro_ocr_page(RoCx *cx, EePdf *pdf, uint32_t page, EeOcr *ocr, EeOcrTe
         {
             scale = 1.0;
         }
+        if (cx->sos_scale > 0.0)
+        {
+            scale *= cx->sos_scale;
+        }
     }
 #define RO_RECOGNIZE()                                                                                                    \
     (img->kind == EE_PDF_IMAGE_ENCODED                                                                                    \
@@ -1502,7 +1541,7 @@ static BOOL ro_ocr_page(RoCx *cx, EePdf *pdf, uint32_t page, EeOcr *ocr, EeOcrTe
                 bare += nums < 2; /* (a row of counts has its total, its percentage and more) */
             }
         }
-        if (named >= 8 && bare * 20 > named * 11 && scale < 2.0)
+        if (!cx->sos && named >= 8 && bare * 20 > named * 11 && scale < 2.0)
         {
             scale *= 1.5;
             if (RO_RECOGNIZE() && (nums1 = ro_numbers(t)) > nums0)
@@ -4478,6 +4517,804 @@ static void ro_merge_same_titles(RoCx *cx)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Texas Secretary of State canvass report                                    */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The canvass report a county files with the Secretary of State, printed, signed and scanned
+ * (Angelina's, Brazos's). Its heading ("Texas Secretary of State", "Canvass Report", the
+ * election, its date, the county, "Total # of Voters Voted", "Provisional Votes Counted") may
+ * repeat on each page. County totals follow, with no precincts or vote types: under "Ballot
+ * Measures" a row for each measure and choice ("PROPOSITION 1 (SJR 59)   FOR   14887"), else a
+ * contest's title and rows of candidate, party and votes ("Ted Cruz   REP   24994"). The
+ * certification ("I, ..., do hereby certify ...") and the signature end a page's rows.
+ */
+
+enum
+{
+    SOS_NONE,
+    SOS_MEASURES,
+    SOS_CANDIDATES
+};
+
+#define RO_SOS_MID   450.0f /* the middle column (FOR / AGAINST, the party) starts right of this */
+#define RO_SOS_VOTES 650.0f /* the votes column starts right of this */
+
+/* The page OCR read starts the form: "Texas Secretary of State", "Canvass Report". */
+static BOOL ro_sos_detect(const RoCx *cx)
+{
+    uint32_t l;
+    BOOL sec = FALSE, canv = FALSE;
+    for (l = 0; l < cx->pg.nl && l < 12; l++)
+    {
+        wchar_t key[RO_TEXT_CCH];
+        ro_key(cx->pg.ln[l].text, key, ARRAYSIZE(key));
+        sec = sec || wcsstr(key, L"SECRETARYOFSTATE") != NULL;
+        canv = canv || wcsstr(key, L"CANVASSREPORT") != NULL;
+    }
+    return sec && canv;
+}
+
+/* Words [a, b) of the page, joined as ro_build_rows joins a row's. */
+static void ro_sos_words(const RoCx *cx, uint32_t a, uint32_t b, wchar_t *out, size_t cch)
+{
+    uint32_t k;
+    out[0] = L'\0';
+    for (k = a; k < b; k++)
+    {
+        if (k > a && !ro_split_word(&cx->pg, k))
+        {
+            StringCchCatW(out, cch, L" ");
+        }
+        StringCchCatW(out, cch, cx->pg.w[k].t);
+    }
+}
+
+/* "11/18/2024   Page 1 of 23": the page's footer. The date before "Page" is when the report
+ * was printed. */
+static BOOL ro_sos_footer(RoCx *cx, const RoLine *ln)
+{
+    uint32_t k;
+    for (k = ln->w0; k + 2 < ln->w0 + ln->nw; k++)
+    {
+        if (_wcsicmp(cx->pg.w[k].t, L"Page") == 0 && ro_numish(cx->pg.w[k + 1].t) && _wcsicmp(cx->pg.w[k + 2].t, L"of") == 0)
+        {
+            if (k > ln->w0 && cx->d->timestamp == NULL && iswdigit(cx->pg.w[ln->w0].t[0]))
+            {
+                wchar_t ts[64];
+                ro_sos_words(cx, ln->w0, k, ts, ARRAYSIZE(ts));
+                if ((cx->d->timestamp = ro_wdup(ts)) == NULL)
+                {
+                    cx->oom = TRUE;
+                }
+            }
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* The last whole number on a row, or EE_RPDF_UNKNOWN. */
+static int64_t ro_sos_last_number(const RoCx *cx, const RoLine *ln)
+{
+    uint32_t k;
+    for (k = ln->w0 + ln->nw; k > ln->w0; k--)
+    {
+        int64_t v;
+        double pct;
+        if (iswdigit(cx->pg.w[k - 1].t[0]) && ro_number(cx->pg.w[k - 1].t, &v, &pct) == RO_INT)
+        {
+            return v;
+        }
+    }
+    return EE_RPDF_UNKNOWN;
+}
+
+/* A row's votes: its number words right of RO_SOS_VOTES before word @p end ("14887", or "148
+ * 87" as OCR split it), *vstart the first of them. FALSE when there are none (*vstart = end)
+ * or they do not read as a whole number. */
+static BOOL ro_sos_votes(const RoCx *cx, const RoLine *ln, uint32_t end, int64_t *v, uint32_t *vstart)
+{
+    wchar_t num[48] = L"";
+    double pct;
+    uint32_t k = end;
+    while (k > ln->w0 && cx->pg.w[k - 1].x0 > RO_SOS_VOTES && ro_numish(cx->pg.w[k - 1].t))
+    {
+        k--;
+    }
+    *vstart = k;
+    if (k == end)
+    {
+        return FALSE;
+    }
+    for (; k < end; k++)
+    {
+        StringCchCatW(num, ARRAYSIZE(num), cx->pg.w[k].t);
+    }
+    return ro_number(num, v, &pct) == RO_INT;
+}
+
+/* The first word of a row's middle column (before word @p vstart, the votes): the first right of
+ * RO_SOS_MID after a wide gap. A long title runs past RO_SOS_MID with no gap ("JUSTICE, 12TH
+ * COURT OF APPEALS DISTRICT, PLACE 3"). */
+static uint32_t ro_sos_mid(const RoCx *cx, const RoLine *ln, uint32_t vstart)
+{
+    uint32_t k;
+    for (k = ln->w0; k < vstart; k++)
+    {
+        if (cx->pg.w[k].x0 >= RO_SOS_MID && (k == ln->w0 || cx->pg.w[k].x0 - cx->pg.w[k - 1].x1 > 40.0f))
+        {
+            return k;
+        }
+    }
+    return vstart;
+}
+
+/* Rows of the page whose votes OCR did not read: a middle column ("REP", "AGAINST") and no
+ * number right of it. */
+static uint32_t ro_sos_missing(const RoCx *cx)
+{
+    uint32_t l, n = 0;
+    for (l = 0; l < cx->pg.nl; l++)
+    {
+        const RoLine *ln = &cx->pg.ln[l];
+        uint32_t end = ln->w0 + ln->nw, vstart, mid0;
+        int64_t v;
+        if (end > ln->w0 + 1 && cx->pg.w[end - 1].x0 > RO_SOS_VOTES && _wcsicmp(cx->pg.w[end - 1].t, L"Votes") == 0)
+        {
+            end--;
+        }
+        ro_sos_votes(cx, ln, end, &v, &vstart);
+        mid0 = ro_sos_mid(cx, ln, vstart);
+        if (vstart == end && mid0 > ln->w0 && mid0 + 1 == end && cx->pg.w[mid0].x0 < RO_SOS_VOTES && iswalpha(cx->pg.w[mid0].t[0]))
+        {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The county the heading names ("BRAZOS"), as "Brazos County". */
+static void ro_sos_region(RoCx *cx, const wchar_t *s)
+{
+    wchar_t rg[96];
+    size_t o = 0;
+    BOOL start = TRUE;
+    if (cx->d->region != NULL)
+    {
+        return;
+    }
+    for (; *s != L'\0' && o + 8 < ARRAYSIZE(rg); s++)
+    {
+        if (iswalpha(*s))
+        {
+            rg[o++] = start ? (wchar_t)towupper(*s) : (wchar_t)towlower(*s);
+            start = FALSE;
+        }
+        else if ((*s == L' ' || *s == L'-' || *s == L'.') && o > 0)
+        {
+            rg[o++] = *s;
+            start = TRUE;
+        }
+    }
+    while (o > 0 && !iswalpha(rg[o - 1]))
+    {
+        o--;
+    }
+    if (o < 3)
+    {
+        return; /* not a county name */
+    }
+    rg[o] = L'\0';
+    if (wcsstr(rg, L"County") == NULL)
+    {
+        StringCchCatW(rg, ARRAYSIZE(rg), L" County");
+    }
+    if ((cx->d->region = ro_wdup(rg)) == NULL)
+    {
+        cx->oom = TRUE;
+    }
+}
+
+static uint32_t ro_sos_contest(RoCx *cx, const wchar_t *title)
+{
+    EeRpdfDoc *d = cx->d;
+    EeRpdfContest *c;
+    if (!ro_grow((void **)&d->contests, &d->cap_contests, d->ncontests + 1, sizeof(EeRpdfContest)) ||
+        !ro_grow_cside(cx, d->ncontests + 1))
+    {
+        cx->oom = TRUE;
+        return UINT32_MAX;
+    }
+    c = &d->contests[d->ncontests];
+    ZeroMemory(c, sizeof(*c));
+    c->over = EE_RPDF_UNKNOWN;
+    c->under = EE_RPDF_UNKNOWN;
+    c->ballots = EE_RPDF_UNKNOWN;
+    if ((c->title = ro_wdup(title)) == NULL)
+    {
+        cx->oom = TRUE;
+        return UINT32_MAX;
+    }
+    ro_var_add(cx, &cx->cvar[d->ncontests], title);
+    return d->ncontests++;
+}
+
+static void ro_sos_choice(RoCx *cx, uint32_t ci, const wchar_t *name, const wchar_t *party, int64_t votes)
+{
+    EeRpdfContest *c = &cx->d->contests[ci];
+    if (!ro_grow((void **)&c->choices, &c->cap_choices, c->nchoices + 1, sizeof(EeRpdfChoice)) ||
+        !ro_grow((void **)&cx->chvar[ci], &cx->cap_chvar[ci], c->nchoices + 1, sizeof(RoVarList)) ||
+        (c->choices[c->nchoices].name = ro_wdup(name)) == NULL)
+    {
+        cx->oom = TRUE;
+        return;
+    }
+    c->choices[c->nchoices].party = (party != NULL && party[0] != L'\0') ? ro_wdup(party) : NULL;
+    c->choices[c->nchoices].total = votes;
+    ro_var_add(cx, &cx->chvar[ci][c->nchoices], name);
+    c->nchoices++;
+}
+
+static void ro_sos_unread(RoCx *cx, const wchar_t *what)
+{
+    if (cx->sos_unread++ == 0)
+    {
+        StringCchPrintfW(cx->sos_unread_first, ARRAYSIZE(cx->sos_unread_first), L"page %u, \"%s\"", cx->page + 1, what);
+    }
+}
+
+/* A measure's joint resolution with its "J" misread ("(SUR 5)", "(HIR 7)", "(SdR 2)"): "(SJR 5)",
+ * "(HJR 7)", "(SJR 2)". */
+static void ro_sos_fix_jr(wchar_t *s)
+{
+    wchar_t *p;
+    for (p = s; (p = wcschr(p, L'(')) != NULL; p++)
+    {
+        if ((p[1] == L'S' || p[1] == L'H') && p[2] != L'\0' && p[2] != L'J' &&
+            (wcschr(L"UIL1|]", p[2]) != NULL || iswlower(p[2])) && p[3] == L'R' && p[4] == L' ')
+        {
+            p[2] = L'J';
+        }
+    }
+}
+
+/* A measure's title run together with its wording ("PROPOSITION NUMBER 2 (SJR 2) THE
+ * CONSTITUTIONAL AMENDMENT ..."): cut after the joint resolution. */
+static void ro_sos_trim_title(wchar_t *s)
+{
+    wchar_t *p = wcsstr(s, L"(SJR ");
+    wchar_t *q;
+    if (p == NULL)
+    {
+        p = wcsstr(s, L"(HJR ");
+    }
+    if (p != NULL && (q = wcschr(p, L')')) != NULL && q[1] != L'\0')
+    {
+        q[1] = L'\0';
+    }
+}
+
+/* A measure's choice as the middle column reads it ("FOR", "AGAINST", "AGAlNST"), else "". */
+static const wchar_t *ro_sos_measure_choice(const wchar_t *key)
+{
+    size_t n = wcslen(key);
+    if (n >= 5 && n <= 9 && ro_lev(key, L"AGAINST") <= 2)
+    {
+        return L"AGAINST";
+    }
+    if (n >= 2 && n <= 4 && ro_lev(key, L"FOR") <= 1)
+    {
+        return L"FOR";
+    }
+    return L"";
+}
+
+static BOOL ro_sos_has_choice(const RoCx *cx, uint32_t ci, const wchar_t *name)
+{
+    const EeRpdfContest *c = &cx->d->contests[ci];
+    uint32_t k;
+    for (k = 0; k < c->nchoices; k++)
+    {
+        if (wcscmp(c->choices[k].name, name) == 0)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Read one page of the form from its rows (RoPage). */
+static void ro_sos_page(RoCx *cx)
+{
+    EeRpdfDoc *d = cx->d;
+    const RoPage *pg = &cx->pg;
+    uint32_t l;
+    int head = 0;       /* 1: after "Canvass Report", 2: after the date, 3: after the voters voted */
+    int name_lines = 0; /* the election's name: the heading's rows before the date */
+    wchar_t ename[RO_TEXT_CCH] = L"";
+    for (l = 0; l < pg->nl && !cx->oom; l++)
+    {
+        const RoLine *ln = &pg->ln[l];
+        wchar_t key[RO_TEXT_CCH], label[RO_LABEL_CCH], mid[64], mkey[64];
+        uint32_t end = ln->w0 + ln->nw, mid0, vstart, k;
+        int64_t v = EE_RPDF_UNKNOWN;
+        BOOL has_v;
+        ro_key(ln->text, key, ARRAYSIZE(key));
+        if (key[0] == L'\0')
+        {
+            continue;
+        }
+        if (wcsstr(key, L"SECRETARYOFSTATE") != NULL || wcsstr(key, L"CANVASSREPORT") != NULL)
+        {
+            head = 1;
+            cx->sos_started = TRUE;
+            continue;
+        }
+        if (!cx->sos_started)
+        {
+            continue; /* pages before the form (Henderson's court order ratifying the canvass) */
+        }
+        if (ro_sos_footer(cx, ln))
+        {
+            continue;
+        }
+        if (wcsstr(key, L"HEREBYCERTIF") != NULL || wcsstr(key, L"CERTIFYTHE") != NULL)
+        {
+            break; /* the certification and the signature: the page's rows are done */
+        }
+        if (wcsstr(key, L"VOTERSVOTED") != NULL || (wcsstr(key, L"TOTAL") != NULL && wcsstr(key, L"VOTERS") != NULL))
+        {
+            /* "ANGELINA  Total # of Voters Voted:  34820" (Brazos's county is on a row of its own) */
+            v = ro_sos_last_number(cx, ln);
+            for (k = ln->w0; k < end && _wcsnicmp(pg->w[k].t, L"Total", 5) != 0; k++)
+            {
+            }
+            if (k > ln->w0 && k < end && pg->w[k - 1].x1 < RO_SOS_MID)
+            {
+                wchar_t cty[96];
+                ro_sos_words(cx, ln->w0, k, cty, ARRAYSIZE(cty));
+                ro_sos_region(cx, cty);
+            }
+            if (v != EE_RPDF_UNKNOWN)
+            {
+                if (cx->sos_voters == EE_RPDF_UNKNOWN)
+                {
+                    cx->sos_voters = v;
+                }
+                else if (v != cx->sos_voters)
+                {
+                    cx->sos_voters_differ++;
+                }
+            }
+            head = 3;
+            continue;
+        }
+        if (wcsstr(key, L"PROVISIONAL") != NULL)
+        {
+            if (cx->sos_prov == EE_RPDF_UNKNOWN)
+            {
+                cx->sos_prov = ro_sos_last_number(cx, ln);
+            }
+            head = 0;
+            continue;
+        }
+        if (head == 1)
+        {
+            wchar_t date[64];
+            if (ro_date(ln->text, date, ARRAYSIZE(date)))
+            {
+                if (d->election_date == NULL && (d->election_date = ro_wdup(date)) == NULL)
+                {
+                    cx->oom = TRUE;
+                }
+                if (d->election_name == NULL && ename[0] != L'\0' && (d->election_name = ro_wdup(ename)) == NULL)
+                {
+                    cx->oom = TRUE;
+                }
+                head = 2;
+            }
+            else if (name_lines++ < 3)
+            {
+                if (ename[0] != L'\0')
+                {
+                    StringCchCatW(ename, ARRAYSIZE(ename), L" ");
+                }
+                StringCchCatW(ename, ARRAYSIZE(ename), ln->text);
+            }
+            continue;
+        }
+        if (head == 2)
+        {
+            /* the county on a row of its own ("BRAZOS"), between the date and the voters voted */
+            BOOL digits = FALSE;
+            const wchar_t *s;
+            for (s = ln->text; *s != L'\0'; s++)
+            {
+                digits = digits || iswdigit(*s);
+            }
+            if (!digits && ln->x1 < RO_SOS_MID)
+            {
+                ro_sos_region(cx, ln->text);
+            }
+            continue;
+        }
+        if (wcscmp(key, L"VOTES") == 0)
+        {
+            continue; /* the column's heading */
+        }
+        if (ro_starts(key, L"BALLOTMEASURES"))
+        {
+            cx->sos_mode = SOS_MEASURES;
+            cx->sos_contest = UINT32_MAX;
+            continue;
+        }
+        if (end > ln->w0 + 1 && pg->w[end - 1].x0 > RO_SOS_VOTES && _wcsicmp(pg->w[end - 1].t, L"Votes") == 0)
+        {
+            end--; /* the column's heading OCR put on the row */
+        }
+        has_v = ro_sos_votes(cx, ln, end, &v, &vstart);
+        mid0 = ro_sos_mid(cx, ln, vstart);
+        ro_sos_words(cx, ln->w0, mid0, label, ARRAYSIZE(label));
+        ro_sos_words(cx, mid0, vstart, mid, ARRAYSIZE(mid));
+        ro_key(mid, mkey, ARRAYSIZE(mkey));
+        if (mkey[0] == L'\0' && vstart == end)
+        {
+            /* a row of words only: a contest's title, or a measure's row with its choice and
+             * votes not read */
+            if (label[0] == L'\0')
+            {
+                continue;
+            }
+            if (cx->sos_mode == SOS_MEASURES && cx->sos_contest != UINT32_MAX &&
+                ro_near_title(d->contests[cx->sos_contest].title, label))
+            {
+                ro_sos_unread(cx, label);
+                continue;
+            }
+            if (cx->sos_mode == SOS_CANDIDATES && cx->sos_contest != UINT32_MAX &&
+                d->contests[cx->sos_contest].nchoices == 0)
+            {
+                /* after a title, before its rows: a measure's wording (rows across the page,
+                 * Henderson's), else the title's second line */
+                EeRpdfContest *c = &d->contests[cx->sos_contest];
+                if (cx->sos_desc || ln->x1 > 800.0f || wcsstr(c->title, L"(SJR ") != NULL ||
+                    wcsstr(c->title, L"(HJR ") != NULL)
+                {
+                    cx->sos_desc = TRUE;
+                }
+                else
+                {
+                    wchar_t nt[RO_LABEL_CCH];
+                    wchar_t *dup;
+                    StringCchPrintfW(nt, ARRAYSIZE(nt), L"%s %s", c->title, label);
+                    if ((dup = ro_wdup(nt)) == NULL)
+                    {
+                        cx->oom = TRUE;
+                        continue;
+                    }
+                    free(c->title);
+                    c->title = dup;
+                    ro_var_free(&cx->cvar[cx->sos_contest]);
+                    ro_var_add(cx, &cx->cvar[cx->sos_contest], nt);
+                }
+                continue;
+            }
+            ro_sos_fix_jr(label);
+            ro_sos_trim_title(label);
+            cx->sos_mode = SOS_CANDIDATES;
+            cx->sos_desc = FALSE;
+            cx->sos_contest = ro_sos_contest(cx, label);
+            continue;
+        }
+        if (cx->sos_mode == SOS_MEASURES)
+        {
+            const wchar_t *choice = ro_sos_measure_choice(mkey);
+            uint32_t ci = cx->sos_contest;
+            if (choice[0] == L'\0' && mkey[0] == L'\0')
+            {
+                /* the choice read as part of the measure's name */
+                wchar_t *sp = wcsrchr(label, L' '), lkey[16];
+                if (sp != NULL)
+                {
+                    ro_key(sp + 1, lkey, ARRAYSIZE(lkey));
+                    choice = ro_sos_measure_choice(lkey);
+                    if (choice[0] != L'\0')
+                    {
+                        *sp = L'\0';
+                    }
+                }
+            }
+            if (choice[0] == L'\0')
+            {
+                choice = mid[0] != L'\0' ? mid : NULL;
+            }
+            if (choice == NULL || label[0] == L'\0')
+            {
+                ro_sos_unread(cx, ln->text);
+                continue;
+            }
+            ro_sos_fix_jr(label);
+            ro_sos_trim_title(label);
+            if (ci == UINT32_MAX || !ro_near_title(d->contests[ci].title, label) || ro_sos_has_choice(cx, ci, choice))
+            {
+                ci = cx->sos_contest = ro_sos_contest(cx, label);
+            }
+            else
+            {
+                ro_var_add(cx, &cx->cvar[ci], label);
+            }
+            if (ci != UINT32_MAX && !cx->oom)
+            {
+                ro_sos_choice(cx, ci, choice, NULL, has_v ? v : EE_RPDF_UNKNOWN);
+            }
+            if (!has_v)
+            {
+                ro_sos_unread(cx, ln->text);
+            }
+            continue;
+        }
+        if (cx->sos_contest == UINT32_MAX)
+        {
+            cx->sos_untitled++;
+            continue;
+        }
+        if (cx->sos_desc && d->contests[cx->sos_contest].nchoices == 0 && wcslen(label) > 60)
+        {
+            continue; /* a line of a measure's wording ending in a number */
+        }
+        if (label[0] == L'\0')
+        {
+            ro_sos_unread(cx, ln->text); /* a row whose name OCR did not read */
+            continue;
+        }
+        {
+            /* the party: "REP", "DEM", "LIB", "GRE", "WRI" (a write-in); a code OCR misread by
+             * one letter ("CIB") is the known code it is closest to */
+            static const wchar_t *const k_codes[] = {L"REP", L"DEM", L"LIB", L"GRE", L"GRN", L"WRI",
+                                                     L"IND", L"CON", L"SOC", L"NON"};
+            BOOL code = wcslen(mkey) >= 2 && wcslen(mkey) <= 4;
+            const wchar_t *party = mkey;
+            uint32_t close = 0;
+            for (k = 0; mkey[k] != L'\0'; k++)
+            {
+                code = code && iswupper(mkey[k]);
+            }
+            for (k = 0; code && k < ARRAYSIZE(k_codes); k++)
+            {
+                int dist = ro_lev(mkey, k_codes[k]);
+                if (dist == 0)
+                {
+                    party = k_codes[k];
+                    break;
+                }
+                if (dist == 1 && wcslen(mkey) == 3)
+                {
+                    party = close++ == 0 ? k_codes[k] : mkey; /* (two codes as close: keep it as read) */
+                }
+            }
+            ro_sos_choice(cx, cx->sos_contest, label, code ? party : NULL, has_v ? v : EE_RPDF_UNKNOWN);
+            if (!has_v)
+            {
+                ro_sos_unread(cx, ln->text);
+            }
+        }
+    }
+}
+
+/* A scan turned a little (Brazos's): a row's words at the right sit higher or lower than at its
+ * left, by more than OCR's own lines show, and rows split into their names and their counts.
+ * Take the slope across the rows that hold words far apart, straighten the words and group them
+ * into rows again. */
+static BOOL ro_sos_deskew(RoCx *cx)
+{
+    RoPage *pg = &cx->pg;
+    float *sl, slope;
+    uint32_t l, k, ns = 0;
+    if (pg->nl < 3)
+    {
+        return TRUE;
+    }
+    if ((sl = (float *)malloc((size_t)pg->nl * sizeof(float))) == NULL)
+    {
+        return FALSE;
+    }
+    for (l = 0; l < pg->nl; l++)
+    {
+        const RoLine *ln = &pg->ln[l];
+        const RoWord *a = &pg->w[ln->w0], *b = &pg->w[ln->w0 + ln->nw - 1];
+        float dx = (b->x0 + b->x1 - a->x0 - a->x1) * 0.5f;
+        if (ln->nw >= 2 && dx > 250.0f)
+        {
+            sl[ns++] = (b->yc - a->yc) / dx;
+        }
+    }
+    slope = 0.0f;
+    if (ns >= 3)
+    {
+        qsort(sl, ns, sizeof(float), ro_float_cmp);
+        slope = sl[ns / 2];
+    }
+    free(sl);
+    if (fabsf(slope) < 0.002f || fabsf(slope) > 0.05f)
+    {
+        return TRUE;
+    }
+    for (k = 0; k < pg->nw; k++)
+    {
+        pg->w[k].yc -= slope * ((pg->w[k].x0 + pg->w[k].x1) * 0.5f - 500.0f);
+    }
+    return ro_group_rows(pg);
+}
+
+/* Read the form's pages. Page cx->sos_first is in cx->pg already (ro_sos_detect); when that is
+ * not page 0, the pages are read again from the start. */
+static void ro_sos_read(RoCx *cx, EePdf *pdf, EeOcr *ocr, EeOcrText *t, EePdfImage *img, int *turns, uint32_t *typical,
+                        BOOL (*page_fn)(uint32_t done, uint32_t total, void *user), void *user, BOOL *cancelled)
+{
+    uint32_t np = EePdf_PageCount(pdf), p, miss;
+    cx->sos_mode = SOS_NONE;
+    cx->sos_contest = UINT32_MAX;
+    cx->sos_voters = EE_RPDF_UNKNOWN;
+    cx->sos_prov = EE_RPDF_UNKNOWN;
+    if (cx->sos_first > 0)
+    {
+        cx->pages_read = cx->pages_blank = cx->pages_failed = 0; /* (read again below) */
+    }
+    for (p = 0; p < np && !cx->oom; p++)
+    {
+        if (((p > 0 || cx->sos_first > 0) && !ro_ocr_page(cx, pdf, p, ocr, t, img, turns, typical)) ||
+            !ro_sos_deskew(cx))
+        {
+            cx->oom = TRUE;
+            break;
+        }
+        miss = ro_sos_missing(cx);
+        if (miss > 0)
+        {
+            /* small counts ("0", "1") OCR did not see: read the page enlarged, and keep that
+             * reading if it misses fewer */
+            RoPage *pg = &cx->pg;
+            uint32_t pr = cx->pages_read, pb = cx->pages_blank, pf = cx->pages_failed;
+            uint32_t nw = pg->nw;
+            float h = pg->h, height = pg->height;
+            RoWord *keep = (RoWord *)malloc((size_t)nw * sizeof(RoWord));
+            if (keep == NULL)
+            {
+                cx->oom = TRUE;
+                break;
+            }
+            memcpy(keep, pg->w, (size_t)nw * sizeof(RoWord));
+            cx->sos_scale = 1.6;
+            if (!ro_ocr_page(cx, pdf, p, ocr, t, img, turns, typical) || !ro_sos_deskew(cx))
+            {
+                cx->oom = TRUE;
+            }
+            cx->sos_scale = 0.0;
+            cx->pages_read = pr;
+            cx->pages_blank = pb;
+            cx->pages_failed = pf;
+            if (!cx->oom && pg->nl > 0 && ro_sos_missing(cx) < miss)
+            {
+                cx->sos_enlarged++;
+            }
+            else if (!cx->oom)
+            {
+                /* the first reading */
+                if (!ro_grow((void **)&pg->w, &pg->capw, nw, sizeof(RoWord)))
+                {
+                    cx->oom = TRUE;
+                }
+                else
+                {
+                    memcpy(pg->w, keep, (size_t)nw * sizeof(RoWord));
+                    pg->nw = nw;
+                    pg->h = h;
+                    pg->height = height;
+                    cx->oom = !ro_group_rows(pg);
+                }
+            }
+            free(keep);
+            if (cx->oom)
+            {
+                break;
+            }
+        }
+        cx->page = p;
+        ro_sos_page(cx);
+        if (page_fn != NULL && !page_fn(p + 1, np, user))
+        {
+            *cancelled = TRUE;
+            break;
+        }
+    }
+}
+
+/* Check the form's counts and say what was read. */
+static void ro_sos_finish(RoCx *cx)
+{
+    EeRpdfDoc *d = cx->d;
+    uint32_t i, k, over = 0, one = 0;
+    wchar_t msg[600], ex[200] = L"", voters[32] = L"not read", prov[32] = L"not read";
+    d->kind = EE_RPDF_SOS_CANVASS;
+    d->ballots_total = cx->sos_voters;
+    for (i = 0; i < d->ncontests; i++)
+    {
+        const EeRpdfContest *c = &d->contests[i];
+        int64_t sum = 0;
+        BOOL measure = c->nchoices > 0 && c->choices[0].party == NULL &&
+                       (_wcsicmp(c->choices[0].name, L"FOR") == 0 || _wcsicmp(c->choices[0].name, L"AGAINST") == 0);
+        for (k = 0; k < c->nchoices; k++)
+        {
+            sum += c->choices[k].total > 0 ? c->choices[k].total : 0;
+        }
+        if (cx->sos_voters != EE_RPDF_UNKNOWN && sum > cx->sos_voters)
+        {
+            if (over++ == 0)
+            {
+                StringCchPrintfW(ex, ARRAYSIZE(ex), L"%s (%lld votes)", c->title, (long long)sum);
+            }
+        }
+        one += measure && c->nchoices == 1;
+    }
+    if (cx->sos_voters != EE_RPDF_UNKNOWN)
+    {
+        StringCchPrintfW(voters, ARRAYSIZE(voters), L"%lld", (long long)cx->sos_voters);
+    }
+    if (cx->sos_prov != EE_RPDF_UNKNOWN)
+    {
+        StringCchPrintfW(prov, ARRAYSIZE(prov), L"%lld", (long long)cx->sos_prov);
+    }
+    StringCchPrintfW(msg, ARRAYSIZE(msg),
+                     L"The report is a Texas Secretary of State canvass report, scanned: its %u pages were read by OCR "
+                     L"(Windows OCR). It gives county totals only, with no precincts or vote types. Total # of Voters "
+                     L"Voted: %s; Provisional Votes Counted: %s.",
+                     cx->pages_read, voters, prov);
+    ro_note(cx, msg);
+    if (over > 0)
+    {
+        StringCchPrintfW(msg, ARRAYSIZE(msg),
+                         L"%u contests have more votes than voters voted and need checking against the report, such "
+                         L"as %s.",
+                         over, ex);
+        ro_note(cx, msg);
+    }
+    if (cx->sos_unread > 0)
+    {
+        StringCchPrintfW(msg, ARRAYSIZE(msg),
+                         L"%u rows had a count or choice OCR could not read (a count not read shows as 0) and need "
+                         L"checking against the report; the first: %s.",
+                         cx->sos_unread, cx->sos_unread_first);
+        ro_note(cx, msg);
+    }
+    if (one > 0)
+    {
+        StringCchPrintfW(msg, ARRAYSIZE(msg), L"%u ballot measures have only one of FOR and AGAINST read.", one);
+        ro_note(cx, msg);
+    }
+    if (cx->sos_untitled > 0)
+    {
+        StringCchPrintfW(msg, ARRAYSIZE(msg),
+                         L"%u rows of counts came before any contest title OCR could read and were not read.",
+                         cx->sos_untitled);
+        ro_note(cx, msg);
+    }
+    if (cx->sos_voters_differ > 0)
+    {
+        StringCchPrintfW(msg, ARRAYSIZE(msg),
+                         L"%u pages give a Total # of Voters Voted other than the first page's (%s), which was kept.",
+                         cx->sos_voters_differ, voters);
+        ro_note(cx, msg);
+    }
+    if (cx->pages_blank + cx->pages_failed > 0)
+    {
+        StringCchPrintfW(msg, ARRAYSIZE(msg), L"%u pages had no image to read%s.", cx->pages_blank + cx->pages_failed,
+                         cx->pages_failed > 0 ? L" or could not be read" : L"");
+        ro_note(cx, msg);
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Public API                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -4498,12 +5335,15 @@ BOOL EeRocr_IsScannedPage(EePdf *pdf, uint32_t page)
     return scanned;
 }
 
-BOOL EeRocr_Parse(EePdf *pdf,
-                  EeRpdfDoc *out,
-                  BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
-                  void *user,
-                  wchar_t *err,
-                  size_t errcch)
+/* EeRocr_Parse, or with @p sos_only EeRocr_ParseSosCanvass (*is_form: the form was found). */
+static BOOL ro_parse(EePdf *pdf,
+                     EeRpdfDoc *out,
+                     BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
+                     void *user,
+                     BOOL sos_only,
+                     BOOL *is_form,
+                     wchar_t *err,
+                     size_t errcch)
 {
     RoCx *cx;
     EeOcr *ocr = NULL;
@@ -4517,6 +5357,10 @@ BOOL EeRocr_Parse(EePdf *pdf,
     ZeroMemory(out, sizeof(*out));
     out->registered_total = EE_RPDF_UNKNOWN;
     out->ballots_total = EE_RPDF_UNKNOWN;
+    if (is_form != NULL)
+    {
+        *is_form = FALSE;
+    }
     cx = (RoCx *)calloc(1, sizeof(RoCx));
     if (cx == NULL)
     {
@@ -4525,6 +5369,11 @@ BOOL EeRocr_Parse(EePdf *pdf,
     }
     if (!EeOcr_Create(&ocr, oerr, ARRAYSIZE(oerr)))
     {
+        if (sos_only)
+        {
+            free(cx);
+            return FALSE; /* no OCR to tell: the caller says why it cannot read the file */
+        }
         wchar_t msg[400];
         StringCchPrintfW(msg, ARRAYSIZE(msg),
                          L"The report is scanned (page images only) and Windows OCR, which reads it, is not "
@@ -4558,6 +5407,20 @@ BOOL EeRocr_Parse(EePdf *pdf,
             cx->oom = TRUE;
             break;
         }
+        if (p < 3 && ro_sos_detect(cx))
+        {
+            cx->sos = TRUE; /* a Texas Secretary of State canvass report: ro_sos_read */
+            cx->sos_first = p;
+            break;
+        }
+        if (sos_only)
+        {
+            if (p >= 2)
+            {
+                break; /* not the form */
+            }
+            continue;
+        }
         ro_mark(cx);
         for (l = 0; l < cx->pg.nl; l++)
         {
@@ -4574,32 +5437,42 @@ BOOL EeRocr_Parse(EePdf *pdf,
         }
     }
     cx->learning = FALSE;
-    ro_order_vt(cx);
-    cx->cols.valid = FALSE;
-    cx->label_lim = -1.0f;
-    cx->pages_read = cx->pages_blank = cx->pages_failed = 0;
-    for (p = 0; p < np && !cx->oom; p++)
+    if (cx->sos)
     {
-        if (!ro_ocr_page(cx, pdf, p, ocr, &t, &img, &turns, &typical))
+        if (!cx->oom)
         {
-            cx->oom = TRUE;
-            break;
-        }
-        cx->page = p;
-        ro_page(cx);
-        if (page_fn != NULL && !page_fn(p + 1, np, user))
-        {
-            cancelled = TRUE;
-            break;
-        }
-        /* not a report this reader knows: stop after a few pages */
-        if (p == 4 && out->ncontests == 0 && !cx->blk.open)
-        {
-            break;
+            ro_sos_read(cx, pdf, ocr, &t, &img, &turns, &typical, page_fn, user, &cancelled);
         }
     }
-    ro_block_close(cx);
-    ro_bal_finish(cx, NULL);
+    else if (!sos_only)
+    {
+        ro_order_vt(cx);
+        cx->cols.valid = FALSE;
+        cx->label_lim = -1.0f;
+        cx->pages_read = cx->pages_blank = cx->pages_failed = 0;
+        for (p = 0; p < np && !cx->oom; p++)
+        {
+            if (!ro_ocr_page(cx, pdf, p, ocr, &t, &img, &turns, &typical))
+            {
+                cx->oom = TRUE;
+                break;
+            }
+            cx->page = p;
+            ro_page(cx);
+            if (page_fn != NULL && !page_fn(p + 1, np, user))
+            {
+                cancelled = TRUE;
+                break;
+            }
+            /* not a report this reader knows: stop after a few pages */
+            if (p == 4 && out->ncontests == 0 && !cx->blk.open)
+            {
+                break;
+            }
+        }
+        ro_block_close(cx);
+        ro_bal_finish(cx, NULL);
+    }
     EePdf_ImageFree(&img);
     EeOcr_TextFree(&t);
     EeOcr_Destroy(ocr);
@@ -4662,13 +5535,21 @@ BOOL EeRocr_Parse(EePdf *pdf,
         }
     }
 
-    if (!cx->oom)
+    if (!cx->oom && !cx->sos)
     {
         ro_merge_same_titles(cx);
+    }
+    if (is_form != NULL)
+    {
+        *is_form = cx->sos;
     }
     if (cancelled)
     {
         ro_set_err(err, errcch, L"Load cancelled.");
+    }
+    else if (sos_only && !cx->sos)
+    {
+        /* not the form: the caller says why it cannot read the file */
     }
     else if (cx->oom)
     {
@@ -4681,12 +5562,26 @@ BOOL EeRocr_Parse(EePdf *pdf,
                          cx->ocr_err[0] ? L": " : L"", cx->ocr_err);
         ro_set_err(err, errcch, msg);
     }
+    else if (cx->sos)
+    {
+        if (out->ncontests == 0)
+        {
+            ro_set_err(err, errcch,
+                       L"The report is a scanned Texas Secretary of State canvass report, and OCR read no contests "
+                       L"from it.");
+        }
+        else
+        {
+            ro_sos_finish(cx);
+            ok = !cx->oom;
+        }
+    }
     else if (out->ncontests == 0)
     {
         ro_set_err(err, errcch,
-                   L"The report is scanned (page images only) and is not a results report this version can read "
-                   L"by OCR. Scanned summary and precinct reports from ES&S (Electionware, and the older "
-                   L"monospaced reports) can be loaded.");
+                   L"The report is scanned and is not a results report this version can read by OCR. Scanned "
+                   L"summary and precinct reports from ES&S (Electionware, and the older monospaced reports) and "
+                   L"Texas Secretary of State canvass reports can be loaded.");
     }
     else
     {
@@ -4810,4 +5705,25 @@ BOOL EeRocr_Parse(EePdf *pdf,
         EeRpdf_Free(out);
     }
     return ok;
+}
+
+BOOL EeRocr_Parse(EePdf *pdf,
+                  EeRpdfDoc *out,
+                  BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
+                  void *user,
+                  wchar_t *err,
+                  size_t errcch)
+{
+    return ro_parse(pdf, out, page_fn, user, FALSE, NULL, err, errcch);
+}
+
+BOOL EeRocr_ParseSosCanvass(EePdf *pdf,
+                            EeRpdfDoc *out,
+                            BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
+                            void *user,
+                            BOOL *is_form,
+                            wchar_t *err,
+                            size_t errcch)
+{
+    return ro_parse(pdf, out, page_fn, user, TRUE, is_form, err, errcch);
 }

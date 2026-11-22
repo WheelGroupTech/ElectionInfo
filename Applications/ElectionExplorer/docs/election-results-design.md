@@ -1272,6 +1272,78 @@ Release x64 and ARM64 build with no warnings.
 - **Time:** about 0.3 s a page; Cameron's 700-page primaries take about 4 minutes, behind the
   progress dialog.
 
+### Texas Secretary of State canvass reports (done 2026-11-22)
+
+The canvass report a county files with the Secretary of State, printed, signed and scanned. Eight
+files have it: Angelina G24 and G25 (two copies), Brazos G25, Henderson G20, G21, L22 and S21
+(August 31). All eight were refused before. For Brazos G25 it is the only whole-county result: its
+other G25 files are the 20 vote-center reports.
+
+- **The form:**
+  - **Heading:** "Texas Secretary of State", "Canvass Report", the election, its date, the county,
+    "Total # of Voters Voted" and "Provisional Votes Counted" (or "Cast"). It may repeat on each
+    page.
+  - **County totals only:** no precincts, no vote types, no over or under votes.
+  - **Ballot measures, two layouts:**
+    - 2024–25: under "Ballot Measures", a row for each measure and choice ("PROPOSITION 1 (SJR
+      59)   FOR   14887").
+    - Henderson 2021–22: the measure's title (with its ballot wording on the lines after, or run
+      into the same line), then "For" and "Against" rows.
+  - **Candidates:** the contest's title, then rows of candidate, party (REP, DEM, LIB, GRE, WRI
+    for a write-in) and votes.
+  - **The rest:** the certification ("I, ..., do hereby certify ...") and the signature end a
+    page's rows. Henderson's S21 file starts with a court order page.
+- **Why OCR:**
+  - Five of the files are scans that Acrobat's Paper Capture gave an OCR text layer. The layer
+    is unusable: letters doubled ("Texas Secrreettary of Sttate"), numbers merged ("2094422" for
+    20,942) and on the wrong rows.
+  - So `EeRpdf_ParseEx` turns to `EeRocr_ParseSosCanvass` when a file's text is no report it
+    knows, its Producer says "Paper Capture", and its first text page draws an image of 1,000+
+    pixels each way. That call reads the page images by OCR, and only this form.
+  - Any other such scan is refused as before. The ES&S OCR reader on Angelina's Paper Capture
+    G26 and P26 scans gave every total 0 and broken titles.
+  - Pure scans (Angelina G24) go through `EeRocr_Parse`, which now checks the first three pages
+    for the form's heading before trying the ES&S layouts.
+- **Brazos's image:** it is drawn through a form XObject. `EePdf_GetPageImage` now takes the
+  largest image among a form's own XObjects. Elsewhere this changes only text pages (Collin's
+  reports, Ellis and Travis PR20), which the readers do not OCR: all 27 such files load as
+  before.
+- **Reading (`ro_sos_*` in `ee_results_ocr.c`):**
+  - **Columns:** fixed, in page units (the page is 1,000 wide). The votes are numbers right of
+    650. The middle column (FOR / AGAINST, the party) starts right of 450 after a wide gap. A
+    long title runs past 450 with no gap ("JUSTICE, 12TH COURT OF APPEALS DISTRICT, PLACE 3").
+  - **Skew:** Brazos's scan is turned about 0.7°. OCR's own lines are too short to show it, so a
+    row split into its name and its counts. The slope across rows with words 250+ apart is taken
+    out and the rows grouped again (`ro_sos_deskew`; the grouping is now `ro_group_rows`, shared
+    with `ro_build_rows`).
+  - **Faint counts:** a page with rows that have a party or choice but no count is read again at
+    1.6x, and that reading is kept if it misses fewer. Lone "0"s and "1"s still go unread at any
+    scale; such a count shows as 0 and the Load Summary names the first.
+  - **Repairs:** a joint resolution's misread "J" ("(SUR 5)", "(SdR 2)"), and a party code one
+    letter off a known one ("CIB" is LIB).
+  - **Checks in the Load Summary:** a contest with more votes than voters voted, a measure with
+    only one of FOR and AGAINST, rows not read, rows before any title, and pages whose voters
+    voted differ from the first page's.
+- **Format:** `EE_RES_FMT_SOS_CANVASS`, "Texas SOS canvass report (PDF)". Region "<County>
+  County", the footer's print date as the timestamp, and ballots = Total # of Voters Voted.
+  Henderson's G21 form gives 56,413 there, which is the county's registered voters (its own
+  report: 5,055 ballots cast); the reader keeps what the form says.
+- **Checked:**
+  - **Against the scans:** every count of Brazos G25 (34), Angelina G25 (34, both copies),
+    Henderson G21 (16) and S21 (8).
+  - **Against the county's own reports:**
+    - Henderson L22: its 4 counts equal the official summary's.
+    - Henderson G21: the official report's text agrees where it can be read (Props 1, 2 and 4).
+  - **Angelina G24 (23 pages, 48 choices):** 3 lone write-in zeros are not read.
+  - **Henderson G20 (29 pages):** 6 write-in rows are not read (one of them a 1). The party code
+    OCR read as "CIB" is taken as LIB.
+  - **Smoke test `ressos`:** a two-page form drawn with GDI, loaded as a plain scan and as Paper
+    Capture leaves it (the image in a form XObject under a garbled text layer). Both give the same
+    totals, voters voted, region, date and format.
+  - **Old and new `data_check` builds:**
+    - **The 30 Paper Capture results PDFs and Angelina's G24 scan:** only the 8 forms change.
+    - **The 27 files whose page image now reads differently:** all load as before.
+
 ## Implementation plan (proposed)
 
 1. **Engine `src/ee_results.{c,h}`** (no UI):

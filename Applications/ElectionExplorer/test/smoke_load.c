@@ -13548,6 +13548,259 @@ static int test_results_glyphs(void)
 }
 #endif
 
+/* Texas Secretary of State canvass report, signed and scanned (tag: ressos). */
+#ifdef _WIN32 /* the scanned pages are drawn with GDI and read with Windows OCR */
+/* Write @p pages as Acrobat's Paper Capture leaves a scan (Brazos's): each page image drawn
+ * through a form XObject, under an invisible OCR text layer with letters doubled and numbers on
+ * the wrong rows, and "Paper Capture" in the Producer. */
+static BOOL tpdf_write_paper_capture(const wchar_t *path, unsigned char *const *pages, int npages, int w, int h)
+{
+    static const char k_Layer[] = "BT /F1 10 Tf 3 Tr 1 0 0 1 200 740 Tm (Texas Secrreettary of Sttate) Tj "
+                                  "1 0 0 1 60 560 Tm (PROPOSITIOONN 11 \\(SJR 5599\\) AAGGAAIINNSSTT 142599) Tj ET ";
+    static const char k_Form[] = "q 612 0 0 792 0 0 cm /Im0 Do Q ";
+    TBuf b = {0};
+    uint64_t offs[64];
+    uint64_t xref_off;
+    int i, nobj = 4 + npages * 4;
+    BOOL ok = TRUE;
+    FILE *fp = NULL;
+    if (nobj + 1 >= (int)ARRAYSIZE(offs))
+    {
+        return FALSE;
+    }
+#define POBJ(n) (offs[n] = b.len, ok = ok && tb_printf(&b, "%d 0 obj\n", n))
+    ok = tb_printf(&b, "%%PDF-1.6\n");
+    POBJ(1);
+    ok = ok && tb_printf(&b, "<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    POBJ(2);
+    ok = ok && tb_printf(&b, "<< /Type /Pages /Count %d /Kids [", npages);
+    for (i = 0; i < npages; i++)
+    {
+        ok = ok && tb_printf(&b, " %d 0 R", 5 + i * 4);
+    }
+    ok = ok && tb_printf(&b, " ] >>\nendobj\n");
+    POBJ(3);
+    ok = ok && tb_printf(&b, "<< /Producer (Adobe Acrobat \\(64-bit\\) 25 Paper Capture Plug-in) >>\nendobj\n");
+    POBJ(4);
+    ok = ok && tb_printf(&b, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+    for (i = 0; i < npages && ok; i++)
+    {
+        static const char k_Page[] = "q /Fm0 Do Q ";
+        int pn = 5 + i * 4;
+        mz_ulong clen = mz_compressBound((mz_ulong)((size_t)w * h));
+        unsigned char *z = (unsigned char *)malloc(clen);
+        if (z == NULL || mz_compress(z, &clen, pages[i], (mz_ulong)((size_t)w * h)) != MZ_OK)
+        {
+            free(z);
+            ok = FALSE;
+            break;
+        }
+        POBJ(pn);
+        ok = ok && tb_printf(&b, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R "
+                                 "/Resources << /XObject << /Fm0 %d 0 R >> /Font << /F1 4 0 R >> >> >>\nendobj\n",
+                             pn + 1, pn + 2);
+        POBJ(pn + 1);
+        ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n%s%s\nendstream\nendobj\n",
+                             (unsigned)(strlen(k_Page) + strlen(k_Layer)), k_Page, k_Layer);
+        POBJ(pn + 2);
+        ok = ok && tb_printf(&b, "<< /Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /XObject << "
+                                 "/Im0 %d 0 R >> >> /Length %u >>\nstream\n%s\nendstream\nendobj\n",
+                             pn + 3, (unsigned)strlen(k_Form), k_Form);
+        POBJ(pn + 3);
+        ok = ok && tb_printf(&b, "<< /Type /XObject /Subtype /Image /Width %d /Height %d /ColorSpace /DeviceGray "
+                                 "/BitsPerComponent 8 /Filter /FlateDecode /Length %lu >>\nstream\n",
+                             w, h, (unsigned long)clen);
+        ok = ok && tb_add(&b, z, clen) && tb_printf(&b, "\nendstream\nendobj\n");
+        free(z);
+    }
+    xref_off = b.len;
+    ok = ok && tb_printf(&b, "xref\n0 %d\n0000000000 65535 f \n", nobj + 1);
+    for (i = 1; i <= nobj && ok; i++)
+    {
+        ok = tb_printf(&b, "%010lu 00000 n \n", (unsigned long)offs[i]);
+    }
+    ok = ok && tb_printf(&b, "trailer\n<< /Size %d /Root 1 0 R /Info 3 0 R >>\nstartxref\n%lu\n%%%%EOF\n", nobj + 1,
+                         (unsigned long)xref_off);
+#undef POBJ
+    if (ok)
+    {
+        ok = (_wfopen_s(&fp, path, L"wb") == 0 && fp != NULL && fwrite(b.p, 1, b.len, fp) == b.len);
+        if (fp != NULL)
+        {
+            fclose(fp);
+        }
+    }
+    free(b.p);
+    return ok;
+}
+
+/* A choice's total in a loaded contest, or -2 when the choice is not there. */
+static int64_t sos_total(const EeResults *r, const EeResultsContest *ct, const wchar_t *name, const wchar_t *party)
+{
+    uint32_t k;
+    for (k = 0; ct != NULL && k < ct->nchoices; k++)
+    {
+        const EeResultsChoice *ch = &r->choices[ct->first_choice + k];
+        if (wcscmp(ch->name, name) == 0)
+        {
+            if (party != NULL && (ch->party == NULL || wcscmp(ch->party, party) != 0))
+            {
+                return -2;
+            }
+            return ch->total;
+        }
+    }
+    return -2;
+}
+
+/* The form's two pages: its heading, the county on a row of its own, "Ballot Measures" rows of
+ * measure, FOR / AGAINST and votes continued on page 2, a contest of candidate, party and votes,
+ * the certification and signature (not rows), and each page's footer. Loaded as a plain scan,
+ * and as Paper Capture leaves it (the image in a form XObject under a garbled text layer, read
+ * by OCR instead): county totals, the voters voted, the format and the note. */
+static int test_results_sos(void)
+{
+    wchar_t dir[MAX_PATH], p_scan[MAX_PATH], p_layer[MAX_PATH];
+    wchar_t err[512] = L"";
+    unsigned char *pages[2] = {NULL, NULL};
+    TPage p;
+    int rc = 1, v, y;
+    {
+        EeOcr *probe = NULL;
+        if (!EeOcr_Create(&probe, err, ARRAYSIZE(err)))
+        {
+            wprintf(L"ressos skipped (%s)\n", err);
+            return 0;
+        }
+        EeOcr_Destroy(probe);
+    }
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_scan, MAX_PATH, L"%sRPDF_sos_scan.pdf", dir);
+    StringCchPrintfW(p_layer, MAX_PATH, L"%sRPDF_sos_layer.pdf", dir);
+    if (!tpage_begin(&p))
+    {
+        goto done;
+    }
+    tpage_text(&p, 470, 80, L"Texas Secretary of State");
+    tpage_text(&p, 520, 130, L"Canvass Report");
+    tpage_text(&p, 360, 180, L"2025 NOVEMBER 4TH CONSTITUTIONAL AMENDMENT");
+    tpage_text(&p, 510, 225, L"November 04, 2025");
+    tpage_text(&p, 50, 290, L"EXAMPLE");
+    tpage_text(&p, 330, 340, L"Total # of Voters Voted:");
+    tpage_text(&p, 860, 340, L"20942");
+    tpage_text(&p, 330, 385, L"Provisional Votes Counted:");
+    tpage_text(&p, 900, 385, L"4");
+    tpage_text(&p, 1100, 410, L"Votes");
+    tpage_text(&p, 50, 460, L"Ballot Measures");
+    y = 530;
+    tpage_text(&p, 90, y, L"PROPOSITION 1 (SJR 59)");
+    tpage_text(&p, 680, y, L"FOR");
+    tpage_text(&p, 1080, y, L"14887");
+    y += 45;
+    tpage_text(&p, 90, y, L"PROPOSITION 1 (SJR 59)");
+    tpage_text(&p, 680, y, L"AGAINST");
+    tpage_text(&p, 1080, y, L"5675");
+    y += 45;
+    tpage_text(&p, 90, y, L"PROPOSITION 2 (SJR 18)");
+    tpage_text(&p, 680, y, L"FOR");
+    tpage_text(&p, 1080, y, L"14259");
+    tpage_text(&p, 50, 1500, L"2025-11-13");
+    tpage_text(&p, 560, 1500, L"Page 1 of 2");
+    pages[0] = tpage_end(&p);
+    if (!tpage_begin(&p))
+    {
+        goto done;
+    }
+    tpage_text(&p, 90, 80, L"PROPOSITION 2 (SJR 18)");
+    tpage_text(&p, 680, 80, L"AGAINST");
+    tpage_text(&p, 1080, 80, L"6300");
+    tpage_text(&p, 50, 180, L"STATE REPRESENTATIVE DISTRICT 9");
+    tpage_text(&p, 100, 240, L"Trent Ashby");
+    tpage_text(&p, 680, 240, L"REP");
+    tpage_text(&p, 1080, 240, L"28489");
+    tpage_text(&p, 100, 290, L"Jane Doe");
+    tpage_text(&p, 680, 290, L"WRI");
+    tpage_text(&p, 1080, 290, L"12");
+    tpage_text(&p, 50, 380, L"I, __________, EXAMPLE County do hereby certify the results as shown on the official");
+    tpage_text(&p, 50, 470, L"Signature");
+    tpage_text(&p, 680, 470, L"Date 11 13 2025");
+    tpage_text(&p, 50, 1500, L"2025-11-13");
+    tpage_text(&p, 560, 1500, L"Page 2 of 2");
+    pages[1] = tpage_end(&p);
+    if (pages[0] == NULL || pages[1] == NULL || !tpdf_write_images(p_scan, pages, 2, 1224, 1584) ||
+        !tpdf_write_paper_capture(p_layer, pages, 2, 1224, 1584))
+    {
+        wprintf(L"ressos: fixtures\n");
+        goto done;
+    }
+    for (v = 0; v < 2; v++)
+    {
+        const wchar_t *one = v == 0 ? p_scan : p_layer;
+        EeResults *res = NULL;
+        uint32_t nres = 0, i;
+        const EeResultsContest *p1, *p2, *rep;
+        BOOL noted = FALSE, ok;
+        if (!res_load(&one, 1, &res, &nres, err) || nres != 1)
+        {
+            wprintf(L"ressos: %s load (%u) %s\n", v == 0 ? L"scan" : L"layer", nres, err);
+            EeResults_FreeArray(res, nres);
+            goto done;
+        }
+        for (i = 0; i < res[0].nissues; i++)
+        {
+            noted = noted || wcsstr(res[0].issues[i].text, L"Secretary of State canvass report") != NULL;
+        }
+        p1 = rpdf_contest(&res[0], L"PROPOSITION 1 (SJR 59)");
+        p2 = rpdf_contest(&res[0], L"PROPOSITION 2 (SJR 18)");
+        rep = rpdf_contest(&res[0], L"STATE REPRESENTATIVE DISTRICT 9");
+        ok = noted && res[0].nsources == 1 && res[0].sources[0].format == EE_RES_FMT_SOS_CANVASS &&
+             res[0].ncontests == 3 && res[0].ballots_total == 20942 && res[0].nprecincts == 0 &&
+             res[0].region != NULL && wcscmp(res[0].region, L"Example County") == 0 && res[0].election_date != NULL &&
+             wcscmp(res[0].election_date, L"November 4, 2025") == 0 && res[0].election_name != NULL &&
+             wcscmp(res[0].election_name, L"2025 NOVEMBER 4TH CONSTITUTIONAL AMENDMENT") == 0 &&
+             p1 != NULL && p1->nchoices == 2 && sos_total(&res[0], p1, L"FOR", NULL) == 14887 &&
+             sos_total(&res[0], p1, L"AGAINST", NULL) == 5675 && p2 != NULL && p2->nchoices == 2 &&
+             sos_total(&res[0], p2, L"FOR", NULL) == 14259 && sos_total(&res[0], p2, L"AGAINST", NULL) == 6300 &&
+             rep != NULL && rep->nchoices == 2 && sos_total(&res[0], rep, L"Trent Ashby", L"REP") == 28489 &&
+             sos_total(&res[0], rep, L"Jane Doe", L"WRI") == 12;
+        if (!ok)
+        {
+            uint32_t c, k;
+            wprintf(L"ressos: %s (note %d, %u contests, ballots %lld, region %s, date %s)\n",
+                    v == 0 ? L"scan" : L"layer", noted, res[0].ncontests, (long long)res[0].ballots_total,
+                    res[0].region ? res[0].region : L"-", res[0].election_date ? res[0].election_date : L"-");
+            for (c = 0; c < res[0].ncontests; c++)
+            {
+                const EeResultsContest *ct = &res[0].contests[c];
+                for (k = 0; k < ct->nchoices; k++)
+                {
+                    const EeResultsChoice *ch = &res[0].choices[ct->first_choice + k];
+                    wprintf(L"   %s | %s | %s | %lld\n", ct->title, ch->name, ch->party ? ch->party : L"",
+                            (long long)ch->total);
+                }
+            }
+            EeResults_FreeArray(res, nres);
+            goto done;
+        }
+        EeResults_FreeArray(res, nres);
+    }
+    rc = 0;
+done:
+    free(pages[0]);
+    free(pages[1]);
+    DeleteFileW(p_scan);
+    DeleteFileW(p_layer);
+    wprintf(L"ressos: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+#else
+static int test_results_sos(void)
+{
+    wprintf(L"ressos skipped (OCR is not available on this platform yet)\n");
+    return 0;
+}
+#endif
+
 /* A Clarity combined primary (Tarrant): both parties' contests under the same titles with no
  * party prefix, the choices carrying party="DEM" / "REP", and a party proposition. */
 static const char k_res_primary_xml[] =
@@ -15784,6 +16037,7 @@ int wmain(void)
     failed |= test_results_hart_pct();
     failed |= test_results_hart_places();
     failed |= test_results_glyphs();
+    failed |= test_results_sos();
     failed |= test_results_compare();
     failed |= test_results_compare_party();
     failed |= test_results_compare_groups();

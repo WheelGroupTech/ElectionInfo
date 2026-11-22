@@ -4,31 +4,32 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-21. **In progress (uncommitted): macOS / Linux port, step 1.**
-The engine and the console tests (`smoke_load`, `data_check`) build with CMake and pass on Linux
-(WSL `Ubuntu` 24.04, GCC 13), with the Win32 calls supplied by stand-in headers in
-`ElectionExplorer/src/platform/posix/`.
-- **Windows fixes:** the port also found and fixed three Windows bugs:
-  - scrambled titles in Brazos's "accessible" Hart precinct reports (a sort tie in
-    `ee_results_pdf.c`);
-  - an unsequenced `key[o++]` in `ee_results_ocr.c`;
-  - audit-log file names after `/`.
-- **Checked:** Windows x64/ARM64 build clean, and both smoke suites pass. `data_check` agrees
-  between Windows and Linux on all 11,939 roster/results/CVR/audit files the backup plan loads,
-  except the 179 scans that need OCR.
-- **Where to read more:** design, decisions X1–X7 and next steps are in
-  `ElectionExplorer/docs/cross-platform-design.md`. The CHANGELOG entry is under "Unreleased".
-- **Build:** `cmake --preset linux-x64-debug`, `cmake --build --preset linux-x64-debug` and
-  `ctest --preset linux-x64-debug`, all run from `ElectionExplorer/`. A Linux clone for builds is
-  at `~/dev/WheelGroupTech/ElectionInfo` in WSL (the user pulls it). These checks built from
-  `/mnt/h/...`.
-- **Next steps:** review and commit. Then:
+**Last updated:** 2026-11-22. **In progress (uncommitted): Texas Secretary of State canvass reports.**
+Election Explorer now reads, by OCR, the signed canvass report a county files with the SOS (county
+totals only). Eight files that were refused now load: Angelina G24/G25 (two copies), Brazos G25,
+and Henderson G20/G21/L22/S21.
+- **Scans with a text layer:** Acrobat Paper Capture text layers are garbled. A Paper Capture scan
+  whose text is no known report is read by OCR for this form only; any other such scan is still
+  refused. `EePdf_GetPageImage` now looks inside form XObjects (Brazos).
+- **Checked:**
+  - The Windows smoke suite passes with new test `ressos`; the Linux build is clean and its smoke
+    suite passes.
+  - Counts were checked against the scans and against Henderson's own reports.
+  - Old vs new `data_check` differs only on the 8 forms.
+- **Where to read more:** `ElectionExplorer/docs/election-results-design.md`, "Texas Secretary of
+  State canvass reports", and the CHANGELOG entry under "Unreleased".
+- **Next steps:** review and commit.
+- **Committed since the last note:**
+  - the macOS / Linux port, step 1 (74c0bd1);
+  - Brazos vote-center reports as one election (f12a33e).
+- **Port, next steps** (see `ElectionExplorer/docs/cross-platform-design.md`):
   - the macOS build (needs a Mac);
   - OCR (Apple Vision / Tesseract);
-  - a wxWidgets prototype of the voter-list window;
+  - a wxWidgets prototype;
   - CI;
   - a `.gitattributes`.
-- **Window management (Window menu, Windows… dialog):** committed in 0696c96.
+- **Linux builds:** run `cmake --preset linux-x64-debug` from `ElectionExplorer/`. The WSL clone at
+  `~/dev/WheelGroupTech/ElectionInfo` needs a pull.
 
 **Noticed while testing, left as is by the user's decision (2026-11-19):**
 `File → Load Cast Vote Records…` opens an *empty* Cast Vote Records window when the file holds no

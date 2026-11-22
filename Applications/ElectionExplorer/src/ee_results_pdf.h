@@ -31,6 +31,8 @@ extern "C"
                                    * tables repeated for each precinct, by vote type */
 #define EE_RPDF_DOM_SUMMARY 6 /* Dominion Election Summary Report (ee_results_dom.c) */
 #define EE_RPDF_DOM_SOVC    7 /* Dominion Statement of Votes Cast: precinct x vote type */
+#define EE_RPDF_SOS_CANVASS 8 /* Texas Secretary of State canvass report, scanned (ee_results_ocr.c):
+                               * county totals only */
 
 /** EeRpdfCount.votes for a count the report withholds ("****", too few voters to keep the
  *  vote secret): the same value as ee_results.c's RES_PROTECTED. */

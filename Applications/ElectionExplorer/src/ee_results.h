@@ -43,6 +43,7 @@ extern "C"
 #define EE_RES_FMT_DOM_SUMMARY_XLSX 0x1000u /* Dominion Election Summary Report (XLSX) */
 #define EE_RES_FMT_DOM_SUMMARY_PDF  0x2000u /* Dominion Election Summary Report (PDF) */
 #define EE_RES_FMT_DOM_SOVC         0x4000u /* Dominion Statement of Votes Cast (PDF) */
+#define EE_RES_FMT_SOS_CANVASS      0x8000u /* Texas Secretary of State canvass report (PDF, scanned) */
 
 /** Unknown count (registered voters, ballots cast, precinct counts). */
 #define EE_RES_UNKNOWN (-1)

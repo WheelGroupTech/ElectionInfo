@@ -103,6 +103,24 @@ static void rp_set_err(wchar_t *dst, size_t cch, const wchar_t *msg)
     }
 }
 
+/* Page @p page is a scan with a text layer OCR put on it: Acrobat's Paper Capture made the PDF
+ * and the page draws a full-page image (a page of 1,000+ pixels each way). */
+static BOOL rp_ocr_layer(EePdf *pdf, uint32_t page)
+{
+    char prod[256];
+    EePdfImage img;
+    BOOL scan;
+    if (!EePdf_GetInfoText(pdf, "Producer", prod, sizeof(prod)) || strstr(prod, "Paper Capture") == NULL)
+    {
+        return FALSE;
+    }
+    ZeroMemory(&img, sizeof(img));
+    scan = EePdf_GetPageImage(pdf, page, &img) && img.kind != EE_PDF_IMAGE_NONE && img.width >= 1000 &&
+           img.height >= 1000;
+    EePdf_ImageFree(&img);
+    return scan;
+}
+
 static BOOL rp_ws(wchar_t c)
 {
     return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n' || c == 0xA0;
@@ -4451,6 +4469,28 @@ BOOL EeRpdf_ParseEx(const void *data,
     if (cx.jasper && cx.structure)
     {
         cx.electionware = TRUE;
+    }
+    if (!cx.oom && cx.any_text && !glyphs_learned && !cx.electionware && !cx.hart_canvass && !cx.hart_cum &&
+        !cx.hl_table && !cx.hl_canvass && rp_ocr_layer(pdf, p0))
+    {
+        /* a scan whose OCR text layer (Acrobat's Paper Capture) is no report this reader knows:
+         * the Secretary of State canvass reports of Angelina, Brazos and Henderson, whose layers
+         * have letters doubled and numbers on the wrong rows. Read that form from the page
+         * images by OCR instead; any other such scan is refused as before. */
+        BOOL is_form = FALSE, got;
+        EeRpdfDoc form;
+        got = EeRocr_ParseSosCanvass(pdf, &form, page_fn, user, &is_form, err, errcch);
+        if (got || is_form)
+        {
+            EePdf_PageTextFree(&pt);
+            free(cx.occ);
+            free(cx.seq);
+            free(cx.hcols);
+            EeRpdf_Free(out);
+            *out = form; /* (zeroed when the read failed) */
+            EePdf_Close(pdf);
+            return got;
+        }
     }
     EePdf_PageTextFree(&pt);
     EePdf_Close(pdf);

@@ -119,6 +119,15 @@ file name.
   carries the load note;
 - two cells shown as one string spread by a character spacing, which a `Q` restored, read as two;
 - the summary agrees with a plain-text precinct report of the same election.
+`ressos` covers the Texas Secretary of State canvass report a county files, signed and scanned
+(Angelina, Brazos, Henderson; `src\ee_results_ocr.c`, needs an OCR language and is skipped without one):
+- a two-page form drawn with GDI: its heading, the county on a row of its own, "Ballot Measures"
+  rows of measure, FOR / AGAINST and votes continued on page 2, a contest of candidate, party and
+  votes, then the certification and signature (not rows) and each page's footer;
+- loaded as a plain scan, and as Acrobat's Paper Capture leaves it (the image drawn through a form
+  XObject under an invisible text layer with letters doubled and numbers on the wrong rows, read
+  by OCR instead): both give the county totals, Total # of Voters Voted as ballots, the region,
+  date and election, the "Texas SOS canvass report (PDF)" format and the load note.
 `rescmp` covers `EeResults_Compare` and `EeResults_FromTally`:
 - results compared with themselves all match;
 - a summary with one changed total gives exactly one "differs" row, and its missing ballots cast is
@@ -403,8 +412,8 @@ ctest --preset linux-x64-debug          # runs smoke_load from this folder
 ```
 
 Binaries land in `Applications/Build/linux-x64-debug/ElectionExplorer/` (`smoke_load`,
-`data_check`). `hartocr` and `resglyph` are skipped there (no OCR engine yet); every other test
-must pass and print what it prints on Windows. The platform layer and its rules are in
+`data_check`). `hartocr`, `resglyph` and `ressos` are skipped there (no OCR engine yet); every
+other test must pass and print what it prints on Windows. The platform layer and its rules are in
 [`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
 
 ## Data backup check (on demand)

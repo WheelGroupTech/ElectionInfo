@@ -4399,6 +4399,9 @@ static uint32_t res_from_rpdf(ResBuilder *b, EeRpdfDoc *pdoc, uint32_t dom_summa
         case EE_RPDF_DOM_SOVC:
             fmt = EE_RES_FMT_DOM_SOVC;
             break;
+        case EE_RPDF_SOS_CANVASS:
+            fmt = EE_RES_FMT_SOS_CANVASS;
+            break;
         default:
             fmt = EE_RES_FMT_ESS_SUMMARY;
             break;
@@ -4686,6 +4689,8 @@ static const wchar_t *format_label(uint32_t fmt)
             return L"Dominion summary report (PDF)";
         case EE_RES_FMT_DOM_SOVC:
             return L"Dominion Statement of Votes Cast (PDF)";
+        case EE_RES_FMT_SOS_CANVASS:
+            return L"Texas SOS canvass report (PDF)";
         default:
             return L"results";
     }

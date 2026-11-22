@@ -1,8 +1,9 @@
 /**
  * @file ee_results_ocr.h
  * @brief Election results from a scanned results report (page images only), read by OCR:
- *        ES&S Electionware summary and precinct reports, and the older ES&S monospaced
- *        reports ("SUMMRY REPT-GROUP DETAIL", "PREC REPORT-GROUP DETAIL", report EL30A).
+ *        ES&S Electionware summary and precinct reports, the older ES&S monospaced reports
+ *        ("SUMMRY REPT-GROUP DETAIL", "PREC REPORT-GROUP DETAIL", report EL30A), and the Texas
+ *        Secretary of State canvass report a county files (county totals only).
  *
  * Each page image (pdf_reader.c) goes through Windows OCR (ocr_win.c) in the orientation that
  * reads best. The words are grouped into rows; numbers go to the columns the table headings
@@ -50,6 +51,24 @@ extern "C"
                       void *user,
                       wchar_t *err,
                       size_t errcch);
+
+    /**
+     * Read a Texas Secretary of State canvass report by OCR, and nothing else: for a scan whose
+     * OCR text layer (Acrobat's Paper Capture) is no report the text reader knows. Its heading
+     * must be on one of the first three pages.
+     *
+     * @param is_form  Receives TRUE when the form was found. When FALSE (or OCR is not
+     *                 available), the read fails with @p err untouched: the caller says why it
+     *                 cannot read the file.
+     * Other parameters and the result are as for EeRocr_Parse.
+     */
+    BOOL EeRocr_ParseSosCanvass(EePdf *pdf,
+                                EeRpdfDoc *out,
+                                BOOL (*page_fn)(uint32_t done, uint32_t total, void *user),
+                                void *user,
+                                BOOL *is_form,
+                                wchar_t *err,
+                                size_t errcch);
 
 #ifdef __cplusplus
 }

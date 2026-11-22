@@ -4672,9 +4672,40 @@ BOOL EePdf_GetPageImage(EePdf *pdf, uint32_t page_index, EePdfImage *out)
         return TRUE; /* not a stream XObject: treat as no image */
     }
     sub = dict_get(&d, "Subtype");
+    if (obj_is_name(sub, "Form"))
+    {
+        /* a form drawing the scan (Brazos's "accessible" canvass report, through Acrobat): the
+         * largest image among the form's own XObjects */
+        const PdfObj *res = resolve(pdf, &pdf->arena, dict_get(&d, "Resources"), NULL);
+        const PdfObj *fx = resolve(pdf, &pdf->arena, dict_get(res, "XObject"), NULL);
+        uint32_t i, best = 0;
+        double best_area = 0.0;
+        for (i = 0; fx != NULL && fx->t == PO_DICT && i < fx->n; i++)
+        {
+            const PdfObj *r = &fx->u.items[2 * i + 1];
+            PdfObj e;
+            uint64_t eoff = 0;
+            if (r->t == PO_REF && pdf_load(pdf, r->u.ref.num, &pdf->arena, &e, &eoff) && eoff != 0 && e.t == PO_DICT &&
+                obj_is_name(dict_get(&e, "Subtype"), "Image"))
+            {
+                double area = obj_num(resolve(pdf, &pdf->arena, dict_get(&e, "Width"), NULL)) *
+                              obj_num(resolve(pdf, &pdf->arena, dict_get(&e, "Height"), NULL));
+                if (area > best_area)
+                {
+                    best_area = area;
+                    best = r->u.ref.num;
+                }
+            }
+        }
+        if (best == 0 || !pdf_load(pdf, best, &pdf->arena, &d, &soff) || soff == 0 || d.t != PO_DICT)
+        {
+            return TRUE; /* a form with no image of its own: treat as no image */
+        }
+        sub = dict_get(&d, "Subtype");
+    }
     if (!obj_is_name(sub, "Image"))
     {
-        return TRUE; /* a form XObject (not followed) */
+        return TRUE; /* not an image */
     }
     w = (uint32_t)obj_num(resolve(pdf, &pdf->arena, dict_get(&d, "Width"), NULL));
     h = (uint32_t)obj_num(resolve(pdf, &pdf->arena, dict_get(&d, "Height"), NULL));

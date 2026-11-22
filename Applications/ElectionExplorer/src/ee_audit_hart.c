@@ -63,8 +63,15 @@ static void hv_set_err(wchar_t *dst, size_t cch, const wchar_t *fmt, const wchar
 {
     if (dst != NULL && cch > 0)
     {
-        const wchar_t *name = wcsrchr(path, L'\\');
-        StringCchPrintfW(dst, cch, fmt, name != NULL ? name + 1 : path);
+        const wchar_t *name = path, *p;
+        for (p = path; *p != L'\0'; p++)
+        {
+            if (*p == L'\\' || *p == L'/')
+            {
+                name = p + 1;
+            }
+        }
+        StringCchPrintfW(dst, cch, fmt, name);
     }
 }
 

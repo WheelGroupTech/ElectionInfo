@@ -4311,7 +4311,15 @@ static int test_cvr_delimited(void)
         }
         img[0] = 0xFF;
         img[1] = 0xFE;
-        memcpy(img + 2, k_w, nwch * 2);
+        {
+            /* unit by unit: wchar_t is 4 bytes on macOS and Linux */
+            size_t i;
+            for (i = 0; i < nwch; i++)
+            {
+                img[2 + i * 2] = (unsigned char)(k_w[i] & 0xFF);
+                img[3 + i * 2] = (unsigned char)((k_w[i] >> 8) & 0xFF);
+            }
+        }
         wrote_ok = cvr_write_bytes(pu16, img, nbytes);
         free(img);
         if (!wrote_ok)
@@ -6072,6 +6080,7 @@ done:
 
 /* ---- Scanned (image-only) Hart CVR Report: OCR path ----------------------------- */
 
+#ifdef _WIN32 /* GDI */
 /* A gray page bitmap drawn with GDI at 144 dpi (2 px per PDF point, letter size). */
 typedef struct TPage
 {
@@ -6189,6 +6198,7 @@ static int tpage_row(TPage *p, int y, const wchar_t *title, const wchar_t *optio
     tpage_text(p, 630, y, option);
     return y + 35;
 }
+#endif /* _WIN32 */
 
 /* Write a PDF whose pages are each one full-page 8-bit gray Flate image (no text). */
 static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, int npages,
@@ -6269,6 +6279,7 @@ static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, 
  * OCR -- one row per ballot sheet, a vote-for-2 contest from repeated title rows, an
  * undervote, the OCR Status key column and the load note. Skipped (passes) when Windows
  * OCR is unavailable on the machine. */
+#ifdef _WIN32 /* the scanned pages are drawn with GDI and read with Windows OCR */
 static int test_hart_ocr(void)
 {
     wchar_t path[MAX_PATH];
@@ -6385,6 +6396,13 @@ done:
     }
     return rc;
 }
+#else
+static int test_hart_ocr(void)
+{
+    wprintf(L"hartocr skipped (OCR is not available on this platform yet)\n");
+    return 0;
+}
+#endif
 
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
@@ -13085,6 +13103,7 @@ static BOOL rpdf_t3_spread(TBuf *c, double y, double size, double ra, const char
     return ok && tb_printf(c, "ET\n");
 }
 
+#ifdef _WIN32 /* GDI glyph outlines for the Type 3 font */
 #define T3FX(f) (((double)(f).value + (double)(f).fract / 65536.0) / 1000.0)
 
 /* Character @p ch's CharProc: Arial's outline (1 em = 1, y up) filled; a space draws
@@ -13267,12 +13286,14 @@ static BOOL rpdf_t3_write(const wchar_t *path, TBuf *pages, int npages, const T3
     free(b.p);
     return ok;
 }
+#endif /* _WIN32 */
 
 /* A results report printed to PDF through PScript5 (tag: resglyph): its text, drawn by a
  * Type 3 font of unnamed glyph outlines (each declared 1 em wide and placed one at a time, a
  * space an empty glyph), is read through OCR; two cells shown as one string spread by a
  * character spacing that a Q restored read as two; the summary then agrees with the
  * plain-text precinct report. */
+#ifdef _WIN32 /* the fixture is drawn with GDI and read with Windows OCR */
 static int test_results_glyphs(void)
 {
     wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH];
@@ -13383,6 +13404,13 @@ done:
     wprintf(L"resglyph: %s\n", rc == 0 ? L"OK" : L"FAILED");
     return rc;
 }
+#else
+static int test_results_glyphs(void)
+{
+    wprintf(L"resglyph skipped (OCR is not available on this platform yet)\n");
+    return 0;
+}
+#endif
 
 /* A Clarity combined primary (Tarrant): both parties' contests under the same titles with no
  * party prefix, the choices carrying party="DEM" / "REP", and a party proposition. */

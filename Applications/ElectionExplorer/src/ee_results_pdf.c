@@ -645,6 +645,15 @@ static void rp_count(RpCtx *cx, BOOL turnout, uint32_t contest, uint32_t choice,
 /* Page reading                                                               */
 /* -------------------------------------------------------------------------- */
 
+/* Items at the same place (Brazos's "accessible" Hart reports draw a wrapped title's pieces
+ * at one point) keep the order the page drew them in: their text was appended to the page's
+ * pool in that order. Without the tie-break the order would be whatever the sort left, which
+ * differs between C libraries and from page to page, and scrambled those titles. */
+static int rp_drawn_order(const RpItem *a, const RpItem *b)
+{
+    return a->text < b->text ? -1 : (a->text > b->text ? 1 : 0);
+}
+
 static int __cdecl rp_item_cmp(const void *pa, const void *pb)
 {
     const RpItem *a = (const RpItem *)pa;
@@ -653,14 +662,22 @@ static int __cdecl rp_item_cmp(const void *pa, const void *pb)
     {
         return a->y > b->y ? -1 : 1;
     }
-    return a->x < b->x ? -1 : (a->x > b->x ? 1 : 0);
+    if (a->x != b->x)
+    {
+        return a->x < b->x ? -1 : 1;
+    }
+    return rp_drawn_order(a, b);
 }
 
 static int __cdecl rp_ptr_x_cmp(const void *pa, const void *pb)
 {
     const RpItem *a = *(const RpItem *const *)pa;
     const RpItem *b = *(const RpItem *const *)pb;
-    return a->x < b->x ? -1 : (a->x > b->x ? 1 : 0);
+    if (a->x != b->x)
+    {
+        return a->x < b->x ? -1 : 1;
+    }
+    return rp_drawn_order(a, b);
 }
 
 /* Join the texts of @p n items with single spaces into @p out; an item that starts where

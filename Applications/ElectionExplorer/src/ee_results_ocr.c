@@ -570,9 +570,12 @@ static void ro_pre_key(const wchar_t *name, wchar_t *key, size_t cch)
     {
         if (iswalnum(name[k]) || name[k] == L',')
         {
-            key[o++] = (wchar_t)towupper(ro_digit_of(name[k]) != name[k] && o > 0 && iswdigit(key[o - 1])
-                                             ? ro_digit_of(name[k])
-                                             : name[k]);
+            /* look at the previous character before o moves on (one statement would leave
+             * the order of the read and the increment unspecified) */
+            wchar_t c = (wchar_t)towupper(ro_digit_of(name[k]) != name[k] && o > 0 && iswdigit(key[o - 1])
+                                              ? ro_digit_of(name[k])
+                                              : name[k]);
+            key[o++] = c;
             digit = digit || iswdigit(key[o - 1]);
         }
     }

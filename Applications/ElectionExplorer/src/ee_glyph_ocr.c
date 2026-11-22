@@ -117,6 +117,18 @@ static int __cdecl go_x_cmp(const void *pa, const void *pb)
  * @p k pixels per point, the page @p ph points high. */
 static BOOL go_draw(GoCtx *cx, const EePdfPageText *pt, uint8_t *gray, int w, int h, float k, float ph)
 {
+#ifndef _WIN32
+    /* GDI draws the outlines; macOS and Linux have no OCR engine to read them yet either
+     * (src/platform/posix/ocr_none.c), so this is never reached there. */
+    (void)cx;
+    (void)pt;
+    (void)gray;
+    (void)w;
+    (void)h;
+    (void)k;
+    (void)ph;
+    return FALSE;
+#else
     BITMAPINFO bi;
     void *bits = NULL;
     HDC dc = CreateCompatibleDC(NULL);
@@ -209,6 +221,7 @@ static BOOL go_draw(GoCtx *cx, const EePdfPageText *pt, uint8_t *gray, int w, in
     DeleteObject(bm);
     DeleteDC(dc);
     return TRUE;
+#endif
 }
 
 /* Line up the recognized words with the glyphs under them and vote. */

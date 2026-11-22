@@ -30,6 +30,41 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-21 — macOS / Linux: the engine and its tests build and pass on Linux
+- **What:** Step 1 of porting to macOS and Linux.
+  - The engine (everything but the Win32 UI) and the console tests `smoke_load` and `data_check` now build with CMake on Linux. The same presets cover macOS, which is not yet tried.
+  - The engine sources keep their Win32 calls. A stand-in `windows.h` / `strsafe.h` / `intsafe.h`, used only by that build, supplies them.
+  - Wide strings hold UTF-16 units on every platform, and printf follows MSVC's `%s` rules.
+  - Settings go to a text file. OCR reports "not available" for now.
+  - The Windows build and app are unchanged, apart from the fixes below.
+- **Fixed on Windows too:**
+  - Brazos's "accessible" Hart precinct reports had scrambled wrapped contest titles, which split one contest into several. `rp_item_cmp` and `rp_ptr_x_cmp` left pieces drawn at the same point in whatever order the sort chose; they now keep the drawn order.
+  - In `ee_results_ocr.c` `ro_pre_key`, `key[o++] = …key[o - 1]…` read and incremented `o` in one expression, an order C leaves undefined. It is now two statements.
+  - Audit-log error messages now take the file name after `/` as well as `\`.
+- **Where:**
+  - New:
+    - `CMakeLists.txt` and `CMakePresets.json`.
+    - `src/platform/posix/`: `include/windows.h`, `strsafe.h`, `intsafe.h`, `ee_port.c`, `settings_posix.c`, `ocr_none.c` and `wmain_posix.c`.
+  - Changed:
+    - `src/ee_results_pdf.c` (`rp_drawn_order`, `rp_item_cmp`, `rp_ptr_x_cmp`);
+    - `src/ee_results_ocr.c`;
+    - `src/ee_audit.c` and `src/ee_audit_hart.c` (name helpers);
+    - `src/ee_glyph_ocr.c` (`go_draw` returns FALSE off Windows);
+    - `test/smoke_load.c`: the UTF-16 fixture is written unit by unit; `hartocr` and `resglyph` are skipped off Windows;
+    - `test/data_check.c` (`base_name`, `%lu` casts);
+    - `test/README.md`.
+- **Checked:**
+  - **Linux:** WSL Ubuntu 24.04, GCC 13, Debug and Release.
+    - `smoke_load` passes. Its output is identical to Windows' except `hartocr` / `resglyph`, which are skipped.
+  - **Windows:**
+    - x64 and ARM64 Release build clean.
+    - `smoke_load` passes, including both OCR tests.
+  - **`data_check`** was run on old Windows, new Windows and Linux for every file the 2026-11-17 backup plan loads (voter lists excluded):
+    - **Results, CVRs, audit logs:** 4,022 files. Windows and Linux agree except 179 scans that need OCR.
+    - **Rosters:** 7,917 files. Windows and Linux agree on all of them.
+    - **Old vs new Windows:** they differ only on the 27 Brazos accessible reports.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md). It covers the decisions X1–X7, the platform layer's rules, and the next steps: macOS build, OCR engines, wxWidgets UI, CI, `.gitattributes`.
+
 ### 2026-11-18 — Window menu and the Windows… dialog
 - **What:** a **Window** menu between Compare and Help in every window that has a menu bar. It
   numbers the open Election Explorer windows, most recently used first (so the current window is

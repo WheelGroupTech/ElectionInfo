@@ -1,0 +1,56 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "posix-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../Build/${presetName}/ElectionExplorer/obj"
+    },
+    {
+      "name": "linux-x64-debug",
+      "inherits": "posix-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-x64-release",
+      "inherits": "posix-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux-arm64-debug",
+      "inherits": "posix-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "linux-arm64-release",
+      "inherits": "posix-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "mac-universal-debug",
+      "inherits": "posix-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64" }
+    },
+    {
+      "name": "mac-universal-release",
+      "inherits": "posix-base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "CMAKE_OSX_ARCHITECTURES": "arm64;x86_64" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux-x64-debug", "configurePreset": "linux-x64-debug" },
+    { "name": "linux-x64-release", "configurePreset": "linux-x64-release" },
+    { "name": "linux-arm64-debug", "configurePreset": "linux-arm64-debug" },
+    { "name": "linux-arm64-release", "configurePreset": "linux-arm64-release" },
+    { "name": "mac-universal-debug", "configurePreset": "mac-universal-debug" },
+    { "name": "mac-universal-release", "configurePreset": "mac-universal-release" }
+  ],
+  "testPresets": [
+    { "name": "linux-x64-debug", "configurePreset": "linux-x64-debug", "output": { "outputOnFailure": true } },
+    { "name": "linux-x64-release", "configurePreset": "linux-x64-release", "output": { "outputOnFailure": true } },
+    { "name": "mac-universal-debug", "configurePreset": "mac-universal-debug", "output": { "outputOnFailure": true } },
+    { "name": "mac-universal-release", "configurePreset": "mac-universal-release", "output": { "outputOnFailure": true } }
+  ]
+}

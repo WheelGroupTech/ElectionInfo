@@ -100,15 +100,22 @@ static void j_strn(const wchar_t *s, size_t max)
 
 static const wchar_t *base_name(const wchar_t *p)
 {
-    const wchar_t *b = wcsrchr(p, L'\\');
-    return b != NULL ? b + 1 : p;
+    const wchar_t *b = p;
+    for (; *p != L'\0'; p++)
+    {
+        if (*p == L'\\' || *p == L'/')
+        {
+            b = p + 1;
+        }
+    }
+    return b;
 }
 
 static int fail(const wchar_t *mode, EeLoadStatus st, const wchar_t *err, DWORD t0)
 {
     printf("{\"mode\":");
     j_str(mode);
-    printf(",\"ok\":false,\"status\":%d,\"ms\":%lu,\"error\":", (int)st, GetTickCount() - t0);
+    printf(",\"ok\":false,\"status\":%d,\"ms\":%lu,\"error\":", (int)st, (unsigned long)(GetTickCount() - t0));
     j_strn(err, 600);
     printf("}\n");
     return 1;
@@ -136,7 +143,7 @@ static int do_roster(const wchar_t *const *paths, int n)
            "\"sheets_read\":%u,\"unsupported_files\":%u,\"reference_files\":%u,\"skipped_sheets\":%u,"
            "\"recovered_sheets\":%u,\"rows_no_date\":%u,\"vuids_malformed\":%u,\"vuids_missing\":%u,"
            "\"rows_redacted\":%u,\"method_rows\":[",
-           GetTickCount() - t0, t.row_count, t.column_count, info.files_read, info.sheets_read,
+           (unsigned long)(GetTickCount() - t0), t.row_count, t.column_count, info.files_read, info.sheets_read,
            info.unsupported_files, info.reference_files, info.skipped_sheets, info.recovered_sheets,
            info.rows_no_date, info.vuids_malformed, info.vuids_missing, info.rows_redacted);
     for (m = 0; m < EE_VM_COUNT; m++)
@@ -207,7 +214,7 @@ static int do_cvr(const wchar_t *const *paths, int n)
     EeCvr_CardCounts(&t, NULL, 0, &cc);
     printf("{\"mode\":\"cvr\",\"ok\":true,\"ms\":%lu,\"rows\":%u,\"cols\":%u,\"ballots\":%u,\"cards\":%u,"
            "\"multi_card\":%s,\"has_precinct\":%s,\"note\":",
-           GetTickCount() - t0, t.nrows, t.ncols, cc.ballots, cc.rows, EeCvr_HasMultiCard(&t) ? "true" : "false",
+           (unsigned long)(GetTickCount() - t0), t.nrows, t.ncols, cc.ballots, cc.rows, EeCvr_HasMultiCard(&t) ? "true" : "false",
            EeCvr_FindColumnByTitle(&t, L"Precinct", &pcol) ? "true" : "false");
     j_strn(t.load_note, 600);
     printf("}\n");
@@ -310,7 +317,7 @@ static int do_results(const wchar_t *const *paths, int n)
     {
         return fail(L"results", st, err, t0);
     }
-    printf("{\"mode\":\"results\",\"ok\":true,\"ms\":%lu,\"groups\":[", GetTickCount() - t0);
+    printf("{\"mode\":\"results\",\"ok\":true,\"ms\":%lu,\"groups\":[", (unsigned long)(GetTickCount() - t0));
     for (g = 0; g < nres; g++)
     {
         printf("%s", g ? "," : "");
@@ -332,7 +339,7 @@ static int do_audit(const wchar_t *const *paths, int n)
     {
         return fail(L"audit", st, err, t0);
     }
-    printf("{\"mode\":\"audit\",\"ok\":true,\"ms\":%lu,\"elections\":[", GetTickCount() - t0);
+    printf("{\"mode\":\"audit\",\"ok\":true,\"ms\":%lu,\"elections\":[", (unsigned long)(GetTickCount() - t0));
     for (e = 0; e < nels; e++)
     {
         EeAuditElection *el = &els[e];
@@ -434,7 +441,7 @@ static int do_voters(const wchar_t *path)
         EeVoterTable_Clear(&t);
         return fail(L"voters", st, err, t0);
     }
-    printf("{\"mode\":\"voters\",\"ok\":true,\"ms\":%lu,\"rows\":%u,\"cols\":%u}\n", GetTickCount() - t0, t.row_count,
+    printf("{\"mode\":\"voters\",\"ok\":true,\"ms\":%lu,\"rows\":%u,\"cols\":%u}\n", (unsigned long)(GetTickCount() - t0), t.row_count,
            t.column_count);
     EeVoterTable_Clear(&t);
     return 0;
@@ -613,7 +620,7 @@ static int do_compare(const wchar_t *const *args, int n)
         printf("}");
         i++;
     }
-    printf("],\"ms\":%lu}\n", GetTickCount() - t0);
+    printf("],\"ms\":%lu}\n", (unsigned long)(GetTickCount() - t0));
     EeResults_Clear(&cvr.res);
     for (i = 0; i < ntabs; i++)
     {

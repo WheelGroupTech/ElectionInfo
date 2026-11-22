@@ -24,8 +24,16 @@ static void au_set_err(wchar_t *dst, size_t cch, const wchar_t *fmt, const wchar
 {
     if (dst != NULL && cch > 0)
     {
-        const wchar_t *name = path != NULL ? wcsrchr(path, L'\\') : NULL;
-        StringCchPrintfW(dst, cch, fmt, name != NULL ? name + 1 : (path != NULL ? path : L""));
+        const wchar_t *name = path != NULL ? path : L"";
+        const wchar_t *p;
+        for (p = name; *p != L'\0'; p++)
+        {
+            if (*p == L'\\' || *p == L'/')
+            {
+                name = p + 1;
+            }
+        }
+        StringCchPrintfW(dst, cch, fmt, name);
     }
 }
 
@@ -4429,8 +4437,14 @@ EeLoadStatus EeAudit_LoadExport(const wchar_t *path,
     {
         if (st == EeLoadStatus_Error && err != NULL && errcch > 0)
         {
-            const wchar_t *name = wcsrchr(path, L'\\');
-            name = name != NULL ? name + 1 : path;
+            const wchar_t *name = path, *p;
+            for (p = path; *p != L'\0'; p++)
+            {
+                if (*p == L'\\' || *p == L'/')
+                {
+                    name = p + 1;
+                }
+            }
             if (rl.msg[0] != L'\0')
             {
                 StringCchPrintfW(err, errcch, L"%s: %s", name, rl.msg);

@@ -4,16 +4,31 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-18. **In progress (uncommitted): window management.** A **Window** menu
-between Compare and Help in every window with a menu bar (numbered windows, most recently used
-first; cascade / tile / minimize all; close all of a type or all but this), plus a resizable,
-sortable **Windows…** dialog listing every open window with Name, Path, Type, Size, Records and
-Modified, a Find box, and Activate / Close window(s) / OK. Help → Managing Windows added to the
-five Help menus. Design, decisions D1–D8 and the verification log:
-`ElectionExplorer/docs/window-management-design.md`; CHANGELOG entry under "Unreleased". Release
-x64 and ARM64 build clean, smoke suite passes, the live feature was driven from another process.
-**Next steps:** review and commit; consider the design doc's "Possible next steps" (Ctrl+Tab
-cycling, a Records figure while a window is still loading, remembering the sort column).
+**Last updated:** 2026-11-21. **In progress (uncommitted): macOS / Linux port, step 1.**
+The engine and the console tests (`smoke_load`, `data_check`) build with CMake and pass on Linux
+(WSL `Ubuntu` 24.04, GCC 13), with the Win32 calls supplied by stand-in headers in
+`ElectionExplorer/src/platform/posix/`.
+- **Windows fixes:** the port also found and fixed three Windows bugs:
+  - scrambled titles in Brazos's "accessible" Hart precinct reports (a sort tie in
+    `ee_results_pdf.c`);
+  - an unsequenced `key[o++]` in `ee_results_ocr.c`;
+  - audit-log file names after `/`.
+- **Checked:** Windows x64/ARM64 build clean, and both smoke suites pass. `data_check` agrees
+  between Windows and Linux on all 11,939 roster/results/CVR/audit files the backup plan loads,
+  except the 179 scans that need OCR.
+- **Where to read more:** design, decisions X1–X7 and next steps are in
+  `ElectionExplorer/docs/cross-platform-design.md`. The CHANGELOG entry is under "Unreleased".
+- **Build:** `cmake --preset linux-x64-debug`, `cmake --build --preset linux-x64-debug` and
+  `ctest --preset linux-x64-debug`, all run from `ElectionExplorer/`. A Linux clone for builds is
+  at `~/dev/WheelGroupTech/ElectionInfo` in WSL (the user pulls it). These checks built from
+  `/mnt/h/...`.
+- **Next steps:** review and commit. Then:
+  - the macOS build (needs a Mac);
+  - OCR (Apple Vision / Tesseract);
+  - a wxWidgets prototype of the voter-list window;
+  - CI;
+  - a `.gitattributes`.
+- **Window management (Window menu, Windows… dialog):** committed in 0696c96.
 
 **Noticed while testing, left as is by the user's decision (2026-11-19):**
 `File → Load Cast Vote Records…` opens an *empty* Cast Vote Records window when the file holds no

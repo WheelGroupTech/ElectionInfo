@@ -383,6 +383,22 @@ two voters with the same name and DOB who both voted, a group where only one vot
 Voter ID on two rows (not two people), the same DOB written two ways, and a list without
 birth dates.)
 
+### macOS and Linux
+
+The engine and these console tests also build on macOS and Linux with CMake (the Win32 UI
+does not yet). From `ElectionExplorer/`, in WSL Ubuntu or on a Mac:
+
+```sh
+cmake --preset linux-x64-debug          # mac-universal-debug on a Mac
+cmake --build --preset linux-x64-debug
+ctest --preset linux-x64-debug          # runs smoke_load from this folder
+```
+
+Binaries land in `Applications/Build/linux-x64-debug/ElectionExplorer/` (`smoke_load`,
+`data_check`). `hartocr` and `resglyph` are skipped there (no OCR engine yet); every other test
+must pass and print what it prints on Windows. The platform layer and its rules are in
+[`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
+
 ## Data backup check (on demand)
 
 `backup_data.py` backs up the election records Election Explorer reads (voter rosters, CVRs,

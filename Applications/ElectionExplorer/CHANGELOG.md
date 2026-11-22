@@ -30,6 +30,36 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — macOS: scanned documents read by OCR through Apple Vision
+- **What:**
+  - **OCR on the Mac:** scanned results reports, Secretary of State canvass forms and scanned Hart CVRs are now read on macOS through Apple's Vision framework, behind the same OCR interface as Windows OCR (`ocr_win.h`).
+  - **Prepared as for Windows OCR:** each page is decoded, scaled, capped at 10,000 pixels, made gray and turned, as on Windows.
+  - **Where Vision differs from Windows OCR:**
+    - It skipped counts printed on an underline, so rules are whitened first.
+    - Its word boxes are padded, so they are trimmed to their ink.
+    - Its newest text model (revision 3) dropped letters on some scans, so revision 2 is used while macOS offers it.
+    - It reads sideways text in place, so those lines are left out and a page scanned sideways is turned until it reads well, as on Windows.
+  - **Engine name:** load notes and messages now name the engine in use ("Windows OCR", "Apple Vision") through new `EeOcr_EngineName()`. The Windows text is unchanged.
+  - **Linux:** no OCR yet; scanned documents are still refused there.
+- **Where:**
+  - New `src/platform/macos/`:
+    - `ocr_apple.c` implements `ocr_win.h`;
+    - `ocr_vision.m` is the Vision code (Objective-C, ARC);
+    - `ocr_vision.h` is the plain C bridge between them.
+  - `CMakeLists.txt`: Objective-C and the Vision, CoreGraphics, ImageIO and Foundation frameworks on Apple; `ocr_none.c` elsewhere.
+  - `src/ocr_win.{h,c}` and `src/platform/posix/ocr_none.c`: `EeOcr_EngineName`.
+  - `src/ee_results_ocr.c` and `src/hart_cvr.c`: five messages name the engine.
+  - `test/smoke_load.c`: on macOS and Linux, `hartocr`, `resglyph` and `ressos` say they are skipped because their test pages are drawn with GDI. `test/README.md` says so too.
+- **Checked:**
+  - **Builds:** Windows x64 Release app with no warnings. Mac Debug and Release (universal) with no new warnings. Linux with no new warnings.
+  - **Smoke suites:** Windows passes, including all three OCR tests. Mac and Linux pass with those three skipped.
+  - **Windows OCR against Apple Vision, `data_check` with every choice's total:**
+    - **The 8 Secretary of State forms:** every count equal.
+    - **41 other scanned results files:** 38 load on both. The 3 that do not are Travis's PScript5 reports, whose glyph drawing (GDI) is not ported.
+    - **Totals:** 1,182 equal under the same names and 27 differ. Under names the two engines OCR'd differently, 234 more are equal and 35 differ. The differences are in poor scans (Bowie 2026 unofficial, Cameron's ERM precinct reports), where both engines misread.
+    - **Not yet run on the Mac:** the other 139 Cameron files and the three Sierra County scanned CVRs, about 12,000 pages.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "Apple Vision OCR on macOS".
+
 ### 2026-11-22 — macOS: the engine and its tests build and pass on a Mac
 - **What:**
   - **Build:** the engine and the console tests now also build and pass on macOS, on an Intel Mac mini running macOS 15 (Apple clang 17, Xcode). The `mac-universal-*` CMake presets build universal binaries (Intel and Apple Silicon) with no source changes.

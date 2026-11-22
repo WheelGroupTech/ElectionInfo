@@ -2,7 +2,8 @@
 
 Status: **step 1 done** (2026-11-21). The engine and its console tests build and pass on Linux
 (Ubuntu 24.04 in WSL2, GCC 13), and since 2026-11-22 on macOS 15 (Intel Mac mini, Apple clang
-17, universal binaries). The Windows build is unchanged. There is no macOS or Linux UI yet.
+17, universal binaries). On macOS, scanned documents are read by OCR through Apple Vision
+(2026-11-22). The Windows build is unchanged. There is no macOS or Linux UI yet.
 
 ## Goal
 
@@ -67,6 +68,7 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 - **Time and process:** `GetLocalTime`, `FileTimeToSystemTime`, `SystemTimeToFileTime`, `FileTimeToLocalFileTime`, `GetTickCount` and `GetCurrentProcessId`.
 - **Interlocked:** `InterlockedExchange` and `InterlockedCompareExchange`, on the compiler's atomics.
 - **Settings:** a registry key maps to `~/.config/<key without "Software\">.ini` on Linux and `~/Library/Application Support/…` on macOS. The value names are the registry's. `RegDeleteKeyW` removes the file, which is what the settings test uses.
+- **OCR (`ocr_win.h`):** Apple Vision on macOS (`src/platform/macos/`, below); on Linux `ocr_none.c` refuses scans until Tesseract is added. `EeOcr_EngineName()` names the engine in load notes and messages ("Windows OCR", "Apple Vision").
 
 ## Source changes outside the platform folder
 
@@ -124,11 +126,36 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 
 **Seen while checking, not fixed:** Brazos's 28 "accessible" Hart precinct reports also split words inside titles, at places that differ from file to file ("PLA CE 4", "R epublican Party"). Loaded together they give 1,448 contests and 2,229 issues where one election's ballot has about 100 contests. The comparator fix removed the scrambling (it was 1,535 and 2,457), but merging these reports needs its own work.
 
+## Apple Vision OCR on macOS (2026-11-22)
+
+- **Files:** `src/platform/macos/`:
+  - `ocr_apple.c` implements `ocr_win.h`;
+  - `ocr_vision.m` is the Objective-C, compiled with ARC;
+  - `ocr_vision.h` is the plain C bridge between them. Objective-C's `BOOL` differs from the stand-in `windows.h`'s, so neither side sees the other's headers.
+- **Build:** CMake enables Objective-C on Apple and links Vision, CoreGraphics, ImageIO and Foundation. Linux keeps `ocr_none.c`.
+- **Same input as Windows OCR:** each image is decoded (ImageIO, including CCITT TIFF), scaled with high-quality interpolation and capped at 10,000 pixels (Windows OCR's `MaxImageDimension`), made 8-bit gray and turned. It is then read by `VNRecognizeTextRequest`: accurate level, language correction off, `en-US`.
+- **Where Vision differs, and what the bridge does about it:** the readers in `ee_results_ocr.c` and `hart_ocr.c` were built on Windows OCR's output.
+  - **Underlines:** accurate mode does not read a count printed on a rule. On page 1 of Angelina's Secretary of State form it read 4 of the 29 counts. Dark runs along a row longer than 1/25 of the page are whitened first, and then all 29 read.
+  - **Revision 3** (macOS 13's default) drops letters at the ends of lines and invents words on some scans (Henderson's 2021 form: "ROPOSITION 1 (HJR 14", "CONOUCT OHAR FOBEE"). Revision 2 reads them and is used while macOS offers it. Apple marked it deprecated in macOS 15.
+  - **Box size:** word boxes are a line's height, padded, about twice the letters', and a few pixels wider each side. That merged rows and moved numbers out of their columns. Each box is trimmed to the band of inked rows at its centre and then to its inked columns.
+  - **Sideways text:** Vision reads it in place, Windows OCR does not, and the readers rely on that to turn a page scanned sideways (Midland's) until it reads well. Lines much taller than wide are left out.
+- **Checked against Windows OCR:** `data_check` with every choice's total, on both machines.
+  - **The 8 Secretary of State forms:** every count equal (Brazos, Angelina, Henderson). Vision misses fewer faint write-in zeros (Henderson G20: 1 row against 6; Angelina G24: none against 3).
+  - **41 other scanned results files** (every scanned file Windows loads, outside Cameron and the Sierra CVRs, plus 12 Cameron files): 38 load on both.
+    - The 3 that do not are Travis's PScript5 reports. Their glyph outlines are drawn with GDI (`go_draw`), which is not ported.
+    - 1,182 choice totals are equal under the same names and 27 differ. Of the totals named differently by the two engines (a title or name OCR'd differently), 234 more are equal and 35 differ; 99 Windows totals have no partner.
+    - The differences gather in poor scans, where both engines misread: Bowie's 2026 unofficial results, Cameron's ERM precinct reports. Clean scans agree closely (Guadalupe's primaries, Midland, Cameron's summaries, Ellis's ZIPs).
+  - **Not yet run:** the other 139 Cameron files (about 7,000 pages) and the three Sierra County scanned CVRs (5,300 pages). At 3–6 seconds a page on the Intel Mac mini, they take many hours.
+- **Smoke suite on macOS:** `hartocr`, `resglyph` and `ressos` are still skipped. Their test pages are drawn with GDI.
+
 ## Known gaps and next steps
 
 1. **macOS build:** done on an Intel Mac (above). The arm64 half needs an Apple Silicon Mac or a CI runner to be tested.
-2. **OCR:** Apple Vision (macOS) and Tesseract (Linux) behind `ocr_win.h`, plus a small scanline rasterizer to replace GDI in `go_draw`.
-   - The OCR repair rules in `ee_results_ocr.c` and `hart_ocr.c` were tuned to Windows OCR output, so the scanned-document validations must be rerun on each engine.
+2. **OCR:** macOS has Apple Vision (above). Still to do:
+   - **Linux:** Tesseract behind `ocr_win.h`.
+   - **A rasterizer for `go_draw`:** a small scanline rasterizer to replace GDI, for the glyph-outline reports (Travis L22, LR22, PR22).
+   - **Test pages without GDI:** the smoke tests' scanned pages are drawn with GDI. Drawing them with CoreGraphics on macOS (or embedding them as images) would let `hartocr`, `resglyph` and `ressos` run there.
+   - **Poor scans on Vision:** tune the readers for Vision's output, and run the long Cameron and Sierra sweeps.
 3. **UI:** a wxWidgets prototype of one window (the voter list grid) to settle the toolkit before the rest.
 4. **CI:** GitHub Actions `ubuntu-24.04` and `macos-14` jobs running `ctest`.
 5. **`.gitattributes`:** the repo has none.

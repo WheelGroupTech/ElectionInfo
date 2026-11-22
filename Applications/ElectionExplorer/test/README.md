@@ -412,8 +412,9 @@ ctest --preset linux-x64-debug          # runs smoke_load from this folder
 ```
 
 Binaries land in `Applications/Build/linux-x64-debug/ElectionExplorer/` (`smoke_load`,
-`data_check`). `hartocr`, `resglyph` and `ressos` are skipped there (no OCR engine yet); every
-other test must pass and print what it prints on Windows. The platform layer and its rules are in
+`data_check`). `hartocr`, `resglyph` and `ressos` are skipped there: their test pages are drawn
+with GDI. (macOS reads scans through Apple Vision; Linux has no OCR engine yet.) Every other test
+must pass and print what it prints on Windows. The platform layer and its rules are in
 [`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
 
 ## Data backup check (on demand)

@@ -1989,8 +1989,8 @@ static BOOL hart_pdf_open(HartPdfCtx *c, const wchar_t *path, EeOcr **ocr, wchar
         if (ocr == NULL || (*ocr == NULL && !EeOcr_Create(ocr, perr, ARRAYSIZE(perr))))
         {
             StringCchPrintfW(msg, ARRAYSIZE(msg),
-                             L"the report's pages are scanned images, which need Windows OCR. %s",
-                             perr);
+                             L"the report's pages are scanned images, which need %s. %s",
+                             EeOcr_EngineName(), perr);
             set_pdf_err(err, errcch, path, msg);
             pdfctx_free(c);
             return FALSE;
@@ -2811,10 +2811,10 @@ EeLoadStatus EeCvr_LoadFromHartFiles(const wchar_t *const *paths,
                     continue;
                 }
                 StringCchPrintfW(line, ARRAYSIZE(line),
-                                 L"%s: %u scanned pages were read with Windows OCR into %u ballot "
+                                 L"%s: %u scanned pages were read with %s into %u ballot "
                                  L"records -- %u corrected automatically (%u values), %u need "
                                  L"review.\r\n",
-                                 path_leaf(pdfs[f]), stores[f].pages, stores[f].nrecs,
+                                 path_leaf(pdfs[f]), stores[f].pages, EeOcr_EngineName(), stores[f].nrecs,
                                  stores[f].corrected_records, stores[f].corrected_values,
                                  stores[f].review_records);
                 StringCchCatW(note, cap, line);

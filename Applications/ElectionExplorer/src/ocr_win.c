@@ -94,6 +94,11 @@ static void set_err(wchar_t *err, size_t cch, const wchar_t *msg, HRESULT hr)
     }
 }
 
+const wchar_t *EeOcr_EngineName(void)
+{
+    return L"Windows OCR";
+}
+
 void EeOcr_TextInit(EeOcrText *t)
 {
     if (t != NULL)

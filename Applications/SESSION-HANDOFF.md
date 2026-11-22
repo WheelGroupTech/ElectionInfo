@@ -4,29 +4,36 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **In progress (uncommitted): macOS results of the port.**
-- **The Mac:** the engine and its tests build and pass on the Intel Mac mini (`ssh macmini`, macOS
-  15, Xcode, CMake/Ninja from their own downloads, no Homebrew). The binaries are universal; the
-  arm64 half is untested on Intel.
-  - Commands go as `ssh macmini 'zsh -l -c "..."'`, because a non-login shell lacks
-    `/usr/local/bin`.
-  - The clone is `~/dev/WheelGroupTech/ElectionInfo`.
-- **The data on the Mac:** all 16,743 data files, verified identical by SHA-256 (45 that a copy had
-  turned CRLF to LF were copied again with scp).
-- **The comparison:** `data_check` gives the same output on Windows and the Mac for every file
-  that does not need OCR, voter lists included through the new `cells_fnv` checksum.
-- **Changed:** `test/data_check.c` (`cells_fnv`), `docs/cross-platform-design.md` (new "macOS"
-  section) and the CHANGELOG.
+**Last updated:** 2026-11-22. **In progress (uncommitted): OCR on macOS through Apple Vision.**
+- **What:** `src/platform/macos/` implements `ocr_win.h` with Apple's Vision framework.
+  - `ocr_vision.m` is Objective-C behind a plain C bridge, because Objective-C's BOOL clashes
+    with the stand-in windows.h.
+  - Rules are whitened, word boxes trimmed to their ink, revision 2 is used, and sideways lines
+    are left out, so the readers built on Windows OCR work.
+  - `EeOcr_EngineName()` names the engine in messages.
+- **Checked:**
+  - The 8 Secretary of State forms are equal count for count on Mac and Windows.
+  - Of 41 other scanned results files, 38 load on both. 1,182 totals are equal and 27 differ,
+    mostly in poor scans.
+  - The 3 Travis PScript5 reports need a GDI-free `go_draw`.
+  - Windows app and smoke suite (all OCR tests), Mac and Linux builds and smoke suites pass.
+- **Where to read more:** `ElectionExplorer/docs/cross-platform-design.md`, "Apple Vision OCR on
+  macOS", and the CHANGELOG.
 - **Next steps:** review and commit. Then:
-  - OCR for macOS (Apple Vision) and Linux (Tesseract);
-  - a wxWidgets prototype;
-  - CI (which can also test arm64);
-  - a `.gitattributes`.
-- **Recent commits:** Texas SOS canvass reports (cc12ac8); Brazos vote centers (f12a33e); port
-  step 1 (74c0bd1).
-- **Linux builds:** the WSL clone at `~/dev/WheelGroupTech/ElectionInfo` is current through
-  cc12ac8. From `Applications/ElectionExplorer/`, run `cmake --preset linux-x64-debug`, then
-  `--build` and `ctest` with the same preset.
+  - Tesseract on Linux;
+  - a rasterizer for `go_draw`;
+  - smoke-test pages drawn without GDI;
+  - tune for poor scans and run the long Cameron / Sierra sweeps on the Mac (about 12,000
+    pages);
+  - a wxWidgets prototype, CI, `.gitattributes`.
+- **The Mac:** `ssh macmini 'zsh -l -c "..."'` (Intel Mac mini, macOS 15). The clone is
+  `~/dev/WheelGroupTech/ElectionInfo`; `~/ee_check` holds my scripts and a source copy for
+  uncommitted builds.
+- **Recent commits:** macOS build and data check (f22d9c0); Texas SOS canvass reports (cc12ac8);
+  Brazos vote centers (f12a33e); port step 1 (74c0bd1).
+- **Linux builds:** the WSL clone at `~/dev/WheelGroupTech/ElectionInfo`. From
+  `Applications/ElectionExplorer/`, run `cmake --preset linux-x64-debug`, then `--build` and
+  `ctest` with the same preset.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

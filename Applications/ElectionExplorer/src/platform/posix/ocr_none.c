@@ -5,12 +5,18 @@
  *        refused with that message and the callers' "no OCR" paths run; everything that reads
  *        text from files works as on Windows.
  *
- * To be replaced by Apple Vision (macOS) and Tesseract (Linux) behind the same interface.
+ * macOS uses Apple Vision instead (src/platform/macos/ocr_apple.c); Linux is to use Tesseract
+ * behind the same interface.
  */
 
 #include "ocr_win.h"
 
 #include <stdlib.h>
+
+const wchar_t *EeOcr_EngineName(void)
+{
+    return L"OCR";
+}
 
 void EeOcr_TextInit(EeOcrText *t)
 {

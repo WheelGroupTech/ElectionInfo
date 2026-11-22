@@ -119,6 +119,9 @@ extern "C"
     void EeOcr_SetRotation(EeOcr *ocr, int quarter_turns);
 
 
+    /** The engine's name for messages: "Windows OCR" (here), "Apple Vision" (macOS). */
+    const wchar_t *EeOcr_EngineName(void);
+
     /** Initialize / release an EeOcrText. */
     void EeOcr_TextInit(EeOcrText *t);
     void EeOcr_TextFree(EeOcrText *t);

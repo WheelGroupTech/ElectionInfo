@@ -6399,7 +6399,7 @@ done:
 #else
 static int test_hart_ocr(void)
 {
-    wprintf(L"hartocr skipped (OCR is not available on this platform yet)\n");
+    wprintf(L"hartocr skipped (its test pages are drawn with Windows GDI)\n");
     return 0;
 }
 #endif
@@ -13543,7 +13543,7 @@ done:
 #else
 static int test_results_glyphs(void)
 {
-    wprintf(L"resglyph skipped (OCR is not available on this platform yet)\n");
+    wprintf(L"resglyph skipped (its test pages are drawn with Windows GDI)\n");
     return 0;
 }
 #endif
@@ -13796,7 +13796,7 @@ done:
 #else
 static int test_results_sos(void)
 {
-    wprintf(L"ressos skipped (OCR is not available on this platform yet)\n");
+    wprintf(L"ressos skipped (its test pages are drawn with Windows GDI)\n");
     return 0;
 }
 #endif

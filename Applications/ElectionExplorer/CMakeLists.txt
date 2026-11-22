@@ -3,7 +3,8 @@
 # Windows builds keep using Applications.sln (ElectionExplorer.vcxproj, MSIX packaging);
 # this file is only for macOS and Linux. It builds
 #   ee_engine   - the engine (all of src/ except the Win32 UI main.c, ocr_win.c and
-#                 settings.c) with the POSIX platform layer in src/platform/posix/
+#                 settings.c) with the POSIX platform layer in src/platform/posix/ and, on
+#                 macOS, OCR through Apple Vision (src/platform/macos/)
 #   smoke_load  - the smoke suite (test/smoke_load.c), run from this folder
 #   data_check  - the loader harness used by test/backup_data.py (test/data_check.c)
 #
@@ -76,9 +77,23 @@ add_library(ee_engine STATIC
     ${EE_SRC}/xlsx.c
     ${EE_SRC}/third_party/miniz/miniz.c
     ${EE_POSIX}/ee_port.c
-    ${EE_POSIX}/ocr_none.c
     ${EE_POSIX}/settings_posix.c
 )
+if(APPLE)
+    # OCR through Apple's Vision framework: ocr_apple.c implements ocr_win.h on top of
+    # ocr_vision.m, which is Objective-C behind a plain C bridge (ocr_vision.h) and never sees
+    # the stand-in windows.h (Objective-C has its own BOOL).
+    enable_language(OBJC)
+    set(EE_MACOS "${EE_SRC}/platform/macos")
+    target_sources(ee_engine PRIVATE ${EE_MACOS}/ocr_apple.c ${EE_MACOS}/ocr_vision.m)
+    target_include_directories(ee_engine PRIVATE ${EE_MACOS})
+    set_source_files_properties(${EE_MACOS}/ocr_vision.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(ee_engine PUBLIC
+        "-framework Vision" "-framework CoreGraphics" "-framework ImageIO" "-framework Foundation")
+else()
+    # No OCR engine yet (Tesseract is planned): scanned documents are refused with a message.
+    target_sources(ee_engine PRIVATE ${EE_POSIX}/ocr_none.c)
+endif()
 # The stand-in windows.h / strsafe.h / intsafe.h come first, ahead of the system headers.
 target_include_directories(ee_engine BEFORE PUBLIC ${EE_POSIX}/include)
 target_include_directories(ee_engine PUBLIC ${EE_SRC})

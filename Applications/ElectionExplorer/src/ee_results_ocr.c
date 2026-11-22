@@ -5267,9 +5267,9 @@ static void ro_sos_finish(RoCx *cx)
     }
     StringCchPrintfW(msg, ARRAYSIZE(msg),
                      L"The report is a Texas Secretary of State canvass report, scanned: its %u pages were read by OCR "
-                     L"(Windows OCR). It gives county totals only, with no precincts or vote types. Total # of Voters "
+                     L"(%s). It gives county totals only, with no precincts or vote types. Total # of Voters "
                      L"Voted: %s; Provisional Votes Counted: %s.",
-                     cx->pages_read, voters, prov);
+                     cx->pages_read, EeOcr_EngineName(), voters, prov);
     ro_note(cx, msg);
     if (over > 0)
     {
@@ -5376,9 +5376,9 @@ static BOOL ro_parse(EePdf *pdf,
         }
         wchar_t msg[400];
         StringCchPrintfW(msg, ARRAYSIZE(msg),
-                         L"The report is scanned (page images only) and Windows OCR, which reads it, is not "
+                         L"The report is scanned (page images only) and %s, which reads it, is not "
                          L"available: %s",
-                         oerr);
+                         EeOcr_EngineName(), oerr);
         ro_set_err(err, errcch, msg);
         free(cx);
         return FALSE;
@@ -5610,9 +5610,10 @@ static BOOL ro_parse(EePdf *pdf,
             }
         }
         StringCchPrintfW(msg, ARRAYSIZE(msg),
-                         L"The report is scanned: its %u pages were read by OCR (Windows OCR). Of %llu rows of counts, "
+                         L"The report is scanned: its %u pages were read by OCR (%s). Of %llu rows of counts, "
                          L"%llu had a count OCR left out or misread that their row and column totals gave",
-                         cx->pages_read, (unsigned long long)cx->rows, (unsigned long long)cx->rows_fixed);
+                         cx->pages_read, EeOcr_EngineName(), (unsigned long long)cx->rows,
+                         (unsigned long long)cx->rows_fixed);
         if (cx->rows_review > 0)
         {
             StringCchPrintfW(msg + wcslen(msg), ARRAYSIZE(msg) - wcslen(msg),

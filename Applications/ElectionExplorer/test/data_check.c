@@ -6,13 +6,15 @@
  *   data_check cvr     files...           cast vote records (vendor chosen as the CVR window does)
  *   data_check results files...           election results (EeResults_LoadFiles)
  *   data_check audit   files...           audit logs (EeAudit_LoadFiles)
- *   data_check voters  file               a voter list (EeVoterTable_LoadFromFile)
+ *   data_check voters  file               a voter list (EeVoterTable_LoadFromFile): rows,
+ *                                         columns and "cells_fnv", a checksum of every cell
  *   data_check compare cvr... [+ cvr...] -- results [-- results ...]
  *       contest totals of each results file vs the CVR tabulation (CVR sets after '+' are
  *       loaded apart, e.g. a primary's parties, and tabulated together)
  *
  * Exit code 0 when the load succeeded (the JSON then has "ok": true), 1 when it failed.
- * No voter names or addresses are printed: rosters and voter lists report counts only. */
+ * No voter names or addresses are printed: rosters and voter lists report counts (and a
+ * checksum) only. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -441,8 +443,26 @@ static int do_voters(const wchar_t *path)
         EeVoterTable_Clear(&t);
         return fail(L"voters", st, err, t0);
     }
-    printf("{\"mode\":\"voters\",\"ok\":true,\"ms\":%lu,\"rows\":%u,\"cols\":%u}\n", (unsigned long)(GetTickCount() - t0), t.row_count,
-           t.column_count);
+    {
+        /* a checksum of every cell (FNV-1a 64 over each cell's UTF-8 and a separator), so two
+         * builds can be compared on what they read without printing any of it */
+        uint64_t h = 14695981039346656037ULL;
+        uint32_t r, c;
+        for (r = 0; r < t.row_count; r++)
+        {
+            for (c = 0; c < t.column_count; c++)
+            {
+                const unsigned char *s = (const unsigned char *)EeVoterTable_GetCellUtf8(&t, r, c);
+                for (; *s != 0; s++)
+                {
+                    h = (h ^ *s) * 1099511628211ULL;
+                }
+                h = (h ^ (c + 1 == t.column_count ? 0x0Au : 0x1Fu)) * 1099511628211ULL;
+            }
+        }
+        printf("{\"mode\":\"voters\",\"ok\":true,\"ms\":%lu,\"rows\":%u,\"cols\":%u,\"cells_fnv\":\"%016llx\"}\n",
+               (unsigned long)(GetTickCount() - t0), t.row_count, t.column_count, (unsigned long long)h);
+    }
     EeVoterTable_Clear(&t);
     return 0;
 }

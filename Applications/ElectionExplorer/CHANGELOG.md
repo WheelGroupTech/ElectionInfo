@@ -30,6 +30,23 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — macOS: the engine and its tests build and pass on a Mac
+- **What:**
+  - **Build:** the engine and the console tests now also build and pass on macOS, on an Intel Mac mini running macOS 15 (Apple clang 17, Xcode). The `mac-universal-*` CMake presets build universal binaries (Intel and Apple Silicon) with no source changes.
+  - **Real county files:** `data_check` gives the same output on the Mac as on Windows for every county data file that does not need OCR.
+  - **Voter-list checksum:** `data_check voters` now also prints `cells_fnv`, a checksum of every cell (FNV-1a 64 over each cell's UTF-8). Two builds' readings of a voter list can be compared without printing any of it.
+- **Where:**
+  - `test/data_check.c`: `do_voters` prints `cells_fnv`; the usage comment says so.
+  - `docs/cross-platform-design.md`: status, new "macOS (2026-11-22)" section, next steps (the macOS build is done; the stale `data_check` `%lu` item is gone).
+- **Checked:**
+  - **Smoke suite:** `smoke_load` passes in Debug and Release on the Mac, and `ctest` passes. The Debug output is identical line for line to Linux's. `hartocr`, `resglyph` and `ressos` are skipped (no OCR engine yet). Only the arm64 half is untested: an Intel Mac cannot run it.
+  - **Copied data:** SHA-256 of all 16,743 data files on both machines. After 45 text files whose copy had turned CRLF into LF were copied again with `scp`, every file was identical.
+  - **`data_check`, Windows against Mac, on 16,741 files** (all but `_Other-2022 Primary`):
+    - identical on all 137 audit logs, 12,074 rosters and 61 voter lists (cell checksums included), on 171 of 174 CVRs and on 4,058 of 4,295 results files;
+    - every other file needs OCR: 233 the Mac refuses for lack of it (Windows loads 183), and 7 Secretary of State forms with a Paper Capture text layer, which fall back to their earlier refusal.
+  - **Windows:** `data_check` builds with no warnings.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "macOS (2026-11-22)".
+
 ### 2026-11-22 — Texas Secretary of State canvass reports (scanned) load
 - **What:**
   - **The form:** the canvass report a county files with the Secretary of State, printed, signed and scanned. It gives county totals only: the voters voted, provisional votes, then ballot measures (FOR / AGAINST) and contests of candidate, party and votes. It is now read by OCR.

@@ -4,24 +4,29 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **Nothing in progress; everything is committed.**
-- **Recent commits:**
-  - Texas Secretary of State canvass reports, read by OCR (cc12ac8). Eight files that were
-    refused now load (Angelina G24/G25, Brazos G25, Henderson G20/G21/L22/S21). A Paper Capture
-    scan whose text layer is no known report is read by OCR for this form only. See
-    `ElectionExplorer/docs/election-results-design.md`, "Texas Secretary of State canvass
-    reports".
-  - Brazos vote-center reports as one election (f12a33e).
-  - The macOS / Linux port, step 1 (74c0bd1).
-- **Port, next steps** (see `ElectionExplorer/docs/cross-platform-design.md`):
-  - the macOS build (needs a Mac);
-  - OCR (Apple Vision / Tesseract);
+**Last updated:** 2026-11-22. **In progress (uncommitted): macOS results of the port.**
+- **The Mac:** the engine and its tests build and pass on the Intel Mac mini (`ssh macmini`, macOS
+  15, Xcode, CMake/Ninja from their own downloads, no Homebrew). The binaries are universal; the
+  arm64 half is untested on Intel.
+  - Commands go as `ssh macmini 'zsh -l -c "..."'`, because a non-login shell lacks
+    `/usr/local/bin`.
+  - The clone is `~/dev/WheelGroupTech/ElectionInfo`.
+- **The data on the Mac:** all 16,743 data files, verified identical by SHA-256 (45 that a copy had
+  turned CRLF to LF were copied again with scp).
+- **The comparison:** `data_check` gives the same output on Windows and the Mac for every file
+  that does not need OCR, voter lists included through the new `cells_fnv` checksum.
+- **Changed:** `test/data_check.c` (`cells_fnv`), `docs/cross-platform-design.md` (new "macOS"
+  section) and the CHANGELOG.
+- **Next steps:** review and commit. Then:
+  - OCR for macOS (Apple Vision) and Linux (Tesseract);
   - a wxWidgets prototype;
-  - CI;
+  - CI (which can also test arm64);
   - a `.gitattributes`.
-- **Linux builds:** the WSL clone at `~/dev/WheelGroupTech/ElectionInfo` is up to date with
-  cc12ac8. From its `Applications/ElectionExplorer/`, run `cmake --preset linux-x64-debug`,
-  `cmake --build --preset linux-x64-debug` and `ctest --preset linux-x64-debug`.
+- **Recent commits:** Texas SOS canvass reports (cc12ac8); Brazos vote centers (f12a33e); port
+  step 1 (74c0bd1).
+- **Linux builds:** the WSL clone at `~/dev/WheelGroupTech/ElectionInfo` is current through
+  cc12ac8. From `Applications/ElectionExplorer/`, run `cmake --preset linux-x64-debug`, then
+  `--build` and `ctest` with the same preset.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

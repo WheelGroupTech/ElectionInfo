@@ -1,7 +1,8 @@
 # macOS and Linux — design (portable engine, step 1)
 
 Status: **step 1 done** (2026-11-21). The engine and its console tests build and pass on Linux
-(Ubuntu 24.04 in WSL2, GCC 13). The Windows build is unchanged. There is no macOS or Linux UI yet.
+(Ubuntu 24.04 in WSL2, GCC 13), and since 2026-11-22 on macOS 15 (Intel Mac mini, Apple clang
+17, universal binaries). The Windows build is unchanged. There is no macOS or Linux UI yet.
 
 ## Goal
 
@@ -99,11 +100,33 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
   - **Old and new Windows builds:** they differ only on the 27 Brazos "accessible" precinct reports, the comparator fix above.
   - **Rosters:** Windows and Linux agree on all 7,917 files: CSV, PDF, TXT, XLS, XLSX and ZIP. (One file, whose name has parentheses, needed the same direct rerun.)
 
+## macOS (2026-11-22)
+
+- **Machine:** an Intel Mac mini running macOS 15 with Xcode, Apple clang 17, CMake 4.5 and Ninja 1.13. There is no Homebrew; CMake and Ninja are the official downloads.
+- **Driven from Windows over SSH:** the machine is reached with key authentication through Windows' `ssh-agent`. Commands run as `ssh macmini 'zsh -l -c "…"'`, because a non-login shell does not get `/usr/local/bin` on its PATH.
+- **Build:** the `mac-universal-debug` and `mac-universal-release` presets build universal binaries (x86_64 and arm64) with no source changes. The only warnings are the three Linux shows, once per architecture.
+- **Tests:** `smoke_load` passes in Debug and Release, and `ctest` passes. `hartocr`, `resglyph` and `ressos` are skipped (no OCR engine yet).
+  - Its Debug output is identical line for line to Linux's.
+  - An Intel Mac runs only the x86_64 half; the arm64 half is built but untested.
+- **The data:** Voter_Lists, Voter_Rosters, Audit_Logs, Election_CVRs and Election_Results were copied to the Mac: 16,743 files, 56.2 GB.
+  - SHA-256 of every file on both machines found 45 text files whose copy had CRLF turned into LF (the Dallas and El Paso countywide voter lists, El Paso rosters, two Travis CVRs, and Bexar and Williamson results). Nothing else differed.
+  - Those 45 were copied again with `scp`, and then every file was identical.
+- **Real county files:** `data_check` ran on the same 16,741 files on Windows and on the Mac (all but `_Other-2022 Primary`). The JSON was compared with the timings removed.
+  - `data_check voters` now also prints `cells_fnv`, an FNV-1a checksum of every cell, so a voter list's contents are compared without printing any of them.
+  - **Identical on every file that does not need OCR:**
+    - audit logs: 137;
+    - CVRs: 171 of 174;
+    - results: 4,058 of 4,295;
+    - rosters: 12,074;
+    - voter lists: 61 (with matching cell checksums).
+  - **The rest need OCR:** 233 files the Mac refuses with "OCR is not available on this platform yet" (Windows loads 183 of them), and the 7 Secretary of State canvass forms with a Paper Capture text layer. Without OCR, those 7 fall back to their earlier refusal, "not a results report this version can read".
+  - **Time:** 43 minutes on the Mac (the 71 files over 200 MB one at a time took 36 of them) and 42 on Windows (which also ran OCR).
+
 **Seen while checking, not fixed:** Brazos's 28 "accessible" Hart precinct reports also split words inside titles, at places that differ from file to file ("PLA CE 4", "R epublican Party"). Loaded together they give 1,448 contests and 2,229 issues where one election's ballot has about 100 contests. The comparator fix removed the scrambling (it was 1,535 and 2,457), but merging these reports needs its own work.
 
 ## Known gaps and next steps
 
-1. **macOS build:** the same CMake presets (`mac-universal-*`) on a Mac with the Xcode command-line tools. Expect small differences: `qsort_r` argument order is handled, and `st_mtimespec` too.
+1. **macOS build:** done on an Intel Mac (above). The arm64 half needs an Apple Silicon Mac or a CI runner to be tested.
 2. **OCR:** Apple Vision (macOS) and Tesseract (Linux) behind `ocr_win.h`, plus a small scanline rasterizer to replace GDI in `go_draw`.
    - The OCR repair rules in `ee_results_ocr.c` and `hart_ocr.c` were tuned to Windows OCR output, so the scanned-document validations must be rerun on each engine.
 3. **UI:** a wxWidgets prototype of one window (the voter list grid) to settle the toolkit before the rest.
@@ -111,4 +134,3 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 5. **`.gitattributes`:** the repo has none.
    - Today the index is LF and Windows checkouts get CRLF from `core.autocrlf`.
    - An explicit `* text=auto` (with `*.sh eol=lf`) keeps macOS and Linux checkouts right whatever a machine's git settings are.
-6. **`data_check.c`:** it prints `GetTickCount()` (a `DWORD`) with plain `printf("%lu")`, which is not quite right on LP64 (`-Wformat`). It only affects the "ms" timing field.

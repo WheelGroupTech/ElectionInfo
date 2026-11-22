@@ -13077,6 +13077,142 @@ done:
     return rc;
 }
 
+/* A Hart cumulative contest title drawn in pieces on one line, as Brazos's "accessible" reports
+ * draw a title wrapped in its box: the first piece at the margin, each other from where the
+ * first ends. Then the table headings of hart_cum_contest. */
+static BOOL hart_cum_contest_pieces(TBuf *c, double y, const char *const *pieces, int n)
+{
+    double x = 20.0 + rpdf_w(pieces[0], 10.0);
+    BOOL ok = rpdf_text(c, 20.0, y, 10.0, pieces[0]);
+    int i;
+    for (i = 1; i < n && ok; i++)
+    {
+        ok = rpdf_text(c, x, y, 10.0, pieces[i]);
+    }
+    return ok && rpdf_text(c, 20.0, y - 17.6, 9.0, "Choice") && rpdf_text(c, 179.9, y - 17.6, 9.0, "Party") &&
+           rpdf_text(c, 344.2, y - 17.6, 9.0, "Early Voting") &&
+           rpdf_text(c, 406.9, y - 17.6, 9.0, "Election Day Voting") && rpdf_text(c, 570.3, y - 17.6, 9.0, "Total");
+}
+
+/* One precinct's page of a Brazos vote center's Hart precinct report: heading @p head1 (and
+ * @p head2 wrapped below it, or NULL), the precinct line, and the land office contest with its
+ * title in @p pieces. */
+static BOOL hart_place_page(TBuf *c, const char *head1, const char *head2, const char *pre, const char *voters,
+                            const char *const *pieces, int npieces, const char *const rows[2][3])
+{
+    BOOL ok = hart_page_head(c, head1) && (head2 == NULL || rpdf_text(c, 22.0, 747.9, 10.0, head2)) &&
+              hart_pct_line(c, 640.2, pre, voters) && hart_cum_contest_pieces(c, 615.0, pieces, npieces) &&
+              hart_cum_row(c, 582.3, "ANN LEE", "REP", rows[0][0], rows[0][1], rows[0][2]) &&
+              hart_cum_row(c, 566.4, "BOB RAY", "REP", rows[1][0], rows[1][1], rows[1][2]);
+    return ok;
+}
+
+/* Brazos's Hart precinct reports of each vote center (P26, G25; tag: reshartplace): a contest
+ * title drawn in pieces whose words split at places that differ from file to file reads as one
+ * title ("COMMISSIONER OF THE" " GENERAL LAND O" "FFICE - Republican Pa" "rty "); two places'
+ * reports (headings "North Hall Precinct" / "Report" and "South Gym ED" / "Precinct Report") load
+ * as one election whose counts are their sums, with no notes; a second copy of one place's report
+ * is another snapshot and stays apart. */
+static int test_results_hart_places(void)
+{
+    static const char *const k_pa[] = {"COMMISSIONER OF THE", " GENERAL LAND O", "FFICE - Republican Pa", "rty "};
+    static const char *const k_pb[] = {"COMMISSIONER OF THE GEN", "ERAL LAND OFFICE - Re", "publican Party "};
+    static const char *const k_a101[2][3] = {{"10", "20", "30"}, {"5", "15", "20"}};
+    static const char *const k_a102[2][3] = {{"4", "6", "10"}, {"2", "3", "5"}};
+    static const char *const k_b101[2][3] = {{"7", "8", "15"}, {"1", "2", "3"}};
+    static const char *const k_b103[2][3] = {{"0", "5", "5"}, {"1", "1", "2"}};
+    const wchar_t *k_title = L"REP COMMISSIONER OF THE GENERAL LAND OFFICE";
+    wchar_t dir[MAX_PATH], p_a[MAX_PATH], p_b[MAX_PATH], p_a2[MAX_PATH];
+    wchar_t err[512] = L"";
+    TBuf a[2] = {{0}, {0}}, b[2] = {{0}, {0}};
+    EeResults *res = NULL;
+    uint32_t nres = 0;
+    const wchar_t *paths[3];
+    const EeResultsContest *ct;
+    BOOL ok;
+    int rc = 1, i;
+
+    GetTempPathW(MAX_PATH, dir);
+    StringCchPrintfW(p_a, MAX_PATH, L"%sRPDF_hart_place_north.pdf", dir);
+    StringCchPrintfW(p_b, MAX_PATH, L"%sRPDF_hart_place_south.pdf", dir);
+    StringCchPrintfW(p_a2, MAX_PATH, L"%sRPDF_hart_place_north_again.pdf", dir);
+
+    /* North Hall: precincts 101 (120 ballots) and 102 (80); South Gym: 101 (150) and 103 (50) */
+    ok = hart_place_page(&a[0], "North Hall Precinct", "Report", "101", "120 of 600 registered voters = 20.00%", k_pa,
+                         4, k_a101) &&
+         hart_place_page(&a[1], "North Hall Precinct", "Report", "102", "80 of 400 registered voters = 20.00%", k_pa, 4,
+                         k_a102) &&
+         hart_place_page(&b[0], "South Gym ED", "Precinct Report", "101", "150 of 600 registered voters = 25.00%", k_pb,
+                         3, k_b101) &&
+         hart_place_page(&b[1], "South Gym ED", "Precinct Report", "103", "50 of 400 registered voters = 12.50%", k_pb, 3,
+                         k_b103);
+    g_tpdf_widths = TRUE; /* the pieces touch by the font's widths */
+    ok = ok && tpdf_write(p_a, a, 2, FALSE) && tpdf_write(p_a2, a, 2, FALSE) && tpdf_write(p_b, b, 2, FALSE);
+    g_tpdf_widths = FALSE;
+    if (!ok)
+    {
+        wprintf(L"reshartplace: fixtures\n");
+        goto done;
+    }
+
+    /* each alone: the title whole */
+    paths[0] = p_a;
+    paths[1] = p_b;
+    for (i = 0; i < 2; i++)
+    {
+        if (!res_load(&paths[i], 1, &res, &nres, err) || nres != 1 || res[0].ncontests != 1 ||
+            (ct = rpdf_contest(&res[0], k_title)) == NULL || ct->nchoices != 2 || res[0].nissues != 0)
+        {
+            wprintf(L"reshartplace: file %d alone (%u results, %s, %u issues: %s) %s\n", i, nres,
+                    nres && res[0].ncontests ? res[0].contests[0].title : L"-", nres ? res[0].nissues : 0,
+                    nres && res[0].nissues ? res[0].issues[0].text : L"-", err);
+            goto done;
+        }
+        EeResults_FreeArray(res, nres);
+        res = NULL;
+        nres = 0;
+    }
+
+    /* both: one election of their sums */
+    if (!res_load(paths, 2, &res, &nres, err) || nres != 1 || res[0].nsources != 2 || res[0].ncontests != 1 ||
+        (ct = rpdf_contest(&res[0], k_title)) == NULL || ct->nchoices != 2 || res[0].nissues != 0 ||
+        res[0].choices[ct->first_choice].total != 60 || res[0].choices[ct->first_choice + 1].total != 30 ||
+        rpdf_cell(&res[0], ct, 0, L"101", 1) != 28 || rpdf_cell(&res[0], ct, 1, L"102", 0) != 2 ||
+        rpdf_cell(&res[0], ct, 0, L"103", 1) != 5 || res[0].ballots_total != 400 || res[0].registered_total != 1000 ||
+        res[0].nprecincts != 3 || res[0].precincts[0].ballots != 270 || res[0].precincts[0].registered != 600)
+    {
+        wprintf(L"reshartplace: both (%u results, %u sources, %u contests, %u issues, ballots %lld) %s\n", nres,
+                nres ? res[0].nsources : 0, nres ? res[0].ncontests : 0, nres ? res[0].nissues : 0,
+                nres ? (long long)res[0].ballots_total : -1LL, err);
+        goto done;
+    }
+    EeResults_FreeArray(res, nres);
+    res = NULL;
+    nres = 0;
+
+    /* North Hall twice (two snapshots of one place) and South Gym: the copy is not added in */
+    paths[2] = p_a2;
+    if (!res_load(paths, 3, &res, &nres, err) || nres != 2 || res[0].ballots_total + res[1].ballots_total != 600)
+    {
+        wprintf(L"reshartplace: same place twice (%u results) %s\n", nres, err);
+        goto done;
+    }
+    rc = 0;
+
+done:
+    g_tpdf_widths = FALSE;
+    EeResults_FreeArray(res, nres);
+    free(a[0].p);
+    free(a[1].p);
+    free(b[0].p);
+    free(b[1].p);
+    DeleteFileW(p_a);
+    DeleteFileW(p_b);
+    DeleteFileW(p_a2);
+    wprintf(L"reshartplace: %s\n", rc == 0 ? L"OK" : L"FAILED");
+    return rc;
+}
+
 /* PScript5's two cells in one string: the last digit of @p a (right edge @p ra) and the
  * first of @p b (right edge @p rb) shown together, spread by a character spacing set before
  * a q ... Q that sets it to 0 inside (the Q restores it, as in Travis's L22 report). */
@@ -15646,6 +15782,7 @@ int wmain(void)
     failed |= test_results_hart_old();
     failed |= test_results_hart_runoff();
     failed |= test_results_hart_pct();
+    failed |= test_results_hart_places();
     failed |= test_results_glyphs();
     failed |= test_results_compare();
     failed |= test_results_compare_party();

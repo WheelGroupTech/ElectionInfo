@@ -682,17 +682,29 @@ static int __cdecl rp_ptr_x_cmp(const void *pa, const void *pb)
 
 /* Join the texts of @p n items with single spaces into @p out; an item that starts where
  * the one before it ends goes on the same word (Smith: "City of Linda" + "le" by the font's
- * widths, "H" + "ershal" by Helvetica's, trusted for a letter or two). */
+ * widths, "H" + "ershal" by Helvetica's, trusted for a letter or two). So does an item drawn
+ * from the same point as one that went on that way: Brazos's "accessible" Hart reports draw a
+ * title wrapped in its box as pieces on one line, the first at the margin and each other from
+ * where the first ends ("COMMISSIONER OF THE" " GENERAL LAND O" "FFICE - Republican Pa" "rty "),
+ * splitting words at places that differ from file to file. */
 static void rp_join(RpItem *const *it, size_t n, wchar_t *out, size_t cch)
 {
     size_t i;
+    BOOL went_on = FALSE; /* it[i - 1] went on from the item before it */
     out[0] = L'\0';
     for (i = 0; i < n; i++)
     {
-        if (i > 0 && !((it[i - 1]->exact || wcslen(it[i - 1]->text) <= 2) && !it[i - 1]->sp_after && !it[i]->sp_before &&
-                       fabsf(it[i]->x - it[i - 1]->x1) < 0.5f && fabsf(it[i]->y - it[i - 1]->y) < 1.0f))
+        if (i > 0)
         {
-            StringCchCatW(out, cch, L" ");
+            const RpItem *p = it[i - 1], *t = it[i];
+            BOOL line = fabsf(t->y - p->y) < 1.0f;
+            BOOL touch = line && (p->exact || wcslen(p->text) <= 2) && fabsf(t->x - p->x1) < 0.5f;
+            BOOL same_point = line && went_on && fabsf(t->x - p->x) < 0.05f;
+            went_on = touch || same_point;
+            if (!went_on || p->sp_after || t->sp_before)
+            {
+                StringCchCatW(out, cch, L" ");
+            }
         }
         StringCchCatW(out, cch, it[i]->text);
     }
@@ -2346,6 +2358,52 @@ static void ht_contest(RpCtx *cx, const wchar_t *raw_title)
     cx->have_contest = TRUE;
 }
 
+/* The voting place a precinct report's heading names: Brazos posts a report of the ballots
+ * cast at each place, its heading at the top left wrapped onto up to three lines ("Arena Hall ED
+ * Precinct Report"; "Brazos Co Elections Admin" / "Precinct Report"; "A&M Church of Christ
+ * Precinct" / "Report"). Nothing for "Precinct Report" or "Precinct Results Report" alone. */
+static void ht_place(RpCtx *cx, const RpItem *items, size_t n, float body_top)
+{
+    static const wchar_t k_suffix[] = L"Precinct Report";
+    const size_t ns = ARRAYSIZE(k_suffix) - 1;
+    wchar_t head[256] = L"";
+    const RpItem *last = NULL;
+    size_t i, len, lines = 0;
+    for (i = 0; i < n && lines < 3; i++)
+    {
+        const RpItem *t = &items[i]; /* top to bottom */
+        if (t->y <= body_top || t->rot != 0 || t->x >= 40.0f || t->size < RP_HEAD_SIZE)
+        {
+            continue;
+        }
+        if (last != NULL && (fabsf(t->x - last->x) >= 1.0f || last->y - t->y >= 1.6f * last->size ||
+                             fabsf(t->size - last->size) >= 0.5f))
+        {
+            break; /* not the heading's next line */
+        }
+        if (head[0] != L'\0')
+        {
+            StringCchCatW(head, ARRAYSIZE(head), L" ");
+        }
+        StringCchCatW(head, ARRAYSIZE(head), t->text);
+        last = t;
+        lines++;
+    }
+    rp_norm(head);
+    len = wcslen(head);
+    if (len <= ns || wcscmp(head + len - ns, k_suffix) != 0)
+    {
+        return;
+    }
+    head[len - ns] = L'\0';
+    rp_norm(head);
+    if (head[0] != L'\0' && wcsstr(head, L"Precinct") == NULL)
+    {
+        cx->d->place = rp_wdup(head);
+        cx->oom = cx->oom || cx->d->place == NULL;
+    }
+}
+
 /* The heading of the first page: "<ballots> of <registered> = n%", the election name (the
  * left line above "Run Time"), the election date, the county and the run date and time. */
 static void ht_heading(RpCtx *cx, RpItem *items, size_t n, float body_top)
@@ -2354,6 +2412,10 @@ static void ht_heading(RpCtx *cx, RpItem *items, size_t n, float body_top)
     size_t i, k;
     const wchar_t *run_date = NULL, *run_time = NULL;
     BOOL got_counts = FALSE;
+    if (d->place == NULL)
+    {
+        ht_place(cx, items, n, body_top);
+    }
     for (i = 0; i < n; i++)
     {
         const wchar_t *s = items[i].text;
@@ -4215,6 +4277,7 @@ void EeRpdf_Free(EeRpdfDoc *doc)
     free(doc->election_date);
     free(doc->region);
     free(doc->timestamp);
+    free(doc->place);
     for (i = 0; i < doc->nvt; i++)
     {
         free(doc->vote_types[i]);

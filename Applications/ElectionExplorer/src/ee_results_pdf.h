@@ -87,6 +87,8 @@ extern "C"
         wchar_t *election_date;
         wchar_t *region;
         wchar_t *timestamp; /* when the report was run, from its footer */
+        wchar_t *place;     /* Hart precinct report of one voting place: the place its heading
+                             * names ("Arena Hall ED" Precinct Report), else NULL */
 
         wchar_t **vote_types; /* column names in first-seen order */
         uint32_t nvt, cap_vt;

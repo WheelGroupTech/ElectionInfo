@@ -551,6 +551,7 @@ typedef struct ResBuilder
     BOOL bad; /* the parser met something it cannot read */
     wchar_t bad_msg[256];
     BOOL quiet; /* combining files already checked: b_finish's checks add no notes */
+    wchar_t *place; /* the voting place a report covers alone (EeRpdfDoc.place), or NULL */
 } ResBuilder;
 
 static void b_init(ResBuilder *b, EeResults *r)
@@ -566,10 +567,12 @@ static void b_free(ResBuilder *b)
     free(b->ent);
     free(b->tvt);
     free(b->vt_ballots_total);
+    free(b->place);
     b->pre_hash = NULL;
     b->ent = NULL;
     b->tvt = NULL;
     b->vt_ballots_total = NULL;
+    b->place = NULL;
 }
 
 static void b_fail(ResBuilder *b, const wchar_t *msg)
@@ -4268,6 +4271,8 @@ typedef struct Parsed
     ParsedPart *parts; /* files of the same election combined into this one */
     uint32_t nparts;
     uint32_t own_contests, own_choices, own_precincts; /* this file's, before combining */
+    wchar_t **places; /* the voting places of reports that each cover one (summed into this) */
+    uint32_t nplaces;
 } Parsed;
 
 /* sniff_format: a PDF, whose report kind (and so its EE_RES_FMT_*) the parser decides */
@@ -4402,6 +4407,9 @@ static uint32_t res_from_rpdf(ResBuilder *b, EeRpdfDoc *pdoc, uint32_t dom_summa
 done:
     free(vtmap);
     free(pmap);
+    free(b->place);
+    b->place = doc.place;
+    doc.place = NULL;
     EeRpdf_Free(&doc);
     return b->oom ? 0 : fmt;
 }
@@ -4758,6 +4766,16 @@ static BOOL parse_buffer(const uint8_t *d,
         EeResults_Clear(&out->r);
         return FALSE;
     }
+    if (b.place != NULL)
+    {
+        out->places = (wchar_t **)malloc(sizeof(wchar_t *));
+        if (out->places != NULL)
+        {
+            out->places[0] = b.place;
+            out->nplaces = 1;
+            b.place = NULL;
+        }
+    }
     b_free(&b);
     return TRUE;
 }
@@ -4852,10 +4870,17 @@ static void parsed_free(Parsed *p)
         free(p->parts[k].member);
     }
     free(p->parts);
+    for (k = 0; k < p->nplaces; k++)
+    {
+        free(p->places[k]);
+    }
+    free(p->places);
     p->path = NULL;
     p->member = NULL;
     p->parts = NULL;
     p->nparts = 0;
+    p->places = NULL;
+    p->nplaces = 0;
 }
 
 /* Load @p path (a results file or a ZIP of them) into @p pl. */
@@ -5974,13 +5999,43 @@ static void adopt_meta(EeResults *dst, EeResults *src)
 /* Files of one election split by entity                                      */
 /* -------------------------------------------------------------------------- */
 
+/* Feed the counts of contest @p ct of @p s into contest @p ci of builder @p b: its choice k is
+ * the builder's @p chm[k] (k itself when @p chm is NULL), its vote types and precincts go
+ * through @p vtm and @p pm. */
+static void feed_counts(ResBuilder *b,
+                        uint32_t ci,
+                        const EeResults *s,
+                        const EeResultsContest *ct,
+                        const uint32_t *chm,
+                        const uint32_t *vtm,
+                        const uint32_t *pm)
+{
+    uint32_t nvt = EE_RESULTS_NVT(s), p, k, v;
+    for (p = 0; ct->counts != NULL && p < ct->npre && !b->oom; p++)
+    {
+        for (k = 0; k < ct->nchoices; k++)
+        {
+            for (v = 0; v < nvt; v++)
+            {
+                size_t idx = ((size_t)k * ct->npre + p) * nvt + v;
+                b_count(b, ci, chm != NULL ? chm[k] : k, pm[ct->pre[p]], s->nvt != 0 ? vtm[v] : 0,
+                        ct->protected_cells != NULL && ct->protected_cells[idx] ? RES_PROTECTED : ct->counts[idx]);
+            }
+        }
+        if (ct->over != NULL)
+        {
+            b_count(b, ci, RES_OVER, pm[ct->pre[p]], 0, ct->over[p]);
+            b_count(b, ci, RES_UNDER, pm[ct->pre[p]], 0, ct->under[p]);
+        }
+    }
+}
+
 /* Feed result @p s into builder @p b, leaving out the contests flagged in @p skip (kept from
  * the other file). A precinct keeps the larger figures of two files (a city's report may count
  * only its part of a split precinct); @p fed marks precincts whose ballots by vote type are in. */
 static void res_feed(ResBuilder *b, const EeResults *s, const uint8_t *skip, uint8_t *fed)
 {
     EeResults *r = b->r;
-    uint32_t nvt = EE_RESULTS_NVT(s);
     uint32_t *vtm = (uint32_t *)malloc(((size_t)s->nvt + 1) * sizeof(uint32_t));
     uint32_t *pm = (uint32_t *)malloc(((size_t)s->nprecincts + 1) * sizeof(uint32_t));
     uint32_t c, k, p, v;
@@ -6041,23 +6096,7 @@ static void res_feed(ResBuilder *b, const EeResults *s, const uint8_t *skip, uin
             const EeResultsChoice *ch = &s->choices[ct->first_choice + k];
             b_choice(b, ch->name, ch->party, ch->total);
         }
-        for (p = 0; ct->counts != NULL && p < ct->npre; p++)
-        {
-            for (k = 0; k < ct->nchoices; k++)
-            {
-                for (v = 0; v < nvt; v++)
-                {
-                    size_t idx = ((size_t)k * ct->npre + p) * nvt + v;
-                    b_count(b, ci, k, pm[ct->pre[p]], s->nvt != 0 ? vtm[v] : 0,
-                            ct->protected_cells != NULL && ct->protected_cells[idx] ? RES_PROTECTED : ct->counts[idx]);
-                }
-            }
-            if (ct->over != NULL)
-            {
-                b_count(b, ci, RES_OVER, pm[ct->pre[p]], 0, ct->over[p]);
-                b_count(b, ci, RES_UNDER, pm[ct->pre[p]], 0, ct->under[p]);
-            }
-        }
+        feed_counts(b, ci, s, ct, NULL, vtm, pm);
     }
     for (p = 0; s->prec_ballots_vt != NULL && s->nvt != 0 && p < s->nprecincts && !b->oom; p++)
     {
@@ -6073,6 +6112,180 @@ static void res_feed(ResBuilder *b, const EeResults *s, const uint8_t *skip, uin
 done:
     free(vtm);
     free(pm);
+}
+
+/* @p x + @p y, unknown when either is. */
+static int64_t add_known(int64_t x, int64_t y)
+{
+    return x == EE_RES_UNKNOWN || y == EE_RES_UNKNOWN ? EE_RES_UNKNOWN : x + y;
+}
+
+/* Feed the sum of @p x and @p y into builder @p b: reports of the ballots cast at different
+ * voting places of one election (Brazos posts a precinct report of each vote center, each with
+ * every contest). A contest titled the same in both is one contest: its choices are matched by
+ * name and their totals, counts and over/under votes add up. A precinct's ballots add up; its
+ * registered voters are the larger figure (the same voters in both). */
+static void res_feed_sum(ResBuilder *b, const EeResults *x, const EeResults *y)
+{
+    EeResults *r = b->r;
+    const EeResults *src[2];
+    uint32_t *vtm[2] = {NULL, NULL}, *pm[2] = {NULL, NULL};
+    uint32_t *xm = (uint32_t *)malloc(((size_t)x->ncontests + 1) * sizeof(uint32_t));   /* x's contest -> y's */
+    uint32_t *ychm = (uint32_t *)malloc(((size_t)y->nchoices + 1) * sizeof(uint32_t)); /* y's choice -> local */
+    uint8_t *yused = (uint8_t *)calloc((size_t)y->ncontests + 1, 1);
+    uint32_t s, c, d, k, j, p, v;
+    src[0] = x;
+    src[1] = y;
+    if (xm == NULL || ychm == NULL || yused == NULL)
+    {
+        b->oom = TRUE;
+        goto done;
+    }
+    for (s = 0; s < 2 && !b->oom; s++)
+    {
+        vtm[s] = (uint32_t *)malloc(((size_t)src[s]->nvt + 1) * sizeof(uint32_t));
+        pm[s] = (uint32_t *)malloc(((size_t)src[s]->nprecincts + 1) * sizeof(uint32_t));
+        if (vtm[s] == NULL || pm[s] == NULL)
+        {
+            b->oom = TRUE;
+            break;
+        }
+        for (v = 0; v < src[s]->nvt; v++)
+        {
+            vtm[s][v] = b_vt(b, src[s]->vote_types[v]);
+        }
+        for (p = 0; p < src[s]->nprecincts && !b->oom; p++)
+        {
+            const EeResultsPrecinct *sp = &src[s]->precincts[p];
+            EeResultsPrecinct *dp;
+            pm[s][p] = b_pre(b, sp->name);
+            if (b->oom)
+            {
+                break;
+            }
+            dp = &r->precincts[pm[s][p]];
+            if (sp->registered > dp->registered)
+            {
+                dp->registered = sp->registered;
+            }
+            if (sp->ballots != EE_RES_UNKNOWN)
+            {
+                dp->ballots = dp->ballots == EE_RES_UNKNOWN ? sp->ballots : dp->ballots + sp->ballots;
+            }
+        }
+    }
+    if (b->oom)
+    {
+        goto done;
+    }
+    for (c = 0; c < y->nchoices; c++)
+    {
+        ychm[c] = UINT32_MAX;
+    }
+    for (c = 0; c < x->ncontests; c++)
+    {
+        const EeResultsContest *a = &x->contests[c];
+        xm[c] = UINT32_MAX;
+        for (d = 0; d < y->ncontests; d++)
+        {
+            const EeResultsContest *e = &y->contests[d];
+            if (!yused[d] && EeResults_NamesMatch(a->title, e->title) &&
+                (a->vote_for == e->vote_for || a->vote_for == 0 || e->vote_for == 0))
+            {
+                xm[c] = d;
+                yused[d] = 1;
+                break;
+            }
+        }
+    }
+    /* x's contests (each with y's of its title), then y's others */
+    for (c = 0; c < x->ncontests + y->ncontests && !b->oom; c++)
+    {
+        const EeResultsContest *a = c < x->ncontests ? &x->contests[c] : NULL;
+        const EeResultsContest *e = a != NULL ? (xm[c] != UINT32_MAX ? &y->contests[xm[c]] : NULL)
+                                              : (!yused[c - x->ncontests] ? &y->contests[c - x->ncontests] : NULL);
+        const EeResultsContest *f = a != NULL ? a : e;
+        EeResultsContest *dc;
+        uint32_t ci, local = 0;
+        if (f == NULL)
+        {
+            continue;
+        }
+        ci = b_contest(b, f->title, f->vote_for != 0 || e == NULL ? f->vote_for : e->vote_for, f->is_question);
+        for (k = 0; a != NULL && k < a->nchoices && !b->oom; k++)
+        {
+            const EeResultsChoice *ch = &x->choices[a->first_choice + k];
+            int64_t total = ch->total;
+            for (j = 0; e != NULL && j < e->nchoices; j++)
+            {
+                const EeResultsChoice *ych = &y->choices[e->first_choice + j];
+                if (ychm[e->first_choice + j] == UINT32_MAX && EeResults_NamesMatch(ch->name, ych->name))
+                {
+                    ychm[e->first_choice + j] = k;
+                    total = add_known(total, ych->total);
+                    break;
+                }
+            }
+            if (e != NULL && j == e->nchoices)
+            {
+                total = EE_RES_UNKNOWN; /* not in y: the sum of its precincts */
+            }
+            b_choice(b, ch->name, ch->party, total);
+            local++;
+        }
+        for (j = 0; e != NULL && j < e->nchoices && !b->oom; j++)
+        {
+            const EeResultsChoice *ych = &y->choices[e->first_choice + j];
+            if (ychm[e->first_choice + j] == UINT32_MAX)
+            {
+                ychm[e->first_choice + j] = local++;
+                b_choice(b, ych->name, ych->party, a != NULL ? EE_RES_UNKNOWN : ych->total);
+            }
+        }
+        if (b->oom)
+        {
+            break;
+        }
+        dc = &r->contests[ci];
+        dc->registered = a != NULL && e != NULL ? (a->registered > e->registered ? a->registered : e->registered)
+                                                : f->registered;
+        dc->ballots = a != NULL && e != NULL ? add_known(a->ballots, e->ballots) : f->ballots;
+        dc->precincts_total = f->precincts_total;
+        dc->precincts_reporting = f->precincts_reporting;
+        if ((a != NULL && a->has_over_under) || (e != NULL && e->has_over_under))
+        {
+            dc->has_over_under = TRUE;
+            dc->over_total = (a != NULL ? a->over_total : 0) + (e != NULL ? e->over_total : 0);
+            dc->under_total = (a != NULL ? a->under_total : 0) + (e != NULL ? e->under_total : 0);
+        }
+        if (a != NULL)
+        {
+            feed_counts(b, ci, x, a, NULL, vtm[0], pm[0]);
+        }
+        if (e != NULL)
+        {
+            feed_counts(b, ci, y, e, ychm + e->first_choice, vtm[1], pm[1]);
+        }
+    }
+    for (s = 0; s < 2 && !b->oom; s++)
+    {
+        for (p = 0; src[s]->prec_ballots_vt != NULL && src[s]->nvt != 0 && p < src[s]->nprecincts; p++)
+        {
+            for (v = 0; v < src[s]->nvt; v++)
+            {
+                b_turnout_vt(b, pm[s][p], vtm[s][v], src[s]->prec_ballots_vt[(size_t)p * src[s]->nvt + v]);
+            }
+        }
+    }
+done:
+    for (s = 0; s < 2; s++)
+    {
+        free(vtm[s]);
+        free(pm[s]);
+    }
+    free(xm);
+    free(ychm);
+    free(yused);
 }
 
 /* Contest @p ca of @p ra is contest @p cb of @p rb: the same title, half their choices'
@@ -6158,8 +6371,9 @@ static BOOL same_contest(const EeResults *ra, uint32_t ca, const EeResults *rb, 
 /* Combine @p b into @p a (same format, same election): McLennan posts a report per city and
  * ISD besides (or instead of) the county's, Cameron a summary per entity. A contest in both
  * is kept from the file with more contests, and the other's totals are checked against it.
- * @p b is freed. Returns FALSE when out of memory. */
-static BOOL combine_into(Parsed *a, Parsed *b)
+ * With @p add the two count different ballots (Brazos's report of each vote center) and are
+ * summed (res_feed_sum). @p b is freed. Returns FALSE when out of memory. */
+static BOOL combine_into(Parsed *a, Parsed *b, BOOL add)
 {
     EeResults out;
     ResBuilder bld;
@@ -6185,7 +6399,7 @@ static BOOL combine_into(Parsed *a, Parsed *b)
     {
         bigname = wcsrchr(bigname, L'/') + 1;
     }
-    for (c = 0; c < small->ncontests; c++)
+    for (c = 0; !add && c < small->ncontests; c++)
     {
         const EeResultsContest *sc = &small->contests[c];
         for (d = 0; d < big->ncontests && !skip[c]; d++)
@@ -6222,10 +6436,19 @@ static BOOL combine_into(Parsed *a, Parsed *b)
     }
     b_init(&bld, &out);
     bld.quiet = TRUE; /* each file ran its own checks */
-    res_feed(&bld, big, NULL, fed);
-    res_feed(&bld, small, skip, fed);
+    if (add)
+    {
+        res_feed_sum(&bld, &a->r, &b->r);
+    }
+    else
+    {
+        res_feed(&bld, big, NULL, fed);
+        res_feed(&bld, small, skip, fed);
+    }
     out.registered_total = a->r.registered_total > b->r.registered_total ? a->r.registered_total : b->r.registered_total;
-    out.ballots_total = a->r.ballots_total > b->r.ballots_total ? a->r.ballots_total : b->r.ballots_total;
+    out.ballots_total = add ? add_known(a->r.ballots_total, b->r.ballots_total)
+                      : a->r.ballots_total > b->r.ballots_total ? a->r.ballots_total
+                                                                : b->r.ballots_total;
     if (!b_finish(&bld))
     {
         b_free(&bld);
@@ -6265,6 +6488,16 @@ static BOOL combine_into(Parsed *a, Parsed *b)
         EeResults_Clear(&out);
         goto done;
     }
+    if (b->nplaces > 0)
+    {
+        wchar_t **places = (wchar_t **)realloc(a->places, ((size_t)a->nplaces + b->nplaces) * sizeof(wchar_t *));
+        if (places == NULL)
+        {
+            EeResults_Clear(&out);
+            goto done;
+        }
+        a->places = places;
+    }
     a->parts[a->nparts].path = b->path;
     a->parts[a->nparts].member = b->member;
     a->parts[a->nparts].ncontests = b->nparts > 0 ? b->own_contests : b->r.ncontests;
@@ -6280,6 +6513,13 @@ static BOOL combine_into(Parsed *a, Parsed *b)
     b->nparts = 0;
     b->path = NULL;
     b->member = NULL;
+    for (k = 0; k < b->nplaces; k++)
+    {
+        a->places[a->nplaces++] = b->places[k];
+    }
+    free(b->places);
+    b->places = NULL;
+    b->nplaces = 0;
     EeResults_Clear(&a->r);
     a->r = out;
     EeResults_Clear(&b->r);
@@ -6343,9 +6583,59 @@ static const wchar_t *res_one_party(const EeResults *r)
     return p;
 }
 
+enum
+{
+    PLACES_NONE,  /* not reports of voting places */
+    PLACES_SAME,  /* a place in both: another snapshot of its report (they stay apart) */
+    PLACES_APART  /* different places of one election: their counts add up */
+};
+
+/* How @p a and @p b relate by voting place. Brazos posts a Hart precinct report of the ballots
+ * cast at each vote center; two such reports count different ballots (PLACES_APART) when they
+ * name different places, the same county-wide registered voters, and at least half their
+ * contests' titles in common. */
+static int places_apart(const Parsed *a, const Parsed *b)
+{
+    const EeResults *big = a->r.ncontests >= b->r.ncontests ? &a->r : &b->r;
+    const EeResults *small = big == &a->r ? &b->r : &a->r;
+    uint32_t i, k, common = 0;
+    if (a->format != EE_RES_FMT_HART_PCT_REPORT || b->format != EE_RES_FMT_HART_PCT_REPORT || a->nplaces == 0 ||
+        b->nplaces == 0)
+    {
+        return PLACES_NONE;
+    }
+    for (i = 0; i < a->nplaces; i++)
+    {
+        for (k = 0; k < b->nplaces; k++)
+        {
+            if (alnum_eq(a->places[i], b->places[k]))
+            {
+                return PLACES_SAME;
+            }
+        }
+    }
+    if (a->r.registered_total == EE_RES_UNKNOWN || a->r.registered_total != b->r.registered_total)
+    {
+        return PLACES_NONE;
+    }
+    for (i = 0; i < small->ncontests; i++)
+    {
+        for (k = 0; k < big->ncontests; k++)
+        {
+            if (EeResults_NamesMatch(small->contests[i].title, big->contests[k].title))
+            {
+                common++;
+                break;
+            }
+        }
+    }
+    return big->ncontests > 0 && common * 2 >= big->ncontests ? PLACES_APART : PLACES_NONE;
+}
+
 /* Combine files of one election that one county splits by entity (results report PDFs of
  * the same format, election, date and region with less than half their contests in
- * common; two snapshots of an election share them all and stay apart). */
+ * common; two snapshots of an election share them all and stay apart), or by voting place
+ * (places_apart: their counts add up). */
 static BOOL combine_split(ParsedList *pl)
 {
     size_t i, j, w;
@@ -6363,6 +6653,7 @@ static BOOL combine_split(ParsedList *pl)
             Parsed *b = &pl->p[j];
             const EeResults *big, *small;
             uint32_t c, d, common = 0;
+            int places;
             if (b->path == NULL || b->format != a->format || b->r.election_name == NULL || b->r.election_date == NULL ||
                 b->r.region == NULL || !alnum_eq(a->r.election_name, b->r.election_name) ||
                 !alnum_eq(a->r.election_date, b->r.election_date) || !alnum_eq(a->r.region, b->r.region))
@@ -6377,6 +6668,19 @@ static BOOL combine_split(ParsedList *pl)
                 {
                     continue;
                 }
+            }
+            places = places_apart(a, b);
+            if (places == PLACES_SAME)
+            {
+                continue;
+            }
+            if (places == PLACES_APART)
+            {
+                if (!combine_into(a, b, TRUE))
+                {
+                    return FALSE;
+                }
+                continue;
             }
             big = a->r.ncontests >= b->r.ncontests ? &a->r : &b->r;
             small = big == &a->r ? &b->r : &a->r;
@@ -6395,7 +6699,7 @@ static BOOL combine_split(ParsedList *pl)
             {
                 continue;
             }
-            if (!combine_into(a, b))
+            if (!combine_into(a, b, FALSE))
             {
                 return FALSE;
             }

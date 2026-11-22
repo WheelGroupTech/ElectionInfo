@@ -104,6 +104,14 @@ County 2024): the cumulative report's Party column gives `REP`, the canvass titl
 `Sheriff -`, and the files are named `... Official Republican ...`. The three load as one election
 of `REP` contests with no differences, and the precinct report alone takes the party from its
 file name.
+`reshartplace` covers Brazos's Hart precinct reports of each vote center (P26, G25):
+- a contest title drawn as pieces on one line, the first at the margin and each other from where
+  the first ends, split mid-word at places that differ from file to file ("COMMISSIONER OF THE"
+  " GENERAL LAND O" "FFICE - Republican Pa" "rty "), reads as one title in each file;
+- two places' reports, with headings wrapped as "North Hall Precinct" / "Report" and "South Gym
+  ED" / "Precinct Report", load as one election whose choice totals, precinct counts and ballots
+  are the two files' sums (a precinct in both keeps its registered voters), with no notes;
+- a second copy of one place's report is another snapshot and stays a separate election.
 `resglyph` covers reports printed to PDF through PScript5 (Travis L22, LR22, PR22;
 `src\ee_glyph_ocr.c`, needs an OCR language and is skipped without one):
 - an Electionware summary whose text is a Type 3 font of unnamed glyph outlines (Arial's, each

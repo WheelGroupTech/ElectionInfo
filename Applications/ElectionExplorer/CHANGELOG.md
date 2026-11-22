@@ -30,6 +30,34 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — Brazos vote-center precinct reports load as one election
+- **What:**
+  - **Titles:** Brazos's "accessible" Hart precinct reports draw a wrapped contest title as pieces on one line: the first piece at the margin, and every other piece from the point where the first one ends. The words split at places that differ from file to file ("COMMISSIONER OF THE GENERAL LAND O FFICE - Republican Pa rty"), so each vote center's file named the same contest differently. Those pieces now join into the whole title. Its party suffix then reads too, so the title is "REP COMMISSIONER OF THE GENERAL LAND OFFICE".
+  - **Vote centers added up:** each of these files holds only the ballots cast at one vote center, yet lists every contest. Loading several used to cross-check them against each other, which gave spurious "votes here" issues and repeated contests. Now Hart precinct reports of one election whose headings name different places ("Arena Hall ED Precinct Report"), with the same county-wide registered voters and mostly the same contests, are added together:
+    - choice totals, precinct counts, over/under votes and ballots are summed;
+    - a precinct in several files keeps its registered voters;
+    - two reports naming the same place are snapshots and stay separate elections.
+  - **Brazos P26, 28 files:** 1 election of 98 contests, 209 choices and no issues (was 1,448 contests, 2,648 choices, 2,229 issues). Ballots are 12,570, the files' sum.
+  - **Brazos G25, 20 files:** 26 contests and no issues (was 404 contests, 194 issues).
+  - **Coverage:** these files are not the whole county; the P26 cumulative report has 32,143 ballots. Loaded with them, it reports those differences.
+- **Where:**
+  - `src/ee_results_pdf.c`:
+    - `rp_join` joins a piece drawn from the same point as a piece that already went on;
+    - new `ht_place` (called from `ht_heading`) reads the place into new `EeRpdfDoc.place` (`src/ee_results_pdf.h`).
+  - `src/ee_results.c`:
+    - `ResBuilder.place` and `Parsed.places` carry the place;
+    - new `places_apart` decides, in `combine_split`;
+    - `combine_into` takes an `add` flag and calls new `res_feed_sum`;
+    - new `feed_counts` is shared with `res_feed`.
+  - `test/smoke_load.c`: new `test_results_hart_places` (tag `reshartplace`); `test/README.md`.
+- **Checked:**
+  - **Smoke suite:** passes on Windows x64 Release, including `reshartplace`. It covers a title split mid-word two ways, two places' reports summed, and a same-place copy kept apart.
+  - **Brazos totals:** for P26 and G25, every choice total of the combined load equals the sum of that choice over the files loaded alone. Each file alone still has 98 (P26) or 26 (G25) contests and 209 or 51 choices.
+  - **`data_check` sweep, old vs new:** run on all 2,101 `Election_Results` PDFs.
+    - **Each file alone:** 1,698 load, as before. Only the 27 Brazos P26 vote-center files change, and only in their titles.
+    - **Each county's loadable files of one election, together (350 sets):** only Brazos G25 and P26 change. A Cameron P22 set that timed out on the old build in the sweep gives the same output on old and new when run alone. The final build matches on all 350 sets.
+- **Details:** [docs/election-results-design.md](docs/election-results-design.md), "One election from several files", Brazos vote centers.
+
 ### 2026-11-21 — macOS / Linux: the engine and its tests build and pass on Linux
 - **What:** Step 1 of porting to macOS and Linux.
   - The engine (everything but the Win32 UI) and the console tests `smoke_load` and `data_check` now build with CMake on Linux. The same presets cover macOS, which is not yet tried.

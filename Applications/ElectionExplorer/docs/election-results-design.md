@@ -921,6 +921,20 @@ one rerun the full sweep and record the counts. Expected result: about 1,300 loa
       (per-entity files only) each load as one election.
     - **Cameron:** LR25 (two cities) loads as one election. Cameron's other entity reports
       name their own elections and stay apart.
+    - **Brazos vote centers (2026-11-22, `places_apart`, `res_feed_sum`):** Brazos posts a Hart
+      precinct report of the ballots cast at each vote center (G25: 20, P26: 28), each with every
+      contest. The heading names the place ("Arena Hall ED Precinct Report", or wrapped as
+      "Brazos Co Elections Admin" / "Precinct Report" or "A&M Church of Christ Precinct" /
+      "Report"; `ht_place` reads it into `EeRpdfDoc.place`).
+      - **When:** two Hart precinct reports of one election that name different places, give
+        the same county-wide registered voters, and share at least half their contest titles.
+      - **How:** their counts are added. Contests are matched by title and choices by name, and
+        choice totals, precinct counts, over/under votes and ballots are summed. A precinct in
+        both keeps the larger registered figure.
+      - **Same place:** two reports that name the same place are two snapshots and stay apart.
+      - **Coverage:** the vote-center files are not the whole county. P26's 28 hold 12,570 of
+        the cumulative report's 32,143 ballots, so loading them with the cumulative report
+        reports differences.
 - **Results:**
   - **Sweep:** 1,337 of 1,941 PDFs load (1,087 after 9a): 250 more (McLennan 198,
     Montgomery 45, Harris 7). None lost, no file that loaded before reads differently, no

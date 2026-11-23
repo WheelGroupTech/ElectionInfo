@@ -46,11 +46,13 @@ jobs:
         run: ctest --preset linux-x64-release
       - name: Window self-test (no display)
         run: ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest test/sample_voters.csv
-      - name: Window self-test, duplicates (made-up list)
+      - name: Window self-test, duplicates and reports (made-up list)
         run: |
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest test/sample_duplicates.csv | tee selftest.txt
           grep -q "Showing 4 duplicate Voter IDs of 9 voters" selftest.txt
           grep -q "Showing 4 duplicate voters (name + DOB) of 9 voters" selftest.txt
+          grep -q "Precinct report: 5 unique precincts" selftest.txt
+          grep -q "Address report: 7 unique addresses" selftest.txt
 
   macos:
     name: macOS (Apple Silicon, Apple Vision)
@@ -72,8 +74,10 @@ jobs:
         run: ctest --preset mac-universal-release
       - name: Window self-test (no display)
         run: '"../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest test/sample_voters.csv'
-      - name: Window self-test, duplicates (made-up list)
+      - name: Window self-test, duplicates and reports (made-up list)
         run: |
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest test/sample_duplicates.csv | tee selftest.txt
           grep -q "Showing 4 duplicate Voter IDs of 9 voters" selftest.txt
           grep -q "Showing 4 duplicate voters (name + DOB) of 9 voters" selftest.txt
+          grep -q "Precinct report: 5 unique precincts" selftest.txt
+          grep -q "Address report: 7 unique addresses" selftest.txt

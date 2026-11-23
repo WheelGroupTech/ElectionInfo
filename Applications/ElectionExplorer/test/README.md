@@ -437,6 +437,8 @@ prints what the window would show; CI runs it on `test/sample_voters.csv`, and o
 right-click menu; repeatable), `--duplicates ids|voters` (as the Filter menu), `--export <file>`
 (the shown rows, as Export Voter List... without the dialogs) and `--filter-window` (the PNG is
 then of the Filter window).
+`--report precinct|address` opens that report and the PNG is of its window; with it, `--sort
+0|1[:desc]` clicks the report's heading and `--export <file>` exports the report.
 
 To try the window by hand, use a Linux desktop or a VM (an Ubuntu 24.04 VM in VMware with the
 repository on a shared folder works). Under WSLg the window runs, but its menus open behind it

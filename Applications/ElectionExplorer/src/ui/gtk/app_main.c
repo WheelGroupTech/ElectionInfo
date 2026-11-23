@@ -6,8 +6,8 @@
  * on the command line), the load in the background with a progress bar, sorting by a column's
  * heading (again to reverse), numbers and dates right-aligned, the Filter window (Ctrl+L, as on
  * Windows), Reset Filter, right-click Include / Exclude on a cell, Copy (Ctrl+C), Export Voter
- * List... and Export Selected..., Show Duplicate Voter IDs / Voters, Reset View, and a status
- * line. The list comes from the engine through ee_ui_voters.h (plain C).
+ * List... and Export Selected..., Show Duplicate Voter IDs / Voters, Reset View, the Precinct
+ * and Address reports (a window each), and a status line. The list comes from the engine through ee_ui_voters.h (plain C).
  *
  * The rows are a GListModel of our own that makes a small row object only for the rows on
  * screen, so a list of 1.5 million voters costs no more than one of five. The column view's
@@ -25,6 +25,9 @@
  *   `--duplicates ids|voters` shows a duplicates view first (as the Filter menu does), and
  *   `--export <file>` exports the shown rows before the PNG (as Export Voter List... does,
  *   without the dialogs).
+ *   `--report precinct|address` opens that report (Reports > Display ... Report...) and the PNG
+ *   is of its window; then `--sort 0|1[:desc]` clicks the report's heading and `--export`
+ *   exports the report (Export All...).
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -128,6 +131,7 @@ static EeRows *ee_rows_new(guint count)
 /* -------------------------------------------------------------------------- */
 
 typedef struct FilterDialog FilterDialog;
+typedef struct ReportWindow ReportWindow;
 
 typedef struct VoterWindow
 {
@@ -167,6 +171,7 @@ typedef struct VoterWindow
     char *quick_value;
 
     FilterDialog *filter_dialog;
+    ReportWindow *reports[EE_UI_REPORT_COUNT]; /* the open Precinct / Address reports */
 
     char *snapshot;                  /* --snapshot: write the content here once loaded, then quit */
     int snapshot_sort;               /* --sort: click this column's heading first (-1: none) */
@@ -175,6 +180,7 @@ typedef struct VoterWindow
     gboolean snapshot_filter_window; /* --filter-window: the PNG is of the Filter window */
     int snapshot_marks;              /* --duplicates: EE_UI_MARKS_* */
     char *snapshot_export;           /* --export: export the shown rows here first */
+    int snapshot_report;             /* --report: EE_UI_REPORT_* (-1: none) */
     int snapshot_tries;
 } VoterWindow;
 
@@ -412,6 +418,12 @@ static void on_sorter_changed(GtkSorter *sorter, GtkSorterChange change, gpointe
     w->want_sort =
         col != NULL ? (int)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(col), "column")) : -1;
     w->want_ascending = gtk_column_view_sorter_get_primary_sort_order(cvs) == GTK_SORT_ASCENDING;
+    if (gtk_column_view_sorter_get_n_sort_columns(cvs) > 1)
+    {
+        /* (the sorter keeps earlier columns as secondary sorts, with their arrows: the engine
+         * sorts by one column, so keep only the clicked one) */
+        show_sort_arrow(w, w->want_sort, w->want_ascending);
+    }
     request_view(w);
 }
 
@@ -453,6 +465,7 @@ static void show_sort_arrow(VoterWindow *w, int column, gboolean ascending)
         col = g_list_model_get_item(cols, (guint)column);
     }
     w->rebuilding = TRUE; /* (on_sorter_changed: not a heading click) */
+    gtk_column_view_sort_by_column(w->view, NULL, GTK_SORT_ASCENDING); /* (one arrow only) */
     gtk_column_view_sort_by_column(w->view,
                                    col,
                                    ascending ? GTK_SORT_ASCENDING : GTK_SORT_DESCENDING);
@@ -503,13 +516,13 @@ static void reset_view(VoterWindow *w)
     }
 }
 
-/* the selected shown rows, in order */
-static uint32_t *selected_rows(VoterWindow *w, guint *n)
+/* a column view's selected rows (below @p count), in order */
+static uint32_t *view_selection(GtkColumnView *view, guint count, guint *n)
 {
-    GtkSelectionModel *model = gtk_column_view_get_model(w->view);
+    GtkSelectionModel *model = gtk_column_view_get_model(view);
     GtkBitset *set;
     GtkBitsetIter it;
-    guint pos, k = 0, count = w->rows != NULL ? w->rows->count : 0;
+    guint pos, k = 0;
     uint32_t *rows;
     *n = 0;
     if (model == NULL)
@@ -531,6 +544,47 @@ static uint32_t *selected_rows(VoterWindow *w, guint *n)
     gtk_bitset_unref(set);
     *n = k;
     return rows;
+}
+
+/* the selected shown rows, in order */
+static uint32_t *selected_rows(VoterWindow *w, guint *n)
+{
+    return view_selection(w->view, w->rows != NULL ? w->rows->count : 0, n);
+}
+
+/* an export's path: as on Windows, a name without .csv or .tsv is a CSV (g_free() it) */
+static char *export_named(const char *path)
+{
+    size_t len = strlen(path);
+    if (len >= 4 && (g_ascii_strcasecmp(path + len - 4, ".tsv") == 0 ||
+                     g_ascii_strcasecmp(path + len - 4, ".csv") == 0))
+    {
+        return g_strdup(path);
+    }
+    return g_strconcat(path, ".csv", NULL);
+}
+
+/* the export's field separator, from its extension: tabs for .tsv, else commas */
+static char export_delim(const char *path)
+{
+    size_t len = strlen(path);
+    return len >= 4 && g_ascii_strcasecmp(path + len - 4, ".tsv") == 0 ? '\t' : ',';
+}
+
+/* the Save dialog's file types, as on Windows (g_object_unref() it) */
+static GListModel *export_filters(void)
+{
+    GtkFileFilter *csv = gtk_file_filter_new(), *tsv = gtk_file_filter_new();
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    gtk_file_filter_set_name(csv, "UTF-8 CSV (*.csv)");
+    gtk_file_filter_add_suffix(csv, "csv");
+    gtk_file_filter_set_name(tsv, "UTF-8 TSV (*.tsv)");
+    gtk_file_filter_add_suffix(tsv, "tsv");
+    g_list_store_append(filters, csv);
+    g_list_store_append(filters, tsv);
+    g_object_unref(csv);
+    g_object_unref(tsv);
+    return G_LIST_MODEL(filters);
 }
 
 /* Copy: the selected rows, separated as in the file, with the Voter ID / Precinct / Name /
@@ -588,8 +642,7 @@ static void export_to(VoterWindow *w,
                       gboolean normalized)
 {
     char err[256], msg[96];
-    size_t len = strlen(path);
-    char delim = len >= 4 && g_ascii_strcasecmp(path + len - 4, ".tsv") == 0 ? '\t' : ',';
+    char delim = export_delim(path);
     gint64 started = g_get_monotonic_time();
     long wrote = EeUiVoters_Export(w->voters, path, rows, n, normalized, delim, err, sizeof(err));
     if (wrote < 0)
@@ -614,23 +667,13 @@ static void on_export_chosen(GObject *source, GAsyncResult *result, gpointer use
         char *path = g_file_get_path(file);
         if (path != NULL)
         {
-            size_t len = strlen(path);
-            char *named = path;
-            /* (as on Windows: no .csv or .tsv given, it is a CSV) */
-            if (!(len >= 4 && (g_ascii_strcasecmp(path + len - 4, ".tsv") == 0 ||
-                               g_ascii_strcasecmp(path + len - 4, ".csv") == 0)))
-            {
-                named = g_strconcat(path, ".csv", NULL);
-            }
+            char *named = export_named(path);
             export_to(e->w,
                       named,
                       e->rows,
                       e->n,
                       GPOINTER_TO_INT(g_object_get_data(source, "normalized")));
-            if (named != path)
-            {
-                g_free(named);
-            }
+            g_free(named);
             g_free(path);
         }
     }
@@ -645,8 +688,7 @@ static void on_export_options_ok(GtkWidget *button, gpointer user)
 {
     ExportJob *e = (ExportJob *)user;
     GtkFileDialog *d = gtk_file_dialog_new();
-    GtkFileFilter *csv = gtk_file_filter_new(), *tsv = gtk_file_filter_new();
-    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    GListModel *filters = export_filters();
     char name[512];
     (void)button;
     g_object_set_data(G_OBJECT(d),
@@ -657,21 +699,12 @@ static void on_export_options_ok(GtkWidget *button, gpointer user)
         e->options = NULL; /* (the job lives on: on_export_options_destroy keeps it) */
         gtk_window_destroy(options);
     }
-    /* (the Windows file types) */
-    gtk_file_filter_set_name(csv, "UTF-8 CSV (*.csv)");
-    gtk_file_filter_add_suffix(csv, "csv");
-    gtk_file_filter_set_name(tsv, "UTF-8 TSV (*.tsv)");
-    gtk_file_filter_add_suffix(tsv, "tsv");
-    g_list_store_append(filters, csv);
-    g_list_store_append(filters, tsv);
     EeUiVoters_ExportName(e->w->voters, e->w->path, e->selection, name, sizeof(name));
     gtk_file_dialog_set_title(d, "Export");
-    gtk_file_dialog_set_filters(d, G_LIST_MODEL(filters));
+    gtk_file_dialog_set_filters(d, filters);
     gtk_file_dialog_set_initial_name(d, name);
     gtk_file_dialog_save(d, e->w->window, NULL, on_export_chosen, e);
     g_object_unref(filters);
-    g_object_unref(csv);
-    g_object_unref(tsv);
     g_object_unref(d);
 }
 
@@ -1275,13 +1308,586 @@ static void show_filter_dialog(VoterWindow *w)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Reports (as on Windows: Display Precinct / Address Report..., a window     */
+/* each, a row per value with its Number of Voters, over all loaded rows)     */
+/* -------------------------------------------------------------------------- */
+
+struct ReportWindow
+{
+    VoterWindow *w;
+    int kind; /* EE_UI_REPORT_* */
+    int refs; /* the window, and each export dialog or menu still to finish */
+    gboolean closed;
+    GtkWindow *win;
+    GtkColumnView *view;
+    GtkLabel *status;
+    GtkWidget *menu; /* the right-click menu while it is open */
+    EeUiReport *report;
+    EeRows *rows;
+    char *list_path;
+    guint menu_row; /* the right-clicked row */
+    gboolean rebuilding;
+};
+
+static void report_unref(ReportWindow *rw)
+{
+    if (--rw->refs == 0)
+    {
+        EeUiReport_Free(rw->report);
+        g_clear_object(&rw->rows);
+        g_free(rw->list_path);
+        g_free(rw);
+    }
+}
+
+static void report_alert(ReportWindow *rw, const char *message)
+{
+    GtkAlertDialog *d = gtk_alert_dialog_new("%s", message);
+    gtk_alert_dialog_show(d, rw->win);
+    g_object_unref(d);
+}
+
+static uint32_t *report_selection(ReportWindow *rw, guint *n)
+{
+    return view_selection(rw->view, rw->rows->count, n);
+}
+
+/* Copy (Ctrl+C or the right-click menu): "<value>\t<count>" a line, as on Windows */
+static void report_copy(ReportWindow *rw)
+{
+    guint n = 0;
+    uint32_t *rows = report_selection(rw, &n);
+    char *text = n > 0 ? EeUiReport_CopyText(rw->report, rows, n, NULL) : NULL;
+    if (text != NULL)
+    {
+        gdk_clipboard_set_text(gtk_widget_get_clipboard(GTK_WIDGET(rw->win)), text);
+        free(text);
+    }
+    g_free(rows);
+}
+
+/* Include / Exclude: a rule "<Precinct or Address> is <value>" in the voter list's filter for
+ * each selected row (the blank row matches the empty cells) */
+static void report_filter(ReportWindow *rw, gboolean exclude)
+{
+    VoterWindow *w = rw->w;
+    guint n = 0, i;
+    uint32_t *rows;
+    if (w->closed || w->voters == NULL || w->worker != NULL)
+    {
+        return;
+    }
+    rows = report_selection(rw, &n);
+    for (i = 0; i < n; i++)
+    {
+        EeUiRule r;
+        EeUiReport_Rule(rw->report, rows[i], exclude ? 1 : 0, &r);
+        g_array_append_val(w->rules, r);
+    }
+    g_free(rows);
+    if (n > 0)
+    {
+        request_view(w);
+    }
+}
+
+static void report_export_to(ReportWindow *rw, const char *path, const uint32_t *rows, guint n)
+{
+    char err[256];
+    long wrote = EeUiReport_Export(rw->report, path, rows, n, export_delim(path), err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "report export: %s\n", err);
+        report_alert(rw, err);
+        return;
+    }
+    fprintf(stderr, "exported %ld report rows\n", wrote);
+}
+
+typedef struct ReportExport
+{
+    ReportWindow *rw;
+    uint32_t *rows; /* NULL: all */
+    guint n;
+} ReportExport;
+
+static void on_report_export_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    ReportExport *e = (ReportExport *)user;
+    GFile *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, NULL);
+    if (file != NULL)
+    {
+        char *path = g_file_get_path(file);
+        if (path != NULL && !e->rw->closed)
+        {
+            char *named = export_named(path);
+            report_export_to(e->rw, named, e->rows, e->n);
+            g_free(named);
+        }
+        g_free(path);
+        g_object_unref(file);
+    }
+    report_unref(e->rw);
+    g_free(e->rows);
+    g_free(e);
+}
+
+/* Export Selected... / Export All...: where to save it, then the file (no options: a report
+ * has no normalized fields) */
+static void report_export(ReportWindow *rw, gboolean selection)
+{
+    ReportExport *e = g_new0(ReportExport, 1);
+    GtkFileDialog *d;
+    GListModel *filters;
+    char name[512];
+    if (selection)
+    {
+        e->rows = report_selection(rw, &e->n);
+        if (e->n == 0)
+        {
+            g_free(e->rows);
+            g_free(e);
+            return;
+        }
+    }
+    e->rw = rw;
+    rw->refs++;
+    d = gtk_file_dialog_new();
+    filters = export_filters();
+    EeUiReport_ExportName(rw->report, rw->list_path, selection, name, sizeof(name));
+    gtk_file_dialog_set_title(d, "Export");
+    gtk_file_dialog_set_filters(d, filters);
+    gtk_file_dialog_set_initial_name(d, name);
+    gtk_file_dialog_save(d, rw->win, NULL, on_report_export_chosen, e);
+    g_object_unref(filters);
+    g_object_unref(d);
+}
+
+static void on_maps_launched(GObject *source, GAsyncResult *result, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    if (!gtk_uri_launcher_launch_finish(GTK_URI_LAUNCHER(source), result, NULL) && !rw->closed)
+    {
+        report_alert(rw, "Could not open the map in a browser.");
+    }
+    report_unref(rw);
+}
+
+/* Show in Maps... (Address report): the address in a browser's map */
+static void report_maps(ReportWindow *rw, guint row)
+{
+    char *url = EeUiReport_MapUrl(rw->report, row);
+    GtkUriLauncher *launcher;
+    if (url == NULL)
+    {
+        report_alert(rw, "Could not build a map link for this address.");
+        return;
+    }
+    launcher = gtk_uri_launcher_new(url);
+    rw->refs++;
+    gtk_uri_launcher_launch(launcher, rw->win, NULL, on_maps_launched, rw);
+    g_object_unref(launcher);
+    free(url);
+}
+
+static void report_action(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    const char *name = g_action_get_name(G_ACTION(action));
+    (void)param;
+    if (rw->closed)
+    {
+        return;
+    }
+    if (strcmp(name, "copy") == 0)
+    {
+        report_copy(rw);
+    }
+    else if (strcmp(name, "include") == 0 || strcmp(name, "exclude") == 0)
+    {
+        report_filter(rw, name[0] == 'e');
+    }
+    else if (strcmp(name, "maps") == 0)
+    {
+        report_maps(rw, rw->menu_row);
+    }
+    else if (strcmp(name, "export-selected") == 0 || strcmp(name, "export-all") == 0)
+    {
+        report_export(rw, name[7] == 's');
+    }
+}
+
+static gboolean report_drop_menu(gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    if (!rw->closed && rw->menu != NULL && !gtk_widget_get_visible(rw->menu))
+    {
+        gtk_widget_unparent(rw->menu);
+        rw->menu = NULL;
+    }
+    report_unref(rw);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_report_menu_closed(GtkPopover *popover, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    (void)popover;
+    rw->refs++;
+    g_idle_add(report_drop_menu, rw); /* (later: the menu's action runs after "closed") */
+}
+
+static void menu_section(GMenu *menu, GMenu *section)
+{
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+    g_object_unref(section);
+}
+
+/* the right-click menu, in Windows' order: Copy; Include, Exclude (on the value column); Show
+ * in Maps... (an address); Export Selected..., Export All... */
+static void on_report_right_click(GtkGestureClick *g,
+                                  int n_press,
+                                  double x,
+                                  double y,
+                                  gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    GtkWidget *label = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(g));
+    GtkSelectionModel *model = gtk_column_view_get_model(rw->view);
+    guint row = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(label), "row"));
+    guint column = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(label), "column"));
+    GMenu *menu, *section;
+    graphene_point_t at;
+    (void)n_press;
+    if (rw->closed || row >= rw->rows->count)
+    {
+        return;
+    }
+    rw->menu_row = row;
+    if (!gtk_selection_model_is_selected(model, row))
+    {
+        gtk_selection_model_select_item(model, row, TRUE); /* (as on Windows) */
+    }
+    menu = g_menu_new();
+    section = g_menu_new();
+    g_menu_append(section, "Copy", "report.copy");
+    menu_section(menu, section);
+    if (column == EE_UI_REPORT_COLUMN_VALUE)
+    {
+        char *shown = menu_value(EeUiReport_Value(rw->report, row)), *text;
+        section = g_menu_new();
+        text = g_strdup_printf("Include \"%s\"", shown);
+        g_menu_append(section, text, "report.include");
+        g_free(text);
+        text = g_strdup_printf("Exclude \"%s\"", shown);
+        g_menu_append(section, text, "report.exclude");
+        g_free(text);
+        g_free(shown);
+        menu_section(menu, section);
+        if (rw->kind == EE_UI_REPORT_ADDRESS && !EeUiReport_IsBlank(rw->report, row))
+        {
+            section = g_menu_new();
+            g_menu_append(section, "Show in Maps\xE2\x80\xA6", "report.maps");
+            menu_section(menu, section);
+        }
+    }
+    section = g_menu_new();
+    g_menu_append(section, "Export Selected\xE2\x80\xA6", "report.export-selected");
+    g_menu_append(section, "Export All\xE2\x80\xA6", "report.export-all");
+    menu_section(menu, section);
+    if (rw->menu != NULL)
+    {
+        gtk_widget_unparent(rw->menu);
+    }
+    rw->menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    gtk_widget_set_parent(rw->menu, GTK_WIDGET(rw->view));
+    gtk_popover_set_has_arrow(GTK_POPOVER(rw->menu), FALSE);
+    gtk_widget_set_halign(rw->menu, GTK_ALIGN_START);
+    g_signal_connect(rw->menu, "closed", G_CALLBACK(on_report_menu_closed), rw);
+    g_object_unref(menu);
+    if (gtk_widget_compute_point(label,
+                                 GTK_WIDGET(rw->view),
+                                 &GRAPHENE_POINT_INIT((float)x, (float)y),
+                                 &at))
+    {
+        GdkRectangle r = {(int)at.x, (int)at.y, 1, 1};
+        gtk_popover_set_pointing_to(GTK_POPOVER(rw->menu), &r);
+    }
+    gtk_popover_popup(GTK_POPOVER(rw->menu));
+    gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static void report_cell_setup(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    GtkWidget *label = gtk_label_new(NULL);
+    GtkGesture *click = gtk_gesture_click_new();
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    /* (as on Windows: Precinct and Number of Voters centered, Address at the left) */
+    gtk_label_set_xalign(GTK_LABEL(label),
+                         c == EE_UI_REPORT_COLUMN_VALUE && rw->kind == EE_UI_REPORT_ADDRESS ? 0.0f
+                                                                                            : 0.5f);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_single_line_mode(GTK_LABEL(label), TRUE);
+    g_object_set_data(G_OBJECT(label), "column", GUINT_TO_POINTER(c));
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+    g_signal_connect(click, "pressed", G_CALLBACK(on_report_right_click), rw);
+    gtk_widget_add_controller(label, GTK_EVENT_CONTROLLER(click));
+    gtk_list_item_set_child(item, label);
+}
+
+static void report_cell_bind(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    EeRow *row = EE_ROW(gtk_list_item_get_item(item));
+    GtkWidget *label = gtk_list_item_get_child(item);
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    g_object_set_data(G_OBJECT(label), "row", GUINT_TO_POINTER(row->index));
+    if (c == EE_UI_REPORT_COLUMN_COUNT)
+    {
+        char num[16];
+        g_snprintf(num, sizeof(num), "%u", EeUiReport_Count(rw->report, row->index));
+        gtk_label_set_text(GTK_LABEL(label), num);
+    }
+    else
+    {
+        gtk_label_set_text(GTK_LABEL(label), EeUiReport_Value(rw->report, row->index));
+    }
+}
+
+/* the report's arrow, or a heading click (--sort with --report) */
+static void report_sort_by(ReportWindow *rw, guint column, gboolean ascending, gboolean quietly)
+{
+    GtkColumnViewColumn *col = g_list_model_get_item(gtk_column_view_get_columns(rw->view), column);
+    if (col == NULL)
+    {
+        return;
+    }
+    rw->rebuilding = TRUE;
+    gtk_column_view_sort_by_column(rw->view, NULL, GTK_SORT_ASCENDING); /* (one arrow only) */
+    rw->rebuilding = quietly;
+    gtk_column_view_sort_by_column(rw->view,
+                                   col,
+                                   ascending ? GTK_SORT_ASCENDING : GTK_SORT_DESCENDING);
+    rw->rebuilding = FALSE;
+    g_object_unref(col);
+}
+
+/* a heading clicked: sort the report (it is small: on the UI thread, as on Windows) */
+static void on_report_sorter_changed(GtkSorter *sorter, GtkSorterChange change, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    GtkColumnViewSorter *cvs = GTK_COLUMN_VIEW_SORTER(sorter);
+    GtkColumnViewColumn *col;
+    guint n = rw->rows->count, column;
+    gboolean ascending;
+    (void)change;
+    if (rw->rebuilding || rw->closed)
+    {
+        return;
+    }
+    col = gtk_column_view_sorter_get_primary_sort_column(cvs);
+    if (col == NULL)
+    {
+        return;
+    }
+    column = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(col), "column"));
+    ascending = gtk_column_view_sorter_get_primary_sort_order(cvs) == GTK_SORT_ASCENDING;
+    if (gtk_column_view_sorter_get_n_sort_columns(cvs) > 1)
+    {
+        report_sort_by(rw, column, ascending, TRUE); /* (one arrow only) */
+    }
+    EeUiReport_Sort(rw->report, (int)column, ascending);
+    gtk_selection_model_unselect_all(gtk_column_view_get_model(rw->view));
+    g_list_model_items_changed(G_LIST_MODEL(rw->rows), 0, n, n);
+}
+
+static void on_report_destroy(GtkWidget *widget, gpointer user)
+{
+    ReportWindow *rw = (ReportWindow *)user;
+    (void)widget;
+    rw->closed = TRUE;
+    if (rw->menu != NULL)
+    {
+        gtk_widget_unparent(rw->menu);
+        rw->menu = NULL;
+    }
+    if (rw->w->reports[rw->kind] == rw)
+    {
+        rw->w->reports[rw->kind] = NULL;
+    }
+    report_unref(rw);
+}
+
+/* Reports > Display Precinct / Address Report...: a window of its own (the open one is brought
+ * forward); it closes when the list is reloaded or its voter list window closes */
+static void show_report(VoterWindow *w, int kind)
+{
+    static const GActionEntry actions[] = {
+        {"copy", report_action, NULL, NULL, NULL, {0}},
+        {"include", report_action, NULL, NULL, NULL, {0}},
+        {"exclude", report_action, NULL, NULL, NULL, {0}},
+        {"maps", report_action, NULL, NULL, NULL, {0}},
+        {"export-selected", report_action, NULL, NULL, NULL, {0}},
+        {"export-all", report_action, NULL, NULL, NULL, {0}},
+    };
+    char err[256], text[600];
+    EeUiReport *report;
+    ReportWindow *rw;
+    GSimpleActionGroup *group;
+    GtkEventController *keys;
+    GtkWidget *box, *scroll;
+    GtkSelectionModel *sel;
+    guint c;
+    if (w->voters == NULL || w->worker != NULL || kind < 0 || kind >= EE_UI_REPORT_COUNT)
+    {
+        return;
+    }
+    if (w->reports[kind] != NULL)
+    {
+        gtk_window_present(w->reports[kind]->win);
+        return;
+    }
+    {
+        gint64 started = g_get_monotonic_time();
+        report = EeUiVoters_Report(w->voters, kind, err, sizeof(err));
+        if (report == NULL)
+        {
+            alert(w, err, NULL); /* ("No precinct information available", as on Windows) */
+            return;
+        }
+        fprintf(stderr,
+                "%s report: %u rows in %.2f s\n",
+                EeUiReport_Heading(kind),
+                EeUiReport_Rows(report),
+                (g_get_monotonic_time() - started) / 1e6);
+    }
+    rw = g_new0(ReportWindow, 1);
+    rw->w = w;
+    rw->kind = kind;
+    rw->refs = 1;
+    rw->report = report;
+    rw->list_path = g_strdup(w->path);
+    rw->rows = ee_rows_new(EeUiReport_Rows(report));
+    w->reports[kind] = rw;
+
+    /* (as on Windows: a window of its own, not kept above the voter list) */
+    rw->win = GTK_WINDOW(gtk_window_new());
+    EeUiReport_WindowTitle(report, w->path, text, sizeof(text));
+    gtk_window_set_title(rw->win, text);
+    gtk_window_set_default_size(rw->win, kind == EE_UI_REPORT_ADDRESS ? 560 : 400, 600);
+    group = g_simple_action_group_new();
+    g_action_map_add_action_entries(G_ACTION_MAP(group), actions, G_N_ELEMENTS(actions), rw);
+    gtk_widget_insert_action_group(GTK_WIDGET(rw->win), "report", G_ACTION_GROUP(group));
+    g_object_unref(group);
+    keys = gtk_shortcut_controller_new();
+    gtk_shortcut_controller_add_shortcut(
+        GTK_SHORTCUT_CONTROLLER(keys),
+        gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_c, GDK_CONTROL_MASK),
+                         gtk_named_action_new("report.copy")));
+    gtk_shortcut_controller_set_scope(GTK_SHORTCUT_CONTROLLER(keys), GTK_SHORTCUT_SCOPE_GLOBAL);
+    gtk_widget_add_controller(GTK_WIDGET(rw->win), keys);
+
+    rw->view = GTK_COLUMN_VIEW(gtk_column_view_new(NULL));
+    gtk_column_view_set_show_column_separators(rw->view, TRUE);
+    gtk_column_view_set_show_row_separators(rw->view, TRUE); /* (Windows' grid lines) */
+    gtk_column_view_set_reorderable(rw->view, FALSE);
+    gtk_widget_add_css_class(GTK_WIDGET(rw->view), "data-table");
+    for (c = 0; c < 2; c++)
+    {
+        GtkListItemFactory *f = gtk_signal_list_item_factory_new();
+        GtkColumnViewColumn *col;
+        GtkSorter *sorter;
+        g_object_set_data(G_OBJECT(f), "column", GUINT_TO_POINTER(c));
+        g_signal_connect(f, "setup", G_CALLBACK(report_cell_setup), rw);
+        g_signal_connect(f, "bind", G_CALLBACK(report_cell_bind), rw);
+        col = gtk_column_view_column_new(c == EE_UI_REPORT_COLUMN_VALUE ? EeUiReport_Heading(kind)
+                                                                        : "Number of Voters",
+                                         f);
+        g_object_set_data(G_OBJECT(col), "column", GUINT_TO_POINTER(c));
+        gtk_column_view_column_set_resizable(col, TRUE);
+        if (c == EE_UI_REPORT_COLUMN_VALUE)
+        {
+            gtk_column_view_column_set_expand(col, TRUE);
+        }
+        else
+        {
+            /* (the heading, with room for the arrow) */
+            gtk_column_view_column_set_fixed_width(
+                col,
+                text_width(GTK_WIDGET(rw->view), "Number of Voters") + 40);
+        }
+        sorter = GTK_SORTER(gtk_custom_sorter_new(no_compare, NULL, NULL));
+        gtk_column_view_column_set_sorter(col, sorter);
+        g_object_unref(sorter);
+        gtk_column_view_append_column(rw->view, col);
+        g_object_unref(col);
+    }
+    sel = GTK_SELECTION_MODEL(gtk_multi_selection_new(G_LIST_MODEL(g_object_ref(rw->rows))));
+    gtk_column_view_set_model(rw->view, sel);
+    g_object_unref(sel);
+    report_sort_by(rw, EE_UI_REPORT_COLUMN_VALUE, TRUE, TRUE); /* (sorted by the value) */
+    g_signal_connect(gtk_column_view_get_sorter(rw->view),
+                     "changed",
+                     G_CALLBACK(on_report_sorter_changed),
+                     rw);
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), GTK_WIDGET(rw->view));
+    gtk_widget_set_vexpand(scroll, TRUE);
+
+    EeUiReport_StatusText(report, text, sizeof(text));
+    rw->status = GTK_LABEL(gtk_label_new(text));
+    gtk_label_set_xalign(rw->status, 0.0f);
+    gtk_widget_set_margin_start(GTK_WIDGET(rw->status), 8);
+    gtk_widget_set_margin_end(GTK_WIDGET(rw->status), 8);
+    gtk_widget_set_margin_top(GTK_WIDGET(rw->status), 4);
+    gtk_widget_set_margin_bottom(GTK_WIDGET(rw->status), 4);
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(box), scroll);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(rw->status));
+    gtk_window_set_child(rw->win, box);
+    g_signal_connect(rw->win, "destroy", G_CALLBACK(on_report_destroy), rw);
+    gtk_window_present(rw->win);
+}
+
+static void close_reports(VoterWindow *w)
+{
+    int k;
+    for (k = 0; k < EE_UI_REPORT_COUNT; k++)
+    {
+        if (w->reports[k] != NULL)
+        {
+            gtk_window_destroy(w->reports[k]->win); /* (on_report_destroy clears the slot) */
+        }
+    }
+}
+
+/* the Reports items: only with a list loaded (Windows grays them) */
+static void enable_reports(VoterWindow *w, gboolean on)
+{
+    static const char *const names[] = {"report-precinct", "report-address"};
+    size_t i;
+    for (i = 0; i < G_N_ELEMENTS(names); i++)
+    {
+        GAction *a = g_action_map_lookup_action(G_ACTION_MAP(w->window), names[i]);
+        if (a != NULL)
+        {
+            g_simple_action_set_enabled(G_SIMPLE_ACTION(a), on);
+        }
+    }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Loading                                                                    */
 /* -------------------------------------------------------------------------- */
 
 static gboolean take_snapshot(gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
-    GtkWindow *target = w->filter_dialog != NULL ? w->filter_dialog->win : w->window;
+    ReportWindow *rw = w->snapshot_report >= 0 ? w->reports[w->snapshot_report] : NULL;
+    GtkWindow *target = rw != NULL                 ? rw->win
+                        : w->filter_dialog != NULL ? w->filter_dialog->win
+                                                   : w->window;
     GtkWidget *content = gtk_window_get_child(target);
     int width = gtk_widget_get_width(content), height = gtk_widget_get_height(content);
     GdkPaintable *paint;
@@ -1291,7 +1897,12 @@ static gboolean take_snapshot(gpointer user)
     {
         return G_SOURCE_CONTINUE; /* (a sort or filter is still running) */
     }
-    if (w->snapshot_export != NULL && w->voters != NULL)
+    if (w->snapshot_export != NULL && rw != NULL)
+    {
+        report_export_to(rw, w->snapshot_export, NULL, 0); /* (Export All..., no dialog) */
+        g_clear_pointer(&w->snapshot_export, g_free);
+    }
+    else if (w->snapshot_export != NULL && w->voters != NULL)
     {
         export_to(w, w->snapshot_export, NULL, 0, FALSE);
         g_clear_pointer(&w->snapshot_export, g_free);
@@ -1349,11 +1960,31 @@ static void snapshot_actions(VoterWindow *w)
             }
         }
     }
-    if (w->voters != NULL && w->snapshot_sort >= 0 &&
-        (guint)w->snapshot_sort < g_list_model_get_n_items(gtk_column_view_get_columns(w->view)))
+    if (w->voters != NULL && w->snapshot_report >= 0)
+    {
+        /* --report: the report's window (and --sort clicks its heading, 0 or 1) */
+        show_report(w, w->snapshot_report);
+        if (w->reports[w->snapshot_report] != NULL && w->snapshot_sort >= 0 &&
+            w->snapshot_sort <= EE_UI_REPORT_COLUMN_COUNT)
+        {
+            report_sort_by(w->reports[w->snapshot_report],
+                           (guint)w->snapshot_sort,
+                           w->snapshot_ascending,
+                           FALSE);
+        }
+    }
+    else if (w->voters != NULL && w->snapshot_sort >= 0 &&
+             (guint)w->snapshot_sort <
+                 g_list_model_get_n_items(gtk_column_view_get_columns(w->view)))
     {
         GtkColumnViewColumn *col =
             g_list_model_get_item(gtk_column_view_get_columns(w->view), (guint)w->snapshot_sort);
+        /* (a heading click leaves the earlier column as a secondary sort, which
+         * on_sorter_changed drops; this call replaces it, but GTK keeps its arrow on screen
+         * unless the sort is cleared first) */
+        w->rebuilding = TRUE;
+        gtk_column_view_sort_by_column(w->view, NULL, GTK_SORT_ASCENDING);
+        w->rebuilding = FALSE;
         gtk_column_view_sort_by_column(w->view,
                                        col,
                                        w->snapshot_ascending ? GTK_SORT_ASCENDING
@@ -1426,6 +2057,7 @@ static gboolean load_done(gpointer user)
         {
             gtk_window_destroy(w->filter_dialog->win);
         }
+        close_reports(w); /* (as on Windows: a report is of the list it was made from) */
         EeUiVoters_Free(w->voters);
         w->voters = done->voters;
         g_array_set_size(w->rules, 0); /* (a new list starts unfiltered, in file order) */
@@ -1441,6 +2073,7 @@ static gboolean load_done(gpointer user)
         gtk_window_set_title(w->window, title);
         set_status(w);
     }
+    enable_reports(w, w->voters != NULL);
     g_clear_pointer(&w->loading_path, g_free);
     if (w->snapshot != NULL)
     {
@@ -1481,6 +2114,7 @@ static void open_path(VoterWindow *w, const char *path)
     w->cancel = 0;
     gtk_progress_bar_set_fraction(w->progress, 0.0);
     gtk_widget_set_visible(GTK_WIDGET(w->progress), TRUE);
+    enable_reports(w, FALSE); /* (grayed while loading, as on Windows) */
     w->progress_timer = g_timeout_add(100, show_load_progress, w);
     w->worker = g_thread_new("ee-load", load_worker, done);
 }
@@ -1596,6 +2230,20 @@ static void action_export_selected(GSimpleAction *action, GVariant *param, gpoin
     export_rows((VoterWindow *)user, TRUE);
 }
 
+static void action_report_precinct(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    (void)action;
+    (void)param;
+    show_report((VoterWindow *)user, EE_UI_REPORT_PRECINCT);
+}
+
+static void action_report_address(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    (void)action;
+    (void)param;
+    show_report((VoterWindow *)user, EE_UI_REPORT_ADDRESS);
+}
+
 static void action_quick_include(GSimpleAction *action, GVariant *param, gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
@@ -1654,6 +2302,7 @@ static void on_destroy(GtkWidget *widget, gpointer user)
         gtk_widget_unparent(w->cell_menu);
         w->cell_menu = NULL;
     }
+    close_reports(w);
     EeUiVoters_Free(w->voters);
     w->voters = NULL;
 }
@@ -1668,7 +2317,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     GtkWidget *open = gtk_button_new_from_icon_name("document-open-symbolic");
     GtkWidget *filter = gtk_button_new_from_icon_name("edit-find-symbolic");
     GMenu *menu = g_menu_new(), *file = g_menu_new(), *edit = g_menu_new(), *filt = g_menu_new(),
-          *dups = g_menu_new(), *help = g_menu_new();
+          *dups = g_menu_new(), *reports = g_menu_new(), *help = g_menu_new();
     GtkWidget *menu_button = gtk_menu_button_new();
     const GActionEntry actions[] = {
         {"open", action_open, NULL, NULL, NULL, {0}},
@@ -1682,6 +2331,8 @@ static VoterWindow *voter_window_new(GtkApplication *app)
         {"copy", action_copy, NULL, NULL, NULL, {0}},
         {"export", action_export, NULL, NULL, NULL, {0}},
         {"export-selected", action_export_selected, NULL, NULL, NULL, {0}},
+        {"report-precinct", action_report_precinct, NULL, NULL, NULL, {0}},
+        {"report-address", action_report_address, NULL, NULL, NULL, {0}},
         {"quick-include", action_quick_include, NULL, NULL, NULL, {0}},
         {"quick-exclude", action_quick_exclude, NULL, NULL, NULL, {0}},
         {"about", action_about, NULL, NULL, NULL, {0}},
@@ -1695,6 +2346,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     w->want_sort = -1;
     w->want_ascending = TRUE;
     w->snapshot_sort = -1;
+    w->snapshot_report = -1;
     w->window = GTK_WINDOW(gtk_application_window_new(app));
     gtk_window_set_title(w->window, "Election Explorer");
     gtk_window_set_default_size(w->window, 1100, 700);
@@ -1719,11 +2371,14 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     g_menu_append(filt, "Show Duplicate Voter IDs\xE2\x80\xA6", "win.dup-ids");
     g_menu_append(filt, "Show Duplicate Voters\xE2\x80\xA6", "win.dup-voters");
     g_menu_append(dups, "Reset View\xE2\x80\xA6", "win.reset-view");
+    g_menu_append(reports, "Display Precinct Report\xE2\x80\xA6", "win.report-precinct");
+    g_menu_append(reports, "Display Address Report\xE2\x80\xA6", "win.report-address");
     g_menu_append(help, "About Election Explorer", "win.about");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(file));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(edit));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(filt));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(dups));
+    g_menu_append_section(menu, "Reports", G_MENU_MODEL(reports));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(help));
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_button), G_MENU_MODEL(menu));
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_button), "open-menu-symbolic");
@@ -1740,7 +2395,9 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     g_object_unref(edit);
     g_object_unref(filt);
     g_object_unref(dups);
+    g_object_unref(reports);
     g_object_unref(help);
+    enable_reports(w, FALSE); /* (until a list is loaded) */
 
     /* the table */
     w->view = GTK_COLUMN_VIEW(gtk_column_view_new(NULL));
@@ -1793,6 +2450,7 @@ typedef struct AppArgs
     gboolean filter_window; /* --filter-window, with --snapshot */
     int marks;              /* --duplicates ids|voters, with --snapshot */
     const char *export_to;  /* --export <file>, with --snapshot */
+    int report;             /* --report precinct|address, with --snapshot: -1 for none */
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -1808,6 +2466,7 @@ static void on_activate(GtkApplication *app, gpointer user)
         w->snapshot_filter_window = args->filter_window;
         w->snapshot_marks = args->marks;
         w->snapshot_export = g_strdup(args->export_to);
+        w->snapshot_report = args->report;
     }
     gtk_window_present(w->window);
     if (args->pending != NULL)
@@ -1818,7 +2477,7 @@ static void on_activate(GtkApplication *app, gpointer user)
 
 int main(int argc, char **argv)
 {
-    AppArgs args = {NULL, NULL, -1, TRUE, NULL, FALSE, EE_UI_MARKS_NONE, NULL};
+    AppArgs args = {NULL, NULL, -1, TRUE, NULL, FALSE, EE_UI_MARKS_NONE, NULL, -1};
     GtkApplication *app;
     int status, i;
     args.quick = g_ptr_array_new_with_free_func(g_free);
@@ -1860,6 +2519,12 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--export") == 0 && i + 1 < argc)
         {
             args.export_to = argv[++i];
+        }
+        else if (strcmp(argv[i], "--report") == 0 && i + 1 < argc)
+        {
+            i++;
+            args.report =
+                strcmp(argv[i], "address") == 0 ? EE_UI_REPORT_ADDRESS : EE_UI_REPORT_PRECINCT;
         }
         else if (argv[i][0] != '-')
         {

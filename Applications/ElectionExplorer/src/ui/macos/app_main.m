@@ -7,7 +7,8 @@
  * a column's heading (again to reverse), numbers and dates right-aligned, the Filter sheet
  * (Filter > Filter..., Cmd-L, as Ctrl+L on Windows), Reset Filter, Include / Exclude a cell's
  * value from the right-click menu, Copy (Cmd-C), Export Voter List... and Export Selected...,
- * Show Duplicate Voter IDs / Voters, Reset View, and a status line. The list comes from the
+ * Show Duplicate Voter IDs / Voters, Reset View, the Precinct and Address reports (Reports menu,
+ * a window each), and a status line. The list comes from the
  * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
  * Sorting and filtering are the engine's, computed on a background queue
@@ -23,7 +24,9 @@
  *   --filter-window, the Filter sheet) as a PNG and quits. The window draws itself, so no
  *   screen recording permission is needed. `--duplicates ids|voters` shows a duplicates view
  *   first (as the Filter menu does); `--export <file>` exports the shown rows before the PNG
- *   (as Export Voter List... does, without the save sheet).
+ *   (as Export Voter List... does, without the save sheet). `--report precinct|address` opens
+ *   that report and the PNG is of its window; then `--sort 0|1[:desc]` clicks the report's
+ *   heading and `--export` exports the report (Export All...).
  */
 
 #import <Cocoa/Cocoa.h>
@@ -40,6 +43,49 @@ static NSString *ns_utf8(const char *s)
 }
 
 @class EeFilterSheet;
+@class EeReportWindow;
+
+/* an export's field separator, as on Windows: a typed .csv or .tsv wins, else the chosen type
+ * (0 CSV, 1 TSV), whose extension is then added to *path */
+static char export_delim(NSString **path, NSInteger type)
+{
+    if ([(*path).pathExtension caseInsensitiveCompare:@"tsv"] == NSOrderedSame)
+    {
+        return '\t';
+    }
+    if ([(*path).pathExtension caseInsensitiveCompare:@"csv"] == NSOrderedSame)
+    {
+        return ',';
+    }
+    *path = [*path stringByAppendingPathExtension:type == 1 ? @"tsv" : @"csv"];
+    return type == 1 ? '\t' : ',';
+}
+
+/* the save sheet's file type below it (UTF-8 CSV or TSV, as on Windows), calling
+ * exportTypeChanged: on @p target */
+static NSPopUpButton *export_type_popup(NSView *extra, id target)
+{
+    NSTextField *label = [NSTextField labelWithString:@"Format:"];
+    NSPopUpButton *type = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(80, 4, 200, 26) pullsDown:NO];
+    label.frame = NSMakeRect(20, 8, 60, 20);
+    [type addItemsWithTitles:@[ @"UTF-8 CSV (*.csv)", @"UTF-8 TSV (*.tsv)" ]];
+    type.target = target;
+    type.action = NSSelectorFromString(@"exportTypeChanged:");
+    [extra addSubview:label];
+    [extra addSubview:type];
+    return type;
+}
+
+/* the type chosen: the name's extension follows it */
+static void export_type_changed(NSPopUpButton *type)
+{
+    NSSavePanel *panel = (NSSavePanel *)type.window;
+    if ([panel isKindOfClass:[NSSavePanel class]])
+    {
+        NSString *base = panel.nameFieldStringValue.stringByDeletingPathExtension;
+        panel.nameFieldStringValue = [base stringByAppendingPathExtension:type.indexOfSelectedItem == 1 ? @"tsv" : @"csv"];
+    }
+}
 
 /* -------------------------------------------------------------------------- */
 /* The voter list window                                                      */
@@ -62,11 +108,17 @@ static NSString *ns_utf8(const char *s)
 @property(assign) NSUInteger wantGen;
 @property(assign) BOOL jobRunning;
 @property(strong) EeFilterSheet *filterSheet;
+@property(strong) EeReportWindow *precinctReport; /* the open reports */
+@property(strong) EeReportWindow *addressReport;
 /* the right-clicked cell */
 @property(assign) uint32_t quickColumn;
 @property(copy) NSString *quickValue;
 - (void)openPath:(NSString *)path;
 - (void)setRules:(const EeUiRule *)rules count:(NSUInteger)n;
+- (void)addRules:(NSData *)rules;
+- (void)showReport:(int)kind;
+- (EeReportWindow *)reportOfKind:(int)kind;
+- (void)reportClosed:(EeReportWindow *)report;
 - (void)addQuickRuleColumn:(uint32_t)column value:(NSString *)value exclude:(BOOL)exclude;
 - (void)sortByColumn:(int)column ascending:(BOOL)ascending;
 - (void)showDuplicates:(int)marks;
@@ -381,6 +433,408 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     return 1;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Reports (as on Windows: Display Precinct / Address Report..., a window     */
+/* each, a row per value with its Number of Voters, over all loaded rows)     */
+/* -------------------------------------------------------------------------- */
+
+@interface EeReportWindow
+    : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation>
+@property(weak) EeVoterWindow *owner;
+@property(strong) NSWindow *window;
+@property(strong) NSTableView *table;
+@property(strong) NSTextField *status;
+@property(assign) EeUiReport *report;
+@property(assign) int kind;
+@property(copy) NSString *listPath;
+@property(assign) NSInteger menuRow; /* the right-clicked row */
+- (instancetype)initWithOwner:(EeVoterWindow *)owner report:(EeUiReport *)report path:(NSString *)path;
+- (void)sortByColumn:(int)column ascending:(BOOL)ascending;
+- (BOOL)exportAllTo:(NSString *)path;
+- (void)close;
+@end
+
+@implementation EeReportWindow
+
+- (instancetype)initWithOwner:(EeVoterWindow *)owner report:(EeUiReport *)report path:(NSString *)path
+{
+    NSScrollView *scroll;
+    NSView *content;
+    NSFont *font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    NSRect frame;
+    CGFloat width;
+    char text[600];
+    int c;
+    self = [super init];
+    if (self == nil)
+    {
+        EeUiReport_Free(report);
+        return nil;
+    }
+    self.owner = owner;
+    self.report = report;
+    self.kind = EeUiReport_Kind(report);
+    self.listPath = path;
+    width = self.kind == EE_UI_REPORT_ADDRESS ? 560 : 400;
+    self.window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, width, 600)
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    EeUiReport_WindowTitle(report, path.fileSystemRepresentation, text, sizeof(text));
+    self.window.title = ns_utf8(text);
+    self.window.delegate = self;
+    self.window.releasedWhenClosed = NO;
+    /* (as on Windows: below and right of the voter list's corner, and not kept above it) */
+    frame = owner.window.frame;
+    [self.window setFrameTopLeftPoint:NSMakePoint(NSMinX(frame) + 48, NSMaxY(frame) - 48)];
+    content = self.window.contentView;
+
+    self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.allowsColumnReordering = NO;
+    self.table.allowsColumnResizing = YES;
+    self.table.allowsMultipleSelection = YES;
+    self.table.usesAlternatingRowBackgroundColors = YES;
+    self.table.columnAutoresizingStyle = NSTableViewFirstColumnOnlyAutoresizingStyle;
+    self.table.gridStyleMask = NSTableViewSolidVerticalGridLineMask | NSTableViewSolidHorizontalGridLineMask;
+    if (@available(macOS 11.0, *))
+    {
+        self.table.style = NSTableViewStylePlain; /* (rows from edge to edge, as on Windows) */
+    }
+    self.table.menu = [[NSMenu alloc] initWithTitle:@""];
+    self.table.menu.delegate = self;
+    for (c = 0; c < 2; c++)
+    {
+        NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%d", c]];
+        NSTextFieldCell *cell = [[NSTextFieldCell alloc] initTextCell:@""];
+        col.title = c == EE_UI_REPORT_COLUMN_VALUE ? ns_utf8(EeUiReport_Heading(self.kind)) : @"Number of Voters";
+        col.headerCell.alignment = NSTextAlignmentCenter; /* (as on Windows) */
+        cell.font = font;
+        cell.lineBreakMode = NSLineBreakByTruncatingTail;
+        /* (as on Windows: Precinct and Number of Voters centered, Address at the left) */
+        cell.alignment = c == EE_UI_REPORT_COLUMN_VALUE && self.kind == EE_UI_REPORT_ADDRESS ? NSTextAlignmentLeft
+                                                                                             : NSTextAlignmentCenter;
+        col.dataCell = cell;
+        col.minWidth = 60;
+        col.resizingMask = c == EE_UI_REPORT_COLUMN_VALUE
+                               ? (NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask)
+                               : NSTableColumnUserResizingMask;
+        [self.table addTableColumn:col];
+    }
+    self.table.rowHeight = font.boundingRectForFont.size.height + 3;
+
+    scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.documentView = self.table;
+    scroll.hasVerticalScroller = YES;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    EeUiReport_StatusText(report, text, sizeof(text));
+    self.status = [NSTextField labelWithString:ns_utf8(text)];
+    self.status.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:scroll];
+    [content addSubview:self.status];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.status.topAnchor constant:-6],
+        [self.status.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:10],
+        [self.status.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor constant:-10],
+        [self.status.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-6],
+    ]];
+    [content layoutSubtreeIfNeeded];
+    {
+        /* Number of Voters: its heading and the sort arrow; the value column takes the rest of
+         * the laid-out table (widths set before layout leave the table wider than the window) */
+        NSTableColumn *value = self.table.tableColumns[0], *count = self.table.tableColumns[1];
+        CGFloat room = scroll.contentSize.width - 2 * self.table.intercellSpacing.width;
+        count.width = MAX(130, ceil(count.headerCell.cellSize.width) + 28);
+        value.width = MAX(value.minWidth, room - count.width);
+    }
+    [self showSortIndicator];
+    [self.window makeKeyAndOrderFront:nil];
+    return self;
+}
+
+- (void)dealloc
+{
+    EeUiReport_Free(_report);
+}
+
+- (void)close
+{
+    [self.window close]; /* (windowWillClose: tells the owner) */
+}
+
+- (void)windowWillClose:(NSNotification *)note
+{
+    [self.owner reportClosed:self];
+}
+
+- (void)alert:(NSString *)message
+{
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = message;
+    [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+/* ---- the table ---- */
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    return EeUiReport_Rows(self.report);
+}
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    if (column.identifier.integerValue == EE_UI_REPORT_COLUMN_COUNT)
+    {
+        return [NSString stringWithFormat:@"%u", EeUiReport_Count(self.report, (uint32_t)row)];
+    }
+    return ns_utf8(EeUiReport_Value(self.report, (uint32_t)row));
+}
+
+- (BOOL)tableView:(NSTableView *)tableView shouldEditTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    return NO;
+}
+
+- (void)showSortIndicator
+{
+    int asc = 1, sorted = EeUiReport_SortColumn(self.report, &asc);
+    for (NSTableColumn *col in self.table.tableColumns)
+    {
+        BOOL is = col.identifier.integerValue == sorted;
+        [self.table
+            setIndicatorImage:(is ? [NSImage imageNamed:asc ? @"NSAscendingSortIndicator" : @"NSDescendingSortIndicator"]
+                                  : nil)
+                inTableColumn:col];
+        if (is)
+        {
+            self.table.highlightedTableColumn = col;
+        }
+    }
+}
+
+/* a heading click (the same one again reverses it); a report is small: sorted here, as on
+ * Windows */
+- (void)sortByColumn:(int)column ascending:(BOOL)ascending
+{
+    EeUiReport_Sort(self.report, column, ascending);
+    [self.table deselectAll:nil];
+    [self.table reloadData];
+    [self showSortIndicator];
+}
+
+- (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)column
+{
+    int c = (int)column.identifier.integerValue, asc = 1, sorted = EeUiReport_SortColumn(self.report, &asc);
+    [self sortByColumn:c ascending:(sorted == c ? !asc : YES)];
+}
+
+- (NSMutableData *)selectedRows
+{
+    NSMutableData *rows = [NSMutableData data];
+    [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger i, BOOL *stop) {
+      uint32_t r = (uint32_t)i;
+      [rows appendBytes:&r length:sizeof(r)];
+    }];
+    return rows;
+}
+
+/* ---- commands ---- */
+
+/* Copy (Cmd-C or the right-click menu): "<value>\t<count>" a line, as on Windows */
+- (IBAction)copy:(id)sender
+{
+    NSMutableData *rows = [self selectedRows];
+    char *text;
+    if (rows.length == 0)
+    {
+        return;
+    }
+    text = EeUiReport_CopyText(self.report, (const uint32_t *)rows.bytes, (uint32_t)(rows.length / sizeof(uint32_t)),
+                               NULL);
+    if (text != NULL)
+    {
+        [NSPasteboard.generalPasteboard clearContents];
+        [NSPasteboard.generalPasteboard setString:ns_utf8(text) forType:NSPasteboardTypeString];
+        free(text);
+    }
+}
+
+/* Include / Exclude: a rule "<Precinct or Address> is <value>" in the voter list's filter for
+ * each selected row (the blank row matches the empty cells) */
+- (void)filterSelected:(BOOL)exclude
+{
+    NSMutableData *rows = [self selectedRows], *rules = [NSMutableData data];
+    const uint32_t *r = (const uint32_t *)rows.bytes;
+    NSUInteger i, n = rows.length / sizeof(uint32_t);
+    for (i = 0; i < n; i++)
+    {
+        EeUiRule rule;
+        EeUiReport_Rule(self.report, r[i], exclude ? 1 : 0, &rule);
+        [rules appendBytes:&rule length:sizeof(rule)];
+    }
+    [self.owner addRules:rules];
+}
+
+- (void)includeSelected:(id)sender
+{
+    [self filterSelected:NO];
+}
+
+- (void)excludeSelected:(id)sender
+{
+    [self filterSelected:YES];
+}
+
+/* Show in Maps... (Address report): the address in the browser's map */
+- (void)showInMaps:(id)sender
+{
+    char *url = EeUiReport_MapUrl(self.report, (uint32_t)self.menuRow);
+    NSURL *u = url != NULL ? [NSURL URLWithString:ns_utf8(url)] : nil;
+    free(url);
+    if (u == nil)
+    {
+        [self alert:@"Could not build a map link for this address."];
+        return;
+    }
+    if (![NSWorkspace.sharedWorkspace openURL:u])
+    {
+        [self alert:@"Could not open the map in a browser."];
+    }
+}
+
+/* Export Selected... / Export All...: a save sheet with the file type (a report has no
+ * normalized fields, so no Export Options) */
+- (void)exportRows:(BOOL)selection
+{
+    NSSavePanel *panel;
+    NSView *extra;
+    NSPopUpButton *type;
+    NSMutableData *rows = nil;
+    char name[512];
+    if (selection)
+    {
+        rows = [self selectedRows];
+        if (rows.length == 0)
+        {
+            return;
+        }
+    }
+    panel = [NSSavePanel savePanel];
+    panel.title = @"Export";
+    EeUiReport_ExportName(self.report, self.listPath.fileSystemRepresentation, selection, name, sizeof(name));
+    panel.nameFieldStringValue = ns_utf8(name);
+    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 36)];
+    type = export_type_popup(extra, self);
+    panel.accessoryView = extra;
+    [panel beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse r) {
+                    NSString *path = panel.URL.path;
+                    char delim, err[256];
+                    if (r != NSModalResponseOK || path == nil)
+                    {
+                        return;
+                    }
+                    delim = export_delim(&path, type.indexOfSelectedItem);
+                    if (EeUiReport_Export(self.report, path.fileSystemRepresentation,
+                                          rows != nil ? (const uint32_t *)rows.bytes : NULL,
+                                          (uint32_t)(rows.length / sizeof(uint32_t)), delim, err, sizeof(err)) < 0)
+                    {
+                        [self alert:ns_utf8(err)];
+                    }
+                  }];
+}
+
+- (void)exportTypeChanged:(NSPopUpButton *)type
+{
+    export_type_changed(type);
+}
+
+- (IBAction)exportSelected:(id)sender
+{
+    [self exportRows:YES];
+}
+
+- (IBAction)exportAll:(id)sender
+{
+    [self exportRows:NO];
+}
+
+/* --export with --report: Export All..., as a CSV, without the sheet */
+- (BOOL)exportAllTo:(NSString *)path
+{
+    char err[256];
+    long wrote = EeUiReport_Export(self.report, path.fileSystemRepresentation, NULL, 0, ',', err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "report export: %s\n", err);
+        return NO;
+    }
+    fprintf(stderr, "exported %ld report rows\n", wrote);
+    return YES;
+}
+
+/* the right-click menu, in Windows' order: Copy; Include, Exclude (on the value column); Show
+ * in Maps... (an address); Export Selected..., Export All... */
+- (void)menuNeedsUpdate:(NSMenu *)menu
+{
+    NSInteger row = self.table.clickedRow, col = self.table.clickedColumn;
+    [menu removeAllItems];
+    if (row < 0)
+    {
+        return;
+    }
+    if (![self.table.selectedRowIndexes containsIndex:(NSUInteger)row])
+    {
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+    }
+    self.menuRow = row;
+    [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""].target = self;
+    if (col >= 0 && self.table.tableColumns[(NSUInteger)col].identifier.integerValue == EE_UI_REPORT_COLUMN_VALUE)
+    {
+        NSString *value = ns_utf8(EeUiReport_Value(self.report, (uint32_t)row));
+        /* (at most 40 characters, as on Windows) */
+        NSString *shown = value.length >= 40 ? [[value substringToIndex:36] stringByAppendingString:@"..."] : value;
+        [menu addItem:[NSMenuItem separatorItem]];
+        [menu addItemWithTitle:[NSString stringWithFormat:@"Include \"%@\"", shown]
+                        action:@selector(includeSelected:)
+                 keyEquivalent:@""]
+            .target = self;
+        [menu addItemWithTitle:[NSString stringWithFormat:@"Exclude \"%@\"", shown]
+                        action:@selector(excludeSelected:)
+                 keyEquivalent:@""]
+            .target = self;
+        if (self.kind == EE_UI_REPORT_ADDRESS && !EeUiReport_IsBlank(self.report, (uint32_t)row))
+        {
+            [menu addItem:[NSMenuItem separatorItem]];
+            [menu addItemWithTitle:@"Show in Maps…" action:@selector(showInMaps:) keyEquivalent:@""].target = self;
+        }
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"Export Selected…" action:@selector(exportSelected:) keyEquivalent:@""].target = self;
+    [menu addItemWithTitle:@"Export All…" action:@selector(exportAll:) keyEquivalent:@""].target = self;
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if (item.action == @selector(copy:) || item.action == @selector(exportSelected:))
+    {
+        return self.table.numberOfSelectedRows > 0;
+    }
+    if (item.action == @selector(includeSelected:) || item.action == @selector(excludeSelected:))
+    {
+        return self.owner.voters != NULL && !self.owner.loading;
+    }
+    return YES;
+}
+
+@end
+
 @implementation EeVoterWindow
 
 - (instancetype)init
@@ -679,6 +1133,98 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [self showDuplicates:EE_UI_MARKS_DUP_VOTERS];
 }
 
+/* a report's Include / Exclude: its rules added to the filter */
+- (void)addRules:(NSData *)rules
+{
+    if (self.voters == NULL || self.loading || rules.length == 0)
+    {
+        return;
+    }
+    [self.rules appendData:rules];
+    [self requestView];
+}
+
+/* ---- Reports ---- */
+
+- (EeReportWindow *)reportOfKind:(int)kind
+{
+    return kind == EE_UI_REPORT_ADDRESS ? self.addressReport : self.precinctReport;
+}
+
+/* Reports > Display Precinct / Address Report...: a window of its own (the open one is brought
+ * forward); it closes when the list is reloaded or this window closes */
+- (void)showReport:(int)kind
+{
+    EeReportWindow *open = [self reportOfKind:kind];
+    EeUiReport *report;
+    char err[256];
+    CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    if (self.voters == NULL || self.loading)
+    {
+        return;
+    }
+    if (open != nil)
+    {
+        [open.window makeKeyAndOrderFront:nil];
+        return;
+    }
+    report = EeUiVoters_Report(self.voters, kind, err, sizeof(err));
+    if (report == NULL)
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = ns_utf8(err); /* ("No precinct information available", as on Windows) */
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    fprintf(stderr, "%s report: %u rows in %.2f s\n", EeUiReport_Heading(kind), EeUiReport_Rows(report),
+            CFAbsoluteTimeGetCurrent() - started);
+    open = [[EeReportWindow alloc] initWithOwner:self report:report path:self.path];
+    if (kind == EE_UI_REPORT_ADDRESS)
+    {
+        self.addressReport = open;
+    }
+    else
+    {
+        self.precinctReport = open;
+    }
+}
+
+- (IBAction)showPrecinctReport:(id)sender
+{
+    [self showReport:EE_UI_REPORT_PRECINCT];
+}
+
+- (IBAction)showAddressReport:(id)sender
+{
+    [self showReport:EE_UI_REPORT_ADDRESS];
+}
+
+- (void)reportClosed:(EeReportWindow *)report
+{
+    if (self.precinctReport == report)
+    {
+        self.precinctReport = nil;
+    }
+    if (self.addressReport == report)
+    {
+        self.addressReport = nil;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      (void)report; /* (kept until its window has finished closing) */
+    });
+}
+
+- (void)closeReports
+{
+    [self.precinctReport close];
+    [self.addressReport close];
+}
+
+- (void)windowWillClose:(NSNotification *)note
+{
+    [self closeReports];
+}
+
 /* the selected shown rows, in order */
 - (NSMutableData *)selectedRows
 {
@@ -728,7 +1274,6 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     NSView *extra;
     NSButton *normalized;
     NSPopUpButton *type;
-    NSTextField *typeLabel;
     NSMutableData *rows = nil;
     char name[512];
     if (self.voters == NULL || self.loading || self.jobRunning)
@@ -756,15 +1301,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 64)];
     normalized = [NSButton checkboxWithTitle:@"Include normalized data fields" target:nil action:nil];
     normalized.frame = NSMakeRect(20, 36, 380, 20);
-    typeLabel = [NSTextField labelWithString:@"Format:"];
-    typeLabel.frame = NSMakeRect(20, 8, 60, 20);
-    type = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(80, 4, 200, 26) pullsDown:NO];
-    [type addItemsWithTitles:@[ @"UTF-8 CSV (*.csv)", @"UTF-8 TSV (*.tsv)" ]];
-    type.target = self;
-    type.action = @selector(exportTypeChanged:);
     [extra addSubview:normalized];
-    [extra addSubview:typeLabel];
-    [extra addSubview:type];
+    type = export_type_popup(extra, self);
     panel.accessoryView = extra;
     [panel beginSheetModalForWindow:self.window
                   completionHandler:^(NSModalResponse r) {
@@ -776,20 +1314,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
                     {
                         return;
                     }
-                    /* (as on Windows: a typed .csv or .tsv wins, else the chosen type) */
-                    if ([path.pathExtension caseInsensitiveCompare:@"tsv"] == NSOrderedSame)
-                    {
-                        delim = '\t';
-                    }
-                    else if ([path.pathExtension caseInsensitiveCompare:@"csv"] == NSOrderedSame)
-                    {
-                        delim = ',';
-                    }
-                    else
-                    {
-                        delim = type.indexOfSelectedItem == 1 ? '\t' : ',';
-                        path = [path stringByAppendingPathExtension:delim == '\t' ? @"tsv" : @"csv"];
-                    }
+                    delim = export_delim(&path, type.indexOfSelectedItem);
                     wrote = EeUiVoters_Export(self.voters, path.fileSystemRepresentation,
                                               rows != nil ? (const uint32_t *)rows.bytes : NULL,
                                               (uint32_t)(rows.length / sizeof(uint32_t)),
@@ -806,15 +1331,9 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
                   }];
 }
 
-/* the type chosen: the name's extension follows it */
 - (void)exportTypeChanged:(NSPopUpButton *)type
 {
-    NSSavePanel *panel = (NSSavePanel *)type.window;
-    if ([panel isKindOfClass:[NSSavePanel class]])
-    {
-        NSString *base = panel.nameFieldStringValue.stringByDeletingPathExtension;
-        panel.nameFieldStringValue = [base stringByAppendingPathExtension:type.indexOfSelectedItem == 1 ? @"tsv" : @"csv"];
-    }
+    export_type_changed(type);
 }
 
 - (IBAction)exportVoters:(id)sender
@@ -882,6 +1401,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         {
             [self.filterSheet close];
         }
+        [self closeReports]; /* (as on Windows: a report is of the list it was made from) */
         EeUiVoters_Free(self.voters);
         self.voters = v;
         self.rules = [NSMutableData data]; /* (a new list starts unfiltered, in file order) */
@@ -1018,6 +1538,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     {
         return self.voters != NULL && !self.loading && !self.jobRunning;
     }
+    if (item.action == @selector(showPrecinctReport:) || item.action == @selector(showAddressReport:))
+    {
+        return self.voters != NULL && !self.loading; /* (as on Windows) */
+    }
     return YES;
 }
 
@@ -1037,6 +1561,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 @property(assign) BOOL snapshotFilterWindow;
 @property(assign) int snapshotMarks;          /* --duplicates: EE_UI_MARKS_* */
 @property(copy) NSString *snapshotExport;     /* --export: export the shown rows here first */
+@property(assign) int snapshotReport;         /* --report: EE_UI_REPORT_* (-1: none) */
 @property(assign) BOOL snapshotActionsDone;
 @end
 
@@ -1047,14 +1572,15 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     NSMenu *bar = [[NSMenu alloc] init];
     NSMenuItem *appItem = [[NSMenuItem alloc] init], *fileItem = [[NSMenuItem alloc] init],
                *editItem = [[NSMenuItem alloc] init], *filterItem = [[NSMenuItem alloc] init],
-               *winItem = [[NSMenuItem alloc] init];
+               *reportsItem = [[NSMenuItem alloc] init], *winItem = [[NSMenuItem alloc] init];
     NSMenu *app = [[NSMenu alloc] init], *file = [[NSMenu alloc] initWithTitle:@"File"],
            *edit = [[NSMenu alloc] initWithTitle:@"Edit"], *filter = [[NSMenu alloc] initWithTitle:@"Filter"],
-           *win = [[NSMenu alloc] initWithTitle:@"Window"];
+           *reports = [[NSMenu alloc] initWithTitle:@"Reports"], *win = [[NSMenu alloc] initWithTitle:@"Window"];
     [bar addItem:appItem];
     [bar addItem:fileItem];
     [bar addItem:editItem];
     [bar addItem:filterItem];
+    [bar addItem:reportsItem];
     [bar addItem:winItem];
     [app addItemWithTitle:@"About Election Explorer" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
     [app addItem:[NSMenuItem separatorItem]];
@@ -1077,6 +1603,9 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [filter addItem:[NSMenuItem separatorItem]];
     [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""];
     filterItem.submenu = filter;
+    [reports addItemWithTitle:@"Display Precinct Report…" action:@selector(showPrecinctReport:) keyEquivalent:@""];
+    [reports addItemWithTitle:@"Display Address Report…" action:@selector(showAddressReport:) keyEquivalent:@""];
+    reportsItem.submenu = reports;
     [win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     winItem.submenu = win;
     NSApp.mainMenu = bar;
@@ -1123,7 +1652,16 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
                               exclude:[q hasPrefix:@"-"]];
             }
         }
-        if (self.snapshotSort >= 0 && w.voters != NULL)
+        if (self.snapshotReport >= 0 && w.voters != NULL)
+        {
+            /* --report: the report's window (and --sort clicks its heading, 0 or 1) */
+            [w showReport:self.snapshotReport];
+            if (self.snapshotSort >= 0 && self.snapshotSort <= EE_UI_REPORT_COLUMN_COUNT)
+            {
+                [[w reportOfKind:self.snapshotReport] sortByColumn:self.snapshotSort ascending:self.snapshotAscending];
+            }
+        }
+        else if (self.snapshotSort >= 0 && w.voters != NULL)
         {
             [w sortByColumn:self.snapshotSort ascending:self.snapshotAscending];
         }
@@ -1140,13 +1678,19 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         });
         return;
     }
-    if (self.snapshotExport != nil && w.voters != NULL)
+    EeReportWindow *report = self.snapshotReport >= 0 ? [w reportOfKind:self.snapshotReport] : nil;
+    if (self.snapshotExport != nil && report != nil)
+    {
+        [report exportAllTo:self.snapshotExport]; /* (Export All..., without the sheet) */
+        self.snapshotExport = nil;
+    }
+    else if (self.snapshotExport != nil && w.voters != NULL)
     {
         [w exportShownTo:self.snapshotExport];
         self.snapshotExport = nil;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-      NSWindow *target = w.filterSheet != nil ? w.filterSheet.sheet : w.window;
+      NSWindow *target = report != nil ? report.window : w.filterSheet != nil ? w.filterSheet.sheet : w.window;
       NSView *v = target.contentView.superview ?: target.contentView;
       NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds];
       [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
@@ -1219,6 +1763,7 @@ int main(int argc, const char **argv)
         NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
         delegate = [[EeAppDelegate alloc] init];
         delegate.snapshotSort = -1;
+        delegate.snapshotReport = -1;
         delegate.snapshotAscending = YES;
         delegate.snapshotQuick = [NSMutableArray array];
         for (i = 1; i < argc; i++)
@@ -1253,6 +1798,11 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--export") == 0 && i + 1 < argc)
             {
                 delegate.snapshotExport = ns_utf8(argv[++i]);
+            }
+            else if (strcmp(argv[i], "--report") == 0 && i + 1 < argc)
+            {
+                i++;
+                delegate.snapshotReport = strcmp(argv[i], "address") == 0 ? EE_UI_REPORT_ADDRESS : EE_UI_REPORT_PRECINCT;
             }
             else if (argv[i][0] != '-')
             {

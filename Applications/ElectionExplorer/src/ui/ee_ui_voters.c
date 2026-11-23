@@ -720,6 +720,500 @@ void EeUiVoters_ExportName(const EeUiVoters *v,
     StringCchPrintfA(out, cap, "%s%s.csv", name, what);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Reports                                                                    */
+/* -------------------------------------------------------------------------- */
+
+typedef struct ReportItem
+{
+    wchar_t *wide; /* the engine's value ("" for the blank row): sorting compares these */
+    char *text;    /* UTF-8, as shown ("(blank)" for the blank row) */
+    uint32_t count;
+} ReportItem;
+
+struct EeUiReport
+{
+    int kind;
+    uint32_t column; /* the list's column (EE_COL_PRECINCT / EE_COL_ADDRESS) */
+    ReportItem *items;
+    uint32_t count;
+    BOOL has_blank;
+    int sort_column;
+    BOOL sort_ascending;
+};
+
+static const char k_blank[] = "(blank)"; /* (Windows' label for empty cells) */
+
+typedef struct ReportSortCx
+{
+    int column;
+    BOOL ascending;
+    BOOL numeric; /* precincts sort as numbers */
+} ReportSortCx;
+
+/* Windows' report_sort_cmp */
+static int report_cmp(void *cxv, const void *a, const void *b)
+{
+    const ReportSortCx *cx = (const ReportSortCx *)cxv;
+    const ReportItem *pa = (const ReportItem *)a;
+    const ReportItem *pb = (const ReportItem *)b;
+    int c;
+    if (cx->column == EE_UI_REPORT_COLUMN_COUNT)
+    {
+        c = pa->count < pb->count ? -1 : (pa->count > pb->count ? 1 : 0);
+        if (c == 0)
+        {
+            c = _wcsicmp(pa->wide, pb->wide);
+        }
+    }
+    else if (cx->numeric)
+    {
+        unsigned long na = wcstoul(pa->wide, NULL, 10);
+        unsigned long nb = wcstoul(pb->wide, NULL, 10);
+        c = na < nb ? -1 : (na > nb ? 1 : 0);
+        if (c == 0)
+        {
+            c = _wcsicmp(pa->wide, pb->wide);
+        }
+    }
+    else
+    {
+        c = _wcsicmp(pa->wide, pb->wide);
+    }
+    return cx->ascending ? c : -c;
+}
+
+void EeUiReport_Free(EeUiReport *r)
+{
+    uint32_t i;
+    if (r == NULL)
+    {
+        return;
+    }
+    for (i = 0; i < r->count; i++)
+    {
+        free(r->items[i].wide);
+        free(r->items[i].text);
+    }
+    free(r->items);
+    free(r);
+}
+
+EeUiReport *EeUiVoters_Report(const EeUiVoters *v, int kind, char *err, size_t errcap)
+{
+    EeValueCount *values = NULL;
+    uint32_t n = 0, blank = 0, i;
+    EeUiReport *r;
+    uint32_t column = kind == EE_UI_REPORT_ADDRESS ? EE_COL_ADDRESS : EE_COL_PRECINCT;
+    set_err(err, errcap, "");
+    if (v == NULL)
+    {
+        return NULL;
+    }
+    if (!EeVoterTable_CollectValueCounts(&v->t, column, &values, &n, &blank) || n == 0)
+    {
+        /* (n == 0: every cell is empty, or there is no such column) */
+        EeVoterTable_FreeValueCounts(values, n);
+        set_err(err,
+                errcap,
+                kind == EE_UI_REPORT_ADDRESS ? "No address information available"
+                                             : "No precinct information available");
+        return NULL;
+    }
+    r = (EeUiReport *)calloc(1, sizeof(*r));
+    if (r != NULL)
+    {
+        r->items = (ReportItem *)calloc((size_t)n + 1, sizeof(ReportItem));
+    }
+    if (r == NULL || r->items == NULL)
+    {
+        free(r);
+        EeVoterTable_FreeValueCounts(values, n);
+        set_err(err, errcap, "Out of memory.");
+        return NULL;
+    }
+    r->kind = kind == EE_UI_REPORT_ADDRESS ? EE_UI_REPORT_ADDRESS : EE_UI_REPORT_PRECINCT;
+    r->column = column;
+    for (i = 0; i < n; i++)
+    {
+        ReportItem *it = &r->items[r->count++];
+        it->wide = values[i].value; /* (taken over) */
+        values[i].value = NULL;
+        it->text = utf8_of(it->wide);
+        it->count = values[i].count;
+        if (it->wide == NULL || it->text == NULL)
+        {
+            break;
+        }
+    }
+    EeVoterTable_FreeValueCounts(values, n);
+    if (i < n)
+    {
+        EeUiReport_Free(r);
+        set_err(err, errcap, "Out of memory.");
+        return NULL;
+    }
+    if (blank > 0)
+    {
+        /* (as on Windows: the empty cells, shown because real values exist too) */
+        ReportItem *it = &r->items[r->count];
+        it->wide = (wchar_t *)calloc(1, sizeof(wchar_t));
+        it->text = (char *)malloc(sizeof(k_blank));
+        if (it->wide != NULL && it->text != NULL)
+        {
+            memcpy(it->text, k_blank, sizeof(k_blank));
+            it->count = blank;
+            r->count++;
+            r->has_blank = TRUE;
+        }
+        else
+        {
+            free(it->wide);
+            free(it->text);
+            it->wide = NULL;
+            it->text = NULL;
+        }
+    }
+    EeUiReport_Sort(r, EE_UI_REPORT_COLUMN_VALUE, 1);
+    return r;
+}
+
+int EeUiReport_Kind(const EeUiReport *r)
+{
+    return r != NULL ? r->kind : EE_UI_REPORT_PRECINCT;
+}
+
+const char *EeUiReport_Heading(int kind)
+{
+    return kind == EE_UI_REPORT_ADDRESS ? "Address" : "Precinct";
+}
+
+uint32_t EeUiReport_Rows(const EeUiReport *r)
+{
+    return r != NULL ? r->count : 0;
+}
+
+const char *EeUiReport_Value(const EeUiReport *r, uint32_t row)
+{
+    return r != NULL && row < r->count ? r->items[row].text : "";
+}
+
+int EeUiReport_IsBlank(const EeUiReport *r, uint32_t row)
+{
+    return r != NULL && row < r->count && r->items[row].wide[0] == L'\0';
+}
+
+uint32_t EeUiReport_Count(const EeUiReport *r, uint32_t row)
+{
+    return r != NULL && row < r->count ? r->items[row].count : 0;
+}
+
+void EeUiReport_Rule(const EeUiReport *r, uint32_t row, int exclude, EeUiRule *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->column = r != NULL ? r->column : EE_COL_PRECINCT;
+    out->relation = EE_UI_REL_IS;
+    out->exclude = exclude ? 1 : 0;
+    out->enabled = 1;
+    if (r != NULL && row < r->count && !EeUiReport_IsBlank(r, row))
+    {
+        StringCchCopyA(out->value, sizeof(out->value), r->items[row].text);
+    }
+}
+
+void EeUiReport_Sort(EeUiReport *r, int column, int ascending)
+{
+    ReportSortCx cx;
+    if (r == NULL)
+    {
+        return;
+    }
+    r->sort_column =
+        column == EE_UI_REPORT_COLUMN_COUNT ? EE_UI_REPORT_COLUMN_COUNT : EE_UI_REPORT_COLUMN_VALUE;
+    r->sort_ascending = ascending ? TRUE : FALSE;
+    cx.column = r->sort_column;
+    cx.ascending = r->sort_ascending;
+    cx.numeric = r->column == EE_COL_PRECINCT;
+    if (r->count > 1)
+    {
+        qsort_s(r->items, r->count, sizeof(ReportItem), report_cmp, &cx);
+    }
+}
+
+int EeUiReport_SortColumn(const EeUiReport *r, int *ascending)
+{
+    if (ascending != NULL)
+    {
+        *ascending = r != NULL && r->sort_ascending;
+    }
+    return r != NULL ? r->sort_column : EE_UI_REPORT_COLUMN_VALUE;
+}
+
+void EeUiReport_StatusText(const EeUiReport *r, char *out, size_t cap)
+{
+    const char *noun = EeUiReport_Kind(r) == EE_UI_REPORT_ADDRESS ? "addresses" : "precincts";
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    StringCchPrintfA(out,
+                     cap,
+                     "%u unique %s%s",
+                     EeUiReport_Rows(r),
+                     noun,
+                     r != NULL && r->has_blank ? " (includes blank)" : "");
+}
+
+/* the file's name, with or without its extension */
+static void file_name(const char *path, BOOL extension, char *out, size_t cap)
+{
+    const char *base = path != NULL ? path : "", *slash = strrchr(base, '/'), *dot;
+    size_t len;
+    if (slash != NULL)
+    {
+        base = slash + 1;
+    }
+    dot = strrchr(base, '.');
+    len = !extension && dot != NULL && dot != base ? (size_t)(dot - base) : strlen(base);
+    if (len >= cap)
+    {
+        len = cap - 1;
+    }
+    memcpy(out, base, len);
+    out[len] = '\0';
+}
+
+void EeUiReport_WindowTitle(const EeUiReport *r, const char *list_path, char *out, size_t cap)
+{
+    char name[256];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(list_path, TRUE, name, sizeof(name));
+    StringCchPrintfA(out,
+                     cap,
+                     "%s Report - %s",
+                     EeUiReport_Heading(EeUiReport_Kind(r)),
+                     name[0] != '\0' ? name : "(voter list)");
+}
+
+typedef struct TextBuf
+{
+    char *data;
+    size_t len, cap;
+    BOOL failed;
+} TextBuf;
+
+static void tb_add(TextBuf *b, const char *s, size_t n)
+{
+    if (b->failed)
+    {
+        return;
+    }
+    if (b->len + n + 1 > b->cap)
+    {
+        size_t cap = b->cap > 0 ? b->cap : 4096;
+        char *grown;
+        while (b->len + n + 1 > cap)
+        {
+            cap *= 2;
+        }
+        grown = (char *)realloc(b->data, cap);
+        if (grown == NULL)
+        {
+            b->failed = TRUE;
+            return;
+        }
+        b->data = grown;
+        b->cap = cap;
+    }
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+}
+
+/* one field, quoted as Windows' export quotes it (a delimiter, quote or line break inside) */
+static void tb_field(TextBuf *b, const char *s, char delim)
+{
+    const char *p;
+    if (strchr(s, delim) == NULL && strpbrk(s, "\"\r\n") == NULL)
+    {
+        tb_add(b, s, strlen(s));
+        return;
+    }
+    tb_add(b, "\"", 1);
+    for (p = s; *p != '\0'; p++)
+    {
+        tb_add(b, p, 1);
+        if (*p == '"')
+        {
+            tb_add(b, "\"", 1);
+        }
+    }
+    tb_add(b, "\"", 1);
+}
+
+char *EeUiReport_CopyText(const EeUiReport *r, const uint32_t *rows, uint32_t n, size_t *len)
+{
+    TextBuf b = {NULL, 0, 0, FALSE};
+    uint32_t i;
+    char num[16];
+    if (len != NULL)
+    {
+        *len = 0;
+    }
+    if (r == NULL || rows == NULL)
+    {
+        return NULL;
+    }
+    tb_add(&b, "", 0);
+    for (i = 0; i < n; i++)
+    {
+        if (rows[i] < r->count)
+        {
+            /* (Windows' Copy: "<value>\t<count>\r\n", not quoted) */
+            const ReportItem *it = &r->items[rows[i]];
+            StringCchPrintfA(num, sizeof(num), "%u", it->count);
+            tb_add(&b, it->text, strlen(it->text));
+            tb_add(&b, "\t", 1);
+            tb_add(&b, num, strlen(num));
+            tb_add(&b, "\r\n", 2);
+        }
+    }
+    if (b.failed)
+    {
+        free(b.data);
+        return NULL;
+    }
+    if (len != NULL)
+    {
+        *len = b.len;
+    }
+    return b.data;
+}
+
+long EeUiReport_Export(const EeUiReport *r,
+                       const char *path_utf8,
+                       const uint32_t *rows,
+                       uint32_t n,
+                       char delim,
+                       char *err,
+                       size_t errcap)
+{
+    static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+    TextBuf b = {NULL, 0, 0, FALSE};
+    uint32_t i, count = rows != NULL ? n : EeUiReport_Rows(r), wrote = 0;
+    char num[16];
+    FILE *f;
+    BOOL ok;
+    set_err(err, errcap, "");
+    if (r == NULL || path_utf8 == NULL)
+    {
+        return -1;
+    }
+    delim = delim == '\t' ? '\t' : ',';
+    tb_field(&b, EeUiReport_Heading(r->kind), delim);
+    tb_add(&b, &delim, 1);
+    tb_field(&b, "Number of Voters", delim);
+    tb_add(&b, "\r\n", 2);
+    for (i = 0; i < count; i++)
+    {
+        uint32_t row = rows != NULL ? rows[i] : i;
+        if (row < r->count)
+        {
+            StringCchPrintfA(num, sizeof(num), "%u", r->items[row].count);
+            tb_field(&b, r->items[row].text, delim);
+            tb_add(&b, &delim, 1);
+            tb_add(&b, num, strlen(num));
+            tb_add(&b, "\r\n", 2);
+            wrote++;
+        }
+    }
+    if (b.failed)
+    {
+        free(b.data);
+        set_err(err, errcap, "Out of memory building the export.");
+        return -1;
+    }
+    f = fopen(path_utf8, "wb");
+    if (f == NULL)
+    {
+        free(b.data);
+        set_err(err, errcap, "Could not create the export file.");
+        return -1;
+    }
+    ok = fwrite(bom, 1, sizeof(bom), f) == sizeof(bom) && fwrite(b.data, 1, b.len, f) == b.len;
+    if (fclose(f) != 0)
+    {
+        ok = FALSE;
+    }
+    free(b.data);
+    if (!ok)
+    {
+        set_err(err, errcap, "Could not write the export file.");
+        remove(path_utf8);
+        return -1;
+    }
+    return (long)wrote;
+}
+
+void EeUiReport_ExportName(const EeUiReport *r,
+                           const char *list_path,
+                           int selection,
+                           char *out,
+                           size_t cap)
+{
+    char name[256];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(list_path, FALSE, name, sizeof(name));
+    StringCchPrintfA(out,
+                     cap,
+                     "%s-%s_%s.csv",
+                     name,
+                     selection ? "Selected" : "All",
+                     EeUiReport_Kind(r) == EE_UI_REPORT_ADDRESS ? "Addresses" : "Precincts");
+}
+
+char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row)
+{
+    static const char prefix[] = "https://www.google.com/maps/search/?api=1&query=";
+    static const char hex[] = "0123456789ABCDEF";
+    const unsigned char *p;
+    char *url, *q;
+    if (r == NULL || row >= r->count || EeUiReport_IsBlank(r, row))
+    {
+        return NULL;
+    }
+    url = (char *)malloc(sizeof(prefix) + strlen(r->items[row].text) * 3);
+    if (url == NULL)
+    {
+        return NULL;
+    }
+    memcpy(url, prefix, sizeof(prefix) - 1);
+    q = url + sizeof(prefix) - 1;
+    /* (Windows' App_AppendUrlEncoded: the UTF-8 bytes, all but A-Z a-z 0-9 - _ . ~ as %XX) */
+    for (p = (const unsigned char *)r->items[row].text; *p != '\0'; p++)
+    {
+        if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
+            *p == '-' || *p == '_' || *p == '.' || *p == '~')
+        {
+            *q++ = (char)*p;
+        }
+        else
+        {
+            *q++ = '%';
+            *q++ = hex[*p >> 4];
+            *q++ = hex[*p & 15];
+        }
+    }
+    *q = '\0';
+    return url;
+}
+
 /* the current rules, for a view that only changes the order */
 static EeUiRule *current_rules(const EeUiVoters *v, uint32_t *n)
 {
@@ -838,6 +1332,38 @@ static void selftest_marks(EeUiVoters *v, int marks, int sort_column)
     selftest_rows(v);
 }
 
+/* a report, as its window first shows it (by value), then by Number of Voters, most first */
+static void selftest_report(const EeUiVoters *v, int kind)
+{
+    char err[256], text[128];
+    EeUiReport *r = EeUiVoters_Report(v, kind, err, sizeof(err));
+    uint32_t i, all[3] = {0, 1, 2};
+    size_t len = 0;
+    char *copy;
+    EeUiRule rule;
+    if (r == NULL)
+    {
+        printf("%s report: %s\n", EeUiReport_Heading(kind), err);
+        return;
+    }
+    EeUiReport_StatusText(r, text, sizeof(text));
+    printf("%s report: %s\n", EeUiReport_Heading(kind), text);
+    for (i = 0; i < EeUiReport_Rows(r) && i < 3; i++)
+    {
+        printf("  \"%s\" %u\n", EeUiReport_Value(r, i), EeUiReport_Count(r, i));
+    }
+    EeUiReport_Sort(r, EE_UI_REPORT_COLUMN_COUNT, 0);
+    printf("  most voters: \"%s\" %u\n", EeUiReport_Value(r, 0), EeUiReport_Count(r, 0));
+    copy = EeUiReport_CopyText(r, all, EeUiReport_Rows(r) < 3 ? EeUiReport_Rows(r) : 3, &len);
+    EeUiReport_Rule(r, 0, 0, &rule);
+    printf("  copy: %u bytes; include: column %u is \"%s\"\n",
+           (unsigned)len,
+           rule.column,
+           rule.value);
+    free(copy);
+    EeUiReport_Free(r);
+}
+
 int EeUiVoters_SelfTest(const char *path_utf8)
 {
     char err[1024] = "";
@@ -893,6 +1419,10 @@ int EeUiVoters_SelfTest(const char *path_utf8)
         EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, NULL, 0, EE_UI_MARKS_NONE));
         selftest_marks(v, EE_UI_MARKS_DUP_IDS, EE_UI_COLUMN_VOTER_ID);
         selftest_marks(v, EE_UI_MARKS_DUP_VOTERS, EE_UI_COLUMN_NAME);
+        /* (a filter does not change a report: it counts every loaded row) */
+        EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, rules, 1, EE_UI_MARKS_NONE));
+        selftest_report(v, EE_UI_REPORT_PRECINCT);
+        selftest_report(v, EE_UI_REPORT_ADDRESS);
     }
     EeUiVoters_Free(v);
     return 0;

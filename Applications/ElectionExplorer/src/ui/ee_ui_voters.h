@@ -200,6 +200,98 @@ extern "C"
                                char *out,
                                size_t cap);
 
+    /* ---------------------------------------------------------------------- */
+    /* Reports (Windows' Reports menu): a row per distinct Precinct or Address */
+    /* ---------------------------------------------------------------------- */
+
+    typedef struct EeUiReport EeUiReport;
+
+    enum
+    {
+        EE_UI_REPORT_PRECINCT = 0,
+        EE_UI_REPORT_ADDRESS,
+        EE_UI_REPORT_COUNT
+    };
+
+    /** A report's two columns: the value, then "Number of Voters". */
+    enum
+    {
+        EE_UI_REPORT_COLUMN_VALUE = 0,
+        EE_UI_REPORT_COLUMN_COUNT = 1
+    };
+
+    /**
+     * Display Precinct / Address Report, as on Windows: each distinct value (case-insensitive;
+     * shown as first spelled) with its number of voters, over ALL loaded rows (the filter and a
+     * duplicates view are left out). Empty cells make a "(blank)" row when other values exist.
+     * Sorted by the value, ascending (precincts as numbers). Returns NULL with the Windows
+     * message in @p err when the list has no values ("No precinct information available") or
+     * memory runs out. The report keeps its own copy: it outlives the list.
+     */
+    EeUiReport *EeUiVoters_Report(const EeUiVoters *v, int kind, char *err, size_t errcap);
+
+    void EeUiReport_Free(EeUiReport *r);
+
+    int EeUiReport_Kind(const EeUiReport *r);
+
+    /** "Precinct" or "Address": the first column's heading. */
+    const char *EeUiReport_Heading(int kind);
+
+    uint32_t EeUiReport_Rows(const EeUiReport *r);
+
+    /** Row @p row's value as shown and copied ("(blank)" for empty cells; never NULL). */
+    const char *EeUiReport_Value(const EeUiReport *r, uint32_t row);
+
+    /** 1 for the "(blank)" row. */
+    int EeUiReport_IsBlank(const EeUiReport *r, uint32_t row);
+
+    uint32_t EeUiReport_Count(const EeUiReport *r, uint32_t row);
+
+    /**
+     * Include / Exclude on a report row, as on Windows: the rule "<the list's Precinct or
+     * Address column> is <value>" ("" for the blank row, matching the empty cells).
+     */
+    void EeUiReport_Rule(const EeUiReport *r, uint32_t row, int exclude, EeUiRule *out);
+
+    /** Sort by EE_UI_REPORT_COLUMN_* (a click on a heading: the same one again reverses it). */
+    void EeUiReport_Sort(EeUiReport *r, int column, int ascending);
+    int EeUiReport_SortColumn(const EeUiReport *r, int *ascending);
+
+    /** The status line: "308 unique precincts", "... (includes blank)". */
+    void EeUiReport_StatusText(const EeUiReport *r, char *out, size_t cap);
+
+    /** The window's title: "Precinct Report - <file name>". */
+    void EeUiReport_WindowTitle(const EeUiReport *r, const char *list_path, char *out, size_t cap);
+
+    /** Rows @p rows as Copy puts them on the clipboard: "<value>\t<count>\r\n" each. */
+    char *EeUiReport_CopyText(const EeUiReport *r, const uint32_t *rows, uint32_t n, size_t *len);
+
+    /**
+     * Export rows @p rows (NULL: all, in the shown order) as Windows does: UTF-8 with a byte
+     * order mark, the headings "Precinct" (or "Address") and "Number of Voters". Returns the
+     * rows written, or -1 with a message in @p err.
+     */
+    long EeUiReport_Export(const EeUiReport *r,
+                           const char *path_utf8,
+                           const uint32_t *rows,
+                           uint32_t n,
+                           char delim,
+                           char *err,
+                           size_t errcap);
+
+    /** "<list name>-All_Precincts.csv", "-Selected_Addresses.csv", ... */
+    void EeUiReport_ExportName(const EeUiReport *r,
+                               const char *list_path,
+                               int selection,
+                               char *out,
+                               size_t cap);
+
+    /**
+     * Show in Maps (Address report): a Google Maps search link for row @p row (Windows' default
+     * map; its Options window is not ported yet). Heap UTF-8 (free()), or NULL for the blank row.
+     */
+    char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row);
+
     /** Sort (on the calling thread) by column @p c; sorting the same column again reverses it. */
     void EeUiVoters_Sort(EeUiVoters *v, uint32_t c);
 
@@ -208,7 +300,7 @@ extern "C"
 
     /**
      * The windows' `--selftest <file>`: load @p path, sort it by column 1 both ways, filter it,
-     * copy rows and look for duplicates, and print (stdout) what the window would show: the row
+     * copy rows, look for duplicates and make the Precinct and Address reports, and print (stdout) what the window would show: the row
      * and column counts, the first column titles, the first rows' column-1 cells and counts. Returns 0, or 1 when the load fails.
      */
     int EeUiVoters_SelfTest(const char *path_utf8);

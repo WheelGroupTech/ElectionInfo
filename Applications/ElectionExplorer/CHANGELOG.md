@@ -30,6 +30,25 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-23 — macOS and Linux: filters and background sorting in the voter list window
+- **What:**
+  - **Filters, as on Windows:** Filter… (Ctrl+L on Linux, ⌘L on the Mac) opens a Filter window with the Windows layout and rules. Reset Filter clears the rules. Right-clicking a cell offers Include "value" and Exclude "value". The status line says "Filtered: 3 of 5 voters" when rows are hidden.
+  - **Sorting and filtering in the background:** both run on a worker thread while the table keeps showing the old order, then the result is swapped in. Requests made meanwhile are merged. A descending sort of 1.5 million rows no longer sorts twice (5.3 s became 1.7 s on Linux, filter included).
+  - **Snapshot options:** `--include` / `--exclude <column>=<value>` and `--filter-window` on both platforms, and `--sort` now on the Mac too. The GTK snapshot waits until the window has drawn the new rows.
+  - **Sierra County CVRs:** the Mac reads G20 and G24 with the same records and ballots as Windows, but G22 did not finish within 4 hours. Linux reads G22 with the same 1,582 records and ballots.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiRule`, `EeUiView`, `EeUiVoters_ComputeView` / `SetView`, `RuleIsValid`, `RelationName`, `TotalRows`, `IsFiltered`; the self-test also filters.
+  - `src/ui/gtk/app_main.c`: `request_view` / `start_view_job` / `view_done`, the Filter window (`show_filter_dialog`, `fd_*`), `on_cell_right_click`, `snapshot_actions`. It now needs GTK 4.12 (`CMakeLists.txt`).
+  - `src/ui/macos/app_main.m`: `EeFilterSheet`, `startViewJob` / `requestView`, `menuNeedsUpdate:`, the Filter menu, `takeSnapshotWhenReady`.
+  - `docs/cross-platform-design.md`: the Sierra results under Vision and Tesseract, and filters in "The voter list window, prototype".
+- **Checked:**
+  - Debug builds, no warnings, on WSL Ubuntu 24.04 (GTK 4.14.5) and the Intel Mac.
+  - `--selftest` prints the same on both. Include Precinct "101" shows 3 of 5; adding Exclude "101" shows 0; disabling it, 3 again.
+  - Snapshots on both: Include "101" and Exclude PCTSPT "B", sorted by Voter ID descending, shows 2 of 5 with the arrow and the status line right. The Filter window lists both rules.
+  - Dallas `CountyWide_20261101.txt`, with a filter that tests every row, then a sort: Linux 0.9 s and 1.7 s; the Mac 0.3 s and 2.6 s.
+  - Not checked yet: the clicks (right-click menu; Add, Remove and OK in the Filter window).
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-22 — Linux: the GTK voter list window builds and works
 - **What:**
   - The GTK 4 window, written with the AppKit one, now builds and runs on Linux (WSL Ubuntu 24.04, GTK 4.14.5).

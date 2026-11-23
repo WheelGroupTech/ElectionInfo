@@ -4,28 +4,28 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **In progress (uncommitted): the GTK window checked on Linux.**
+**Last updated:** 2026-11-23. **In progress (uncommitted): filters and background sorting in the macOS/Linux voter list window.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
-- **Voter list window prototype:** works on both.
-  - `src/ui/ee_ui_voters.{h,c}` is the plain C bridge over `EeVoterTable`.
-  - `src/ui/macos/app_main.m` (AppKit) and `src/ui/gtk/app_main.c` (GTK 4) are built by the
-    CMake target `ee_app`.
-  - Checked with `--selftest` and `--snapshot` (GTK also takes `--sort <column>[:desc]`), and on
-    Dallas's 1.5M-row list: Linux loads it in 31.5 s and sorts it in 5.3 s.
-  - The uncommitted part is the GTK fixes and docs (wider columns, `--sort`, sort timing).
+- **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
+  - Open, sort by heading, Filter… (Ctrl+L / ⌘L), Reset Filter, and right-click Include /
+    Exclude.
+  - Sorting and filtering run on a worker thread (`EeUiVoters_ComputeView` / `SetView`).
+  - Checked by `--selftest` and `--snapshot` with `--sort`, `--include`, `--exclude` and
+    `--filter-window`, on both platforms and on Dallas's 1.5M rows.
+  - **Not checked yet:** the clicks themselves (right-click menu; Add, Remove and OK in the
+    Filter window). Try them by hand.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`.
-  Watch its first run after the push.
-- **Running on the Mac and in WSL:** Sierra County's scanned CVRs (`mac_sierra.jsonl` in
-  `~/ee_check`; Linux G22 with a 4-hour limit). Their results are not in the docs yet.
+- **Sierra County CVRs:** done, in the design doc. The Mac did not finish G22 within 4 hours;
+  Linux matched Windows' 1,582 ballots.
 - **Next steps:** review and commit. Then:
-  - sort off the UI thread; the window's filters; then the other windows (roster, results, CVRs,
-    audit logs), each over a plain C bridge;
+  - the window's other commands (Copy, Export, duplicates, saved filters);
+  - the other windows (roster, results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** voter list window + CI (latest); OCR tests on Linux + Tesseract bands
-  (20e8967); Tesseract + glyph drawing (c4dfae9).
+- **Recent commits:** GTK window checked on Linux; voter list window + CI; OCR tests on Linux +
+  Tesseract bands (20e8967).
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

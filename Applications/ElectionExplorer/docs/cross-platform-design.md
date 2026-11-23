@@ -155,7 +155,10 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
     - 125 load on both; 14 load on Windows only and 2 on the Mac only.
     - 1,124 totals are equal under the same names and 388 differ.
     - These are mostly Cameron's 2020–23 ERM monospaced scans. Windows OCR leaves 7.5% of their rows not adding up, so neither engine's reading is a reference there.
-  - **Not yet run on the Mac:** the three Sierra County scanned CVRs (5,300 pages; see Tesseract below for Linux).
+  - **Sierra County's scanned Hart CVRs** (`data_check cvr`, against Windows OCR; 4-hour limit a file):
+    - **G20 and G24:** the same ballot records and ballots as Windows (1,964 / 1,961 and 1,780 / 1,776), with 29 columns each (Windows: 35 and 29).
+    - Records needing review: 736 and 32, against Windows' 22 and 21. Vision misreads G20's marks far more often.
+    - **G22 (2,109 pages):** not finished within 4 hours on the Intel Mac. Windows read it in about 20 minutes.
 - **Smoke suite on macOS:** `hartocr`, `resglyph` and `ressos` run and pass.
   - Their test pages and Arial glyph outlines are drawn with CoreGraphics and CoreText (`test/tdraw_apple.c`, plain C behind `test/tdraw.h`, linked to `smoke_load` on Apple).
   - `hartocr` now looks for `EeOcr_EngineName()` in its load note, not "Windows OCR".
@@ -195,19 +198,25 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
   - **G20 (1,964 pages) and G24 (1,272 pages):** the same ballot records and ballots as Windows (1,964 / 1,961 and 1,780 / 1,776).
     - Columns: 31 and 46, against Windows' 35 and 29. A contest or choice OCR'd differently makes a column of its own.
     - Records needing review: 45 and 63, against 22 and 21.
-  - **G22 (2,109 pages):** not finished within the run's one-hour limit a file. Windows read it in about 20 minutes.
+  - **G22 (2,109 pages):** with a 4-hour limit, 1,582 ballot records and ballots, as on Windows. 77 columns against Windows' 62; 975 records need review.
 - **Smoke suite on Linux:** `hartocr`, `resglyph` and `ressos` run and pass with Tesseract.
   - Their test pages and glyph outlines come from `test/tdraw_ttf.c`, with no library: it reads a TrueType font file (Liberation Sans, else DejaVu Sans, or the file `TDRAW_FONT` names; cmap format 4, simple glyphs) and fills the outlines with a scanline rasterizer at 4 x 4 subsamples a pixel.
   - Without OCR or without a font, the tests say so and are skipped.
 
 ## The voter list window, prototype (2026-11-22)
 
-One window on each platform: the loaded list in a table, File > Open (or a file named on the command line, or opened from the Finder on macOS), the load in the background with a progress bar, sorting by a column's heading (again to reverse), numbers and dates right-aligned, and a status line ("5 voters, 24 columns — sample_voters.csv").
+One window on each platform: the loaded list in a table, File > Open (or a file named on the command line, or opened from the Finder on macOS), the load in the background with a progress bar, sorting by a column's heading (again to reverse), numbers and dates right-aligned, and a status line ("5 voters, 24 columns — sample_voters.csv"; "Filtered: 3 of 5 voters, …" when filtered).
 
-- **`src/ui/ee_ui_voters.{h,c}`:** the bridge, plain C types only. It wraps `EeVoterTable` (load with progress and cancel, UTF-8 titles and cells, numeric columns, `Sort` that toggles and `SortTo` with a direction) and holds the shared `--selftest`. The window code never includes the engine's headers: the stand-in `windows.h` defines `BOOL`, which clashes with Objective-C's.
-- **macOS, `src/ui/macos/app_main.m`** (ARC): an `NSTableView` that asks for the visible cells only, programmatic menus (⌘O, ⌘W, recent documents), `NSAlert` for errors. CMake target `ee_app` builds `Election Explorer.app` (universal).
-- **Linux, `src/ui/gtk/app_main.c`:** a `GtkColumnView` over a `GListModel` of our own that makes a row object only for the rows on screen. The column sorters only show the heading's arrow; the engine sorts, then the model reports every row changed. Header bar with Open and a menu (Ctrl+O, Ctrl+W, Ctrl+Q), `GtkFileDialog`, `GtkAlertDialog`. Needs GTK 4.10+ (Ubuntu 24.04: 4.14, `libgtk-4-dev`); CMake builds `election-explorer` only when pkg-config finds it.
-- **Checking without looking:** `--selftest <file>` loads and sorts without a window and prints what the window would show; `--snapshot <png> <file>` opens the window, loads the file, writes the window's content as a PNG and quits (GTK also takes `--sort <column>[:desc]`). The window draws itself, so this works over SSH, where macOS gives no screen-recording permission. CI runs `--selftest` on both.
+Filters (added 2026-11-23), as on Windows:
+- **Filter…** (Ctrl+L on Linux, ⌘L on the Mac): "Display entries matching these conditions:", then column / relation / value / "then" Include or Exclude, with Reset, Add and Remove; the rules listed with a check box each; OK, Cancel, Apply. A selected rule fills the fields. The engine's rules apply: includes on one column are ORed, different columns ANDed, and any matching exclude hides the row. A date column compared by less than or more than needs a date (the Windows message).
+- **Reset Filter**, and **right-click a cell:** Include "value", Exclude "value" (at most 40 characters shown) and Filter….
+- **In the background:** a sort or filter is a *view* (an order and a filter map) computed on a worker thread (`EeUiVoters_ComputeView`). It sorts a copy of the table's header with its own `view_index`, so the table on screen stays readable, then swaps it in on the UI thread (`EeUiVoters_SetView`). Requests made meanwhile are merged: the latest wins. Windows sorts on the UI thread.
+
+- **`src/ui/ee_ui_voters.{h,c}`:** the bridge, plain C types only. It wraps `EeVoterTable` and `EeFilterSet` (load with progress and cancel, UTF-8 titles and cells, numeric columns, rules as `EeUiRule`, views, `Sort` that toggles and `SortTo` with a direction) and holds the shared `--selftest`, which also filters. The window code never includes the engine's headers: the stand-in `windows.h` defines `BOOL`, which clashes with Objective-C's.
+- **macOS, `src/ui/macos/app_main.m`** (ARC): an `NSTableView` that asks for the visible cells only, programmatic menus (⌘O, ⌘W, ⌘L, recent documents), the Filter window as a sheet (`EeFilterSheet`), the right-click menu built in `menuNeedsUpdate:`, `NSAlert` for errors. CMake target `ee_app` builds `Election Explorer.app` (universal).
+- **Linux, `src/ui/gtk/app_main.c`:** a `GtkColumnView` over a `GListModel` of our own that makes a row object only for the rows on screen. The column sorters only show the heading's arrow; the engine sorts, then the model reports its rows changed. Header bar with Open, Filter and a menu (Ctrl+O, Ctrl+W, Ctrl+Q, Ctrl+L), a Filter window, a right-click `GtkPopoverMenu` made for each click, `GtkFileDialog`, `GtkAlertDialog`. Needs GTK 4.12+ (Ubuntu 24.04: 4.14, `libgtk-4-dev`); CMake builds `election-explorer` only when pkg-config finds it.
+- **Checking without looking:** `--selftest <file>` loads, sorts and filters without a window and prints what the window would show. `--snapshot <png> [--sort <column>[:desc]] [--include|--exclude <column>=<value>]... [--filter-window] <file>` opens the window, loads the file, sorts it as a heading click does and filters it as the right-click menu does, writes the window (or the Filter window) as a PNG and quits. The window draws itself, so this works over SSH, where macOS gives no screen-recording permission. CI runs `--selftest` on both.
+  - The snapshot waits until the window has drawn: right after a background sort GTK has not yet laid out the new rows, and the first try finds nothing to draw.
 - **Checked on the Mac** (Debug):
   - `test/sample_voters.csv`: 5 rows, 24 columns; sorted by Precinct ascending, descending, ascending again.
   - The snapshot showed the window as expected (dark mode).
@@ -217,14 +226,18 @@ One window on each platform: the loaded list in a table, File > Open (or a file 
   - The snapshot with `--sort 1:desc` (the GTK window's extra option: it sorts as a heading click does, through the column view's sorter) showed the arrow on Precinct, the rows by precinct descending, and "sorted by Precinct, descending" in the status line.
   - Dallas `CountyWide_20261101.txt`: loaded in 31.5 s; the heading sort took 5.3 s; 2.6 GB peak memory with GTK.
   - WSLg prints libEGL / MESA warnings (no GPU in WSL); GTK falls back to software rendering, and the window is unaffected.
-- **Known limits:** a sort runs on the UI thread (5 s on 1.5 million rows); the load is the engine's, with no index or filter yet.
+- **Checked with filters (2026-11-23),** on both platforms (Debug; Linux and the Mac give the same results):
+  - `--selftest`: Precinct is "101" shows 3 of 5; adding Exclude "101" shows 0; disabling it, in file order, 3 again.
+  - Snapshots of the sample: Include Precinct "101", sorted by Name: 3 of 5 voters; Include "101" and Exclude PCTSPT "B", sorted by Voter ID descending: 2 of 5, the arrow and status line right. The Filter window with those two rules matches the Windows layout.
+  - Dallas (1,499,178 rows) with a filter that tests every row and a sort: Linux 0.9 s and 1.7 s, the Mac 0.3 s and 2.6 s, on the worker thread. The earlier 5.3 s on Linux was mostly the old descending sort, which sorted ascending first and then again.
+- **Not checked yet:** the clicks themselves (the right-click menu, and Add, Remove and OK in the Filter window). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
 
 ## Known gaps and next steps
 
 1. **macOS build:** done on an Intel Mac (above). The arm64 half is tested by CI's Apple Silicon runner (4).
 2. **OCR:** macOS has Apple Vision and Linux has Tesseract (above), and glyph outlines are drawn without GDI. Still to do:
    - **Poor scans:** tune the readers for Vision's and Tesseract's output, where both still disagree with Windows OCR (mostly Cameron's ERM scans).
-3. **UI:** AppKit and GTK 4 (X7). The voter list window prototype is above; next, its filters and the other windows (roster, results, CVRs, audit logs), each over a plain C bridge like `ee_ui_voters.h`.
+3. **UI:** AppKit and GTK 4 (X7). The voter list window prototype, with filters, is above. Next: try its menus and Filter window by hand; then the rest of the voter list window (Copy, Export, duplicates, saved filters) and the other windows (roster, results, CVRs, audit logs), each over a plain C bridge like `ee_ui_voters.h`.
 4. **CI (added 2026-11-22):** `.github/workflows/election-explorer.yml` runs on pushes and pull requests that touch `Applications/ElectionExplorer/` (and by hand).
    - **Linux** (`ubuntu-24.04`): installs CMake, Ninja, Tesseract, GTK 4 and Liberation fonts, then builds `linux-x64-release`, runs `ctest` with `OMP_THREAD_LIMIT=1` and the window's `--selftest`.
    - **macOS** (`macos-14`, Apple Silicon): installs Ninja, builds `mac-universal-release`, runs `ctest` and the window's `--selftest`, so the arm64 half is tested. Apple Vision OCR is part of macOS.

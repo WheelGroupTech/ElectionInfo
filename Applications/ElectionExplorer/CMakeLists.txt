@@ -162,10 +162,10 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
         MACOSX_BUNDLE_BUNDLE_VERSION "0.1")
 else()
-    # GTK 4.10 or later (Ubuntu: libgtk-4-dev); without it only the engine and tests are built
+    # GTK 4.12 or later (Ubuntu: libgtk-4-dev); without it only the engine and tests are built
     find_package(PkgConfig QUIET)
     if(PKG_CONFIG_FOUND)
-        pkg_check_modules(EE_GTK QUIET gtk4>=4.10)
+        pkg_check_modules(EE_GTK QUIET gtk4>=4.12)
     endif()
     if(EE_GTK_FOUND)
         message(STATUS "Window: GTK ${EE_GTK_VERSION}")
@@ -174,7 +174,7 @@ else()
         target_link_libraries(ee_app PRIVATE ee_engine ${EE_GTK_LINK_LIBRARIES})
         set_target_properties(ee_app PROPERTIES OUTPUT_NAME "election-explorer")
     else()
-        message(STATUS "Window: none (install GTK 4.10+ for it)")
+        message(STATUS "Window: none (install GTK 4.12+ for it)")
     endif()
 endif()
 

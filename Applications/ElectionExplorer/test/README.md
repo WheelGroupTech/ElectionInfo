@@ -430,7 +430,9 @@ on Ubuntu 24.04 (with Tesseract) and on an Apple Silicon Mac for every push that
 The window prototype (`ee_app`: `Election Explorer.app` on macOS, `election-explorer` on Linux
 with GTK 4) has `--selftest <file>`, which loads and sorts a voter list without a window and
 prints what the window would show; CI runs it on `test/sample_voters.csv`. `--snapshot <png>
-<file>` writes the loaded window as a PNG and quits.
+<file>` writes the loaded window as a PNG and quits. Before the file it also takes `--sort
+<column>[:desc]` (as a heading click), `--include` / `--exclude <column>=<value>` (as the
+right-click menu; repeatable) and `--filter-window` (the PNG is then of the Filter window).
 
 The platform layer and its rules are in [`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
 

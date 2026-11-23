@@ -33,7 +33,7 @@ a bullet each.
 ### 2026-11-23 — Linux: Remove in the Filter window
 - **What:** in an Ubuntu VM the user found that Remove in the GTK Filter window did nothing. Each rule row was a check button whose label was the rule, so clicking the text toggled the rule and never selected the row; with no row selected, Remove did nothing. A row is now a check box beside a separate label: clicking the text selects the rule (and fills the fields, as before), clicking the box turns the rule on or off and selects it too, and after Remove the next rule stays selected. The Mac's rule list (a check box column beside a text column) and Windows were not affected.
 - **Where:** `src/ui/gtk/app_main.c` (`fd_refresh`, which now takes the row to select; `fd_on_toggled`; `fd_on_remove`).
-- **Checked:** Linux Debug build with no warnings; `--selftest` on both samples; a `--filter-window` snapshot shows the new rows. The click itself is for the user to try in the VM (WSLg cannot be clicked from here).
+- **Checked:** Linux Debug build with no warnings; `--selftest` on both samples; a `--filter-window` snapshot shows the new rows. The user then tried Remove in the Ubuntu VM: it works.
 - **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
 
 ### 2026-11-23 — Linux: the voter list window tried in an Ubuntu VM; WSLg menus

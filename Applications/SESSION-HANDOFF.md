@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-23. **In progress (uncommitted): Linux, Remove in the Filter window (fixed, to try in the VM).**
+**Last updated:** 2026-11-23. **In progress (uncommitted): docs only — Remove in the Filter window works in the VM.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -20,7 +20,7 @@
     menus behind the window** from the second time on: try menus and dialogs in the VM.
     In the VM, Include/Exclude from the right-click menu and the Filter window's Reset work;
     **Remove did nothing** (a click on a rule's text toggled it instead of selecting it), fixed
-    in `fd_refresh` but not yet tried again. Not yet one by one: Add and OK in the Filter window,
+    in `fd_refresh` and tried again in the VM: it works. Not yet one by one: Add and OK in the Filter window,
     Copy's paste and the Export dialogs.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates counts on `sample_duplicates.csv`.

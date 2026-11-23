@@ -1010,10 +1010,14 @@ static void fd_on_toggled(GtkCheckButton *check, gpointer user)
     if (i < d->draft->len)
     {
         g_array_index(d->draft, EeUiRule, i).enabled = gtk_check_button_get_active(check) ? 1 : 0;
+        /* (the check box takes its click, so select its row here too) */
+        gtk_list_box_select_row(d->list, gtk_list_box_get_row_at_index(d->list, (int)i));
     }
 }
 
-static void fd_refresh(FilterDialog *d)
+/* Rows are a check box (on/off) and a separate label: a check button's own label would take
+   the click as a toggle, so a rule could never be selected for Remove. */
+static void fd_refresh(FilterDialog *d, int select)
 {
     GtkWidget *child;
     guint i;
@@ -1029,12 +1033,26 @@ static void fd_refresh(FilterDialog *d)
                                      EeUiVoters_RelationName(r->relation),
                                      r->value,
                                      r->exclude ? "Exclude" : "Include");
-        GtkWidget *check = gtk_check_button_new_with_label(text);
+        GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+        GtkWidget *check = gtk_check_button_new();
+        GtkWidget *label = gtk_label_new(text);
         g_free(text);
         gtk_check_button_set_active(GTK_CHECK_BUTTON(check), r->enabled != 0);
         g_object_set_data(G_OBJECT(check), "rule", GUINT_TO_POINTER(i));
         g_signal_connect(check, "toggled", G_CALLBACK(fd_on_toggled), d);
-        gtk_list_box_append(d->list, check);
+        gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+        gtk_widget_set_hexpand(label, TRUE);
+        gtk_box_append(GTK_BOX(row), check);
+        gtk_box_append(GTK_BOX(row), label);
+        gtk_list_box_append(d->list, row);
+    }
+    if (select >= 0 && d->draft->len > 0)
+    {
+        if ((guint)select >= d->draft->len)
+        {
+            select = (int)d->draft->len - 1;
+        }
+        gtk_list_box_select_row(d->list, gtk_list_box_get_row_at_index(d->list, select));
     }
 }
 
@@ -1080,23 +1098,29 @@ static void fd_on_add(GtkWidget *button, gpointer user)
             strcmp(e->value, r.value) == 0)
         {
             e->enabled = 1; /* (already listed: just turn it on) */
-            fd_refresh(d);
+            fd_refresh(d, -1);
             return;
         }
     }
     g_array_append_val(d->draft, r);
-    fd_refresh(d);
+    fd_refresh(d, -1);
 }
 
 static void fd_on_remove(GtkWidget *button, gpointer user)
 {
     FilterDialog *d = (FilterDialog *)user;
     GtkListBoxRow *row = gtk_list_box_get_selected_row(d->list);
+    int i;
     (void)button;
-    if (row != NULL && (guint)gtk_list_box_row_get_index(row) < d->draft->len)
+    if (row == NULL)
     {
-        g_array_remove_index(d->draft, (guint)gtk_list_box_row_get_index(row));
-        fd_refresh(d);
+        return; /* (as on Windows and the Mac: nothing selected, nothing removed) */
+    }
+    i = gtk_list_box_row_get_index(row);
+    if (i >= 0 && (guint)i < d->draft->len)
+    {
+        g_array_remove_index(d->draft, (guint)i);
+        fd_refresh(d, i); /* (the next rule stays selected, to Remove again) */
     }
 }
 
@@ -1105,7 +1129,7 @@ static void fd_on_reset(GtkWidget *button, gpointer user)
     FilterDialog *d = (FilterDialog *)user;
     (void)button;
     g_array_set_size(d->draft, 0);
-    fd_refresh(d);
+    fd_refresh(d, -1);
 }
 
 static void fd_on_apply(GtkWidget *button, gpointer user)
@@ -1246,7 +1270,7 @@ static void show_filter_dialog(VoterWindow *w)
 
     gtk_window_set_child(d->win, box);
     g_signal_connect(d->win, "destroy", G_CALLBACK(fd_on_destroy), d);
-    fd_refresh(d);
+    fd_refresh(d, -1);
     gtk_window_present(d->win);
 }
 

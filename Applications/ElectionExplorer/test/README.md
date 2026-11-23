@@ -423,6 +423,15 @@ Binaries land in `Applications/Build/linux-x64-debug/ElectionExplorer/` (`smoke_
 - **Batch runs:** for `data_check` runs on Linux with several processes at once, set
   `OMP_THREAD_LIMIT=1`. Tesseract's threads otherwise slow them many times over.
 
+CI (`.github/workflows/election-explorer.yml`, at the repo root) runs the same build and `ctest`
+on Ubuntu 24.04 (with Tesseract) and on an Apple Silicon Mac for every push that changes
+`Applications/ElectionExplorer/`.
+
+The window prototype (`ee_app`: `Election Explorer.app` on macOS, `election-explorer` on Linux
+with GTK 4) has `--selftest <file>`, which loads and sorts a voter list without a window and
+prints what the window would show; CI runs it on `test/sample_voters.csv`. `--snapshot <png>
+<file>` writes the loaded window as a PNG and quits.
+
 The platform layer and its rules are in [`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
 
 ## Data backup check (on demand)

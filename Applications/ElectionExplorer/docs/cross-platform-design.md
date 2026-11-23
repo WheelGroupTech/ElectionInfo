@@ -3,8 +3,8 @@
 Status: **step 1 done** (2026-11-21). The engine and its console tests build and pass on Linux
 (Ubuntu 24.04 in WSL2, GCC 13), and since 2026-11-22 on macOS 15 (Intel Mac mini, Apple clang
 17, universal binaries). Scanned documents are read by OCR through Apple Vision on macOS and
-Tesseract on Linux (2026-11-22). The Windows build is unchanged. There is no macOS or Linux UI
-yet.
+Tesseract on Linux (2026-11-22). The Windows build is unchanged. The macOS and Linux UI has
+started with a prototype of the voter list window (AppKit and GTK 4, decision X7).
 
 ## Goal
 
@@ -21,7 +21,7 @@ slowing or risking the Windows Store app.
 | X4 | Wide strings hold **UTF-16 code units on every platform**. | `wchar_t` is 2 bytes on Windows and 4 on macOS/Linux. Keeping UTF-16 values (surrogate pairs included) means lengths, offsets and the engine's surrogate handling are the same everywhere. Only code that copies raw UTF-16 *bytes* into `wchar_t` must go unit by unit. |
 | X5 | The printf family follows MSVC rules (`%s` in a wide format is a wide string). | The engine and tests use `StringCchPrintfW(L"%s", wide)` and `wprintf(L"%s", wide)` throughout. glibc's and macOS's `%s` means a narrow string there. |
 | X6 | CMake for macOS and Linux; `Applications.sln` stays the Windows build and the MSIX packaging. | CMake also generates an Xcode project. The `.vcxproj` and `.wapproj` carry the Store packaging that CMake does not. |
-| X7 | One cross-platform UI for macOS and Linux (recommended: wxWidgets). Not started. | Native Cocoa controls on macOS, GTK on Linux, virtual list views, and a license that allows static linking and Store distribution. |
+| X7 | A native UI on each: **AppKit (Objective-C) on macOS, GTK 4 (C) on Linux**, over the plain C bridge `src/ui/ee_ui_voters.h`. Chosen by the user on 2026-11-22 (the sign-off `AGENTS.md` asks for), in place of the earlier wxWidgets recommendation. Prototype: the voter list window (below). | No C++ (`AGENTS.md` prefers C11), and each platform's own controls. Objective-C is already used for Apple Vision; GTK 4 is C and LGPL (linked dynamically, as Linux packages do). Three UIs over one engine: each is a thin layer of windows over the same calls. |
 
 ## Layout
 
@@ -36,6 +36,9 @@ ElectionExplorer/
     settings_posix.c                  settings.h on a text file (settings.c is the registry one)
     ocr_none.c                        ocr_win.h placeholder: "OCR is not available"
     wmain_posix.c                     main() -> wmain() for the console tests
+  src/ui/ee_ui_voters.{h,c}           plain C bridge for the macOS / Linux windows
+  src/ui/macos/app_main.m             AppKit window (prototype)
+  src/ui/gtk/app_main.c               GTK 4 window (prototype)
 ```
 
 Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExplorer/`
@@ -148,9 +151,9 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
     - The 3 that do not are Travis's PScript5 reports. Their glyph outlines were drawn with GDI (`go_draw`). With the rasterizer below they load, and match Windows on every total.
     - 1,182 choice totals are equal under the same names and 27 differ. Of the totals named differently by the two engines (a title or name OCR'd differently), 234 more are equal and 35 differ; 99 Windows totals have no partner.
     - The differences gather in poor scans, where both engines misread: Bowie's 2026 unofficial results, Cameron's ERM precinct reports. Clean scans agree closely (Guadalupe's primaries, Midland, Cameron's summaries, Ellis's ZIPs).
-  - **The rest of the scanned results files** (189 more, about 8,000 pages, nearly all Cameron's): 182 were read on the Mac in about 2½ hours (three processes). The other 7 are Cameron's largest primaries, still running when this was written.
-    - 124 load on both; 8 load on Windows only and 2 on the Mac only.
-    - 1,123 totals are equal under the same names and 341 differ.
+  - **The rest of the scanned results files** (189 more, about 8,000 pages, nearly all Cameron's): all read on the Mac. The first 182 took about 2½ hours (three processes); Cameron's 7 largest primaries took several hours more.
+    - 125 load on both; 14 load on Windows only and 2 on the Mac only.
+    - 1,124 totals are equal under the same names and 388 differ.
     - These are mostly Cameron's 2020–23 ERM monospaced scans. Windows OCR leaves 7.5% of their rows not adding up, so neither engine's reading is a reference there.
   - **Not yet run on the Mac:** the three Sierra County scanned CVRs (5,300 pages; see Tesseract below for Linux).
 - **Smoke suite on macOS:** `hartocr`, `resglyph` and `ressos` run and pass.
@@ -197,13 +200,33 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
   - Their test pages and glyph outlines come from `test/tdraw_ttf.c`, with no library: it reads a TrueType font file (Liberation Sans, else DejaVu Sans, or the file `TDRAW_FONT` names; cmap format 4, simple glyphs) and fills the outlines with a scanline rasterizer at 4 x 4 subsamples a pixel.
   - Without OCR or without a font, the tests say so and are skipped.
 
+## The voter list window, prototype (2026-11-22)
+
+One window on each platform: the loaded list in a table, File > Open (or a file named on the command line, or opened from the Finder on macOS), the load in the background with a progress bar, sorting by a column's heading (again to reverse), numbers and dates right-aligned, and a status line ("5 voters, 24 columns — sample_voters.csv").
+
+- **`src/ui/ee_ui_voters.{h,c}`:** the bridge, plain C types only. It wraps `EeVoterTable` (load with progress and cancel, UTF-8 titles and cells, numeric columns, `Sort` that toggles and `SortTo` with a direction) and holds the shared `--selftest`. The window code never includes the engine's headers: the stand-in `windows.h` defines `BOOL`, which clashes with Objective-C's.
+- **macOS, `src/ui/macos/app_main.m`** (ARC): an `NSTableView` that asks for the visible cells only, programmatic menus (⌘O, ⌘W, recent documents), `NSAlert` for errors. CMake target `ee_app` builds `Election Explorer.app` (universal).
+- **Linux, `src/ui/gtk/app_main.c`:** a `GtkColumnView` over a `GListModel` of our own that makes a row object only for the rows on screen. The column sorters only show the heading's arrow; the engine sorts, then the model reports every row changed. Header bar with Open and a menu (Ctrl+O, Ctrl+W, Ctrl+Q), `GtkFileDialog`, `GtkAlertDialog`. Needs GTK 4.10+ (Ubuntu 24.04: 4.14, `libgtk-4-dev`); CMake builds `election-explorer` only when pkg-config finds it.
+- **Checking without looking:** `--selftest <file>` loads and sorts without a window and prints what the window would show; `--snapshot <png> <file>` opens the window, loads the file, writes the window's content as a PNG and quits. The window draws itself, so this works over SSH, where macOS gives no screen-recording permission. CI runs `--selftest` on both.
+- **Checked on the Mac** (Debug):
+  - `test/sample_voters.csv`: 5 rows, 24 columns; sorted by Precinct ascending, descending, ascending again.
+  - The snapshot showed the window as expected (dark mode).
+  - Dallas `CountyWide_20261101.txt`: 1,499,178 rows and 216 columns in 35 s, 1.87 GB peak memory.
+- **Linux:** written, not yet built (waiting for `libgtk-4-dev` in WSL).
+
 ## Known gaps and next steps
 
-1. **macOS build:** done on an Intel Mac (above). The arm64 half needs an Apple Silicon Mac or a CI runner to be tested.
+1. **macOS build:** done on an Intel Mac (above). The arm64 half is tested by CI's Apple Silicon runner (4).
 2. **OCR:** macOS has Apple Vision and Linux has Tesseract (above), and glyph outlines are drawn without GDI. Still to do:
    - **Poor scans:** tune the readers for Vision's and Tesseract's output, where both still disagree with Windows OCR (mostly Cameron's ERM scans).
-3. **UI:** a wxWidgets prototype of one window (the voter list grid) to settle the toolkit before the rest.
-4. **CI:** GitHub Actions `ubuntu-24.04` and `macos-14` jobs running `ctest`.
-5. **`.gitattributes`:** the repo has none.
-   - Today the index is LF and Windows checkouts get CRLF from `core.autocrlf`.
-   - An explicit `* text=auto` (with `*.sh eol=lf`) keeps macOS and Linux checkouts right whatever a machine's git settings are.
+3. **UI:** AppKit and GTK 4 (X7). The voter list window prototype is above; next, its filters and the other windows (roster, results, CVRs, audit logs), each over a plain C bridge like `ee_ui_voters.h`.
+4. **CI (added 2026-11-22):** `.github/workflows/election-explorer.yml` runs on pushes and pull requests that touch `Applications/ElectionExplorer/` (and by hand).
+   - **Linux** (`ubuntu-24.04`): installs CMake, Ninja, Tesseract, GTK 4 and Liberation fonts, then builds `linux-x64-release`, runs `ctest` with `OMP_THREAD_LIMIT=1` and the window's `--selftest`.
+   - **macOS** (`macos-14`, Apple Silicon): installs Ninja, builds `mac-universal-release`, runs `ctest` and the window's `--selftest`, so the arm64 half is tested. Apple Vision OCR is part of macOS.
+   - **Windows** has no job: `ElectionExplorer.vcxproj` needs the VS 18 (v145) toolset, which GitHub's hosted runners do not have yet.
+   - Not yet seen running: the workflow runs once the commit is pushed.
+5. **`.gitattributes` (added 2026-11-22):**
+   - `* text=auto` keeps the stored files LF, as they all are, and gives each platform its own line endings, whatever a machine's `core.autocrlf` says.
+   - `*.sh` is always LF; the Visual Studio, MSIX packaging, `.rc` and `.ps1` files are always CRLF.
+   - PDFs, images, Office files and executables are binary.
+   - No stored file changes: every text file in the index was already LF.

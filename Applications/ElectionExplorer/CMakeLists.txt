@@ -8,6 +8,8 @@
 #                 installed; src/platform/linux/)
 #   smoke_load  - the smoke suite (test/smoke_load.c), run from this folder
 #   data_check  - the loader harness used by test/backup_data.py (test/data_check.c)
+#   ee_app      - the window, a prototype (src/ui/): "Election Explorer.app" in AppKit on macOS,
+#                 election-explorer in GTK 4 on Linux (when GTK is installed)
 #
 # Build (output goes under Applications/Build/<os>-<arch>-<config>/ElectionExplorer/, as
 # AGENTS.md requires; see CMakePresets.json):
@@ -145,6 +147,36 @@ endif()
 
 add_executable(data_check test/data_check.c ${EE_POSIX}/wmain_posix.c)
 target_link_libraries(data_check PRIVATE ee_engine)
+
+# The window, a prototype: the voter list in AppKit on macOS and GTK 4 on Linux, over the
+# plain C bridge src/ui/ee_ui_voters.h.
+if(APPLE)
+    add_executable(ee_app MACOSX_BUNDLE src/ui/macos/app_main.m src/ui/ee_ui_voters.c)
+    set_source_files_properties(src/ui/macos/app_main.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_include_directories(ee_app PRIVATE ${EE_SRC}/ui)
+    target_link_libraries(ee_app PRIVATE ee_engine "-framework Cocoa")
+    set_target_properties(ee_app PROPERTIES
+        OUTPUT_NAME "Election Explorer"
+        MACOSX_BUNDLE_BUNDLE_NAME "Election Explorer"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.wheelgrouptech.electionexplorer"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1"
+        MACOSX_BUNDLE_BUNDLE_VERSION "0.1")
+else()
+    # GTK 4.10 or later (Ubuntu: libgtk-4-dev); without it only the engine and tests are built
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(EE_GTK QUIET gtk4>=4.10)
+    endif()
+    if(EE_GTK_FOUND)
+        message(STATUS "Window: GTK ${EE_GTK_VERSION}")
+        add_executable(ee_app src/ui/gtk/app_main.c src/ui/ee_ui_voters.c)
+        target_include_directories(ee_app PRIVATE ${EE_SRC}/ui ${EE_GTK_INCLUDE_DIRS})
+        target_link_libraries(ee_app PRIVATE ee_engine ${EE_GTK_LINK_LIBRARIES})
+        set_target_properties(ee_app PROPERTIES OUTPUT_NAME "election-explorer")
+    else()
+        message(STATUS "Window: none (install GTK 4.10+ for it)")
+    endif()
+endif()
 
 enable_testing()
 add_test(NAME smoke_load COMMAND smoke_load WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

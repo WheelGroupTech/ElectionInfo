@@ -4,30 +4,31 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **In progress (uncommitted): OCR smoke tests on Linux; Tesseract halftone headings and small pages.**
-- **What:**
-  - `test/tdraw_ttf.c` draws the OCR tests' pages from a TrueType font with no library, so the
-    smoke suite runs every test on Windows, macOS and Linux.
-  - `ocr_tesseract.c` rereads halftone "picture" bands it found no words in, and enlarges pages
-    under 1,800 pixels (Hart CVR Reports at 1,224 x 1,584).
-- **Checked:**
-  - All three smoke suites pass.
-  - The Tesseract sample: 47/48 load, 1,465 totals equal, 50 differ.
-  - Sierra's scanned CVRs on Linux: G20/G24 give Windows' records and ballots; G22 timed out
-    at 1 hour.
-- **Where to read more:** `ElectionExplorer/docs/cross-platform-design.md` ("Tesseract OCR on
-  Linux") and the CHANGELOG.
+**Last updated:** 2026-11-22. **In progress (uncommitted): CI, .gitattributes and the voter list window prototype.**
+- **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
+  wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
+- **Window prototype:**
+  - `src/ui/ee_ui_voters.{h,c}` is a plain C bridge over `EeVoterTable`.
+  - `src/ui/macos/app_main.m` (AppKit) builds and works on the Mac: `--selftest`, a
+    `--snapshot` PNG, and Dallas's 1.5M-row list.
+  - `src/ui/gtk/app_main.c` (GTK 4) is written but not built yet. It needs
+    `wsl -d Ubuntu -- sudo apt install -y libgtk-4-dev`.
+  - CMake target `ee_app`.
+- **CI:** `.github/workflows/election-explorer.yml` builds and runs `ctest` plus the window's
+  `--selftest` on Ubuntu 24.04 (with Tesseract and GTK 4) and `macos-14`. There is no Windows
+  job (VS 18 toolset). It has not run yet: watch the first run after the push.
+- **`.gitattributes`:** at the repo root: text=auto, `.sh` LF, Visual Studio files CRLF,
+  binaries marked.
+- **Running on the Mac and in WSL:** Sierra County's scanned CVRs (`mac_sierra.jsonl` in
+  `~/ee_check`; Linux G22 with a 4-hour limit). Their results are not in the docs yet.
 - **Next steps:** review and commit. Then:
-  - tuning for poor scans (Cameron ERM) on Vision and Tesseract;
-  - Sierra CVRs on the Mac;
-  - a wxWidgets prototype, CI, `.gitattributes`.
+  - build and check the GTK window;
+  - the window's filters, then the other windows;
+  - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
-  and `~/ee_check` holds my scripts and a source copy. A sweep of Cameron's 7 largest primaries
-  may still be running there (`mac_ocr_rest.jsonl`).
-- **Linux:** WSL Ubuntu with Tesseract installed. Batch `data_check` runs need
-  `OMP_THREAD_LIMIT=1`.
-- **Recent commits:** Tesseract OCR + glyph drawing without GDI (c4dfae9); Apple Vision OCR
-  (28d077f); macOS build and data check (f22d9c0).
+  and `~/ee_check` holds my scripts and a source copy.
+- **Recent commits:** OCR tests on Linux + Tesseract bands (20e8967); Tesseract + glyph drawing
+  (c4dfae9); Apple Vision OCR (28d077f).
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

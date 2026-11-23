@@ -30,6 +30,38 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — macOS and Linux: the voter list window, prototype (AppKit, GTK 4)
+- **What:**
+  - **The UI decision:** a native UI on each platform, AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, chosen by the user over wxWidgets (C++). Decision X7 of the cross-platform design now records it.
+  - **The prototype:** one window that opens a voter list (File > Open, the command line, or the Finder on macOS) and loads it in the background with a progress bar. It shows the list in a table that asks only for the cells on screen. Clicking a heading sorts by that column (again to reverse); numbers and dates are right-aligned; a status line gives the counts and the sort.
+  - **Checking without looking:** `--selftest <file>` loads and sorts the list without a window and prints what the window would show. `--snapshot <png> <file>` writes the window's content as a PNG and quits, which works over SSH.
+  - **CI:** the Linux job installs GTK 4 and builds the window; both jobs run its `--selftest`.
+- **Where:**
+  - New `src/ui/ee_ui_voters.{h,c}`: a plain C bridge over `EeVoterTable` (`EeUiVoters_Load`, `Cell`, `IsNumeric`, `Sort`, `SortTo`, `SelfTest`), so the window code never includes the stand-in `windows.h`, whose `BOOL` clashes with Objective-C's.
+  - New `src/ui/macos/app_main.m` (`EeVoterWindow`, `EeAppDelegate`) and `src/ui/gtk/app_main.c` (`EeRows`, a `GListModel` that makes row objects on demand; `on_sorter_changed` sorts with the engine).
+  - `CMakeLists.txt`: target `ee_app`, built as `Election Explorer.app` on macOS and as `election-explorer` on Linux when pkg-config finds GTK 4.10 or later.
+  - `.github/workflows/election-explorer.yml`; `docs/cross-platform-design.md` (X7, Layout, "The voter list window, prototype", next step 3).
+- **Checked:**
+  - **macOS** (Intel Mac mini, Debug, universal, no warnings): `--selftest test/sample_voters.csv` gives 5 rows and 24 columns, sorted by Precinct ascending, descending and ascending again. The snapshot showed the expected window. Dallas `CountyWide_20261101.txt` loads 1,499,178 rows and 216 columns in 35 s, with a 1.87 GB peak.
+  - **Linux:** written but not yet built: GTK 4 is not installed in WSL yet.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
+### 2026-11-22 — CI on Linux and macOS; .gitattributes
+- **What:**
+  - **CI:** a GitHub Actions workflow builds the engine and runs the smoke suite on Ubuntu 24.04, with Tesseract, and on an Apple Silicon Mac, with Apple Vision. It runs on each push or pull request that changes `Applications/ElectionExplorer/`. The Mac job tests the arm64 half of the universal build, which the Intel Mac mini cannot run.
+  - **No Windows job:** the project needs the VS 18 (v145) toolset, which GitHub's hosted runners do not have yet. Windows stays a local build.
+  - **`.gitattributes`:** line endings no longer depend on each machine's `core.autocrlf`. Text files are stored with LF and checked out with the platform's endings. Shell scripts are always LF, and the Visual Studio, MSIX packaging, `.rc` and `.ps1` files always CRLF. PDFs, images, Office files and executables are binary. No stored file changes: every text file in the index was already LF.
+- **Where:**
+  - New `.github/workflows/election-explorer.yml` and `.gitattributes` at the repo root.
+  - `docs/cross-platform-design.md`: next steps 1, 4 and 5.
+  - `test/README.md`: a CI note.
+- **Checked:**
+  - The workflow parses.
+  - Its build and `ctest` steps pass locally with the same presets: `linux-x64-release` in WSL Ubuntu 24.04 with Tesseract, and `mac-universal-release` on the Intel Mac.
+  - The workflow itself runs once pushed.
+  - **Scanned results on the Mac, now complete:** all 189 files read with Apple Vision. 125 load on both Vision and Windows (Windows loads 139); 1,124 totals are equal and 388 differ, mostly in Cameron's ERM scans.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "Known gaps and next steps".
+
 ### 2026-11-22 — Linux: the OCR smoke tests run; Tesseract reads halftone headings and small pages
 - **What:**
   - **OCR smoke tests on Linux:** `hartocr`, `resglyph` and `ressos` now run and pass there. Their test pages and glyph outlines come from a TrueType font file, read and filled with no library (Liberation Sans, else DejaVu Sans). The smoke suite now runs every test on Windows, macOS and Linux.

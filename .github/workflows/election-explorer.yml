@@ -1,0 +1,69 @@
+# Election Explorer: build the engine, its console tests and the window prototype on Linux and
+# macOS, and run the tests and the window's --selftest.
+#
+# Windows is built locally with Applications.sln: it needs the VS 18 (v145) toolset, which
+# GitHub's hosted Windows runners do not have yet.
+#
+# The macOS job runs on Apple Silicon (macos-14), so it tests the arm64 half of the universal
+# build; the developers' Intel Mac tests the x86_64 half.
+name: Election Explorer
+
+on:
+  push:
+    paths:
+      - "Applications/ElectionExplorer/**"
+      - ".github/workflows/election-explorer.yml"
+  pull_request:
+    paths:
+      - "Applications/ElectionExplorer/**"
+      - ".github/workflows/election-explorer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (Ubuntu 24.04, Tesseract)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: Applications/ElectionExplorer
+    env:
+      OMP_THREAD_LIMIT: "1" # Tesseract's threads (see test/README.md)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools, Tesseract and fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build pkg-config \
+            libtesseract-dev libleptonica-dev tesseract-ocr-eng fonts-liberation
+      - name: Configure
+        run: cmake --preset linux-x64-release
+      - name: Build
+        run: cmake --build --preset linux-x64-release
+      - name: Smoke suite
+        run: ctest --preset linux-x64-release
+      - name: Window self-test (no display)
+        run: ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest test/sample_voters.csv
+
+  macos:
+    name: macOS (Apple Silicon, Apple Vision)
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: Applications/ElectionExplorer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: brew install ninja
+      - name: Configure
+        run: cmake --preset mac-universal-release
+      - name: Build
+        run: cmake --build --preset mac-universal-release
+      - name: Architectures
+        run: lipo -info ../Build/mac-universal-release/ElectionExplorer/smoke_load
+      - name: Smoke suite
+        run: ctest --preset mac-universal-release
+      - name: Window self-test (no display)
+        run: '"../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest test/sample_voters.csv'

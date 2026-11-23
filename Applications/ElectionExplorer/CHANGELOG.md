@@ -30,6 +30,27 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — Linux: the OCR smoke tests run; Tesseract reads halftone headings and small pages
+- **What:**
+  - **OCR smoke tests on Linux:** `hartocr`, `resglyph` and `ressos` now run and pass there. Their test pages and glyph outlines come from a TrueType font file, read and filled with no library (Liberation Sans, else DejaVu Sans). The smoke suite now runs every test on Windows, macOS and Linux.
+  - **Halftone heading bands:** Tesseract took a heading band printed in halftone dots for a picture and did not read it. Such a band is now read again on its own, blurred and thresholded so the dots turn white, but only when the page's reading found no words in it. Guadalupe's 2026 Electionware reports (L26, LR26, PR26) now load on Linux.
+  - **Small pages:** pages under 1,800 pixels on their long side are read at 2 or 3 times their size, and their words are scaled back. Hart's scanned CVR Report is read at 1,224 x 1,584, where Tesseract missed the heading, so Sierra County's scanned CVRs were refused.
+- **Where:**
+  - New `test/tdraw_ttf.c`; `test/tdraw.h` gains `TDraw_Available` (also in `test/tdraw_apple.c`).
+  - `test/smoke_load.c`:
+    - the OCR tests and their page helpers on every platform;
+    - a skip when there is no OCR engine or no font;
+    - the skip-only stubs are gone.
+  - `CMakeLists.txt`: `tdraw_ttf.c` for `smoke_load` off Apple.
+  - `src/platform/linux/ocr_tesseract.c`: `emit_words`, `picture_bands`, `read_band`, and the enlargement of small pages.
+  - `test/README.md`, `docs/cross-platform-design.md`.
+- **Checked:**
+  - **Smoke suites:** Windows, Mac and Linux pass every test, the three OCR tests included.
+  - **Tesseract against Windows OCR on the sample of 48 scanned files:** 47 load (was 44). 1,465 totals are equal and 50 differ (was 1,459 and 48). The one refused is Cameron's GR20 runoff summary.
+    - A first version also read bands the page already read. That doubled Midland's headings and moved 45 of its counts; skipping those restored them.
+  - **Sierra County's scanned CVRs on Linux:** G20 and G24 give Windows' ballot records and ballots (1,964 / 1,961 and 1,780 / 1,776). Their columns differ (31 against 35, 46 against 29), as contests OCR'd differently make columns of their own. G22 (2,109 pages) did not finish within the run's one-hour limit.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "Tesseract OCR on Linux".
+
 ### 2026-11-22 — Linux: scanned documents read through Tesseract; glyph reports and OCR tests without GDI
 - **What:**
   - **Linux OCR:** scanned documents are now read on Linux through Tesseract and Leptonica, when they are installed. Pages are prepared as for Windows OCR: decoded, made gray, scaled, capped at 10,000 pixels and turned.

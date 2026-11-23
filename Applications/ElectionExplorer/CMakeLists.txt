@@ -134,11 +134,13 @@ endif()
 
 add_executable(smoke_load test/smoke_load.c ${EE_POSIX}/wmain_posix.c)
 target_link_libraries(smoke_load PRIVATE ee_engine)
+# the OCR tests' page images and glyph outlines, in place of GDI (plain C behind test/tdraw.h):
+# CoreGraphics / CoreText on macOS, a TrueType font file read and filled with no library on Linux
 if(APPLE)
-    # the OCR tests' page images and glyph outlines, drawn with CoreGraphics / CoreText in place
-    # of GDI (test/tdraw_apple.c; plain C behind test/tdraw.h)
     target_sources(smoke_load PRIVATE test/tdraw_apple.c)
     target_link_libraries(smoke_load PRIVATE "-framework CoreText")
+else()
+    target_sources(smoke_load PRIVATE test/tdraw_ttf.c)
 endif()
 
 add_executable(data_check test/data_check.c ${EE_POSIX}/wmain_posix.c)

@@ -20,6 +20,11 @@ struct TDrawPage
     int w, h;
 };
 
+int TDraw_Available(void)
+{
+    return 1;
+}
+
 TDrawPage *TDraw_PageBegin(int w, int h, double font_px)
 {
     TDrawPage *p = (TDrawPage *)calloc(1, sizeof(TDrawPage));

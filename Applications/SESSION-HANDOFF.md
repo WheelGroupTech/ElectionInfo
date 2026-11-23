@@ -4,34 +4,30 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **In progress (uncommitted): Tesseract on Linux, glyph drawing and OCR tests without GDI.**
+**Last updated:** 2026-11-22. **In progress (uncommitted): OCR smoke tests on Linux; Tesseract halftone headings and small pages.**
 - **What:**
-  - `src/platform/posix/ocr_bridge.c` implements `ocr_win.h` over one engine interface
-    (`ocr_engine.h`): Apple Vision (`macos/ocr_vision.m`) or Tesseract (`linux/ocr_tesseract.c`).
-    `ocr_apple.c` and `ocr_vision.h` are deleted: record their removal in the commit.
-  - `go_draw` has a scanline rasterizer off Windows, so Travis's PScript5 reports load on
-    macOS and Linux.
-  - The Mac smoke suite draws its OCR test pages with CoreText (`test/tdraw_apple.c`) and runs
-    all tests.
+  - `test/tdraw_ttf.c` draws the OCR tests' pages from a TrueType font with no library, so the
+    smoke suite runs every test on Windows, macOS and Linux.
+  - `ocr_tesseract.c` rereads halftone "picture" bands it found no words in, and enlarges pages
+    under 1,800 pixels (Hart CVR Reports at 1,224 x 1,584).
 - **Checked:**
-  - Windows app and smoke suite pass; Mac smoke passes with all OCR tests; Linux smoke passes
-    with the OCR tests skipped.
-  - Tesseract vs Windows: sample 44/48 load, 1,459 totals equal, 48 differ. On the rest
-    (mostly Cameron ERM scans) both Vision and Tesseract differ a lot.
-- **Linux needs:** `libtesseract-dev libleptonica-dev tesseract-ocr-eng pkg-config` (installed in
-  WSL Ubuntu). Batch `data_check` runs need `OMP_THREAD_LIMIT=1`.
-- **Where to read more:** `ElectionExplorer/docs/cross-platform-design.md` and the CHANGELOG.
+  - All three smoke suites pass.
+  - The Tesseract sample: 47/48 load, 1,465 totals equal, 50 differ.
+  - Sierra's scanned CVRs on Linux: G20/G24 give Windows' records and ballots; G22 timed out
+    at 1 hour.
+- **Where to read more:** `ElectionExplorer/docs/cross-platform-design.md` ("Tesseract OCR on
+  Linux") and the CHANGELOG.
 - **Next steps:** review and commit. Then:
-  - Linux test pages (FreeType or embedded images);
-  - Tesseract on halftone heading bands (Guadalupe 2026);
-  - tuning for poor scans (Cameron ERM);
-  - the Sierra scanned CVRs on the Mac;
+  - tuning for poor scans (Cameron ERM) on Vision and Tesseract;
+  - Sierra CVRs on the Mac;
   - a wxWidgets prototype, CI, `.gitattributes`.
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy. A sweep of Cameron's 7 largest primaries
   may still be running there (`mac_ocr_rest.jsonl`).
-- **Recent commits:** Apple Vision OCR (28d077f); macOS build and data check (f22d9c0); Texas SOS
-  canvass reports (cc12ac8).
+- **Linux:** WSL Ubuntu with Tesseract installed. Batch `data_check` runs need
+  `OMP_THREAD_LIMIT=1`.
+- **Recent commits:** Tesseract OCR + glyph drawing without GDI (c4dfae9); Apple Vision OCR
+  (28d077f); macOS build and data check (f22d9c0).
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

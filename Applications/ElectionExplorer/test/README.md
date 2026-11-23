@@ -417,8 +417,9 @@ Binaries land in `Applications/Build/linux-x64-debug/ElectionExplorer/` (`smoke_
   test pages with CoreGraphics and CoreText (`test/tdraw_apple.c`) and run.
 - **Linux:** scans are read through Tesseract when it is installed (Ubuntu: `sudo apt install
   libtesseract-dev libleptonica-dev tesseract-ocr-eng pkg-config`; CMake then says
-  "OCR: Tesseract"). The three OCR tests are skipped, because their test pages are drawn with
-  GDI or CoreText.
+  "OCR: Tesseract"). The three OCR tests draw their test pages from a TrueType font file
+  (Liberation Sans, else DejaVu Sans; `test/tdraw_ttf.c`) and run. Without Tesseract or a font
+  they say so and are skipped.
 - **Batch runs:** for `data_check` runs on Linux with several processes at once, set
   `OMP_THREAD_LIMIT=1`. Tesseract's threads otherwise slow them many times over.
 

@@ -14,8 +14,9 @@
  *   sideways reads poorly and the readers turn it, as on Windows (Midland's reports).
  * - It gives printed rules as words of spaces; those are left out.
  * - It takes a heading band printed in halftone dots for a picture and does not read it
- *   (Guadalupe's 2026 Electionware reports). Blurring and thresholding the page first reads the
- *   band but loses more elsewhere, so the page is read as scanned.
+ *   (Guadalupe's 2026 Electionware reports). A picture block shaped like a band, in which the
+ *   page's reading found no words, is read again on its own, blurred and thresholded so the dots
+ *   turn white (picture_bands, read_band). Doing that to the whole page loses more elsewhere.
  *
  * Tesseract's OpenMP threads slow badly when several processes read at once on a machine's
  * cores (a batch of data_check runs): set OMP_THREAD_LIMIT=1 for those.
@@ -87,6 +88,126 @@ void EeOcrEngine_Close(void *engine)
     }
 }
 
+#define EE_TESS_MAX_BANDS 16
+
+/* The words of Tesseract's last recognition, moved by (@p dx, @p dy), to @p fn. A "word" of
+ * spaces only (a printed rule) is left out, and so is a word turned sideways (its box much
+ * taller than wide): Windows OCR does not read it, and the readers turn a page scanned sideways
+ * until it reads well. Returns 0 when @p fn stops. */
+static int emit_words(TessBaseAPI *api,
+                      EeOcrEngineWordFn fn,
+                      void *user,
+                      int dx,
+                      int dy,
+                      int up,
+                      const BOX *bands,
+                      int nbands,
+                      int *inside)
+{
+    TessResultIterator *ri = TessBaseAPIGetIterator(api);
+    int ok = 1;
+    if (ri != NULL)
+    {
+        TessPageIterator *pi = TessResultIteratorGetPageIterator(ri);
+        int line_start = 1;
+        do
+        {
+            char *word = TessResultIteratorGetUTF8Text(ri, RIL_WORD);
+            int l, t, r, b;
+            line_start = line_start || TessPageIteratorIsAtBeginningOf(pi, RIL_TEXTLINE);
+            if (word != NULL && word[strspn(word, " \t\r\n")] != '\0' &&
+                TessPageIteratorBoundingBox(pi, RIL_WORD, &l, &t, &r, &b) &&
+                !(strlen(word) >= 3 && (double)(b - t) > 1.5 * (double)(r - l)))
+            {
+                int k, cx = (l + r) / 2 + dx, cy = (t + b) / 2 + dy;
+                ok = fn(user,
+                        line_start,
+                        word,
+                        strlen(word),
+                        (float)(l + dx) / up,
+                        (float)(t + dy) / up,
+                        (float)(r + dx) / up,
+                        (float)(b + dy) / up);
+                line_start = 0;
+                for (k = 0; k < nbands; k++)
+                {
+                    /* (a word the page's own reading found in a picture band) */
+                    inside[k] += cx >= bands[k].x && cx < bands[k].x + bands[k].w &&
+                                 cy >= bands[k].y && cy < bands[k].y + bands[k].h;
+                }
+            }
+            if (word != NULL)
+            {
+                TessDeleteText(word);
+            }
+        } while (ok && TessPageIteratorNext(pi, RIL_WORD));
+        TessResultIteratorDelete(ri);
+    }
+    return ok;
+}
+
+/* The blocks Tesseract's page layout takes for pictures that are bands: a quarter of the page
+ * wide or more, and four times as wide as high. (A table's column headings printed on halftone
+ * dots, Guadalupe's 2026 Electionware reports; a seal or a photo is not a band.) */
+static int picture_bands(TessBaseAPI *api, l_int32 page_w, BOX *bands)
+{
+    TessPageIterator *it = TessBaseAPIAnalyseLayout(api);
+    int n = 0;
+    if (it == NULL)
+    {
+        return 0;
+    }
+    do
+    {
+        TessPolyBlockType ty = TessPageIteratorBlockType(it);
+        int l, t, r, b;
+        if ((ty == PT_FLOWING_IMAGE || ty == PT_HEADING_IMAGE || ty == PT_PULLOUT_IMAGE) &&
+            TessPageIteratorBoundingBox(it, RIL_BLOCK, &l, &t, &r, &b) && (r - l) * 4 >= page_w &&
+            (r - l) >= 4 * (b - t) && b > t && n < EE_TESS_MAX_BANDS)
+        {
+            bands[n].x = l;
+            bands[n].y = t;
+            bands[n].w = r - l;
+            bands[n].h = b - t;
+            n++;
+        }
+    } while (TessPageIteratorNext(it, RIL_BLOCK));
+    TessPageIteratorDelete(it);
+    return n;
+}
+
+/* Read a picture band again on its own: blurred a little and thresholded, so its halftone
+ * dots turn white and its letters stay black, as one block of text. */
+static int read_band(TessBaseAPI *api,
+                     PIX *page,
+                     const BOX *band,
+                     int up,
+                     EeOcrEngineWordFn fn,
+                     void *user)
+{
+    BOX *box = boxCreate(band->x, band->y, band->w, band->h);
+    PIX *clip = box != NULL ? pixClipRectangle(page, box, NULL) : NULL;
+    PIX *blur = clip != NULL ? pixBlockconv(clip, 2, 2) : NULL;
+    PIX *bin = blur != NULL ? pixThresholdToBinary(blur, 140) : NULL;
+    int ok = 1;
+    if (bin != NULL)
+    {
+        TessBaseAPISetImage2(api, bin);
+        TessBaseAPISetSourceResolution(api, 200);
+        TessBaseAPISetPageSegMode(api, PSM_SINGLE_BLOCK);
+        if (TessBaseAPIRecognize(api, NULL) == 0)
+        {
+            ok = emit_words(api, fn, user, band->x, band->y, up, NULL, 0, NULL);
+        }
+        TessBaseAPISetPageSegMode(api, PSM_AUTO);
+    }
+    pixDestroy(&bin);
+    pixDestroy(&blur);
+    pixDestroy(&clip);
+    boxDestroy(&box);
+    return ok;
+}
+
 /* Raw pixels as an 8-bit gray Pix (RGB averaged by luminance), or NULL. */
 static PIX *pix_of_pixels(const uint8_t *px, uint32_t w, uint32_t h, uint32_t stride, int channels)
 {
@@ -136,9 +257,10 @@ int EeOcrEngine_Recognize(void *engine,
 {
     TessEngine *e = (TessEngine *)engine;
     PIX *src, *gray, *pix;
-    TessResultIterator *ri;
+    BOX bands[EE_TESS_MAX_BANDS];
+    int inside[EE_TESS_MAX_BANDS];
     l_int32 iw, ih, tw, th;
-    int ok = 1, q = ((quarter_turns % 4) + 4) % 4;
+    int ok = 1, q = ((quarter_turns % 4) + 4) % 4, nbands, k, up;
     if (e == NULL)
     {
         set_err(err, errcap, "Invalid arguments.");
@@ -215,50 +337,6 @@ int EeOcrEngine_Recognize(void *engine,
         set_err(err, errcap, "The page image could not be prepared for OCR");
         return 0;
     }
-    TessBaseAPISetImage2(e->api, pix);
-    TessBaseAPISetSourceResolution(e->api, 200);
-    if (TessBaseAPIRecognize(e->api, NULL) != 0)
-    {
-        TessBaseAPIClear(e->api);
-        pixDestroy(&pix);
-        set_err(err, errcap, "Tesseract text recognition failed");
-        return 0;
-    }
-    ri = TessBaseAPIGetIterator(e->api);
-    if (ri != NULL)
-    {
-        TessPageIterator *pi = TessResultIteratorGetPageIterator(ri);
-        int line_start = 0;
-        do
-        {
-            char *word = TessResultIteratorGetUTF8Text(ri, RIL_WORD);
-            int l, t, r, b;
-            line_start = line_start || TessPageIteratorIsAtBeginningOf(pi, RIL_TEXTLINE);
-            if (word != NULL && word[strspn(word, " \t\r\n")] != '\0' &&
-                TessPageIteratorBoundingBox(pi, RIL_WORD, &l, &t, &r, &b) &&
-                !(strlen(word) >= 3 && (double)(b - t) > 1.5 * (double)(r - l)))
-            {
-                /* (a "word" of spaces only is a printed rule: left out) */
-                /* (a word turned sideways, its box much taller than wide, is left out: Windows
-                 * OCR does not read it, and the readers turn a page scanned sideways until it
-                 * reads well) */
-                ok = fn(user,
-                        line_start,
-                        word,
-                        strlen(word),
-                        (float)l,
-                        (float)t,
-                        (float)r,
-                        (float)b);
-                line_start = 0;
-            }
-            if (word != NULL)
-            {
-                TessDeleteText(word);
-            }
-        } while (ok && TessPageIteratorNext(pi, RIL_WORD));
-        TessResultIteratorDelete(ri);
-    }
     if (out_w != NULL)
     {
         *out_w = (uint32_t)pixGetWidth(pix);
@@ -266,6 +344,45 @@ int EeOcrEngine_Recognize(void *engine,
     if (out_h != NULL)
     {
         *out_h = (uint32_t)pixGetHeight(pix);
+    }
+    {
+        /* a small page (Hart's CVR Report read at 1,224 x 1,584, 10-pixel letters) is read at two
+         * or three times its size, as Tesseract reads letters 20 or more pixels high (Windows OCR
+         * reads them as they are); its words are scaled back to the page */
+        l_int32 lng = pixGetWidth(pix) > pixGetHeight(pix) ? pixGetWidth(pix) : pixGetHeight(pix);
+        up = lng >= 1800 ? 1 : (lng >= 900 ? 2 : 3);
+        if (up > 1)
+        {
+            PIX *big = pixScale(pix, (l_float32)up, (l_float32)up);
+            if (big != NULL)
+            {
+                pixDestroy(&pix);
+                pix = big;
+            }
+            else
+            {
+                up = 1;
+            }
+        }
+    }
+    TessBaseAPISetImage2(e->api, pix);
+    TessBaseAPISetSourceResolution(e->api, 200);
+    nbands = picture_bands(e->api, pixGetWidth(pix), bands);
+    if (TessBaseAPIRecognize(e->api, NULL) != 0)
+    {
+        TessBaseAPIClear(e->api);
+        pixDestroy(&pix);
+        set_err(err, errcap, "Tesseract text recognition failed");
+        return 0;
+    }
+    memset(inside, 0, sizeof(inside));
+    ok = emit_words(e->api, fn, user, 0, 0, up, bands, nbands, inside);
+    for (k = 0; k < nbands && ok; k++)
+    {
+        if (inside[k] == 0) /* (a band the page's reading already reads is not read twice) */
+        {
+            ok = read_band(e->api, pix, &bands[k], up, fn, user);
+        }
     }
     TessBaseAPIClear(e->api);
     pixDestroy(&pix);

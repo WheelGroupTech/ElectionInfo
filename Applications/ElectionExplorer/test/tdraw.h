@@ -1,11 +1,14 @@
 /**
  * @file tdraw.h
- * @brief Test fixtures' text drawing on macOS (tdraw_apple.c, CoreGraphics and CoreText), in
- *        place of the GDI that smoke_load.c uses on Windows: page images with text for the OCR
- *        tests, and a font's glyph outlines for the Type 3 font of the PScript5 test.
+ * @brief Test fixtures' text drawing on macOS and Linux, in place of the GDI that smoke_load.c
+ *        uses on Windows: page images with text for the OCR tests, and a font's glyph outlines
+ *        for the Type 3 font of the PScript5 test.
+ *        - macOS: tdraw_apple.c, CoreGraphics and CoreText (Helvetica, Arial).
+ *        - Linux: tdraw_ttf.c, a TrueType font file read and filled with no library
+ *          (Liberation Sans, else DejaVu Sans).
  *
- * Plain C types only, so tdraw_apple.c includes Apple's headers and never the stand-in
- * windows.h (as src/platform/macos/ocr_vision.h does for OCR).
+ * Plain C types only, so the Apple file includes Apple's headers and never the stand-in
+ * windows.h (as src/platform/posix/ocr_engine.h does for OCR).
  */
 #pragma once
 
@@ -15,6 +18,9 @@ extern "C"
 #endif
 
     typedef struct TDrawPage TDrawPage;
+
+    /** 1 when text can be drawn (Linux: a TrueType font was found), else 0. */
+    int TDraw_Available(void);
 
     /** A white @p w x @p h page whose text is drawn @p font_px pixels to the em. NULL on failure. */
     TDrawPage *TDraw_PageBegin(int w, int h, double font_px);

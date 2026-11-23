@@ -22,7 +22,7 @@
 #include <string.h>
 #include <strsafe.h>
 #include <windows.h>
-#ifdef __APPLE__
+#ifndef _WIN32
 #include "tdraw.h" /* the fixtures' text drawing in place of GDI */
 #endif
 
@@ -6164,9 +6164,9 @@ static unsigned char *tpage_end(TPage *p)
 }
 #endif /* _WIN32 */
 
-#ifdef __APPLE__
-/* The same page drawn with CoreGraphics and CoreText (test/tdraw_apple.c): Helvetica in place
- * of Segoe UI, 22 pixels to the em. */
+#ifndef _WIN32
+/* The same page drawn by test/tdraw_apple.c (macOS, Helvetica) or test/tdraw_ttf.c (Linux,
+ * Liberation Sans) in place of Segoe UI, 22 pixels to the em. */
 typedef struct TPage
 {
     TDrawPage *pg;
@@ -6193,9 +6193,8 @@ static unsigned char *tpage_end(TPage *p)
     p->pg = NULL;
     return g;
 }
-#endif /* __APPLE__ */
+#endif /* !_WIN32 */
 
-#if defined(_WIN32) || defined(__APPLE__)
 /* Hart page banner (dropped by the reader as page furniture). */
 static void tpage_banner(TPage *p, const wchar_t *page_of)
 {
@@ -6234,7 +6233,6 @@ static int tpage_row(TPage *p, int y, const wchar_t *title, const wchar_t *optio
     tpage_text(p, 630, y, option);
     return y + 35;
 }
-#endif /* _WIN32 || __APPLE__ */
 
 /* Write a PDF whose pages are each one full-page 8-bit gray Flate image (no text). */
 static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, int npages,
@@ -6315,7 +6313,6 @@ static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, 
  * OCR -- one row per ballot sheet, a vote-for-2 contest from repeated title rows, an
  * undervote, the OCR Status key column and the load note. Skipped (passes) when Windows
  * OCR is unavailable on the machine. */
-#if defined(_WIN32) || defined(__APPLE__) /* pages drawn with GDI / CoreText, read by OCR */
 static int test_hart_ocr(void)
 {
     wchar_t path[MAX_PATH];
@@ -6338,6 +6335,13 @@ static int test_hart_ocr(void)
         }
         EeOcr_Destroy(probe);
     }
+#ifndef _WIN32
+    if (!TDraw_Available())
+    {
+        wprintf(L"hartocr skipped (no TrueType font to draw its test pages)\n");
+        return 0;
+    }
+#endif
     EeCvr_Init(&t);
     if (!cvr_temp_path(path, ARRAYSIZE(path), L"ee_hart_scanned.pdf"))
     {
@@ -6432,13 +6436,6 @@ done:
     }
     return rc;
 }
-#else
-static int test_hart_ocr(void)
-{
-    wprintf(L"hartocr skipped (its test pages are drawn with GDI or CoreText, which this platform lacks)\n");
-    return 0;
-}
-#endif
 
 /* Whitespace normalization: CVR selection values with stray internal spacing or
  * leading/trailing spaces are normalized at load, so the grid shows them cleanly and
@@ -13275,7 +13272,7 @@ static BOOL rpdf_t3_spread(TBuf *c, double y, double size, double ra, const char
     return ok && tb_printf(c, "ET\n");
 }
 
-#if defined(_WIN32) || defined(__APPLE__) /* glyph outlines for the Type 3 font: GDI / CoreText */
+/* glyph outlines for the Type 3 font: GDI on Windows, tdraw elsewhere */
 #ifdef _WIN32
 #define T3FX(f) (((double)(f).value + (double)(f).fract / 65536.0) / 1000.0)
 
@@ -13393,7 +13390,7 @@ static BOOL rpdf_t3_proc(T3Glyphs *gl, char ch, TBuf *out)
     free(buf);
     return ok && tb_printf(out, "f\n");
 }
-#else /* __APPLE__: Arial's outlines from CoreText (test/tdraw_apple.c) */
+#else /* macOS: Arial's outlines from CoreText; Linux: Liberation Sans's from its font file (test/tdraw_*.c) */
 typedef struct T3Glyphs
 {
     int unused;
@@ -13527,14 +13524,12 @@ static BOOL rpdf_t3_write(const wchar_t *path, TBuf *pages, int npages, const T3
     free(b.p);
     return ok;
 }
-#endif /* _WIN32 || __APPLE__ */
 
 /* A results report printed to PDF through PScript5 (tag: resglyph): its text, drawn by a
  * Type 3 font of unnamed glyph outlines (each declared 1 em wide and placed one at a time, a
  * space an empty glyph), is read through OCR; two cells shown as one string spread by a
  * character spacing that a Q restored read as two; the summary then agrees with the
  * plain-text precinct report. */
-#if defined(_WIN32) || defined(__APPLE__) /* the fixture's glyphs from GDI / CoreText, read by OCR */
 static int test_results_glyphs(void)
 {
     wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH];
@@ -13557,6 +13552,13 @@ static int test_results_glyphs(void)
         }
         EeOcr_Destroy(probe);
     }
+#ifndef _WIN32
+    if (!TDraw_Available())
+    {
+        wprintf(L"resglyph skipped (no TrueType font to draw its test pages)\n");
+        return 0;
+    }
+#endif
     ZeroMemory(&t3, sizeof(t3));
     GetTempPathW(MAX_PATH, dir);
     StringCchPrintfW(p_sum, MAX_PATH, L"%sRPDF_glyph_cumulative.pdf", dir);
@@ -13645,16 +13647,8 @@ done:
     wprintf(L"resglyph: %s\n", rc == 0 ? L"OK" : L"FAILED");
     return rc;
 }
-#else
-static int test_results_glyphs(void)
-{
-    wprintf(L"resglyph skipped (its test pages are drawn with GDI or CoreText, which this platform lacks)\n");
-    return 0;
-}
-#endif
 
 /* Texas Secretary of State canvass report, signed and scanned (tag: ressos). */
-#if defined(_WIN32) || defined(__APPLE__) /* pages drawn with GDI / CoreText, read by OCR */
 /* Write @p pages as Acrobat's Paper Capture leaves a scan (Brazos's): each page image drawn
  * through a form XObject, under an invisible OCR text layer with letters doubled and numbers on
  * the wrong rows, and "Paper Capture" in the Producer. */
@@ -13779,6 +13773,13 @@ static int test_results_sos(void)
         }
         EeOcr_Destroy(probe);
     }
+#ifndef _WIN32
+    if (!TDraw_Available())
+    {
+        wprintf(L"ressos skipped (no TrueType font to draw its test pages)\n");
+        return 0;
+    }
+#endif
     GetTempPathW(MAX_PATH, dir);
     StringCchPrintfW(p_scan, MAX_PATH, L"%sRPDF_sos_scan.pdf", dir);
     StringCchPrintfW(p_layer, MAX_PATH, L"%sRPDF_sos_layer.pdf", dir);
@@ -13898,13 +13899,6 @@ done:
     wprintf(L"ressos: %s\n", rc == 0 ? L"OK" : L"FAILED");
     return rc;
 }
-#else
-static int test_results_sos(void)
-{
-    wprintf(L"ressos skipped (its test pages are drawn with GDI or CoreText, which this platform lacks)\n");
-    return 0;
-}
-#endif
 
 /* A Clarity combined primary (Tarrant): both parties' contests under the same titles with no
  * party prefix, the choices carrying party="DEM" / "REP", and a party proposition. */

@@ -152,7 +152,7 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
     - 124 load on both; 8 load on Windows only and 2 on the Mac only.
     - 1,123 totals are equal under the same names and 341 differ.
     - These are mostly Cameron's 2020–23 ERM monospaced scans. Windows OCR leaves 7.5% of their rows not adding up, so neither engine's reading is a reference there.
-  - **Not yet run:** the three Sierra County scanned CVRs (5,300 pages).
+  - **Not yet run on the Mac:** the three Sierra County scanned CVRs (5,300 pages; see Tesseract below for Linux).
 - **Smoke suite on macOS:** `hartocr`, `resglyph` and `ressos` run and pass.
   - Their test pages and Arial glyph outlines are drawn with CoreGraphics and CoreText (`test/tdraw_apple.c`, plain C behind `test/tdraw.h`, linked to `smoke_load` on Apple).
   - `hartocr` now looks for `EeOcr_EngineName()` in its load note, not "Windows OCR".
@@ -173,27 +173,35 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 - **Where Tesseract differs:**
   - **Sideways text:** like Vision, it reads sideways text in place. Words of three or more characters whose box is more than 1.5 times taller than wide are left out, so Midland's sideways pages get turned.
   - **Printed rules:** it gives them as words of spaces, which are left out.
-  - **Halftone headings:** it takes a heading band printed in halftone dots for a picture and does not read it (Guadalupe's 2026 Electionware reports: L26, LR26 and PR26 are refused).
-    - Tried and rejected: inverting mostly dark rows (no gain), and blurring then thresholding the page. With a 2-pixel blur and threshold 140 the band reads, but 18 of the sample's files fail instead of 4.
-    - Tried and rejected: single-block layout (`PSM_SINGLE_BLOCK`). It reads the band but matches 1,119 totals against automatic layout's 1,459.
+  - **Halftone headings:** its layout takes a heading band printed in halftone dots for a picture and does not read it (Guadalupe's 2026 Electionware reports L26, LR26 and PR26 were refused).
+    - The fix (`picture_bands`, `read_band`): the page's layout is analysed first. A picture block shaped like a band (a quarter of the page wide or more, four times as wide as high) in which the page's reading found no words is read again on its own. It is blurred 2 pixels and thresholded at 140, so the dots turn white, and read as one block. Its words are put back at their places on the page.
+    - Bands the page's reading already reads are skipped. Reading Midland's again added a second copy of its headings, which moved 45 counts out of their columns.
+    - Tried and rejected: inverting mostly dark rows (no gain); blurring and thresholding the whole page (the band reads, but 18 of the sample's files fail instead of 4); single-block layout for the whole page (1,119 equal totals against automatic layout's 1,459).
+  - **Small pages:** Tesseract reads letters about 20 pixels high or more; Windows OCR reads smaller ones. A page under 1,800 pixels on its long side is read at 2 times its size (3 under 900), and its words are scaled back.
+    - Hart's scanned CVR Report is read at 1,224 x 1,584, with letters about 10 pixels high. There Tesseract missed the whole heading ("CVR Report", the run time and date), so Sierra County's CVRs were refused as "not a Hart Cast Vote Record report".
 - **Threads:** Ubuntu's Tesseract uses OpenMP. With seven processes reading at once on 8 cores, files that take 30 seconds alone took over 50 minutes. Batch runs set `OMP_THREAD_LIMIT=1` (the sample of 48 files then takes under 3 minutes).
 - **Checked against Windows OCR** (`data_check` with every choice's total; the 41 sample files above plus the 7 Secretary of State forms):
-  - 44 of 48 load. The 4 that do not are the three Guadalupe reports above and Cameron's GR20 runoff summary.
-  - 1,459 totals are equal under the same names and 48 differ.
+  - 47 of 48 load (44 before the band and small-page changes). The one that does not is Cameron's GR20 runoff summary.
+  - 1,465 totals are equal under the same names and 50 differ (1,459 and 48 before).
   - The Secretary of State forms: Brazos, both Angelina G25 copies, Henderson G21 and L22 are equal count for count; Angelina G24 differs on 5 counts and Henderson S21 on 4.
   - The three Travis glyph reports: every total equal.
 - **The rest of the scanned results files** (189, about 8,000 pages, 50 minutes with seven processes): 133 load on both. Windows loads 139, and 1 loads on Linux only.
   - **Against the Mac:** on the 182 files the Mac had read, Tesseract matches Windows on 780 totals and differs on 378. Apple Vision matches on 1,123 and differs on 341.
   - **Where:** as with Vision, the differences are mostly in Cameron's ERM scans.
-- **Smoke suite on Linux:** `hartocr`, `resglyph` and `ressos` are skipped: their test pages are drawn with GDI or CoreText, and Linux has neither.
+- **Sierra County's scanned Hart CVRs** (`data_check cvr`, against Windows OCR; refused before the small-page change):
+  - **G20 (1,964 pages) and G24 (1,272 pages):** the same ballot records and ballots as Windows (1,964 / 1,961 and 1,780 / 1,776).
+    - Columns: 31 and 46, against Windows' 35 and 29. A contest or choice OCR'd differently makes a column of its own.
+    - Records needing review: 45 and 63, against 22 and 21.
+  - **G22 (2,109 pages):** not finished within the run's one-hour limit a file. Windows read it in about 20 minutes.
+- **Smoke suite on Linux:** `hartocr`, `resglyph` and `ressos` run and pass with Tesseract.
+  - Their test pages and glyph outlines come from `test/tdraw_ttf.c`, with no library: it reads a TrueType font file (Liberation Sans, else DejaVu Sans, or the file `TDRAW_FONT` names; cmap format 4, simple glyphs) and fills the outlines with a scanline rasterizer at 4 x 4 subsamples a pixel.
+  - Without OCR or without a font, the tests say so and are skipped.
 
 ## Known gaps and next steps
 
 1. **macOS build:** done on an Intel Mac (above). The arm64 half needs an Apple Silicon Mac or a CI runner to be tested.
 2. **OCR:** macOS has Apple Vision and Linux has Tesseract (above), and glyph outlines are drawn without GDI. Still to do:
-   - **Test pages on Linux:** the smoke tests' OCR pages need a text renderer there (FreeType, or pages embedded as images) for `hartocr`, `resglyph` and `ressos` to run.
-   - **Halftone heading bands on Tesseract:** for example, preprocess only a band detected as halftone, not the whole page.
-   - **Poor scans:** tune the readers for Vision's and Tesseract's output, where both still disagree with Windows OCR. Run the Sierra County scanned CVRs (5,300 pages).
+   - **Poor scans:** tune the readers for Vision's and Tesseract's output, where both still disagree with Windows OCR (mostly Cameron's ERM scans).
 3. **UI:** a wxWidgets prototype of one window (the voter list grid) to settle the toolkit before the rest.
 4. **CI:** GitHub Actions `ubuntu-24.04` and `macos-14` jobs running `ctest`.
 5. **`.gitattributes`:** the repo has none.

@@ -4,31 +4,28 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-22. **In progress (uncommitted): CI, .gitattributes and the voter list window prototype.**
+**Last updated:** 2026-11-22. **In progress (uncommitted): the GTK window checked on Linux.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
-- **Window prototype:**
-  - `src/ui/ee_ui_voters.{h,c}` is a plain C bridge over `EeVoterTable`.
-  - `src/ui/macos/app_main.m` (AppKit) builds and works on the Mac: `--selftest`, a
-    `--snapshot` PNG, and Dallas's 1.5M-row list.
-  - `src/ui/gtk/app_main.c` (GTK 4) is written but not built yet. It needs
-    `wsl -d Ubuntu -- sudo apt install -y libgtk-4-dev`.
-  - CMake target `ee_app`.
-- **CI:** `.github/workflows/election-explorer.yml` builds and runs `ctest` plus the window's
-  `--selftest` on Ubuntu 24.04 (with Tesseract and GTK 4) and `macos-14`. There is no Windows
-  job (VS 18 toolset). It has not run yet: watch the first run after the push.
-- **`.gitattributes`:** at the repo root: text=auto, `.sh` LF, Visual Studio files CRLF,
-  binaries marked.
+- **Voter list window prototype:** works on both.
+  - `src/ui/ee_ui_voters.{h,c}` is the plain C bridge over `EeVoterTable`.
+  - `src/ui/macos/app_main.m` (AppKit) and `src/ui/gtk/app_main.c` (GTK 4) are built by the
+    CMake target `ee_app`.
+  - Checked with `--selftest` and `--snapshot` (GTK also takes `--sort <column>[:desc]`), and on
+    Dallas's 1.5M-row list: Linux loads it in 31.5 s and sorts it in 5.3 s.
+  - The uncommitted part is the GTK fixes and docs (wider columns, `--sort`, sort timing).
+- **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`.
+  Watch its first run after the push.
 - **Running on the Mac and in WSL:** Sierra County's scanned CVRs (`mac_sierra.jsonl` in
   `~/ee_check`; Linux G22 with a 4-hour limit). Their results are not in the docs yet.
 - **Next steps:** review and commit. Then:
-  - build and check the GTK window;
-  - the window's filters, then the other windows;
+  - sort off the UI thread; the window's filters; then the other windows (roster, results, CVRs,
+    audit logs), each over a plain C bridge;
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** OCR tests on Linux + Tesseract bands (20e8967); Tesseract + glyph drawing
-  (c4dfae9); Apple Vision OCR (28d077f).
+- **Recent commits:** voter list window + CI (latest); OCR tests on Linux + Tesseract bands
+  (20e8967); Tesseract + glyph drawing (c4dfae9).
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

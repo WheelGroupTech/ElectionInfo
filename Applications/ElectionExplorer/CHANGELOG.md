@@ -30,6 +30,18 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — Linux: the GTK voter list window builds and works
+- **What:**
+  - The GTK 4 window, written with the AppKit one, now builds and runs on Linux (WSL Ubuntu 24.04, GTK 4.14.5).
+  - Measured columns get more room, so addresses and names are no longer cut short.
+  - `--snapshot` takes `--sort <column>[:desc]`, which sorts the way a heading click does, through the column view's sorter, so the click path can be checked without a mouse. Sorting prints how long it took.
+- **Where:** `src/ui/gtk/app_main.c` (`main` argument loop, `load_done`, `on_sorter_changed`, `rebuild_columns`); `docs/cross-platform-design.md`, "The voter list window, prototype".
+- **Checked:**
+  - Debug build, no warnings. `--selftest test/sample_voters.csv` prints the same as on the Mac.
+  - Snapshot of the sample with `--sort 1:desc`: the arrow is on Precinct, the rows are by precinct descending, and the status line says so.
+  - Dallas `CountyWide_20261101.txt` (1,499,178 rows, 216 columns): loaded in 31.5 s; the heading sort took 5.3 s; 2.6 GB peak memory.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-22 — macOS and Linux: the voter list window, prototype (AppKit, GTK 4)
 - **What:**
   - **The UI decision:** a native UI on each platform, AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, chosen by the user over wxWidgets (C++). Decision X7 of the cross-platform design now records it.

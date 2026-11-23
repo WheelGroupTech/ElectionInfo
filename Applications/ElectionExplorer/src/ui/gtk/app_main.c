@@ -15,8 +15,8 @@
  * For checking without looking:
  * - `--selftest <file>` loads and sorts the list without a window and prints what the window
  *   would show.
- * - `--snapshot <png> <file>` opens the window, loads the list, writes the window's content as
- *   a PNG and quits.
+ * - `--snapshot <png> [--sort <column>[:desc]] <file>` opens the window, loads the list, sorts
+ *   it as a heading click would (with --sort), writes the window's content as a PNG and quits.
  *
  * Needs GTK 4.10 or later (Ubuntu 24.04 has 4.14).
  */
@@ -24,6 +24,7 @@
 #include <gtk/gtk.h>
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ee_ui_voters.h"
@@ -139,7 +140,9 @@ typedef struct VoterWindow
     volatile int32_t cancel;
     guint progress_timer;
 
-    char *snapshot; /* --snapshot: write the content here once loaded, then quit */
+    char *snapshot;    /* --snapshot: write the content here once loaded, then quit */
+    int snapshot_sort; /* --sort: click this column's heading first (-1: none) */
+    gboolean snapshot_ascending;
 } VoterWindow;
 
 typedef struct LoadDone
@@ -242,7 +245,8 @@ static void rebuild_columns(VoterWindow *w)
         int width = text_width(GTK_WIDGET(w->view), title) + 28; /* (room for the arrow) */
         for (r = 0; r < nr && r < 200; r++)
         {
-            int cw = text_width(GTK_WIDGET(w->view), EeUiVoters_Cell(w->voters, r, c)) + 12;
+            int cw = text_width(GTK_WIDGET(w->view), EeUiVoters_Cell(w->voters, r, c)) +
+                     24; /* (cell padding) */
             width = cw > width ? cw : width;
         }
         width = width < 40 ? 40 : width > 320 ? 320 : width;
@@ -275,6 +279,7 @@ static void on_sorter_changed(GtkSorter *sorter, GtkSorterChange change, gpointe
     VoterWindow *w = (VoterWindow *)user;
     GtkColumnViewSorter *cvs = GTK_COLUMN_VIEW_SORTER(sorter);
     GtkColumnViewColumn *col;
+    gint64 started;
     (void)change;
     if (w->voters == NULL || w->sorting)
     {
@@ -285,10 +290,12 @@ static void on_sorter_changed(GtkSorter *sorter, GtkSorterChange change, gpointe
     {
         return;
     }
+    started = g_get_monotonic_time();
     EeUiVoters_SortTo(w->voters,
                       GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(col), "column")),
                       gtk_column_view_sorter_get_primary_sort_order(cvs) == GTK_SORT_ASCENDING);
     g_list_model_items_changed(G_LIST_MODEL(w->rows), 0, w->rows->count, w->rows->count);
+    fprintf(stderr, "sorted in %.2f s\n", (g_get_monotonic_time() - started) / 1e6);
     set_status(w);
 }
 
@@ -390,6 +397,19 @@ static gboolean load_done(gpointer user)
     g_clear_pointer(&w->loading_path, g_free);
     if (w->snapshot != NULL)
     {
+        if (w->voters != NULL && w->snapshot_sort >= 0 &&
+            (guint)w->snapshot_sort <
+                g_list_model_get_n_items(gtk_column_view_get_columns(w->view)))
+        {
+            /* (what a heading click does: the column view's sorter changes, on_sorter_changed sorts) */
+            GtkColumnViewColumn *col = g_list_model_get_item(gtk_column_view_get_columns(w->view),
+                                                             (guint)w->snapshot_sort);
+            gtk_column_view_sort_by_column(w->view,
+                                           col,
+                                           w->snapshot_ascending ? GTK_SORT_ASCENDING
+                                                                 : GTK_SORT_DESCENDING);
+            g_object_unref(col);
+        }
         g_timeout_add(800, take_snapshot, w); /* (time for the window to lay out and draw) */
     }
     g_free(done);
@@ -617,6 +637,8 @@ typedef struct AppArgs
 {
     const char *pending;  /* a file to open at start */
     const char *snapshot; /* --snapshot */
+    int sort_column;      /* --sort, with --snapshot: -1 for none */
+    gboolean sort_ascending;
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -626,6 +648,8 @@ static void on_activate(GtkApplication *app, gpointer user)
     if (args->snapshot != NULL)
     {
         w->snapshot = g_strdup(args->snapshot);
+        w->snapshot_sort = args->sort_column;
+        w->snapshot_ascending = args->sort_ascending;
     }
     gtk_window_present(w->window);
     if (args->pending != NULL)
@@ -636,20 +660,30 @@ static void on_activate(GtkApplication *app, gpointer user)
 
 int main(int argc, char **argv)
 {
-    AppArgs args = {NULL, NULL};
+    AppArgs args = {NULL, NULL, -1, TRUE};
     GtkApplication *app;
-    int status;
-    if (argc >= 3 && strcmp(argv[1], "--selftest") == 0)
+    int status, i;
+    for (i = 1; i < argc; i++)
     {
-        return EeUiVoters_SelfTest(argv[2]);
-    }
-    if (argc >= 4 && strcmp(argv[1], "--snapshot") == 0)
-    {
-        args.snapshot = argv[2];
-    }
-    if (argc >= 2 && argv[argc - 1][0] != '-' && (args.snapshot == NULL || argc >= 4))
-    {
-        args.pending = argv[argc - 1];
+        if (strcmp(argv[i], "--selftest") == 0 && i + 1 < argc)
+        {
+            return EeUiVoters_SelfTest(argv[i + 1]);
+        }
+        else if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc)
+        {
+            args.snapshot = argv[++i];
+        }
+        else if (strcmp(argv[i], "--sort") == 0 && i + 1 < argc)
+        {
+            /* <column>[:desc] */
+            i++;
+            args.sort_column = atoi(argv[i]);
+            args.sort_ascending = strstr(argv[i], ":desc") == NULL;
+        }
+        else if (argv[i][0] != '-')
+        {
+            args.pending = argv[i];
+        }
     }
     /* (NON_UNIQUE: each start is its own window and process, as on Windows) */
     app = gtk_application_new("com.wheelgrouptech.electionexplorer", G_APPLICATION_NON_UNIQUE);

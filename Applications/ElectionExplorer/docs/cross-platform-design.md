@@ -207,12 +207,17 @@ One window on each platform: the loaded list in a table, File > Open (or a file 
 - **`src/ui/ee_ui_voters.{h,c}`:** the bridge, plain C types only. It wraps `EeVoterTable` (load with progress and cancel, UTF-8 titles and cells, numeric columns, `Sort` that toggles and `SortTo` with a direction) and holds the shared `--selftest`. The window code never includes the engine's headers: the stand-in `windows.h` defines `BOOL`, which clashes with Objective-C's.
 - **macOS, `src/ui/macos/app_main.m`** (ARC): an `NSTableView` that asks for the visible cells only, programmatic menus (⌘O, ⌘W, recent documents), `NSAlert` for errors. CMake target `ee_app` builds `Election Explorer.app` (universal).
 - **Linux, `src/ui/gtk/app_main.c`:** a `GtkColumnView` over a `GListModel` of our own that makes a row object only for the rows on screen. The column sorters only show the heading's arrow; the engine sorts, then the model reports every row changed. Header bar with Open and a menu (Ctrl+O, Ctrl+W, Ctrl+Q), `GtkFileDialog`, `GtkAlertDialog`. Needs GTK 4.10+ (Ubuntu 24.04: 4.14, `libgtk-4-dev`); CMake builds `election-explorer` only when pkg-config finds it.
-- **Checking without looking:** `--selftest <file>` loads and sorts without a window and prints what the window would show; `--snapshot <png> <file>` opens the window, loads the file, writes the window's content as a PNG and quits. The window draws itself, so this works over SSH, where macOS gives no screen-recording permission. CI runs `--selftest` on both.
+- **Checking without looking:** `--selftest <file>` loads and sorts without a window and prints what the window would show; `--snapshot <png> <file>` opens the window, loads the file, writes the window's content as a PNG and quits (GTK also takes `--sort <column>[:desc]`). The window draws itself, so this works over SSH, where macOS gives no screen-recording permission. CI runs `--selftest` on both.
 - **Checked on the Mac** (Debug):
   - `test/sample_voters.csv`: 5 rows, 24 columns; sorted by Precinct ascending, descending, ascending again.
   - The snapshot showed the window as expected (dark mode).
   - Dallas `CountyWide_20261101.txt`: 1,499,178 rows and 216 columns in 35 s, 1.87 GB peak memory.
-- **Linux:** written, not yet built (waiting for `libgtk-4-dev` in WSL).
+- **Checked on Linux** (WSL Ubuntu 24.04, GTK 4.14.5, Debug, no warnings; WSLg shows the window):
+  - `--selftest test/sample_voters.csv` prints the same as on the Mac.
+  - The snapshot with `--sort 1:desc` (the GTK window's extra option: it sorts as a heading click does, through the column view's sorter) showed the arrow on Precinct, the rows by precinct descending, and "sorted by Precinct, descending" in the status line.
+  - Dallas `CountyWide_20261101.txt`: loaded in 31.5 s; the heading sort took 5.3 s; 2.6 GB peak memory with GTK.
+  - WSLg prints libEGL / MESA warnings (no GPU in WSL); GTK falls back to software rendering, and the window is unaffected.
+- **Known limits:** a sort runs on the UI thread (5 s on 1.5 million rows); the load is the engine's, with no index or filter yet.
 
 ## Known gaps and next steps
 

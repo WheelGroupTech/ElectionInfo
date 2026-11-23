@@ -30,6 +30,24 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-23 — macOS and Linux: Copy, Export and duplicates in the voter list window
+- **What:**
+  - **Copy** (Ctrl+C / ⌘C, and the right-click menu): the selected rows, as Windows copies them. A right-click outside the selection selects that row first.
+  - **Export Voter List…** (File) and **Export Selected…** (right-click): "Include normalized data fields", then a UTF-8 CSV or TSV with a byte order mark and a heading row, under the Windows names (`-All_Voters`, `-Filtered_Voters`, `-Selected_Voters`).
+  - **Show Duplicate Voter IDs… / Show Duplicate Voters…** (Filter menu) and **Reset View…**, with the Windows status line ("Showing 4 duplicate Voter IDs of 9 voters"). The scan runs on the worker thread as part of the view, and sorts and filters keep it.
+  - **Snapshot options:** `--duplicates ids|voters` and `--export <file>` on both platforms.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EE_UI_MARKS_*`, `ComputeView`'s `marks`, `EeUiView_Marks`, `EeUiVoters_Marks` / `HasBirthDate` / `MarksLabel` / `MarksNoneText` / `CountText`, `CopyText`, `Export`, `ExportName`; the self-test also copies and finds duplicates.
+  - `src/ui/gtk/app_main.c`: `show_duplicates`, `reset_view`, `copy_selection`, `export_rows` (Export Options window), `show_sort_arrow`; the `copy`, `export`, `export-selected`, `dup-ids`, `dup-voters` and `reset-view` actions.
+  - `src/ui/macos/app_main.m`: `showDuplicates:`, `copy:`, `exportRows:` (the save sheet's accessory view), `resetView:`, an Edit menu.
+  - `test/sample_duplicates.csv` (made up); CI runs the self-test on it and checks both counts.
+- **Checked:**
+  - Debug builds, no warnings, on WSL Ubuntu 24.04 (GTK 4.14.5) and the Intel Mac; Linux Release too.
+  - The self-test and snapshots give the same results on both: 4 duplicate Voter IDs and 4 duplicate voters of 9 (the twins are not), the duplicate voters within Include Precinct "101" (2 rows), and their export (BOM, heading, 2 rows).
+  - Dallas `CountyWide_20261101.txt`: duplicate Voter IDs (20 rows) in 4.6 s on Linux and 3.8 s on the Mac, duplicate voters in 3.3 s and 3.2 s (Debug). Exporting all 1,499,178 rows: 10.5 s and 10.1 s (Debug), 3.9 s on Linux Release, on the UI thread as on Windows.
+  - Not checked yet: the clicks (the menus, Copy's paste, the Export dialogs, the Filter window's buttons).
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-23 — macOS and Linux: filters and background sorting in the voter list window
 - **What:**
   - **Filters, as on Windows:** Filter… (Ctrl+L on Linux, ⌘L on the Mac) opens a Filter window with the Windows layout and rules. Reset Filter clears the rules. Right-clicking a cell offers Include "value" and Exclude "value". The status line says "Filtered: 3 of 5 voters" when rows are hidden.

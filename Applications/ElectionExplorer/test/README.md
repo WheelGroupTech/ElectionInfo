@@ -4,6 +4,7 @@
 |------|----------------|-------|
 | `sample_voters.csv` | **Travis County** style headers (`VUIDNO`, `LSTNAM`, `FSTNAM`, …) | Comma-delimited |
 | `sample_voters.txt` | **Dallas County** style headers (`SOS_VoterID`, `lastname`, …) | Tab-delimited |
+| `sample_duplicates.csv` | **Travis County** style headers with `DOB` | Made-up rows for the duplicates views: 4 share a Voter ID, 4 share a name and birth date, twins differ by middle name |
 | `smoke_load.c` | — | Optional console harness for `EeVoterTable_LoadFromFile` (samples, generated 400-column history header, copy-text format, ProcMon-style filter logic) |
 
 These are tiny synthetic rows for UI and parser smoke tests only. Do not commit
@@ -429,10 +430,13 @@ on Ubuntu 24.04 (with Tesseract) and on an Apple Silicon Mac for every push that
 
 The window prototype (`ee_app`: `Election Explorer.app` on macOS, `election-explorer` on Linux
 with GTK 4) has `--selftest <file>`, which loads and sorts a voter list without a window and
-prints what the window would show; CI runs it on `test/sample_voters.csv`. `--snapshot <png>
+prints what the window would show; CI runs it on `test/sample_voters.csv`, and on
+`test/sample_duplicates.csv`, where it checks the two duplicates counts. `--snapshot <png>
 <file>` writes the loaded window as a PNG and quits. Before the file it also takes `--sort
 <column>[:desc]` (as a heading click), `--include` / `--exclude <column>=<value>` (as the
-right-click menu; repeatable) and `--filter-window` (the PNG is then of the Filter window).
+right-click menu; repeatable), `--duplicates ids|voters` (as the Filter menu), `--export <file>`
+(the shown rows, as Export Voter List... without the dialogs) and `--filter-window` (the PNG is
+then of the Filter window).
 
 The platform layer and its rules are in [`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
 

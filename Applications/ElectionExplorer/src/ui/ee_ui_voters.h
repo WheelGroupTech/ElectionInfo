@@ -6,8 +6,9 @@
  * The windows' code never includes the engine's headers: they bring the stand-in
  * <windows.h>, whose BOOL clashes with Objective-C's. Text is UTF-8.
  *
- * Rows are *shown rows*: the rows that pass the filter, in the current sort order. The
- * order and the filter together are a *view*. A new view is computed off the UI thread
+ * Rows are *shown rows*: the rows that pass the filter (and, in a duplicates view, are
+ * duplicates), in the current sort order. The order, the filter and the duplicates together
+ * are a *view*. A new view is computed off the UI thread
  * (EeUiVoters_ComputeView: a sort of 1.5 million rows takes seconds) while the window keeps
  * showing the old one, then swapped in on the UI thread (EeUiVoters_SetView, which is cheap).
  * Only one ComputeView may run at a time, and SetView must not run while one does.
@@ -40,6 +41,22 @@ extern "C"
         EE_UI_REL_CONTAINS,
         EE_UI_REL_EXCLUDES,
         EE_UI_REL_COUNT
+    };
+
+    /** What a view shows besides the filter: all rows, or only duplicates (Windows' Filter menu). */
+    enum
+    {
+        EE_UI_MARKS_NONE = 0,
+        EE_UI_MARKS_DUP_IDS,    /* rows sharing a Voter ID with another row */
+        EE_UI_MARKS_DUP_VOTERS, /* rows sharing first, middle and last name and birth date */
+        EE_UI_MARKS_COUNT
+    };
+
+    /** The columns the duplicates views sort by (Voter ID, Name), as on Windows. */
+    enum
+    {
+        EE_UI_COLUMN_VOTER_ID = 0,
+        EE_UI_COLUMN_NAME = 2
     };
 
 #define EE_UI_RULE_VALUE_BYTES 768 /* UTF-8: the engine keeps 255 UTF-16 units */
@@ -105,22 +122,83 @@ extern "C"
     /** "is", "is not", ... (never NULL). */
     const char *EeUiVoters_RelationName(int relation);
 
+    /** The shown view's duplicates (EE_UI_MARKS_*), and how many rows are duplicates. */
+    int EeUiVoters_Marks(const EeUiVoters *v, uint32_t *marked);
+
+    /** 1 when the list has a birth date column (Show Duplicate Voters needs one). */
+    int EeUiVoters_HasBirthDate(const EeUiVoters *v);
+
+    /** For EE_UI_MARKS_*: "duplicate Voter IDs", ... and "No duplicate Voter IDs.", ... */
+    const char *EeUiVoters_MarksLabel(int marks);
+    const char *EeUiVoters_MarksNoneText(int marks);
+
     /**
-     * Compute a view: the order by @p sort_column (-1 for file order) and the filter
-     * @p rules. Any thread; reads the list but changes nothing. Returns NULL when out of
-     * memory.
+     * The status line's count, in the Windows words: "5 voters", "Filtered: 3 of 5 voters",
+     * "Showing 4 duplicate Voter IDs of 8 voters", "duplicate Voter IDs within filter: 2 of 8
+     * voters".
+     */
+    void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap);
+
+    /**
+     * Compute a view: the order by @p sort_column (-1 for file order), the filter @p rules and
+     * the duplicates @p marks (EE_UI_MARKS_*: those of the shown view are reused, others are
+     * found). Any thread; reads the list but changes nothing. Returns NULL when out of memory.
      */
     EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
                                      int sort_column,
                                      int ascending,
                                      const EeUiRule *rules,
-                                     uint32_t nrules);
+                                     uint32_t nrules,
+                                     int marks);
+
+    /**
+     * A computed view's duplicates (EE_UI_MARKS_*) and how many rows are duplicates. When a
+     * duplicates view found none, Windows says so (EeUiVoters_MarksNoneText) and keeps the
+     * shown view.
+     */
+    int EeUiView_Marks(const EeUiView *view, uint32_t *marked);
 
     /** Show @p view (UI thread; takes ownership). */
     void EeUiVoters_SetView(EeUiVoters *v, EeUiView *view);
 
     /** Free a view that was not shown. */
     void EeUiView_Free(EeUiView *view);
+
+    /**
+     * Shown rows @p rows (in that order) as text for the clipboard, as Windows' Copy: a line a
+     * row, fields separated as in the list's file (commas for a CSV, tabs for a TSV).
+     * @p normalized: with the Voter ID, Precinct, Name and Address columns first (Windows'
+     * default). Returns heap UTF-8 (free()), or NULL when out of memory.
+     */
+    char *EeUiVoters_CopyText(const EeUiVoters *v,
+                              const uint32_t *rows,
+                              uint32_t n,
+                              int normalized,
+                              size_t *len);
+
+    /**
+     * Export shown rows @p rows (NULL: all shown rows, in order) to @p path_utf8 as Windows'
+     * Export does: UTF-8 with a byte order mark, a heading row, @p delim ',' (CSV) or '	'
+     * (TSV). Returns the rows written, or -1 with a message in @p err.
+     */
+    long EeUiVoters_Export(const EeUiVoters *v,
+                           const char *path_utf8,
+                           const uint32_t *rows,
+                           uint32_t n,
+                           int normalized,
+                           char delim,
+                           char *err,
+                           size_t errcap);
+
+    /**
+     * Windows' suggested export name for the list at @p list_path: "<name>-All_Voters.csv",
+     * "-Filtered_Voters" (filtered or a duplicates view) or "-Selected_Voters".
+     */
+    void EeUiVoters_ExportName(const EeUiVoters *v,
+                               const char *list_path,
+                               int selection,
+                               char *out,
+                               size_t cap);
 
     /** Sort (on the calling thread) by column @p c; sorting the same column again reverses it. */
     void EeUiVoters_Sort(EeUiVoters *v, uint32_t c);
@@ -129,9 +207,9 @@ extern "C"
     void EeUiVoters_SortTo(EeUiVoters *v, uint32_t c, int ascending);
 
     /**
-     * The windows' `--selftest <file>`: load @p path, sort it by column 1 both ways, filter it
-     * and print (stdout) what the window would show: the row and column counts, the first
-     * column titles and the first rows' column-1 cells. Returns 0, or 1 when the load fails.
+     * The windows' `--selftest <file>`: load @p path, sort it by column 1 both ways, filter it,
+     * copy rows and look for duplicates, and print (stdout) what the window would show: the row
+     * and column counts, the first column titles, the first rows' column-1 cells and counts. Returns 0, or 1 when the load fails.
      */
     int EeUiVoters_SelfTest(const char *path_utf8);
 

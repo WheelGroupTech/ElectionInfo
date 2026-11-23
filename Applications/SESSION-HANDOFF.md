@@ -4,28 +4,29 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-23. **In progress (uncommitted): filters and background sorting in the macOS/Linux voter list window.**
+**Last updated:** 2026-11-23. **In progress (uncommitted): Copy, Export and duplicates in the macOS/Linux voter list window.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
-  - Open, sort by heading, Filter… (Ctrl+L / ⌘L), Reset Filter, and right-click Include /
-    Exclude.
-  - Sorting and filtering run on a worker thread (`EeUiVoters_ComputeView` / `SetView`).
-  - Checked by `--selftest` and `--snapshot` with `--sort`, `--include`, `--exclude` and
-    `--filter-window`, on both platforms and on Dallas's 1.5M rows.
-  - **Not checked yet:** the clicks themselves (right-click menu; Add, Remove and OK in the
-    Filter window). Try them by hand.
-- **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`.
-- **Sierra County CVRs:** done, in the design doc. The Mac did not finish G22 within 4 hours;
-  Linux matched Windows' 1,582 ballots.
+  - Open, sort by heading, Filter… (Ctrl+L / ⌘L), Reset Filter, right-click Include / Exclude.
+  - New: Copy (Ctrl+C / ⌘C), Export Voter List… / Export Selected…, Show Duplicate Voter IDs… /
+    Show Duplicate Voters…, Reset View…. Test list: `test/sample_duplicates.csv` (made up).
+  - Sorting, filtering and finding duplicates run on a worker thread (`EeUiVoters_ComputeView`);
+    an export runs on the UI thread, as on Windows (4 s for Dallas in Release).
+  - Checked by `--selftest` and `--snapshot` (`--sort`, `--include`, `--exclude`, `--duplicates`,
+    `--export`, `--filter-window`) on both platforms and on Dallas's 1.5M rows.
+  - **Checked by hand (user, WSLg):** sorting, and opening Dallas. **Not yet:** the right-click
+    menu, the Filter window's buttons, Copy's paste and the Export dialogs.
+- **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
+  it now also checks the duplicates counts on `sample_duplicates.csv`.
 - **Next steps:** review and commit. Then:
-  - the window's other commands (Copy, Export, duplicates, saved filters);
+  - the rest of the voter list window (Precinct and Address reports, Find, saved filters, Options);
   - the other windows (roster, results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** GTK window checked on Linux; voter list window + CI; OCR tests on Linux +
-  Tesseract bands (20e8967).
+- **Recent commits:** filters and background sorting (d9d1cb7); GTK window checked on Linux;
+  voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
 

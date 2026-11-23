@@ -6,8 +6,9 @@
  * line, or opened from the Finder), the load in the background with a progress bar, sorting by
  * a column's heading (again to reverse), numbers and dates right-aligned, the Filter sheet
  * (Filter > Filter..., Cmd-L, as Ctrl+L on Windows), Reset Filter, Include / Exclude a cell's
- * value from the right-click menu, and a status line. The list comes from the engine through
- * ee_ui_voters.h (plain C). Compiled with ARC.
+ * value from the right-click menu, Copy (Cmd-C), Export Voter List... and Export Selected...,
+ * Show Duplicate Voter IDs / Voters, Reset View, and a status line. The list comes from the
+ * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
  * Sorting and filtering are the engine's, computed on a background queue
  * (EeUiVoters_ComputeView) while the table keeps showing the old order, then swapped in on the
@@ -20,7 +21,9 @@
  *   [--filter-window] <file>` opens the window, loads the list, sorts it as a heading click
  *   would and filters it as the right-click menu would, writes the window (or, with
  *   --filter-window, the Filter sheet) as a PNG and quits. The window draws itself, so no
- *   screen recording permission is needed.
+ *   screen recording permission is needed. `--duplicates ids|voters` shows a duplicates view
+ *   first (as the Filter menu does); `--export <file>` exports the shown rows before the PNG
+ *   (as Export Voter List... does, without the save sheet).
  */
 
 #import <Cocoa/Cocoa.h>
@@ -55,6 +58,7 @@ static NSString *ns_utf8(const char *s)
 @property(assign) int wantSort;
 @property(assign) BOOL wantAscending;
 @property(strong) NSMutableData *rules; /* EeUiRule[] */
+@property(assign) int wantMarks;        /* EE_UI_MARKS_*: a duplicates view */
 @property(assign) NSUInteger wantGen;
 @property(assign) BOOL jobRunning;
 @property(strong) EeFilterSheet *filterSheet;
@@ -65,6 +69,8 @@ static NSString *ns_utf8(const char *s)
 - (void)setRules:(const EeUiRule *)rules count:(NSUInteger)n;
 - (void)addQuickRuleColumn:(uint32_t)column value:(NSString *)value exclude:(BOOL)exclude;
 - (void)sortByColumn:(int)column ascending:(BOOL)ascending;
+- (void)showDuplicates:(int)marks;
+- (BOOL)exportShownTo:(NSString *)path;
 - (IBAction)showFilter:(id)sender;
 @end
 
@@ -494,19 +500,9 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 {
     NSMutableString *s = [NSMutableString string];
     int asc = 0, sc = EeUiVoters_SortColumn(self.voters, &asc);
-    NSString *(^num)(uint32_t) = ^(uint32_t n) {
-      return [NSNumberFormatter localizedStringFromNumber:@(n) numberStyle:NSNumberFormatterDecimalStyle];
-    };
-    if (EeUiVoters_IsFiltered(self.voters))
-    {
-        /* (the Windows status line's words) */
-        [s appendFormat:@"Filtered: %@ of %@ voters", num(EeUiVoters_Rows(self.voters)),
-                        num(EeUiVoters_TotalRows(self.voters))];
-    }
-    else
-    {
-        [s appendFormat:@"%@ voters", num(EeUiVoters_Rows(self.voters))];
-    }
+    char count[256];
+    EeUiVoters_CountText(self.voters, count, sizeof(count)); /* (the Windows words) */
+    [s appendString:ns_utf8(count)];
     [s appendFormat:@", %u columns — %@", EeUiVoters_Columns(self.voters), self.path.lastPathComponent ?: @""];
     if (sc >= 0)
     {
@@ -544,21 +540,48 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     NSData *rules = [self.rules copy];
     NSUInteger gen = self.wantGen;
     EeUiVoters *v = self.voters;
-    NSString *label = (shown != sort || (sort >= 0 && (asc != 0) != ascending)) ? @"Sorting" : @"Filtering";
+    int marks = self.wantMarks;
+    NSString *label;
     CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    /* (named for what changes: duplicates to find, a new order, else the filter) */
+    if (marks != EE_UI_MARKS_NONE && marks != EeUiVoters_Marks(v, NULL))
+    {
+        label = @"Finding duplicates";
+    }
+    else
+    {
+        label = (shown != sort || (sort >= 0 && (asc != 0) != ascending)) ? @"Sorting" : @"Filtering";
+    }
     self.jobRunning = YES;
-    self.status.stringValue = [NSString stringWithFormat:@"%@ %u voters…", label, EeUiVoters_TotalRows(v)];
+    self.status.stringValue = [NSString stringWithFormat:@"%@%@ %u voters…", label,
+                                                         [label hasPrefix:@"Finding"] ? @" in" : @"",
+                                                         EeUiVoters_TotalRows(v)];
     self.progress.indeterminate = YES;
     self.progress.hidden = NO;
     [self.progress startAnimation:nil];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
       EeUiView *view = EeUiVoters_ComputeView(v, sort, ascending, (const EeUiRule *)rules.bytes,
-                                              (uint32_t)(rules.length / sizeof(EeUiRule)));
+                                              (uint32_t)(rules.length / sizeof(EeUiRule)), marks);
       dispatch_async(dispatch_get_main_queue(), ^{
+        uint32_t marked = 0;
+        int kind = EeUiView_Marks(view, &marked);
         self.jobRunning = NO;
         if (view == NULL)
         {
             self.status.stringValue = @"Not enough memory to sort or filter the list.";
+        }
+        else if (kind != EE_UI_MARKS_NONE && marked == 0)
+        {
+            /* (as on Windows: no duplicates is said, and the shown view stays) */
+            int shownAsc = 0;
+            NSAlert *a = [[NSAlert alloc] init];
+            EeUiView_Free(view);
+            self.wantMarks = EeUiVoters_Marks(self.voters, NULL);
+            self.wantSort = EeUiVoters_SortColumn(self.voters, &shownAsc);
+            self.wantAscending = shownAsc != 0;
+            [self showStatus];
+            a.messageText = ns_utf8(EeUiVoters_MarksNoneText(kind));
+            [a beginSheetModalForWindow:self.window completionHandler:nil];
         }
         else
         {
@@ -626,6 +649,200 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [self requestView];
 }
 
+/* Show Duplicate Voter IDs / Voters: only the duplicates, grouped by Voter ID or Name (as on
+ * Windows), within the filter */
+- (void)showDuplicates:(int)marks
+{
+    int column = marks == EE_UI_MARKS_DUP_VOTERS ? EE_UI_COLUMN_NAME : EE_UI_COLUMN_VOTER_ID;
+    if (self.voters == NULL || self.loading)
+    {
+        return;
+    }
+    if (marks == EE_UI_MARKS_DUP_VOTERS && !EeUiVoters_HasBirthDate(self.voters))
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"No birth date data is available";
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    self.wantMarks = marks;
+    [self sortByColumn:(uint32_t)column < EeUiVoters_Columns(self.voters) ? column : -1 ascending:YES];
+}
+
+- (IBAction)showDuplicateVoterIds:(id)sender
+{
+    [self showDuplicates:EE_UI_MARKS_DUP_IDS];
+}
+
+- (IBAction)showDuplicateVoters:(id)sender
+{
+    [self showDuplicates:EE_UI_MARKS_DUP_VOTERS];
+}
+
+/* the selected shown rows, in order */
+- (NSMutableData *)selectedRows
+{
+    NSMutableData *rows = [NSMutableData data];
+    [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger i, BOOL *stop) {
+      uint32_t r = (uint32_t)i;
+      [rows appendBytes:&r length:sizeof(r)];
+    }];
+    return rows;
+}
+
+/* Copy: the selected rows, separated as in the list's file, with the Voter ID / Precinct /
+ * Name / Address columns first (Windows' default) */
+- (IBAction)copy:(id)sender
+{
+    NSMutableData *rows;
+    uint32_t n;
+    char *text;
+    if (self.voters == NULL || self.loading || self.jobRunning)
+    {
+        return;
+    }
+    rows = [self selectedRows];
+    n = (uint32_t)(rows.length / sizeof(uint32_t));
+    if (n == 0)
+    {
+        self.status.stringValue = @"Nothing selected to copy.";
+        return;
+    }
+    text = EeUiVoters_CopyText(self.voters, (const uint32_t *)rows.bytes, n, 1, NULL);
+    if (text == NULL)
+    {
+        self.status.stringValue = @"Not enough memory to copy the rows.";
+        return;
+    }
+    [NSPasteboard.generalPasteboard clearContents];
+    [NSPasteboard.generalPasteboard setString:ns_utf8(text) forType:NSPasteboardTypeString];
+    free(text);
+    self.status.stringValue = [NSString stringWithFormat:@"Copied %u row%@ to the clipboard.", n, n == 1 ? @"" : @"s"];
+}
+
+/* Export: a save sheet with Windows' Export Options (include the normalized fields?) and the
+ * file type (CSV or TSV) below it */
+- (void)exportRows:(BOOL)selection
+{
+    NSSavePanel *panel;
+    NSView *extra;
+    NSButton *normalized;
+    NSPopUpButton *type;
+    NSTextField *typeLabel;
+    NSMutableData *rows = nil;
+    char name[512];
+    if (self.voters == NULL || self.loading || self.jobRunning)
+    {
+        return;
+    }
+    if (selection)
+    {
+        rows = [self selectedRows];
+        if (rows.length == 0)
+        {
+            self.status.stringValue = @"Nothing selected to export.";
+            return;
+        }
+    }
+    else if (EeUiVoters_Rows(self.voters) == 0)
+    {
+        self.status.stringValue = @"Nothing to export.";
+        return;
+    }
+    panel = [NSSavePanel savePanel];
+    panel.title = @"Export";
+    EeUiVoters_ExportName(self.voters, self.path.fileSystemRepresentation, selection, name, sizeof(name));
+    panel.nameFieldStringValue = ns_utf8(name);
+    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 64)];
+    normalized = [NSButton checkboxWithTitle:@"Include normalized data fields" target:nil action:nil];
+    normalized.frame = NSMakeRect(20, 36, 380, 20);
+    typeLabel = [NSTextField labelWithString:@"Format:"];
+    typeLabel.frame = NSMakeRect(20, 8, 60, 20);
+    type = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(80, 4, 200, 26) pullsDown:NO];
+    [type addItemsWithTitles:@[ @"UTF-8 CSV (*.csv)", @"UTF-8 TSV (*.tsv)" ]];
+    type.target = self;
+    type.action = @selector(exportTypeChanged:);
+    [extra addSubview:normalized];
+    [extra addSubview:typeLabel];
+    [extra addSubview:type];
+    panel.accessoryView = extra;
+    [panel beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse r) {
+                    NSString *path = panel.URL.path;
+                    char delim;
+                    char err[256];
+                    long wrote;
+                    if (r != NSModalResponseOK || path == nil || self.voters == NULL)
+                    {
+                        return;
+                    }
+                    /* (as on Windows: a typed .csv or .tsv wins, else the chosen type) */
+                    if ([path.pathExtension caseInsensitiveCompare:@"tsv"] == NSOrderedSame)
+                    {
+                        delim = '\t';
+                    }
+                    else if ([path.pathExtension caseInsensitiveCompare:@"csv"] == NSOrderedSame)
+                    {
+                        delim = ',';
+                    }
+                    else
+                    {
+                        delim = type.indexOfSelectedItem == 1 ? '\t' : ',';
+                        path = [path stringByAppendingPathExtension:delim == '\t' ? @"tsv" : @"csv"];
+                    }
+                    wrote = EeUiVoters_Export(self.voters, path.fileSystemRepresentation,
+                                              rows != nil ? (const uint32_t *)rows.bytes : NULL,
+                                              (uint32_t)(rows.length / sizeof(uint32_t)),
+                                              normalized.state == NSControlStateValueOn, delim, err, sizeof(err));
+                    if (wrote < 0)
+                    {
+                        NSAlert *a = [[NSAlert alloc] init];
+                        a.messageText = ns_utf8(err);
+                        [a beginSheetModalForWindow:self.window completionHandler:nil];
+                        return;
+                    }
+                    self.status.stringValue =
+                        [NSString stringWithFormat:@"Exported %ld row%@.", wrote, wrote == 1 ? @"" : @"s"];
+                  }];
+}
+
+/* the type chosen: the name's extension follows it */
+- (void)exportTypeChanged:(NSPopUpButton *)type
+{
+    NSSavePanel *panel = (NSSavePanel *)type.window;
+    if ([panel isKindOfClass:[NSSavePanel class]])
+    {
+        NSString *base = panel.nameFieldStringValue.stringByDeletingPathExtension;
+        panel.nameFieldStringValue = [base stringByAppendingPathExtension:type.indexOfSelectedItem == 1 ? @"tsv" : @"csv"];
+    }
+}
+
+- (IBAction)exportVoters:(id)sender
+{
+    [self exportRows:NO];
+}
+
+- (IBAction)exportSelected:(id)sender
+{
+    [self exportRows:YES];
+}
+
+/* --export: the shown rows, as a CSV, without the sheet */
+- (BOOL)exportShownTo:(NSString *)path
+{
+    char err[256];
+    CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    long wrote = EeUiVoters_Export(self.voters, path.fileSystemRepresentation, NULL, 0, 0, ',', err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "export failed: %s\n", err);
+        return NO;
+    }
+    fprintf(stderr, "exported %ld rows in %.2f s\n", wrote, CFAbsoluteTimeGetCurrent() - started);
+    self.status.stringValue = [NSString stringWithFormat:@"Exported %ld row%@.", wrote, wrote == 1 ? @"" : @"s"];
+    return YES;
+}
+
 /* ---- loading ---- */
 
 - (void)openPath:(NSString *)path
@@ -668,6 +885,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         EeUiVoters_Free(self.voters);
         self.voters = v;
         self.rules = [NSMutableData data]; /* (a new list starts unfiltered, in file order) */
+        self.wantMarks = EE_UI_MARKS_NONE;
         self.wantSort = -1;
         self.wantAscending = YES;
         [self rebuildColumns];
@@ -713,6 +931,14 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 {
     NSInteger row = self.table.clickedRow, col = self.table.clickedColumn;
     [menu removeAllItems];
+    if (self.voters != NULL && !self.jobRunning && row >= 0 && ![self.table.selectedRowIndexes containsIndex:(NSUInteger)row])
+    {
+        /* (as on Windows: a right-click outside the selection selects that row) */
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+    }
+    /* Windows' order: Copy; Include, Exclude; Filter...; Export Selected... */
+    [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""].target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
     if (self.voters != NULL && !self.jobRunning && row >= 0 && col >= 0)
     {
         NSString *value, *shown;
@@ -732,6 +958,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         [menu addItem:[NSMenuItem separatorItem]];
     }
     [menu addItemWithTitle:@"Filter…" action:@selector(showFilter:) keyEquivalent:@""].target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"Export Selected…" action:@selector(exportSelected:) keyEquivalent:@""].target = self;
 }
 
 - (void)quickInclude:(id)sender
@@ -756,12 +984,19 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [self.window beginSheet:self.filterSheet.sheet completionHandler:nil];
 }
 
+/* Reset Filter / Reset View: all rows (no rules, no duplicates view), as on Windows */
 - (IBAction)resetFilter:(id)sender
 {
-    if (self.voters != NULL && self.rules.length > 0)
+    if (self.voters != NULL && (self.rules.length > 0 || self.wantMarks != EE_UI_MARKS_NONE))
     {
+        self.wantMarks = EE_UI_MARKS_NONE;
         [self setRules:NULL count:0];
     }
+}
+
+- (IBAction)resetView:(id)sender
+{
+    [self resetFilter:sender];
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item
@@ -770,9 +1005,18 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     {
         return self.voters != NULL && !self.loading;
     }
-    if (item.action == @selector(resetFilter:))
+    if (item.action == @selector(resetFilter:) || item.action == @selector(resetView:))
     {
-        return self.voters != NULL && !self.loading && self.rules.length > 0;
+        return self.voters != NULL && !self.loading && (self.rules.length > 0 || self.wantMarks != EE_UI_MARKS_NONE);
+    }
+    if (item.action == @selector(copy:) || item.action == @selector(exportSelected:))
+    {
+        return self.voters != NULL && !self.loading && !self.jobRunning && self.table.numberOfSelectedRows > 0;
+    }
+    if (item.action == @selector(exportVoters:) || item.action == @selector(showDuplicateVoterIds:) ||
+        item.action == @selector(showDuplicateVoters:))
+    {
+        return self.voters != NULL && !self.loading && !self.jobRunning;
     }
     return YES;
 }
@@ -791,6 +1035,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 @property(assign) BOOL snapshotAscending;
 @property(strong) NSMutableArray<NSString *> *snapshotQuick; /* --include / --exclude: "+c=v" / "-c=v" */
 @property(assign) BOOL snapshotFilterWindow;
+@property(assign) int snapshotMarks;          /* --duplicates: EE_UI_MARKS_* */
+@property(copy) NSString *snapshotExport;     /* --export: export the shown rows here first */
 @property(assign) BOOL snapshotActionsDone;
 @end
 
@@ -800,11 +1046,14 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 {
     NSMenu *bar = [[NSMenu alloc] init];
     NSMenuItem *appItem = [[NSMenuItem alloc] init], *fileItem = [[NSMenuItem alloc] init],
-               *filterItem = [[NSMenuItem alloc] init], *winItem = [[NSMenuItem alloc] init];
+               *editItem = [[NSMenuItem alloc] init], *filterItem = [[NSMenuItem alloc] init],
+               *winItem = [[NSMenuItem alloc] init];
     NSMenu *app = [[NSMenu alloc] init], *file = [[NSMenu alloc] initWithTitle:@"File"],
-           *filter = [[NSMenu alloc] initWithTitle:@"Filter"], *win = [[NSMenu alloc] initWithTitle:@"Window"];
+           *edit = [[NSMenu alloc] initWithTitle:@"Edit"], *filter = [[NSMenu alloc] initWithTitle:@"Filter"],
+           *win = [[NSMenu alloc] initWithTitle:@"Window"];
     [bar addItem:appItem];
     [bar addItem:fileItem];
+    [bar addItem:editItem];
     [bar addItem:filterItem];
     [bar addItem:winItem];
     [app addItemWithTitle:@"About Election Explorer" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
@@ -814,11 +1063,19 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [app addItemWithTitle:@"Quit Election Explorer" action:@selector(terminate:) keyEquivalent:@"q"];
     appItem.submenu = app;
     [file addItemWithTitle:@"Open Voter List…" action:@selector(openDocument:) keyEquivalent:@"o"];
+    [file addItemWithTitle:@"Export Voter List…" action:@selector(exportVoters:) keyEquivalent:@""];
     [file addItem:[NSMenuItem separatorItem]];
     [file addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];
     fileItem.submenu = file;
+    [edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [edit addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+    editItem.submenu = edit;
     [filter addItemWithTitle:@"Filter…" action:@selector(showFilter:) keyEquivalent:@"l"]; /* (Ctrl+L on Windows) */
     [filter addItemWithTitle:@"Reset Filter" action:@selector(resetFilter:) keyEquivalent:@""];
+    [filter addItemWithTitle:@"Show Duplicate Voter IDs…" action:@selector(showDuplicateVoterIds:) keyEquivalent:@""];
+    [filter addItemWithTitle:@"Show Duplicate Voters…" action:@selector(showDuplicateVoters:) keyEquivalent:@""];
+    [filter addItem:[NSMenuItem separatorItem]];
+    [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""];
     filterItem.submenu = filter;
     [win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     winItem.submenu = win;
@@ -852,6 +1109,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     if (!waiting && !self.snapshotActionsDone)
     {
         self.snapshotActionsDone = YES;
+        if (self.snapshotMarks != EE_UI_MARKS_NONE)
+        {
+            [w showDuplicates:self.snapshotMarks];
+        }
         for (NSString *q in self.snapshotQuick)
         {
             NSRange eq = [q rangeOfString:@"="];
@@ -879,6 +1140,11 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         });
         return;
     }
+    if (self.snapshotExport != nil && w.voters != NULL)
+    {
+        [w exportShownTo:self.snapshotExport];
+        self.snapshotExport = nil;
+    }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
       NSWindow *target = w.filterSheet != nil ? w.filterSheet.sheet : w.window;
       NSView *v = target.contentView.superview ?: target.contentView;
@@ -888,6 +1154,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
       if (w.filterSheet != nil)
       {
           [w.filterSheet close]; /* (terminate: does nothing while a sheet is open) */
+      }
+      if (w.window.attachedSheet != nil)
+      {
+          [w.window endSheet:w.window.attachedSheet]; /* (an alert, such as no duplicates) */
       }
       [NSApp terminate:nil];
     });
@@ -974,6 +1244,15 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--filter-window") == 0)
             {
                 delegate.snapshotFilterWindow = YES;
+            }
+            else if (strcmp(argv[i], "--duplicates") == 0 && i + 1 < argc)
+            {
+                i++;
+                delegate.snapshotMarks = strcmp(argv[i], "voters") == 0 ? EE_UI_MARKS_DUP_VOTERS : EE_UI_MARKS_DUP_IDS;
+            }
+            else if (strcmp(argv[i], "--export") == 0 && i + 1 < argc)
+            {
+                delegate.snapshotExport = ns_utf8(argv[++i]);
             }
             else if (argv[i][0] != '-')
             {

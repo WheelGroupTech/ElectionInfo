@@ -18,8 +18,11 @@ struct EeUiVoters
     char *titles[EE_MAX_COLUMNS]; /* UTF-8 */
     EeFilterSet filters;          /* the shown view's rules */
     BOOL filtered;                /* some rule is enabled */
-    uint32_t *map; /* shown row -> view row; NULL when every row is shown or none is */
+    uint32_t *map;  /* shown row -> view row; NULL when every row is shown or none is */
     uint32_t shown;
+    uint8_t *marks; /* per physical row: 1 for a duplicate (a duplicates view), else NULL */
+    int mark_kind;  /* EE_UI_MARKS_* */
+    uint32_t marked;
 };
 
 /* A computed order and filter, ready to swap in. */
@@ -32,6 +35,9 @@ struct EeUiView
     BOOL filtered;
     uint32_t *map;
     uint32_t shown;
+    uint8_t *marks;
+    int mark_kind;
+    uint32_t marked;
 };
 
 typedef struct ProgressCx
@@ -171,6 +177,7 @@ void EeUiVoters_Free(EeUiVoters *v)
     }
     EeFilter_Clear(&v->filters);
     free(v->map);
+    free(v->marks);
     EeVoterTable_Clear(&v->t);
     free(v);
 }
@@ -300,6 +307,72 @@ const char *EeUiVoters_RelationName(int relation)
     return relation >= 0 && relation < EE_UI_REL_COUNT ? names[relation] : "is";
 }
 
+int EeUiVoters_Marks(const EeUiVoters *v, uint32_t *marked)
+{
+    if (marked != NULL)
+    {
+        *marked = v != NULL ? v->marked : 0;
+    }
+    return v != NULL ? v->mark_kind : EE_UI_MARKS_NONE;
+}
+
+int EeUiVoters_HasBirthDate(const EeUiVoters *v)
+{
+    return v != NULL && EeVoterTable_FindBirthdateColumn(&v->t) >= 0;
+}
+
+/* (the Windows words) */
+const char *EeUiVoters_MarksLabel(int marks)
+{
+    return marks == EE_UI_MARKS_DUP_VOTERS ? "duplicate voters (name + DOB)"
+           : marks == EE_UI_MARKS_DUP_IDS  ? "duplicate Voter IDs"
+                                           : "";
+}
+
+const char *EeUiVoters_MarksNoneText(int marks)
+{
+    return marks == EE_UI_MARKS_DUP_VOTERS ? "No duplicate voters (same name and date of birth)."
+                                           : "No duplicate Voter IDs.";
+}
+
+void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    if (v == NULL)
+    {
+        out[0] = '\0';
+    }
+    else if (v->mark_kind != EE_UI_MARKS_NONE && v->filtered)
+    {
+        StringCchPrintfA(out,
+                         cap,
+                         "%s within filter: %u of %u voters",
+                         EeUiVoters_MarksLabel(v->mark_kind),
+                         v->shown,
+                         v->t.row_count);
+    }
+    else if (v->mark_kind != EE_UI_MARKS_NONE)
+    {
+        StringCchPrintfA(out,
+                         cap,
+                         "Showing %u %s of %u voters",
+                         v->shown,
+                         EeUiVoters_MarksLabel(v->mark_kind),
+                         v->t.row_count);
+    }
+    else if (v->filtered)
+    {
+        StringCchPrintfA(out, cap, "Filtered: %u of %u voters", v->shown, v->t.row_count);
+    }
+    else
+    {
+        StringCchPrintfA(out, cap, "%u voters", v->shown);
+    }
+}
+
 void EeUiView_Free(EeUiView *view)
 {
     if (view != NULL)
@@ -307,15 +380,86 @@ void EeUiView_Free(EeUiView *view)
         free(view->view_index);
         EeFilter_Clear(&view->filters);
         free(view->map);
+        free(view->marks);
         free(view);
     }
+}
+
+int EeUiView_Marks(const EeUiView *view, uint32_t *marked)
+{
+    if (marked != NULL)
+    {
+        *marked = view != NULL ? view->marked : 0;
+    }
+    return view != NULL ? view->mark_kind : EE_UI_MARKS_NONE;
+}
+
+/* the view's duplicates: those of the shown view when the same kind, else found anew */
+static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks)
+{
+    uint32_t n = v->t.row_count;
+    if (marks <= EE_UI_MARKS_NONE || marks >= EE_UI_MARKS_COUNT)
+    {
+        return TRUE;
+    }
+    view->mark_kind = marks;
+    view->marks = (uint8_t *)calloc(n > 0 ? n : 1, 1);
+    if (view->marks == NULL)
+    {
+        return FALSE;
+    }
+    if (marks == v->mark_kind && v->marks != NULL)
+    {
+        memcpy(view->marks, v->marks, n);
+        view->marked = v->marked;
+        return TRUE;
+    }
+    if (marks == EE_UI_MARKS_DUP_VOTERS)
+    {
+        return EeVoterTable_MarkDuplicateVotersByNameDob(&v->t,
+                                                         view->marks,
+                                                         &view->marked,
+                                                         NULL,
+                                                         NULL,
+                                                         NULL);
+    }
+    return EeVoterTable_MarkDuplicateVoterIds(&v->t, view->marks, &view->marked, NULL, NULL, NULL);
+}
+
+/* keep only the shown rows that are duplicates (as Windows ANDs its marks with the filter) */
+static BOOL view_keep_marked(EeUiView *view, uint32_t n)
+{
+    uint32_t *kept, k, m = 0;
+    if (view->marks == NULL)
+    {
+        return TRUE;
+    }
+    kept = (uint32_t *)malloc((size_t)(view->shown > 0 ? view->shown : 1) * sizeof(uint32_t));
+    if (kept == NULL)
+    {
+        return FALSE;
+    }
+    for (k = 0; k < view->shown; k++)
+    {
+        uint32_t vr = view->map != NULL ? view->map[k] : k;
+        uint32_t phys = view->view_index[vr];
+        if (phys < n && view->marks[phys])
+        {
+            kept[m++] = vr;
+        }
+    }
+    free(view->map);
+    view->map = kept;
+    view->shown = m;
+    return TRUE;
 }
 
 EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
                                  int sort_column,
                                  int ascending,
                                  const EeUiRule *rules,
-                                 uint32_t nrules)
+                                 uint32_t nrules,
+                                 int marks)
 {
     EeUiView *view;
     EeVoterTable *tmp;
@@ -385,6 +529,13 @@ EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
         return NULL;
     }
     free(tmp);
+
+    /* the duplicates, if asked for */
+    if (!view_marks(v, view, marks) || !view_keep_marked(view, n))
+    {
+        EeUiView_Free(view);
+        return NULL;
+    }
     return view;
 }
 
@@ -405,7 +556,168 @@ void EeUiVoters_SetView(EeUiVoters *v, EeUiView *view)
     free(v->map);
     v->map = view->map;
     v->shown = view->shown;
+    free(v->marks);
+    v->marks = view->marks;
+    v->mark_kind = view->mark_kind;
+    v->marked = view->marked;
     free(view);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Copy and Export                                                            */
+/* -------------------------------------------------------------------------- */
+
+/* shown rows -> view rows (NULL rows: all shown rows) */
+static uint32_t *view_rows(const EeUiVoters *v, const uint32_t *rows, uint32_t *n)
+{
+    uint32_t i, count = rows != NULL ? *n : v->shown, k = 0;
+    uint32_t *out = (uint32_t *)malloc((size_t)(count > 0 ? count : 1) * sizeof(uint32_t));
+    if (out == NULL)
+    {
+        return NULL;
+    }
+    for (i = 0; i < count; i++)
+    {
+        uint32_t r = rows != NULL ? rows[i] : i;
+        if (r < v->shown)
+        {
+            out[k++] = v->map != NULL ? v->map[r] : r;
+        }
+    }
+    *n = k;
+    return out;
+}
+
+char *EeUiVoters_CopyText(const EeUiVoters *v,
+                          const uint32_t *rows,
+                          uint32_t n,
+                          int normalized,
+                          size_t *len)
+{
+    uint32_t *vr;
+    char *text = NULL;
+    if (len != NULL)
+    {
+        *len = 0;
+    }
+    if (v == NULL || rows == NULL || (vr = view_rows(v, rows, &n)) == NULL)
+    {
+        return NULL;
+    }
+    if (!EeVoterTable_FormatCopyUtf8(&v->t, vr, n, normalized ? TRUE : FALSE, &text, len))
+    {
+        text = NULL;
+    }
+    free(vr);
+    return text;
+}
+
+static void set_err(char *err, size_t errcap, const char *text)
+{
+    if (err != NULL && errcap > 0)
+    {
+        StringCchCopyA(err, errcap, text);
+    }
+}
+
+long EeUiVoters_Export(const EeUiVoters *v,
+                       const char *path_utf8,
+                       const uint32_t *rows,
+                       uint32_t n,
+                       int normalized,
+                       char delim,
+                       char *err,
+                       size_t errcap)
+{
+    static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+    uint32_t *vr;
+    char *text = NULL;
+    size_t len = 0;
+    FILE *f;
+    BOOL ok;
+    set_err(err, errcap, "");
+    if (v == NULL || path_utf8 == NULL || (vr = view_rows(v, rows, &n)) == NULL)
+    {
+        set_err(err, errcap, "Out of memory building the export.");
+        return -1;
+    }
+    ok = EeVoterTable_FormatDelimitedUtf8(&v->t,
+                                          vr,
+                                          n,
+                                          normalized ? TRUE : FALSE,
+                                          delim == '\t' ? '\t' : ',',
+                                          TRUE,
+                                          &text,
+                                          &len);
+    free(vr);
+    if (!ok)
+    {
+        set_err(err, errcap, "Out of memory building the export.");
+        return -1;
+    }
+    /* (the Windows messages) */
+    f = fopen(path_utf8, "wb");
+    if (f == NULL)
+    {
+        set_err(err, errcap, "Could not create the export file.");
+        free(text);
+        return -1;
+    }
+    ok = fwrite(bom, 1, sizeof(bom), f) == sizeof(bom) && fwrite(text, 1, len, f) == len;
+    if (fclose(f) != 0)
+    {
+        ok = FALSE;
+    }
+    free(text);
+    if (!ok)
+    {
+        set_err(err, errcap, "Could not write the export file.");
+        remove(path_utf8);
+        return -1;
+    }
+    return (long)n;
+}
+
+void EeUiVoters_ExportName(const EeUiVoters *v,
+                           const char *list_path,
+                           int selection,
+                           char *out,
+                           size_t cap)
+{
+    const char *base, *slash, *dot, *what;
+    size_t blen;
+    char name[256];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    base = list_path != NULL ? list_path : "";
+    slash = strrchr(base, '/');
+    if (slash != NULL)
+    {
+        base = slash + 1;
+    }
+    dot = strrchr(base, '.');
+    blen = dot != NULL && dot != base ? (size_t)(dot - base) : strlen(base);
+    if (blen >= sizeof(name))
+    {
+        blen = sizeof(name) - 1;
+    }
+    memcpy(name, base, blen);
+    name[blen] = '\0';
+    if (selection)
+    {
+        what = "-Selected_Voters";
+    }
+    else if (v != NULL && (v->filtered || v->mark_kind != EE_UI_MARKS_NONE))
+    {
+        what = "-Filtered_Voters";
+    }
+    else
+    {
+        what = "-All_Voters";
+    }
+    StringCchPrintfA(out, cap, "%s%s.csv", name, what);
 }
 
 /* the current rules, for a view that only changes the order */
@@ -436,7 +748,7 @@ void EeUiVoters_SortTo(EeUiVoters *v, uint32_t c, int ascending)
     rules = current_rules(v, &n);
     if (rules != NULL)
     {
-        EeUiView *view = EeUiVoters_ComputeView(v, (int)c, ascending, rules, n);
+        EeUiView *view = EeUiVoters_ComputeView(v, (int)c, ascending, rules, n, v->mark_kind);
         if (view != NULL)
         {
             EeUiVoters_SetView(v, view);
@@ -474,6 +786,56 @@ static void selftest_rows(const EeUiVoters *v)
     {
         printf("row %u: \"%s\"\n", r, EeUiVoters_Cell(v, r, 1));
     }
+}
+
+/* Copy: the first two shown rows (counts only: a real list's cells are voters' data) */
+static void selftest_copy(const EeUiVoters *v)
+{
+    uint32_t rows[2] = {0, 1}, n = EeUiVoters_Rows(v) < 2 ? EeUiVoters_Rows(v) : 2;
+    size_t len = 0, lines = 0, seps = 0, i;
+    char *text = EeUiVoters_CopyText(v, rows, n, 1, &len);
+    if (text == NULL)
+    {
+        printf("copy failed\n");
+        return;
+    }
+    for (i = 0; i < len; i++)
+    {
+        lines += text[i] == '\n';
+        seps += text[i] == '\t' || text[i] == ',';
+    }
+    printf("copy: %u rows, %u lines, %u separators\n", n, (unsigned)lines, (unsigned)seps);
+    free(text);
+}
+
+/* a duplicates view, as Windows shows it: grouped by Voter ID or Name, ascending */
+static void selftest_marks(EeUiVoters *v, int marks, int sort_column)
+{
+    EeUiView *view;
+    uint32_t marked = 0;
+    char text[256];
+    if (marks == EE_UI_MARKS_DUP_VOTERS && !EeUiVoters_HasBirthDate(v))
+    {
+        printf("%s: no birth date column\n", EeUiVoters_MarksLabel(marks));
+        return;
+    }
+    view = EeUiVoters_ComputeView(v, sort_column, 1, NULL, 0, marks);
+    if (view == NULL)
+    {
+        printf("%s: out of memory\n", EeUiVoters_MarksLabel(marks));
+        return;
+    }
+    EeUiView_Marks(view, &marked);
+    if (marked == 0)
+    {
+        printf("%s\n", EeUiVoters_MarksNoneText(marks));
+        EeUiView_Free(view);
+        return;
+    }
+    EeUiVoters_SetView(v, view);
+    EeUiVoters_CountText(v, text, sizeof(text));
+    printf("%s\n", text);
+    selftest_rows(v);
 }
 
 int EeUiVoters_SelfTest(const char *path_utf8)
@@ -514,19 +876,23 @@ int EeUiVoters_SelfTest(const char *path_utf8)
         rules[0].enabled = 1;
         StringCchCopyA(rules[0].value, sizeof(rules[0].value), EeUiVoters_Cell(v, 0, 1));
         printf("filter: column 1 is \"%s\", include\n", rules[0].value);
-        view = EeUiVoters_ComputeView(v, 1, 0, rules, 1);
+        view = EeUiVoters_ComputeView(v, 1, 0, rules, 1, EE_UI_MARKS_NONE);
         EeUiVoters_SetView(v, view);
         selftest_rows(v);
         rules[1] = rules[0];
         rules[1].exclude = 1;
         printf("filter: and column 1 is \"%s\", exclude\n", rules[1].value);
-        EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, 1, 0, rules, 2));
+        EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, 1, 0, rules, 2, EE_UI_MARKS_NONE));
         selftest_rows(v);
         rules[1].enabled = 0;
         printf("filter: the exclude disabled; file order\n");
-        EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, rules, 2));
+        EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, rules, 2, EE_UI_MARKS_NONE));
         selftest_rows(v);
         printf("rules kept: %u\n", EeUiVoters_RuleCount(v));
+        selftest_copy(v);
+        EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, NULL, 0, EE_UI_MARKS_NONE));
+        selftest_marks(v, EE_UI_MARKS_DUP_IDS, EE_UI_COLUMN_VOTER_ID);
+        selftest_marks(v, EE_UI_MARKS_DUP_VOTERS, EE_UI_COLUMN_NAME);
     }
     EeUiVoters_Free(v);
     return 0;

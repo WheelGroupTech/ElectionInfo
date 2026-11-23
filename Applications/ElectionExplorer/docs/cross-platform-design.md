@@ -241,8 +241,11 @@ Copy, Export and duplicates (added 2026-11-23), as on Windows:
   - Snapshots: the duplicate Voter IDs grouped by Voter ID; the duplicate voters with Include Precinct "101" (2 rows, sorted by Name); `sample_voters.csv` has none, which is said.
   - The export of that view: the byte order mark, the heading row and the 2 rows, the same on both.
   - Dallas (1,499,178 rows): duplicate Voter IDs (20 rows) in 4.6 s on Linux and 3.8 s on the Mac, duplicate voters in 3.3 s and 3.2 s (Debug, on the worker thread; Linux Release 2.9 s). Exporting every row: 1,499,179 lines (547 MB) in 10.5 s on Linux and 10.1 s on the Mac (Debug), 3.9 s on Linux Release.
-- **Checked by hand (the user, 2026-11-23, WSLg):** sorting by a heading, and opening the Dallas list.
-- **Not checked yet:** the other clicks (the right-click menu; Add, Remove and OK in the Filter window; Copy's paste; the Export dialogs). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
+- **Checked by hand (the user, 2026-11-23):**
+  - On WSLg: sorting by a heading, and opening the Dallas list.
+  - **WSLg shows the menus behind the window:** the header bar's menu opens in front the first time, and behind the window (a sliver showing) from the second time on. GTK draws each menu as a window of its own; WSLg seems to bring the main window back in front of it. The X11 backend (`GDK_BACKEND=x11`) was hard to try, since WSLg showed no mouse pointer over it.
+  - In an Ubuntu 24.04 desktop VM (VMware, the repository on a shared folder): the window ran with no issues, its menus included. So the menus are a WSLg problem, not the window's: use a Linux desktop (or a VM) to try the menus and dialogs.
+- **Not checked yet, one by one:** the other clicks (the right-click menu; Add, Remove and OK in the Filter window; Copy's paste; the Export dialogs). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
 - **Known limits:** an export runs on the UI thread, as on Windows (4 s for 1.5 million rows in Release), and builds the whole file in memory first (2.9 GB peak with Dallas loaded, on Linux).
 
 ## Known gaps and next steps

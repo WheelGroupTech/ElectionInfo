@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-23. **In progress (uncommitted): Copy, Export and duplicates in the macOS/Linux voter list window.**
+**Last updated:** 2026-11-23. **In progress (uncommitted): docs only — the window tried in an Ubuntu VM; WSLg menus.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -15,8 +15,11 @@
     an export runs on the UI thread, as on Windows (4 s for Dallas in Release).
   - Checked by `--selftest` and `--snapshot` (`--sort`, `--include`, `--exclude`, `--duplicates`,
     `--export`, `--filter-window`) on both platforms and on Dallas's 1.5M rows.
-  - **Checked by hand (user, WSLg):** sorting, and opening Dallas. **Not yet:** the right-click
-    menu, the Filter window's buttons, Copy's paste and the Export dialogs.
+  - **Checked by hand (user):** on WSLg, sorting and opening Dallas; in an Ubuntu 24.04 VM
+    (VMware, H: on a shared folder), the window with no issues, menus included. **WSLg opens the
+    menus behind the window** from the second time on: try menus and dialogs in the VM.
+    Not yet one by one: the right-click menu, the Filter window's buttons, Copy's paste and the
+    Export dialogs.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates counts on `sample_duplicates.csv`.
 - **Next steps:** review and commit. Then:
@@ -25,7 +28,7 @@
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.

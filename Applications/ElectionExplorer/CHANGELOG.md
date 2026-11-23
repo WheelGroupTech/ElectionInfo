@@ -30,6 +30,11 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-23 — Linux: the voter list window tried in an Ubuntu VM; WSLg menus
+- **What:** the user ran the GTK window in an Ubuntu 24.04 desktop VM (VMware) with no issues, menus included. Under WSLg its menus open behind the window from the second time on, so WSLg is not a place to try the menus and dialogs. No code change.
+- **Where:** `docs/cross-platform-design.md` ("Checked by hand"), `test/README.md`.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-23 — macOS and Linux: Copy, Export and duplicates in the voter list window
 - **What:**
   - **Copy** (Ctrl+C / ⌘C, and the right-click menu): the selected rows, as Windows copies them. A right-click outside the selection selects that row first.

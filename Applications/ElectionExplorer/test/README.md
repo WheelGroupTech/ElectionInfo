@@ -438,6 +438,10 @@ right-click menu; repeatable), `--duplicates ids|voters` (as the Filter menu), `
 (the shown rows, as Export Voter List... without the dialogs) and `--filter-window` (the PNG is
 then of the Filter window).
 
+To try the window by hand, use a Linux desktop or a VM (an Ubuntu 24.04 VM in VMware with the
+repository on a shared folder works). Under WSLg the window runs, but its menus open behind it
+from the second time on.
+
 The platform layer and its rules are in [`docs/cross-platform-design.md`](../docs/cross-platform-design.md).
 
 ## Data backup check (on demand)

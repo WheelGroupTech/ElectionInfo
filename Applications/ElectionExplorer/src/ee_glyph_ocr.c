@@ -113,21 +113,231 @@ static int __cdecl go_x_cmp(const void *pa, const void *pb)
     return a->x0 < b->x0 ? -1 : (a->x0 > b->x0 ? 1 : 0);
 }
 
+#ifndef _WIN32
+/* macOS and Linux: a scanline rasterizer in place of GDI. Each glyph's outline is flattened to
+ * line segments (curves into short pieces) and filled as GDI fills it here: nonzero winding,
+ * a pixel black when its centre is inside, open figures closed. */
+
+typedef struct GoEdge
+{
+    float x0, y0, x1, y1;
+} GoEdge;
+
+typedef struct GoCross
+{
+    float x;
+    int dir;
+} GoCross;
+
+static int __cdecl go_cross_cmp(const void *pa, const void *pb)
+{
+    const GoCross *a = (const GoCross *)pa, *b = (const GoCross *)pb;
+    return a->x < b->x ? -1 : (a->x > b->x ? 1 : (a->dir - b->dir));
+}
+
+static BOOL go_edge(GoEdge **e, size_t *n, size_t *cap, float x0, float y0, float x1, float y1)
+{
+    if (y0 == y1)
+    {
+        return TRUE; /* (a horizontal edge crosses no row centre) */
+    }
+    if (!go_grow((void **)e, cap, *n + 1, sizeof(GoEdge)))
+    {
+        return FALSE;
+    }
+    (*e)[*n].x0 = x0;
+    (*e)[*n].y0 = y0;
+    (*e)[*n].x1 = x1;
+    (*e)[*n].y1 = y1;
+    (*n)++;
+    return TRUE;
+}
+
+/* Fill the closed outline @p e (pixel coordinates, y down) into @p gray, black. */
+static BOOL go_fill(uint8_t *gray, int w, int h, const GoEdge *e, size_t n, GoCross **cr, size_t *cap_cr)
+{
+    float ymin = e[0].y0, ymax = e[0].y0;
+    size_t i;
+    int y, y0, y1;
+    for (i = 0; i < n; i++)
+    {
+        ymin = fminf(ymin, fminf(e[i].y0, e[i].y1));
+        ymax = fmaxf(ymax, fmaxf(e[i].y0, e[i].y1));
+    }
+    y0 = (int)floorf(ymin - 0.5f);
+    y1 = (int)ceilf(ymax - 0.5f);
+    if (y0 < 0)
+    {
+        y0 = 0;
+    }
+    if (y1 > h - 1)
+    {
+        y1 = h - 1;
+    }
+    for (y = y0; y <= y1; y++)
+    {
+        float yc = (float)y + 0.5f;
+        size_t nc = 0, c;
+        int wind = 0;
+        for (i = 0; i < n; i++)
+        {
+            const GoEdge *g = &e[i];
+            float lo = fminf(g->y0, g->y1), hi = fmaxf(g->y0, g->y1);
+            if (yc >= lo && yc < hi)
+            {
+                if (!go_grow((void **)cr, cap_cr, nc + 1, sizeof(GoCross)))
+                {
+                    return FALSE;
+                }
+                (*cr)[nc].x = g->x0 + (yc - g->y0) * (g->x1 - g->x0) / (g->y1 - g->y0);
+                (*cr)[nc].dir = g->y1 > g->y0 ? 1 : -1;
+                nc++;
+            }
+        }
+        qsort(*cr, nc, sizeof(GoCross), go_cross_cmp);
+        {
+            float xs = 0.0f;
+            for (c = 0; c < nc; c++)
+            {
+                int before = wind;
+                wind += (*cr)[c].dir;
+                if (before == 0 && wind != 0)
+                {
+                    xs = (*cr)[c].x; /* inside from here */
+                }
+                else if (before != 0 && wind == 0)
+                {
+                    /* outside again: the pixels whose centres lie between */
+                    int xa = (int)ceilf(xs - 0.5f), xb = (int)ceilf((*cr)[c].x - 0.5f), x;
+                    if (xa < 0)
+                    {
+                        xa = 0;
+                    }
+                    if (xb > w)
+                    {
+                        xb = w;
+                    }
+                    for (x = xa; x < xb; x++)
+                    {
+                        gray[(size_t)y * (size_t)w + (size_t)x] = 0;
+                    }
+                }
+            }
+        }
+    }
+    return TRUE;
+}
+#endif
+
 /* Draw the page's glyphs (black on white) into an 8-bit gray bitmap of @p w x @p h pixels,
  * @p k pixels per point, the page @p ph points high. */
 static BOOL go_draw(GoCtx *cx, const EePdfPageText *pt, uint8_t *gray, int w, int h, float k, float ph)
 {
 #ifndef _WIN32
-    /* GDI draws the outlines; macOS and Linux have no OCR engine to read them yet either
-     * (src/platform/posix/ocr_none.c), so this is never reached there. */
-    (void)cx;
-    (void)pt;
-    (void)gray;
-    (void)w;
-    (void)h;
-    (void)k;
-    (void)ph;
-    return FALSE;
+    GoEdge *e = NULL;
+    GoCross *cr = NULL;
+    size_t ne = 0, cap_e = 0, cap_cr = 0;
+    uint32_t g;
+    BOOL ok = TRUE;
+    memset(gray, 0xFF, (size_t)w * (size_t)h);
+    for (g = 0; g < pt->nglyphs && ok && !cx->oom; g++)
+    {
+        const EePdfGlyph *gl = &pt->glyphs[g];
+        const EePdfOutline *o = go_outline(cx, gl->proc);
+        uint32_t i, p = 0;
+        float sx = 0.0f, sy = 0.0f, cx0 = 0.0f, cy0 = 0.0f; /* the figure's start, the pen */
+        BOOL open = FALSE;
+        if (o == NULL || o->nops == 0)
+        {
+            continue;
+        }
+        ne = 0;
+        for (i = 0; i < o->nops && ok; i++)
+        {
+            float q[3][2];
+            int n = o->ops[i] == 2 ? 3 : (o->ops[i] == 3 ? 0 : 1), j;
+            for (j = 0; j < n; j++, p++)
+            {
+                float gx = o->pts[2 * p], gy = o->pts[2 * p + 1];
+                float ux = gx * gl->m[0] + gy * gl->m[2] + gl->m[4];
+                float uy = gx * gl->m[1] + gy * gl->m[3] + gl->m[5];
+                q[j][0] = ux * k;
+                q[j][1] = (ph - uy) * k;
+            }
+            if (o->ops[i] != 0 && o->ops[i] != 3 && !open)
+            {
+                /* a line or curve after a close starts a figure at the pen */
+                sx = cx0;
+                sy = cy0;
+                open = TRUE;
+            }
+            if (o->ops[i] == 0)
+            {
+                if (open)
+                {
+                    ok = go_edge(&e, &ne, &cap_e, cx0, cy0, sx, sy); /* (close the figure before) */
+                }
+                sx = cx0 = q[0][0];
+                sy = cy0 = q[0][1];
+                open = TRUE;
+            }
+            else if (o->ops[i] == 1)
+            {
+                ok = go_edge(&e, &ne, &cap_e, cx0, cy0, q[0][0], q[0][1]);
+                cx0 = q[0][0];
+                cy0 = q[0][1];
+            }
+            else if (o->ops[i] == 2)
+            {
+                /* a cubic Bezier in pieces about two pixels long */
+                float len = hypotf(q[0][0] - cx0, q[0][1] - cy0) + hypotf(q[1][0] - q[0][0], q[1][1] - q[0][1]) +
+                            hypotf(q[2][0] - q[1][0], q[2][1] - q[1][1]);
+                int s, ns = (int)ceilf(len / 2.0f);
+                float px = cx0, py = cy0;
+                if (ns < 1)
+                {
+                    ns = 1;
+                }
+                if (ns > 64)
+                {
+                    ns = 64;
+                }
+                for (s = 1; s <= ns && ok; s++)
+                {
+                    float t = (float)s / (float)ns, u = 1.0f - t;
+                    float bx = u * u * u * cx0 + 3 * u * u * t * q[0][0] + 3 * u * t * t * q[1][0] + t * t * t * q[2][0];
+                    float by = u * u * u * cy0 + 3 * u * u * t * q[0][1] + 3 * u * t * t * q[1][1] + t * t * t * q[2][1];
+                    ok = go_edge(&e, &ne, &cap_e, px, py, bx, by);
+                    px = bx;
+                    py = by;
+                }
+                cx0 = q[2][0];
+                cy0 = q[2][1];
+            }
+            else if (open)
+            {
+                ok = go_edge(&e, &ne, &cap_e, cx0, cy0, sx, sy);
+                cx0 = sx;
+                cy0 = sy;
+                open = FALSE;
+            }
+        }
+        if (ok && open)
+        {
+            ok = go_edge(&e, &ne, &cap_e, cx0, cy0, sx, sy);
+        }
+        if (ok && ne > 0)
+        {
+            ok = go_fill(gray, w, h, e, ne, &cr, &cap_cr);
+        }
+    }
+    free(e);
+    free(cr);
+    if (!ok)
+    {
+        cx->oom = TRUE;
+    }
+    return ok;
 #else
     BITMAPINFO bi;
     void *bits = NULL;

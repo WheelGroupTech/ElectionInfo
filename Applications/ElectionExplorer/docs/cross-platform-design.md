@@ -2,8 +2,9 @@
 
 Status: **step 1 done** (2026-11-21). The engine and its console tests build and pass on Linux
 (Ubuntu 24.04 in WSL2, GCC 13), and since 2026-11-22 on macOS 15 (Intel Mac mini, Apple clang
-17, universal binaries). On macOS, scanned documents are read by OCR through Apple Vision
-(2026-11-22). The Windows build is unchanged. There is no macOS or Linux UI yet.
+17, universal binaries). Scanned documents are read by OCR through Apple Vision on macOS and
+Tesseract on Linux (2026-11-22). The Windows build is unchanged. There is no macOS or Linux UI
+yet.
 
 ## Goal
 
@@ -68,7 +69,12 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 - **Time and process:** `GetLocalTime`, `FileTimeToSystemTime`, `SystemTimeToFileTime`, `FileTimeToLocalFileTime`, `GetTickCount` and `GetCurrentProcessId`.
 - **Interlocked:** `InterlockedExchange` and `InterlockedCompareExchange`, on the compiler's atomics.
 - **Settings:** a registry key maps to `~/.config/<key without "Software\">.ini` on Linux and `~/Library/Application Support/…` on macOS. The value names are the registry's. `RegDeleteKeyW` removes the file, which is what the settings test uses.
-- **OCR (`ocr_win.h`):** Apple Vision on macOS (`src/platform/macos/`, below); on Linux `ocr_none.c` refuses scans until Tesseract is added. `EeOcr_EngineName()` names the engine in load notes and messages ("Windows OCR", "Apple Vision").
+- **OCR (`ocr_win.h`):** `ocr_bridge.c` implements it on top of an engine's plain C interface, `ocr_engine.h` (open, close, name, recognize).
+  - The engines are Apple Vision on macOS (`src/platform/macos/ocr_vision.m`) and Tesseract on Linux (`src/platform/linux/ocr_tesseract.c`), both described below.
+  - Without Tesseract installed, Linux uses `ocr_none.c`, which refuses scans.
+  - The engine files never include the stand-in `windows.h`: Objective-C's `BOOL` and Leptonica's macros clash with it.
+  - `EeOcr_EngineName()` names the engine in load notes and messages ("Windows OCR", "Apple Vision", "Tesseract").
+- **Glyph outlines:** on macOS and Linux, `go_draw` (`ee_glyph_ocr.c`) fills the outlines of the PScript5 reports' Type 3 glyphs with its own scanline rasterizer in place of GDI (below).
 
 ## Source changes outside the platform folder
 
@@ -128,11 +134,8 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 
 ## Apple Vision OCR on macOS (2026-11-22)
 
-- **Files:** `src/platform/macos/`:
-  - `ocr_apple.c` implements `ocr_win.h`;
-  - `ocr_vision.m` is the Objective-C, compiled with ARC;
-  - `ocr_vision.h` is the plain C bridge between them. Objective-C's `BOOL` differs from the stand-in `windows.h`'s, so neither side sees the other's headers.
-- **Build:** CMake enables Objective-C on Apple and links Vision, CoreGraphics, ImageIO and Foundation. Linux keeps `ocr_none.c`.
+- **Files:** `src/platform/macos/ocr_vision.m` (Objective-C, compiled with ARC), behind `src/platform/posix/ocr_engine.h` and `ocr_bridge.c`. (The first version's `ocr_apple.c` and `ocr_vision.h` became the shared bridge when Tesseract came.)
+- **Build:** CMake enables Objective-C on Apple and links Vision, CoreGraphics, ImageIO and Foundation.
 - **Same input as Windows OCR:** each image is decoded (ImageIO, including CCITT TIFF), scaled with high-quality interpolation and capped at 10,000 pixels (Windows OCR's `MaxImageDimension`), made 8-bit gray and turned. It is then read by `VNRecognizeTextRequest`: accurate level, language correction off, `en-US`.
 - **Where Vision differs, and what the bridge does about it:** the readers in `ee_results_ocr.c` and `hart_ocr.c` were built on Windows OCR's output.
   - **Underlines:** accurate mode does not read a count printed on a rule. On page 1 of Angelina's Secretary of State form it read 4 of the 29 counts. Dark runs along a row longer than 1/25 of the page are whitened first, and then all 29 read.
@@ -142,20 +145,55 @@ Build output follows AGENTS.md: `Applications/Build/linux-x64-debug/ElectionExpl
 - **Checked against Windows OCR:** `data_check` with every choice's total, on both machines.
   - **The 8 Secretary of State forms:** every count equal (Brazos, Angelina, Henderson). Vision misses fewer faint write-in zeros (Henderson G20: 1 row against 6; Angelina G24: none against 3).
   - **41 other scanned results files** (every scanned file Windows loads, outside Cameron and the Sierra CVRs, plus 12 Cameron files): 38 load on both.
-    - The 3 that do not are Travis's PScript5 reports. Their glyph outlines are drawn with GDI (`go_draw`), which is not ported.
+    - The 3 that do not are Travis's PScript5 reports. Their glyph outlines were drawn with GDI (`go_draw`). With the rasterizer below they load, and match Windows on every total.
     - 1,182 choice totals are equal under the same names and 27 differ. Of the totals named differently by the two engines (a title or name OCR'd differently), 234 more are equal and 35 differ; 99 Windows totals have no partner.
     - The differences gather in poor scans, where both engines misread: Bowie's 2026 unofficial results, Cameron's ERM precinct reports. Clean scans agree closely (Guadalupe's primaries, Midland, Cameron's summaries, Ellis's ZIPs).
-  - **Not yet run:** the other 139 Cameron files (about 7,000 pages) and the three Sierra County scanned CVRs (5,300 pages). At 3–6 seconds a page on the Intel Mac mini, they take many hours.
-- **Smoke suite on macOS:** `hartocr`, `resglyph` and `ressos` are still skipped. Their test pages are drawn with GDI.
+  - **The rest of the scanned results files** (189 more, about 8,000 pages, nearly all Cameron's): 182 were read on the Mac in about 2½ hours (three processes). The other 7 are Cameron's largest primaries, still running when this was written.
+    - 124 load on both; 8 load on Windows only and 2 on the Mac only.
+    - 1,123 totals are equal under the same names and 341 differ.
+    - These are mostly Cameron's 2020–23 ERM monospaced scans. Windows OCR leaves 7.5% of their rows not adding up, so neither engine's reading is a reference there.
+  - **Not yet run:** the three Sierra County scanned CVRs (5,300 pages).
+- **Smoke suite on macOS:** `hartocr`, `resglyph` and `ressos` run and pass.
+  - Their test pages and Arial glyph outlines are drawn with CoreGraphics and CoreText (`test/tdraw_apple.c`, plain C behind `test/tdraw.h`, linked to `smoke_load` on Apple).
+  - `hartocr` now looks for `EeOcr_EngineName()` in its load note, not "Windows OCR".
+
+## Glyph outlines without GDI (2026-11-22)
+
+- **The reports:** Travis's L22, LR22 and PR22 reports were printed through PScript5. Their text is a Type 3 font of unnamed glyph outlines, which `ee_glyph_ocr.c` draws and reads by OCR to learn each glyph's character.
+- **`go_draw`:** on Windows it keeps GDI. On macOS and Linux it uses a scanline rasterizer:
+  - Curves are flattened into pieces about two pixels long.
+  - Each glyph is filled as GDI fills it: nonzero winding, a pixel black when its centre is inside, and open figures closed.
+- **Checked:** the three Travis reports give the same totals as Windows on the Mac (Apple Vision) and on Linux (Tesseract): 199, 6 and 18. `resglyph` passes on the Mac.
+
+## Tesseract OCR on Linux (2026-11-22)
+
+- **Files:** `src/platform/linux/ocr_tesseract.c`, behind `ocr_engine.h` and `ocr_bridge.c`.
+- **Build:** CMake finds Tesseract and Leptonica through `pkg-config` (Ubuntu: `libtesseract-dev libleptonica-dev tesseract-ocr-eng`) unless `EE_WITH_TESSERACT` is off. Without them it uses `ocr_none.c`. Built and checked with Tesseract 5.3.4 and Leptonica 1.82 (Ubuntu 24.04).
+- **Same input as Windows OCR:** Leptonica decodes the image (JPEG, PNG, TIFF including CCITT fax), makes it 8-bit gray, scales it (smoothed down, linear up), caps it at 10,000 pixels and turns it. Tesseract reads it with automatic page layout (`PSM_AUTO`) and English data.
+- **Where Tesseract differs:**
+  - **Sideways text:** like Vision, it reads sideways text in place. Words of three or more characters whose box is more than 1.5 times taller than wide are left out, so Midland's sideways pages get turned.
+  - **Printed rules:** it gives them as words of spaces, which are left out.
+  - **Halftone headings:** it takes a heading band printed in halftone dots for a picture and does not read it (Guadalupe's 2026 Electionware reports: L26, LR26 and PR26 are refused).
+    - Tried and rejected: inverting mostly dark rows (no gain), and blurring then thresholding the page. With a 2-pixel blur and threshold 140 the band reads, but 18 of the sample's files fail instead of 4.
+    - Tried and rejected: single-block layout (`PSM_SINGLE_BLOCK`). It reads the band but matches 1,119 totals against automatic layout's 1,459.
+- **Threads:** Ubuntu's Tesseract uses OpenMP. With seven processes reading at once on 8 cores, files that take 30 seconds alone took over 50 minutes. Batch runs set `OMP_THREAD_LIMIT=1` (the sample of 48 files then takes under 3 minutes).
+- **Checked against Windows OCR** (`data_check` with every choice's total; the 41 sample files above plus the 7 Secretary of State forms):
+  - 44 of 48 load. The 4 that do not are the three Guadalupe reports above and Cameron's GR20 runoff summary.
+  - 1,459 totals are equal under the same names and 48 differ.
+  - The Secretary of State forms: Brazos, both Angelina G25 copies, Henderson G21 and L22 are equal count for count; Angelina G24 differs on 5 counts and Henderson S21 on 4.
+  - The three Travis glyph reports: every total equal.
+- **The rest of the scanned results files** (189, about 8,000 pages, 50 minutes with seven processes): 133 load on both. Windows loads 139, and 1 loads on Linux only.
+  - **Against the Mac:** on the 182 files the Mac had read, Tesseract matches Windows on 780 totals and differs on 378. Apple Vision matches on 1,123 and differs on 341.
+  - **Where:** as with Vision, the differences are mostly in Cameron's ERM scans.
+- **Smoke suite on Linux:** `hartocr`, `resglyph` and `ressos` are skipped: their test pages are drawn with GDI or CoreText, and Linux has neither.
 
 ## Known gaps and next steps
 
 1. **macOS build:** done on an Intel Mac (above). The arm64 half needs an Apple Silicon Mac or a CI runner to be tested.
-2. **OCR:** macOS has Apple Vision (above). Still to do:
-   - **Linux:** Tesseract behind `ocr_win.h`.
-   - **A rasterizer for `go_draw`:** a small scanline rasterizer to replace GDI, for the glyph-outline reports (Travis L22, LR22, PR22).
-   - **Test pages without GDI:** the smoke tests' scanned pages are drawn with GDI. Drawing them with CoreGraphics on macOS (or embedding them as images) would let `hartocr`, `resglyph` and `ressos` run there.
-   - **Poor scans on Vision:** tune the readers for Vision's output, and run the long Cameron and Sierra sweeps.
+2. **OCR:** macOS has Apple Vision and Linux has Tesseract (above), and glyph outlines are drawn without GDI. Still to do:
+   - **Test pages on Linux:** the smoke tests' OCR pages need a text renderer there (FreeType, or pages embedded as images) for `hartocr`, `resglyph` and `ressos` to run.
+   - **Halftone heading bands on Tesseract:** for example, preprocess only a band detected as halftone, not the whole page.
+   - **Poor scans:** tune the readers for Vision's and Tesseract's output, where both still disagree with Windows OCR. Run the Sierra County scanned CVRs (5,300 pages).
 3. **UI:** a wxWidgets prototype of one window (the voter list grid) to settle the toolkit before the rest.
 4. **CI:** GitHub Actions `ubuntu-24.04` and `macos-14` jobs running `ctest`.
 5. **`.gitattributes`:** the repo has none.

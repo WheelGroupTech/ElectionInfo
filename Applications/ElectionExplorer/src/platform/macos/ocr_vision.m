@@ -1,7 +1,7 @@
 /**
  * @file ocr_vision.m
  * @brief Text recognition through Apple's Vision framework (VNRecognizeTextRequest), behind the
- *        plain C bridge in ocr_vision.h. Compiled with ARC.
+ *        engine interface in src/platform/posix/ocr_engine.h (for ocr_bridge.c). Compiled with ARC.
  *
  * The image is prepared as ocr_win.c prepares it for Windows OCR: decoded (ImageIO), scaled with
  * high-quality interpolation, made 8-bit gray, then turned. Vision then reads it in its accurate
@@ -26,7 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ocr_vision.h"
+#include "ocr_engine.h"
 
 static void set_err(char *err, size_t cap, const char *msg)
 {
@@ -36,14 +36,25 @@ static void set_err(char *err, size_t cap, const char *msg)
     }
 }
 
-int EeVision_Available(char *err, size_t errcap)
+const char *EeOcrEngine_Name(void)
 {
+    return "Apple Vision";
+}
+
+void *EeOcrEngine_Open(char *err, size_t errcap)
+{
+    static int k_vision; /* (Vision keeps no state between images) */
     if (@available(macOS 10.15, *))
     {
-        return 1;
+        return &k_vision;
     }
     set_err(err, errcap, "Text recognition (Apple Vision) needs macOS 10.15 or later.");
-    return 0;
+    return NULL;
+}
+
+void EeOcrEngine_Close(void *engine)
+{
+    (void)engine;
 }
 
 /* The image's pixels as an 8-bit gray buffer of @p tw x @p th (caller frees), drawn with
@@ -277,23 +288,25 @@ static CGImageRef image_of_pixels(const uint8_t *px, uint32_t w, uint32_t h, uin
     return img;
 }
 
-int EeVision_Recognize(const void *data,
-                       size_t len,
-                       const uint8_t *px,
-                       uint32_t w,
-                       uint32_t h,
-                       uint32_t stride,
-                       int channels,
-                       double scale,
-                       uint32_t max_dim,
-                       int quarter_turns,
-                       EeVisionWordFn fn,
-                       void *user,
-                       uint32_t *out_w,
-                       uint32_t *out_h,
-                       char *err,
-                       size_t errcap)
+int EeOcrEngine_Recognize(void *engine,
+                          const void *data,
+                          size_t len,
+                          const uint8_t *px,
+                          uint32_t w,
+                          uint32_t h,
+                          uint32_t stride,
+                          int channels,
+                          double scale,
+                          uint32_t max_dim,
+                          int quarter_turns,
+                          EeOcrEngineWordFn fn,
+                          void *user,
+                          uint32_t *out_w,
+                          uint32_t *out_h,
+                          char *err,
+                          size_t errcap)
 {
+    (void)engine;
     @autoreleasepool
     {
         CGImageRef img = NULL;

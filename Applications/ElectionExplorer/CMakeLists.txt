@@ -3,8 +3,9 @@
 # Windows builds keep using Applications.sln (ElectionExplorer.vcxproj, MSIX packaging);
 # this file is only for macOS and Linux. It builds
 #   ee_engine   - the engine (all of src/ except the Win32 UI main.c, ocr_win.c and
-#                 settings.c) with the POSIX platform layer in src/platform/posix/ and, on
-#                 macOS, OCR through Apple Vision (src/platform/macos/)
+#                 settings.c) with the POSIX platform layer in src/platform/posix/ and OCR
+#                 through Apple Vision (macOS, src/platform/macos/) or Tesseract (Linux, when
+#                 installed; src/platform/linux/)
 #   smoke_load  - the smoke suite (test/smoke_load.c), run from this folder
 #   data_check  - the loader harness used by test/backup_data.py (test/data_check.c)
 #
@@ -79,20 +80,37 @@ add_library(ee_engine STATIC
     ${EE_POSIX}/ee_port.c
     ${EE_POSIX}/settings_posix.c
 )
+# OCR: ocr_bridge.c implements ocr_win.h on top of an engine's plain C interface
+# (src/platform/posix/ocr_engine.h). The engine files never see the stand-in windows.h, whose
+# BOOL and macros clash with Objective-C's and Leptonica's.
+option(EE_WITH_TESSERACT "Linux: read scanned documents with Tesseract when it is installed" ON)
 if(APPLE)
-    # OCR through Apple's Vision framework: ocr_apple.c implements ocr_win.h on top of
-    # ocr_vision.m, which is Objective-C behind a plain C bridge (ocr_vision.h) and never sees
-    # the stand-in windows.h (Objective-C has its own BOOL).
+    # Apple Vision (Objective-C)
     enable_language(OBJC)
     set(EE_MACOS "${EE_SRC}/platform/macos")
-    target_sources(ee_engine PRIVATE ${EE_MACOS}/ocr_apple.c ${EE_MACOS}/ocr_vision.m)
-    target_include_directories(ee_engine PRIVATE ${EE_MACOS})
+    target_sources(ee_engine PRIVATE ${EE_POSIX}/ocr_bridge.c ${EE_MACOS}/ocr_vision.m)
+    target_include_directories(ee_engine PRIVATE ${EE_POSIX})
     set_source_files_properties(${EE_MACOS}/ocr_vision.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(ee_engine PUBLIC
         "-framework Vision" "-framework CoreGraphics" "-framework ImageIO" "-framework Foundation")
 else()
-    # No OCR engine yet (Tesseract is planned): scanned documents are refused with a message.
-    target_sources(ee_engine PRIVATE ${EE_POSIX}/ocr_none.c)
+    if(EE_WITH_TESSERACT)
+        find_package(PkgConfig QUIET)
+        if(PKG_CONFIG_FOUND)
+            pkg_check_modules(EE_TESS QUIET tesseract lept)
+        endif()
+    endif()
+    if(EE_TESS_FOUND)
+        # Tesseract and Leptonica (Ubuntu: libtesseract-dev libleptonica-dev tesseract-ocr-eng)
+        message(STATUS "OCR: Tesseract ${EE_TESS_tesseract_VERSION}")
+        target_sources(ee_engine PRIVATE ${EE_POSIX}/ocr_bridge.c ${EE_SRC}/platform/linux/ocr_tesseract.c)
+        target_include_directories(ee_engine PRIVATE ${EE_POSIX} ${EE_TESS_INCLUDE_DIRS})
+        target_link_libraries(ee_engine PUBLIC ${EE_TESS_LINK_LIBRARIES})
+    else()
+        # no OCR engine: scanned documents are refused with a message
+        message(STATUS "OCR: none (install Tesseract for scanned documents)")
+        target_sources(ee_engine PRIVATE ${EE_POSIX}/ocr_none.c)
+    endif()
 endif()
 # The stand-in windows.h / strsafe.h / intsafe.h come first, ahead of the system headers.
 target_include_directories(ee_engine BEFORE PUBLIC ${EE_POSIX}/include)
@@ -116,6 +134,12 @@ endif()
 
 add_executable(smoke_load test/smoke_load.c ${EE_POSIX}/wmain_posix.c)
 target_link_libraries(smoke_load PRIVATE ee_engine)
+if(APPLE)
+    # the OCR tests' page images and glyph outlines, drawn with CoreGraphics / CoreText in place
+    # of GDI (test/tdraw_apple.c; plain C behind test/tdraw.h)
+    target_sources(smoke_load PRIVATE test/tdraw_apple.c)
+    target_link_libraries(smoke_load PRIVATE "-framework CoreText")
+endif()
 
 add_executable(data_check test/data_check.c ${EE_POSIX}/wmain_posix.c)
 target_link_libraries(data_check PRIVATE ee_engine)

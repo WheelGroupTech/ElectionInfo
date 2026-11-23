@@ -30,6 +30,43 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-22 — Linux: scanned documents read through Tesseract; glyph reports and OCR tests without GDI
+- **What:**
+  - **Linux OCR:** scanned documents are now read on Linux through Tesseract and Leptonica, when they are installed. Pages are prepared as for Windows OCR: decoded, made gray, scaled, capped at 10,000 pixels and turned.
+  - **Where Tesseract differs from Windows OCR:**
+    - It reads sideways text in place, so sideways words are left out and a page scanned sideways is turned.
+    - It gives printed rules as words of spaces, which are left out.
+  - **One bridge for both engines:** Apple Vision and Tesseract sit behind one plain C engine interface (`ocr_engine.h`), on which `ocr_bridge.c` implements `ocr_win.h`. The first version's `ocr_apple.c` and `ocr_vision.h` are gone.
+  - **Glyph reports without GDI:** reports printed through PScript5 (Travis L22, LR22, PR22) now load on macOS and Linux. `go_draw` fills their glyph outlines with a scanline rasterizer there; Windows keeps GDI.
+  - **OCR smoke tests on the Mac:** `hartocr`, `resglyph` and `ressos` draw their test pages and Arial glyph outlines with CoreGraphics and CoreText, and run on macOS. On Linux they are still skipped.
+- **Where:**
+  - New `src/platform/posix/ocr_engine.h` and `ocr_bridge.c`, and new `src/platform/linux/ocr_tesseract.c`.
+  - `src/platform/macos/ocr_vision.m` implements `ocr_engine.h`; `ocr_apple.c` and `ocr_vision.h` are removed.
+  - `src/ee_glyph_ocr.c`: `go_edge`, `go_fill` and the non-Windows `go_draw`.
+  - `CMakeLists.txt`:
+    - the bridge on both platforms;
+    - Tesseract through `pkg-config` (option `EE_WITH_TESSERACT`), else `ocr_none.c`;
+    - `test/tdraw_apple.c` and CoreText for `smoke_load` on Apple.
+  - `test/smoke_load.c`:
+    - Apple versions of `TPage`;
+    - the Type 3 font's glyphs through `T3Glyphs` (GDI on Windows, CoreText on Apple);
+    - `hartocr` checks for `EeOcr_EngineName()`;
+    - the Linux skip message.
+  - New `test/tdraw.h` and `test/tdraw_apple.c`; `test/README.md`.
+- **Checked:**
+  - **Builds:** the Windows x64 Release app with no warnings, Mac universal Debug and Release, and Linux with Tesseract 5.3.4; no new warnings.
+  - **Smoke suites:** Windows passes with all OCR tests, and so does the Mac. Linux passes with the three OCR tests skipped.
+  - **Travis glyph reports:** all three give Windows' totals on the Mac and on Linux (199, 6 and 18).
+  - **Tesseract against Windows OCR, `data_check` with every choice's total:**
+    - **Sample** (41 scanned results files and the 7 Secretary of State forms): 44 of 48 load, 1,459 totals equal and 48 differ.
+    - **Refused:** three Guadalupe 2026 reports, whose halftone heading band Tesseract takes for a picture, and one Cameron summary.
+    - **The rest of the scanned results files** (189): 133 of Windows' 139 load.
+  - **Apple Vision on the same 189 files** (182 read so far): 124 load on both.
+    - On those 182 files Vision matches Windows on 1,123 totals and differs on 341; Tesseract matches on 780 and differs on 378.
+    - The differences are mostly in Cameron's ERM scans, where Windows OCR itself leaves 7.5% of rows not adding up.
+  - **Speed:** with seven processes at once on 8 cores, Tesseract's OpenMP threads slowed files from 30 seconds to over 50 minutes. Batch runs set `OMP_THREAD_LIMIT=1`; `test/README.md` says so.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md): "Glyph outlines without GDI" and "Tesseract OCR on Linux".
+
 ### 2026-11-22 — macOS: scanned documents read by OCR through Apple Vision
 - **What:**
   - **OCR on the Mac:** scanned results reports, Secretary of State canvass forms and scanned Hart CVRs are now read on macOS through Apple's Vision framework, behind the same OCR interface as Windows OCR (`ocr_win.h`).

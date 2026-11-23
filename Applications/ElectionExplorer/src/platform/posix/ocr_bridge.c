@@ -1,14 +1,16 @@
 /**
- * @file ocr_apple.c
- * @brief macOS implementation of the OCR interface in ocr_win.h, through Apple's Vision
- *        framework (ocr_vision.m, reached through the plain C bridge in ocr_vision.h).
+ * @file ocr_bridge.c
+ * @brief macOS and Linux implementation of the OCR interface in ocr_win.h, on top of an OCR
+ *        engine's plain C interface (ocr_engine.h): Apple Vision on macOS
+ *        (src/platform/macos/ocr_vision.m), Tesseract on Linux
+ *        (src/platform/linux/ocr_tesseract.c).
  *
  * Images are prepared as on Windows (scaled, capped at Windows OCR's 10,000-pixel side, made
  * gray, turned), so the readers built on Windows OCR's output get the same pages.
  */
 
 #include "ocr_win.h"
-#include "ocr_vision.h"
+#include "ocr_engine.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +20,7 @@
 
 struct EeOcr
 {
+    void *engine;
     int quarter_turns;
 };
 
@@ -35,7 +38,13 @@ static void set_err(wchar_t *err, size_t cch, const char *msg)
 
 const wchar_t *EeOcr_EngineName(void)
 {
-    return L"Apple Vision";
+    static wchar_t name[64];
+    if (name[0] == L'\0' &&
+        MultiByteToWideChar(CP_UTF8, 0, EeOcrEngine_Name(), -1, name, (int)ARRAYSIZE(name)) <= 0)
+    {
+        StringCchCopyW(name, ARRAYSIZE(name), L"OCR");
+    }
+    return name;
 }
 
 void EeOcr_TextInit(EeOcrText *t)
@@ -64,16 +73,18 @@ BOOL EeOcr_Create(EeOcr **out, wchar_t *err, size_t errcch)
     {
         return FALSE;
     }
-    *out = NULL;
-    if (!EeVision_Available(e, sizeof(e)))
-    {
-        set_err(err, errcch, e);
-        return FALSE;
-    }
     *out = (EeOcr *)calloc(1, sizeof(EeOcr));
     if (*out == NULL)
     {
         set_err(err, errcch, "Out of memory.");
+        return FALSE;
+    }
+    (*out)->engine = EeOcrEngine_Open(e, sizeof(e));
+    if ((*out)->engine == NULL)
+    {
+        set_err(err, errcch, e[0] != '\0' ? e : "Text recognition is not available.");
+        free(*out);
+        *out = NULL;
         return FALSE;
     }
     return TRUE;
@@ -81,7 +92,11 @@ BOOL EeOcr_Create(EeOcr **out, wchar_t *err, size_t errcch)
 
 void EeOcr_Destroy(EeOcr *ocr)
 {
-    free(ocr);
+    if (ocr != NULL)
+    {
+        EeOcrEngine_Close(ocr->engine);
+        free(ocr);
+    }
 }
 
 void EeOcr_SetRotation(EeOcr *ocr, int quarter_turns)
@@ -116,7 +131,7 @@ static BOOL text_append(EeOcrText *t, const char *s, size_t n)
     return TRUE;
 }
 
-/* EeVisionWordFn: one word into the EeOcrText, a new line first when Vision starts one. */
+/* EeOcrEngineWordFn: one word into the EeOcrText, a new line first when the engine starts one. */
 static int add_word(void *user,
                     int new_line,
                     const char *utf8,
@@ -203,24 +218,25 @@ static BOOL recognize(EeOcr *ocr,
         out->text[0] = '\0';
     }
     out->width = out->height = 0;
-    if (!EeVision_Recognize(data,
-                            len,
-                            (const uint8_t *)px,
-                            w,
-                            h,
-                            stride,
-                            channels,
-                            scale,
-                            EE_OCR_MAX_DIM,
-                            ocr->quarter_turns,
-                            add_word,
-                            out,
-                            &out->width,
-                            &out->height,
-                            e,
-                            sizeof(e)))
+    if (!EeOcrEngine_Recognize(ocr->engine,
+                               data,
+                               len,
+                               (const uint8_t *)px,
+                               w,
+                               h,
+                               stride,
+                               channels,
+                               scale,
+                               EE_OCR_MAX_DIM,
+                               ocr->quarter_turns,
+                               add_word,
+                               out,
+                               &out->width,
+                               &out->height,
+                               e,
+                               sizeof(e)))
     {
-        set_err(err, errcch, e[0] != '\0' ? e : "Apple Vision text recognition failed");
+        set_err(err, errcch, e[0] != '\0' ? e : "Text recognition failed.");
         return FALSE;
     }
     return TRUE;

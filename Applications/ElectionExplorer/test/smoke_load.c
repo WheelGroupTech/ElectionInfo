@@ -22,6 +22,9 @@
 #include <string.h>
 #include <strsafe.h>
 #include <windows.h>
+#ifdef __APPLE__
+#include "tdraw.h" /* the fixtures' text drawing in place of GDI */
+#endif
 
 /** Travis-style history exports currently have ~389 source columns. */
 static const uint32_t k_WideSourceColumns = 400;
@@ -6080,7 +6083,7 @@ done:
 
 /* ---- Scanned (image-only) Hart CVR Report: OCR path ----------------------------- */
 
-#ifdef _WIN32 /* GDI */
+#ifdef _WIN32 /* GDI (macOS: CoreGraphics and CoreText below) */
 /* A gray page bitmap drawn with GDI at 144 dpi (2 px per PDF point, letter size). */
 typedef struct TPage
 {
@@ -6159,7 +6162,40 @@ static unsigned char *tpage_end(TPage *p)
     DeleteDC(p->dc);
     return g;
 }
+#endif /* _WIN32 */
 
+#ifdef __APPLE__
+/* The same page drawn with CoreGraphics and CoreText (test/tdraw_apple.c): Helvetica in place
+ * of Segoe UI, 22 pixels to the em. */
+typedef struct TPage
+{
+    TDrawPage *pg;
+} TPage;
+
+static BOOL tpage_begin(TPage *p)
+{
+    p->pg = TDraw_PageBegin(1224, 1584, 22.0);
+    return p->pg != NULL;
+}
+
+static void tpage_text(TPage *p, int x, int y, const wchar_t *s)
+{
+    char u8[512];
+    if (WideCharToMultiByte(CP_UTF8, 0, s, -1, u8, (int)sizeof(u8), NULL, NULL) > 0)
+    {
+        TDraw_Text(p->pg, x, y, u8);
+    }
+}
+
+static unsigned char *tpage_end(TPage *p)
+{
+    unsigned char *g = TDraw_PageEnd(p->pg);
+    p->pg = NULL;
+    return g;
+}
+#endif /* __APPLE__ */
+
+#if defined(_WIN32) || defined(__APPLE__)
 /* Hart page banner (dropped by the reader as page furniture). */
 static void tpage_banner(TPage *p, const wchar_t *page_of)
 {
@@ -6198,7 +6234,7 @@ static int tpage_row(TPage *p, int y, const wchar_t *title, const wchar_t *optio
     tpage_text(p, 630, y, option);
     return y + 35;
 }
-#endif /* _WIN32 */
+#endif /* _WIN32 || __APPLE__ */
 
 /* Write a PDF whose pages are each one full-page 8-bit gray Flate image (no text). */
 static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, int npages,
@@ -6279,7 +6315,7 @@ static BOOL tpdf_write_images(const wchar_t *path, unsigned char *const *pages, 
  * OCR -- one row per ballot sheet, a vote-for-2 contest from repeated title rows, an
  * undervote, the OCR Status key column and the load note. Skipped (passes) when Windows
  * OCR is unavailable on the machine. */
-#ifdef _WIN32 /* the scanned pages are drawn with GDI and read with Windows OCR */
+#if defined(_WIN32) || defined(__APPLE__) /* pages drawn with GDI / CoreText, read by OCR */
 static int test_hart_ocr(void)
 {
     wchar_t path[MAX_PATH];
@@ -6353,7 +6389,7 @@ static int test_hart_ocr(void)
         goto done;
     }
     if (!EeCvr_FindColumnByTitle(&t, L"OCR Status", &col) || t.load_note == NULL ||
-        wcsstr(t.load_note, L"Windows OCR") == NULL)
+        wcsstr(t.load_note, EeOcr_EngineName()) == NULL)
     {
         wprintf(L"hartocr: OCR Status column / load note missing\n");
         goto done;
@@ -6399,7 +6435,7 @@ done:
 #else
 static int test_hart_ocr(void)
 {
-    wprintf(L"hartocr skipped (its test pages are drawn with Windows GDI)\n");
+    wprintf(L"hartocr skipped (its test pages are drawn with GDI or CoreText, which this platform lacks)\n");
     return 0;
 }
 #endif
@@ -13239,14 +13275,54 @@ static BOOL rpdf_t3_spread(TBuf *c, double y, double size, double ra, const char
     return ok && tb_printf(c, "ET\n");
 }
 
-#ifdef _WIN32 /* GDI glyph outlines for the Type 3 font */
+#if defined(_WIN32) || defined(__APPLE__) /* glyph outlines for the Type 3 font: GDI / CoreText */
+#ifdef _WIN32
 #define T3FX(f) (((double)(f).value + (double)(f).fract / 65536.0) / 1000.0)
+
+/* Arial at 1,000 units to the em, for GetGlyphOutlineW. */
+typedef struct T3Glyphs
+{
+    HDC dc;
+    HFONT font;
+    HGDIOBJ old;
+} T3Glyphs;
+
+static BOOL rpdf_t3_glyphs_open(T3Glyphs *g)
+{
+    ZeroMemory(g, sizeof(*g));
+    g->dc = CreateCompatibleDC(NULL);
+    g->font = CreateFontW(-1000, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_TT_ONLY_PRECIS,
+                          CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Arial");
+    if (g->dc == NULL || g->font == NULL)
+    {
+        return FALSE;
+    }
+    g->old = SelectObject(g->dc, g->font);
+    return TRUE;
+}
+
+static void rpdf_t3_glyphs_close(T3Glyphs *g)
+{
+    if (g->old != NULL)
+    {
+        SelectObject(g->dc, g->old);
+    }
+    if (g->font != NULL)
+    {
+        DeleteObject(g->font);
+    }
+    if (g->dc != NULL)
+    {
+        DeleteDC(g->dc);
+    }
+}
 
 /* Character @p ch's CharProc: Arial's outline (1 em = 1, y up) filled; a space draws
  * nothing. */
-static BOOL rpdf_t3_proc(HDC dc, char ch, TBuf *out)
+static BOOL rpdf_t3_proc(T3Glyphs *gl, char ch, TBuf *out)
 {
     static const MAT2 k_ident = {{0, 1}, {0, 0}, {0, 0}, {0, 1}};
+    HDC dc = gl->dc;
     GLYPHMETRICS gm;
     DWORD n;
     unsigned char *buf, *p;
@@ -13317,6 +13393,53 @@ static BOOL rpdf_t3_proc(HDC dc, char ch, TBuf *out)
     free(buf);
     return ok && tb_printf(out, "f\n");
 }
+#else /* __APPLE__: Arial's outlines from CoreText (test/tdraw_apple.c) */
+typedef struct T3Glyphs
+{
+    int unused;
+} T3Glyphs;
+
+static BOOL rpdf_t3_glyphs_open(T3Glyphs *g)
+{
+    g->unused = 0;
+    return TRUE;
+}
+
+static void rpdf_t3_glyphs_close(T3Glyphs *g)
+{
+    (void)g;
+}
+
+/* TDrawPathFn: one outline element as a path operator of the CharProc. */
+static int rpdf_t3_path(void *user, int op, double x0, double y0, double x1, double y1, double x2, double y2)
+{
+    TBuf *out = (TBuf *)user;
+    switch (op)
+    {
+        case 0:
+            return tb_printf(out, "%.4f %.4f m\n", x0, y0);
+        case 1:
+            return tb_printf(out, "%.4f %.4f l\n", x0, y0);
+        case 2:
+            return tb_printf(out, "%.4f %.4f %.4f %.4f %.4f %.4f c\n", x0, y0, x1, y1, x2, y2);
+        default:
+            return tb_printf(out, "h\n");
+    }
+}
+
+/* Character @p ch's CharProc: Arial's outline (1 em = 1, y up) filled; a space draws
+ * nothing. */
+static BOOL rpdf_t3_proc(T3Glyphs *gl, char ch, TBuf *out)
+{
+    BOOL ok = tb_printf(out, "1 0 -10 -10 10 10 d1\n");
+    (void)gl;
+    if (ch == ' ')
+    {
+        return ok;
+    }
+    return ok && TDraw_GlyphOutline(ch, rpdf_t3_path, out) && tb_printf(out, "f\n");
+}
+#endif
 
 /* Write a PDF as Acrobat Distiller makes it from PScript5's output: the pages' text in font
  * T1, a Type 3 font whose glyphs (named /0 /1 ... in order of first use, a space /i255) are
@@ -13326,17 +13449,10 @@ static BOOL rpdf_t3_write(const wchar_t *path, TBuf *pages, int npages, const T3
     TBuf b = {0};
     uint64_t offs[256];
     int nobj = 5 + t3->n + 2 * npages, i;
-    HDC dc = CreateCompatibleDC(NULL);
-    HFONT font = CreateFontW(-1000, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_TT_ONLY_PRECIS,
-                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Arial");
-    HGDIOBJ old = NULL;
+    T3Glyphs gl;
     FILE *fp = NULL;
     uint64_t xref;
-    BOOL ok = dc != NULL && font != NULL && nobj < (int)ARRAYSIZE(offs);
-    if (ok)
-    {
-        old = SelectObject(dc, font);
-    }
+    BOOL ok = rpdf_t3_glyphs_open(&gl) && nobj < (int)ARRAYSIZE(offs);
     ok = ok && tb_printf(&b, "%%PDF-1.4\n");
 #define OBJ(n) (offs[n] = b.len, ok = ok && tb_printf(&b, "%d 0 obj\n", n))
     OBJ(1);
@@ -13374,7 +13490,7 @@ static BOOL rpdf_t3_write(const wchar_t *path, TBuf *pages, int npages, const T3
     for (i = 0; i < t3->n && ok; i++)
     {
         TBuf g = {0};
-        ok = rpdf_t3_proc(dc, t3->ch[i], &g);
+        ok = rpdf_t3_proc(&gl, t3->ch[i], &g);
         OBJ(6 + i);
         ok = ok && tb_printf(&b, "<< /Length %u >>\nstream\n", (unsigned)g.len) && tb_add(&b, g.p, g.len) &&
              tb_printf(&b, "\nendstream\nendobj\n");
@@ -13407,29 +13523,18 @@ static BOOL rpdf_t3_write(const wchar_t *path, TBuf *pages, int npages, const T3
             fclose(fp);
         }
     }
-    if (old != NULL)
-    {
-        SelectObject(dc, old);
-    }
-    if (font != NULL)
-    {
-        DeleteObject(font);
-    }
-    if (dc != NULL)
-    {
-        DeleteDC(dc);
-    }
+    rpdf_t3_glyphs_close(&gl);
     free(b.p);
     return ok;
 }
-#endif /* _WIN32 */
+#endif /* _WIN32 || __APPLE__ */
 
 /* A results report printed to PDF through PScript5 (tag: resglyph): its text, drawn by a
  * Type 3 font of unnamed glyph outlines (each declared 1 em wide and placed one at a time, a
  * space an empty glyph), is read through OCR; two cells shown as one string spread by a
  * character spacing that a Q restored read as two; the summary then agrees with the
  * plain-text precinct report. */
-#ifdef _WIN32 /* the fixture is drawn with GDI and read with Windows OCR */
+#if defined(_WIN32) || defined(__APPLE__) /* the fixture's glyphs from GDI / CoreText, read by OCR */
 static int test_results_glyphs(void)
 {
     wchar_t dir[MAX_PATH], p_sum[MAX_PATH], p_pre[MAX_PATH];
@@ -13543,13 +13648,13 @@ done:
 #else
 static int test_results_glyphs(void)
 {
-    wprintf(L"resglyph skipped (its test pages are drawn with Windows GDI)\n");
+    wprintf(L"resglyph skipped (its test pages are drawn with GDI or CoreText, which this platform lacks)\n");
     return 0;
 }
 #endif
 
 /* Texas Secretary of State canvass report, signed and scanned (tag: ressos). */
-#ifdef _WIN32 /* the scanned pages are drawn with GDI and read with Windows OCR */
+#if defined(_WIN32) || defined(__APPLE__) /* pages drawn with GDI / CoreText, read by OCR */
 /* Write @p pages as Acrobat's Paper Capture leaves a scan (Brazos's): each page image drawn
  * through a form XObject, under an invisible OCR text layer with letters doubled and numbers on
  * the wrong rows, and "Paper Capture" in the Producer. */
@@ -13796,7 +13901,7 @@ done:
 #else
 static int test_results_sos(void)
 {
-    wprintf(L"ressos skipped (its test pages are drawn with Windows GDI)\n");
+    wprintf(L"ressos skipped (its test pages are drawn with GDI or CoreText, which this platform lacks)\n");
     return 0;
 }
 #endif

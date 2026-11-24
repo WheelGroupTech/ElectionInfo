@@ -10,7 +10,7 @@
  * value from the right-click menu, Copy (Cmd-C), Export Voter List... and Export Selected...,
  * Show Duplicate Voter IDs / Voters, Reset View, the Precinct and Address reports (Reports menu,
  * a window each), Settings... (Windows' Options, kept between runs), Show in Maps... on an Address
- * cell, and a status line. The list comes from the
+ * cell, Open link... on a cell with an https:// link, and a status line. The list comes from the
  * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
  * Sorting and filtering are the engine's, computed on a background queue
@@ -124,6 +124,7 @@ static void export_type_changed(NSPopUpButton *type)
 /* the right-clicked cell */
 @property(assign) uint32_t quickColumn;
 @property(copy) NSString *quickValue;
+@property(copy) NSString *quickLink; /* the cell's link for Open link..., or nil */
 - (void)openPath:(NSString *)path;
 - (void)setRules:(const EeUiRule *)rules count:(NSUInteger)n;
 - (void)addRules:(NSData *)rules;
@@ -1920,13 +1921,14 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 {
     NSInteger row = self.table.clickedRow, col = self.table.clickedColumn;
     [menu removeAllItems];
+    self.quickLink = nil;
     if (self.voters != NULL && !self.jobRunning && row >= 0 && ![self.table.selectedRowIndexes containsIndex:(NSUInteger)row])
     {
         /* (as on Windows: a right-click outside the selection selects that row) */
         [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
     }
-    /* Windows' order: Copy; Include, Exclude; Show in Maps... (an address); Filter...; Export
-     * Selected... */
+    /* Windows' order: Copy; Include, Exclude; Show in Maps... (an address); Open link... (a
+     * file column's https:// link); Filter...; Export Selected... */
     [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""].target = self;
     [menu addItem:[NSMenuItem separatorItem]];
     if (self.voters != NULL && !self.jobRunning && row >= 0 && col >= 0)
@@ -1951,6 +1953,16 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
             [menu addItemWithTitle:@"Show in Maps…" action:@selector(showCellInMaps:) keyEquivalent:@""].target = self;
             [menu addItem:[NSMenuItem separatorItem]];
         }
+        {
+            char *link = EeUiVoters_CellLink(self.quickColumn, value.UTF8String);
+            self.quickLink = link != NULL ? ns_utf8(link) : nil;
+            free(link);
+        }
+        if (self.quickLink != nil)
+        {
+            [menu addItemWithTitle:@"Open link…" action:@selector(openCellLink:) keyEquivalent:@""].target = self;
+            [menu addItem:[NSMenuItem separatorItem]];
+        }
     }
     [menu addItemWithTitle:@"Filter…" action:@selector(showFilter:) keyEquivalent:@""].target = self;
     [menu addItem:[NSMenuItem separatorItem]];
@@ -1970,6 +1982,33 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     }
     a = [[NSAlert alloc] init];
     a.messageText = u == nil ? @"Could not build a map link for this address." : @"Could not open the map in a browser.";
+    [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+/* Open link... on a cell of the file's own columns: its https:// link, in the browser */
+- (void)openCellLink:(id)sender
+{
+    NSURL *u;
+    NSAlert *a;
+    if (self.quickLink == nil)
+    {
+        return;
+    }
+    u = [NSURL URLWithString:self.quickLink];
+    if (u == nil)
+    {
+        /* (Windows opens what the cell has; NSURL wants characters such as { } | or non-ASCII
+         * ones escaped: escape those, leaving the link's own %XX as they are) */
+        NSMutableCharacterSet *keep = [NSCharacterSet.URLFragmentAllowedCharacterSet mutableCopy];
+        [keep addCharactersInString:@"#%[]"];
+        u = [NSURL URLWithString:[self.quickLink stringByAddingPercentEncodingWithAllowedCharacters:keep]];
+    }
+    if (u != nil && [NSWorkspace.sharedWorkspace openURL:u])
+    {
+        return;
+    }
+    a = [[NSAlert alloc] init];
+    a.messageText = @"Could not open the link in a browser.";
     [a beginSheetModalForWindow:self.window completionHandler:nil];
 }
 

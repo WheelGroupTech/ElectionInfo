@@ -248,7 +248,13 @@ Saved filters (added 2026-11-24), as on Windows:
 - Both dialogs start in the folder of the last filter exported or loaded in this run, as on Windows.
 - **The bridge:** `EeUiFilterFile_Name`, `EeUiFilterFile_Path` (the extension rule), `EeUiVoters_SaveFilter`, `EeUiVoters_LoadFilter` (with Windows' date check and messages).
 - **Windows has no Find in the voter list window** (Edit has Copy and Options… only; the Filter window does the narrowing). "Find" was listed here by mistake from 2026-11-22 on, and is dropped (the user's decision, 2026-11-24). The only Find box on Windows is in Window > Windows…, which the port does not have yet (it has one window).
-- Not yet: Show Duplicate Voters Voting (it needs a roster), Open link… in the right-click menu (Windows shows it only on a cell of the scrolling pane whose text holds an `https://` address, `App_ExtractHttpsUrl`; voter lists rarely have one, so it is seldom seen).
+
+Open link (added 2026-11-24), as on Windows:
+- **Open link…** in the right-click menu, after Show in Maps…, on a cell of the file's own columns (Windows' scrolling pane, not Voter ID, Precinct, Name or Address) whose text holds an `https://` address. It opens that address in the browser; if it cannot: "Could not open the link in a browser." Voter lists rarely have such a column, so it is seldom seen.
+- **The link** is Windows' (`App_ExtractHttpsUrl`), in the bridge's `EeUiVoters_CellLink`: the first "https://" in the cell, in any case; it ends at a space, tab, line break, < > " ' ( or ), without a trailing . , ; : or ]; "https://" alone is none, and so is "http://".
+- On the Mac, an address NSURL will not take as it is (characters such as { } | or non-ASCII ones) is escaped first, leaving its own %XX as they are; GTK hands it to the desktop as it is.
+- `test/sample_links.csv` is a made-up list with links in two columns, to try it by hand.
+- Not yet: Show Duplicate Voters Voting (it needs a roster).
 
 - **`src/ui/ee_ui_voters.{h,c}`:** the bridge, plain C types only. It wraps `EeVoterTable` and `EeFilterSet` (load with progress and cancel, UTF-8 titles and cells, numeric columns, rules as `EeUiRule`, views with duplicates marks, `CopyText`, `Export`, the status line's count in the Windows words, `Sort` that toggles and `SortTo` with a direction) and holds the shared `--selftest`, which also filters, copies and finds duplicates. The window code never includes the engine's headers: the stand-in `windows.h` defines `BOOL`, which clashes with Objective-C's.
 - **macOS, `src/ui/macos/app_main.m`** (ARC): an `NSTableView` that asks for the visible cells only, programmatic menus (⌘O, ⌘W, ⌘C, ⌘A, ⌘L, ⌘, for Settings, recent documents), the Filter window as a sheet (`EeFilterSheet`), the right-click menu built in `menuNeedsUpdate:`, `NSAlert` for errors. CMake target `ee_app` builds `Election Explorer.app` (universal).
@@ -293,6 +299,7 @@ Saved filters (added 2026-11-24), as on Windows:
 - **Checked with saved filters (2026-11-24),** on both platforms (Debug and Release, no warnings):
   - `--selftest` on both samples prints the same on Linux and the Mac: two rules (one off, with a comma, quotes and a trailing space in its value) saved as CSV and as TSV and loaded back the same; a typed ".TSV" kept; Windows' messages for a column the list lacks and a date that is not one, a file with no rules, no file, and no rules to save. CI checks four of those lines.
   - Snapshots on both: two rules from the right-click menu exported to a name without an extension (it became `mine.filter.csv`); that file loaded and exported again as TSV, with the same rules; exporting again to `mine` asked before replacing `mine.filter.csv` and left it as it was; a filter with a column the list lacks loaded its other rule (off, as saved), with the warning open (on the Mac the sheet is dimmed behind it).
+- **Checked with Open link (2026-11-24),** on both platforms (Debug and Release, no warnings): `--selftest` prints the same on Linux and the Mac: Windows' rule on made-up cells (a link in capitals with a trailing period, one in parentheses, one in < >, "https://" alone, "http://", the Address column) and the 4 links in `sample_links.csv`. CI checks those lines. The menu itself is for the user to try (snapshots cannot open a menu).
 - **Checked by hand (the user, 2026-11-23):**
   - On WSLg: sorting by a heading, and opening the Dallas list.
   - **WSLg shows the menus behind the window:** the header bar's menu opens in front the first time, and behind the window (a sliver showing) from the second time on. GTK draws each menu as a window of its own; WSLg seems to bring the main window back in front of it. The X11 backend (`GDK_BACKEND=x11`) was hard to try, since WSLg showed no mouse pointer over it.
@@ -302,7 +309,7 @@ Saved filters (added 2026-11-24), as on Windows:
   - **Saved filters (the user, 2026-11-24),** in the VM and on the Mac: Export Filter… and Load Filter… with their file dialogs, the replace question, and a filter file saved by Windows Election Explorer.
   - **Show in Maps… (the user, 2026-11-24),** in the VM and on the Mac: on an Address cell's right-click menu, and after changing the map engine in Options.
   - **The other clicks (the user, 2026-11-24):** Add and OK in the Filter window, Copy's paste, and the Export dialogs.
-- **Not checked yet, one by one:** none of the window's clicks are left (all tried by the user, above). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
+- **Not checked yet, one by one:** Open link… on `test/sample_links.csv` (the other clicks were all tried by the user, above). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
 - **Known limits:** an export runs on the UI thread, as on Windows (4 s for 1.5 million rows in Release), and builds the whole file in memory first (2.9 GB peak with Dallas loaded, on Linux).
 
 ## Known gaps and next steps

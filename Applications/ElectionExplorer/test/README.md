@@ -5,6 +5,7 @@
 | `sample_voters.csv` | **Travis County** style headers (`VUIDNO`, `LSTNAM`, `FSTNAM`, …) | Comma-delimited |
 | `sample_voters.txt` | **Dallas County** style headers (`SOS_VoterID`, `lastname`, …) | Tab-delimited |
 | `sample_duplicates.csv` | **Travis County** style headers with `DOB` | Made-up rows for the duplicates views: 4 share a Voter ID, 4 share a name and birth date, twins differ by middle name |
+| `sample_links.csv` | **Travis County** style headers with `NOTES` and `SOURCE` | Made-up rows with `https://` links in two columns, for the macOS/Linux window's Open link... (4 links; an `http://` one is not a link) |
 | `smoke_load.c` | — | Optional console harness for `EeVoterTable_LoadFromFile` (samples, generated 400-column history header, copy-text format, ProcMon-style filter logic) |
 
 These are tiny synthetic rows for UI and parser smoke tests only. Do not commit

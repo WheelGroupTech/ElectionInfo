@@ -1585,6 +1585,67 @@ char *EeUiOptions_MapUrl(int engine, const char *address)
     return url;
 }
 
+char *EeUiVoters_CellLink(uint32_t column, const char *text)
+{
+    /* (Windows' App_ExtractHttpsUrl, which Open link... uses in the scrolling pane only) */
+    static const char prefix[] = "https://";
+    const char *start = NULL, *p;
+    size_t n, i;
+    char *url;
+    if (column < EE_FROZEN_COLUMN_COUNT || text == NULL)
+    {
+        return NULL;
+    }
+    for (p = text; *p != '\0' && start == NULL; p++)
+    {
+        for (i = 0; prefix[i] != '\0'; i++)
+        {
+            char c = p[i];
+            if (c >= 'A' && c <= 'Z')
+            {
+                c = (char)(c - 'A' + 'a');
+            }
+            if (c != prefix[i])
+            {
+                break;
+            }
+        }
+        if (prefix[i] == '\0')
+        {
+            start = p;
+        }
+    }
+    if (start == NULL)
+    {
+        return NULL;
+    }
+    n = strcspn(start, " \t\r\n<>\"'()");
+    while (n > 0 && strchr(".,;:]", start[n - 1]) != NULL)
+    {
+        n--;
+    }
+    if (n <= 8)
+    {
+        return NULL;
+    }
+    if (n > 2047)
+    {
+        /* (Windows keeps 2047 UTF-16 units; here bytes, not cutting a character in two) */
+        n = 2047;
+        while (n > 0 && ((unsigned char)start[n] & 0xC0) == 0x80)
+        {
+            n--;
+        }
+    }
+    url = (char *)malloc(n + 1);
+    if (url != NULL)
+    {
+        memcpy(url, start, n);
+        url[n] = '\0';
+    }
+    return url;
+}
+
 int EeUiVoters_SetSurnameFirst(EeUiVoters *v, int surname_first)
 {
     BOOL want = surname_first ? TRUE : FALSE, used;
@@ -1838,6 +1899,39 @@ static void selftest_filter_rules(EeUiRule *rules)
     StringCchCopyA(rules[1].value, sizeof(rules[1].value), "Smith, \"J\" ");
 }
 
+/* Open link...: Windows' rule on made-up cells, then the shown cells that have a link */
+static void selftest_links(const EeUiVoters *v)
+{
+    static const char *const cells[] = {"See HTTPS://example.org/a?b=1&c=2.",
+                                        "(https://example.org/x_(y)), more",
+                                        "<https://example.org/q> \"https://example.net/\"",
+                                        "https://",
+                                        "http://example.org/",
+                                        ""};
+    uint32_t r, c, n = 0, columns = EeUiVoters_Columns(v);
+    size_t i;
+    char *url;
+    for (i = 0; i < sizeof(cells) / sizeof(cells[0]); i++)
+    {
+        url = EeUiVoters_CellLink(EE_FROZEN_COLUMN_COUNT, cells[i]);
+        printf("link %u: %s\n", (unsigned)i + 1, url != NULL ? url : "(none)");
+        free(url);
+    }
+    url = EeUiVoters_CellLink(EE_UI_COLUMN_ADDRESS, cells[0]);
+    printf("link in the Address column: %s\n", url != NULL ? url : "(none)");
+    free(url);
+    for (r = 0; r < EeUiVoters_Rows(v); r++)
+    {
+        for (c = 0; c < columns; c++)
+        {
+            url = EeUiVoters_CellLink(c, EeUiVoters_Cell(v, r, c));
+            n += url != NULL;
+            free(url);
+        }
+    }
+    printf("shown cells with a link: %u\n", n);
+}
+
 /* Export Filter... / Load Filter...: save and load in CSV and TSV, then the files Windows
  * warns about (a column the list lacks, a date that is not one, no rules, no file) */
 static void selftest_filter_file(const EeUiVoters *v)
@@ -1977,6 +2071,7 @@ int EeUiVoters_SelfTest(const char *path_utf8)
         selftest_report(v, EE_UI_REPORT_ADDRESS);
         selftest_options(v);
         selftest_filter_file(v);
+        selftest_links(v);
     }
     EeUiVoters_Free(v);
     return 0;

@@ -1,0 +1,5 @@
+VUIDNO,PCTCOD,LSTNAM,FSTNAM,MIDNAM,BLKNUM,STRNAM,STRTYP,RSCITY,RZIPCD,NOTES,SOURCE
+200001,101,Sample,Alex,B,10,Main,ST,Austin,78701,"Form at https://example.org/forms/200001.pdf, scanned",https://example.org/lists/
+200002,101,Example,Jordan,C,22,Oak,AVE,Austin,78701,No link here,http://example.org/plain-http
+200003,102,Testcase,Riley,D,35,Elm,DR,Austin,78702,(see HTTPS://example.net/a?b=1&c=2).,
+200004,102,Madeup,Casey,E,47,Pine,LN,Austin,78702,,https://example.com/x%20y

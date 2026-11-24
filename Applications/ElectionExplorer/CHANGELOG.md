@@ -30,6 +30,19 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-24 — macOS and Linux: Open link
+- **What:** Windows' Open link… in the macOS and Linux voter list window's right-click menu, after Show in Maps…: on a cell of the file's own columns whose text holds an `https://` address, it opens that address in the browser. The link is found by Windows' rule (`App_ExtractHttpsUrl`): the first "https://" in any case, up to a space, tab, line break, < > " ' ( or ), without a trailing . , ; : or ]. On the Mac an address NSURL will not take as it is is escaped first. A made-up list with links, `test/sample_links.csv`, is for trying it.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiVoters_CellLink`, `selftest_links`.
+  - `src/ui/gtk/app_main.c`: `on_cell_right_click` (the item), `open_link`, the `open-link` action; the right-clicked cell's text and link are freed when the window closes.
+  - `src/ui/macos/app_main.m`: `menuNeedsUpdate:` (the item), `openCellLink:`.
+  - `test/sample_links.csv`; `.github/workflows/election-explorer.yml` checks the self-test's link lines.
+- **Checked:**
+  - Builds: Linux and Mac, Debug and Release, with no warnings. `--selftest` prints the same on both platforms; the CI checks pass on Linux.
+  - The self-test checks Windows' rule on made-up cells (case, trailing punctuation, parentheses, < >, "https://" alone, "http://", the Address column) and counts the 4 links in `sample_links.csv`.
+  - The menu's click is for the user to try (the VM, the Mac).
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-24 — macOS and Linux: Export Filter and Load Filter
 - **What:** Windows' Export Filter… and Load Filter… in the macOS and Linux Filter window, at the left of its bottom row as on Windows. They write and read Windows' own filter file (UTF-8 CSV or TSV, columns named by title), so a filter saved on one platform loads on the others. Windows' naming rule ("<list> Filter.filter.csv"; a name without .csv / .tsv gets ".filter.csv" or ".filter.tsv", with a question before replacing that file), its date check on load and its messages ("Loaded 1 rule. 1 rule could not be used here:", "The file holds no filter rules.", "There are no filter rules to export."). "Find", listed as still to port, was dropped: Windows' voter list window has none.
 - **Where:**

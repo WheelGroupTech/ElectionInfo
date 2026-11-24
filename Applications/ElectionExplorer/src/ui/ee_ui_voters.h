@@ -395,6 +395,15 @@ extern "C"
     char *EeUiOptions_MapUrl(int engine, const char *address);
 
     /**
+     * Open link...: the first "https://" address (any case) in @p text, a cell of column
+     * @p column, as on Windows (App_ExtractHttpsUrl): only in the file's own columns (not Voter
+     * ID, Precinct, Name or Address); it ends at a space, tab, line break, < > " ' ( or ),
+     * without a trailing . , ; : or ]; at most 2047 bytes. Heap UTF-8 (free()), or NULL when
+     * the cell has no link.
+     */
+    char *EeUiVoters_CellLink(uint32_t column, const char *text);
+
+    /**
      * Rebuild the Name column surname first or given name first (on the UI thread, while no
      * EeUiVoters_ComputeView runs: it rewrites the cells). Returns 1 when the names changed and
      * the shown view used them (sorted by Name, or a rule on it: ask for a new view), 0 when

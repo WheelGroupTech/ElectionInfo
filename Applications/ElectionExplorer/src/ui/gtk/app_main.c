@@ -9,7 +9,8 @@
  * Exclude on a cell, Copy (Ctrl+C), Export Voter
  * List... and Export Selected..., Show Duplicate Voter IDs / Voters, Reset View, the Precinct
  * and Address reports (a window each), Edit > Options... (kept between runs, as on Windows),
- * Show in Maps... on an Address cell, and a status line. The list comes from the engine through
+ * Show in Maps... on an Address cell, Open link... on a cell with an https:// link, and a status
+ * line. The list comes from the engine through
  * ee_ui_voters.h (plain C).
  *
  * The rows are a GListModel of our own that makes a small row object only for the rows on
@@ -175,9 +176,10 @@ typedef struct VoterWindow
     GThread *job;
     const char *job_label; /* the running job's "Sorting" or "Filtering" */
 
-    /* the right-clicked cell, for Include / Exclude */
+    /* the right-clicked cell, for Include / Exclude, and its link for Open link... (or NULL) */
     guint quick_column;
     char *quick_value;
+    char *quick_link;
 
     FilterDialog *filter_dialog;
     ReportWindow *reports[EE_UI_REPORT_COUNT]; /* the open Precinct / Address reports */
@@ -913,8 +915,8 @@ static void on_cell_right_click(GtkGestureClick *g, int n_press, double x, doubl
         }
     }
 
-    /* Windows' order: Copy; Include, Exclude; Show in Maps... (an address); Filter...; Export
-     * Selected... */
+    /* Windows' order: Copy; Include, Exclude; Show in Maps... (an address); Open link... (a
+     * file column's https:// link); Filter...; Export Selected... */
     menu = g_menu_new();
     section = g_menu_new();
     g_menu_append(section, "Copy", "win.copy");
@@ -935,6 +937,15 @@ static void on_cell_right_click(GtkGestureClick *g, int n_press, double x, doubl
     {
         section = g_menu_new();
         g_menu_append(section, "Show in Maps\xE2\x80\xA6", "win.show-in-maps");
+        g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+        g_object_unref(section);
+    }
+    free(w->quick_link);
+    w->quick_link = EeUiVoters_CellLink(w->quick_column, w->quick_value);
+    if (w->quick_link != NULL)
+    {
+        section = g_menu_new();
+        g_menu_append(section, "Open link\xE2\x80\xA6", "win.open-link");
         g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
         g_object_unref(section);
     }
@@ -2469,6 +2480,28 @@ static void show_in_maps(VoterWindow *w)
     free(url);
 }
 
+/* Open link... on a cell of the file's own columns: its https:// link, in a browser */
+static void on_link_launched(GObject *source, GAsyncResult *result, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    if (!gtk_uri_launcher_launch_finish(GTK_URI_LAUNCHER(source), result, NULL) && !w->closed)
+    {
+        alert(w, "Could not open the link in a browser.", NULL);
+    }
+}
+
+static void open_link(VoterWindow *w)
+{
+    GtkUriLauncher *launcher;
+    if (w->quick_link == NULL)
+    {
+        return;
+    }
+    launcher = gtk_uri_launcher_new(w->quick_link);
+    gtk_uri_launcher_launch(launcher, w->window, NULL, on_link_launched, w);
+    g_object_unref(launcher);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Loading                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -2912,6 +2945,14 @@ static void action_show_in_maps(GSimpleAction *action, GVariant *param, gpointer
     show_in_maps(w);
 }
 
+static void action_open_link(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    (void)action;
+    (void)param;
+    open_link(w);
+}
+
 static void action_about(GSimpleAction *action, GVariant *param, gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
@@ -2957,6 +2998,10 @@ static void on_destroy(GtkWidget *widget, gpointer user)
     close_reports(w);
     EeUiVoters_Free(w->voters);
     w->voters = NULL;
+    g_free(w->quick_value);
+    w->quick_value = NULL;
+    free(w->quick_link);
+    w->quick_link = NULL;
 }
 
 static VoterWindow *voter_window_new(GtkApplication *app)
@@ -2989,6 +3034,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
         {"quick-exclude", action_quick_exclude, NULL, NULL, NULL, {0}},
         {"options", action_options, NULL, NULL, NULL, {0}},
         {"show-in-maps", action_show_in_maps, NULL, NULL, NULL, {0}},
+        {"open-link", action_open_link, NULL, NULL, NULL, {0}},
         {"about", action_about, NULL, NULL, NULL, {0}},
     };
     const char *open_accels[] = {"<Control>o", NULL}, *close_accels[] = {"<Control>w", NULL},

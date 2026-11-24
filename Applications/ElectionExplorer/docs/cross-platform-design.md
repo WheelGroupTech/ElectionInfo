@@ -300,7 +300,8 @@ Saved filters (added 2026-11-24), as on Windows:
   - In the VM: Include and Exclude from the right-click menu, and Reset in the Filter window, work. **Remove did nothing** (fixed; the user tried it again in the VM and it works): each rule row was a check button labeled with the rule, so a click on the text toggled the rule instead of selecting the row, and Remove had no selected row. A row is now a check box beside a separate label: a click on the text selects the rule, a click on the box turns it on or off and selects it too, and after Remove the next rule is selected.
   - In the VM: the Precinct and Address report windows work.
   - **Saved filters (the user, 2026-11-24),** in the VM and on the Mac: Export Filter… and Load Filter… with their file dialogs, the replace question, and a filter file saved by Windows Election Explorer.
-- **Not checked yet, one by one:** the other clicks (Add and OK in the Filter window; Copy's paste; the Export dialogs; the Options window's OK, and the options kept for the next run, which the user tried in the VM and on the Mac; Show in Maps… on an Address cell). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
+  - **Show in Maps… (the user, 2026-11-24),** in the VM and on the Mac: on an Address cell's right-click menu, and after changing the map engine in Options.
+- **Not checked yet, one by one:** the other clicks (Add and OK in the Filter window; Copy's paste; the Export dialogs; the Options window's OK, and the options kept for the next run, which the user tried in the VM and on the Mac). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
 - **Known limits:** an export runs on the UI thread, as on Windows (4 s for 1.5 million rows in Release), and builds the whole file in memory first (2.9 GB peak with Dallas loaded, on Linux).
 
 ## Known gaps and next steps

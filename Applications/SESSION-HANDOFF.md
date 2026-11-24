@@ -33,7 +33,8 @@
     in `fd_refresh` and tried again in the VM: it works. Not yet one by one: Add and OK in the Filter window,
     Copy's paste and the Export dialogs. The report windows work in the VM, and the Mac build works.
     Options work in the VM and on the Mac; the digits line up on the Mac. Export Filter… and Load
-    Filter… work in the VM and on the Mac (the dialogs, the replace question, a file from Windows).
+    Filter… work in the VM and on the Mac (the dialogs, the replace question, a file from Windows),
+    and so does Show in Maps… on an Address cell, with the map engine changed in Options.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options and saved-filter lines on `sample_duplicates.csv`.
 - **Next steps:**

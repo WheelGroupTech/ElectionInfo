@@ -309,7 +309,8 @@ Open link (added 2026-11-24), as on Windows:
   - **Saved filters (the user, 2026-11-24),** in the VM and on the Mac: Export Filter… and Load Filter… with their file dialogs, the replace question, and a filter file saved by Windows Election Explorer.
   - **Show in Maps… (the user, 2026-11-24),** in the VM and on the Mac: on an Address cell's right-click menu, and after changing the map engine in Options.
   - **The other clicks (the user, 2026-11-24):** Add and OK in the Filter window, Copy's paste, and the Export dialogs.
-- **Not checked yet, one by one:** Open link… on `test/sample_links.csv` (the other clicks were all tried by the user, above). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
+  - **Open link… (the user, 2026-11-24),** on Linux and on the Mac.
+- **Not checked yet, one by one:** none of the window's clicks are left (all tried by the user, above). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
 - **Known limits:** an export runs on the UI thread, as on Windows (4 s for 1.5 million rows in Release), and builds the whole file in memory first (2.9 GB peak with Dallas loaded, on Linux).
 
 ## Known gaps and next steps

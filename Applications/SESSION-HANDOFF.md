@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-24. **In progress (uncommitted): Export Filter / Load Filter in the macOS/Linux Filter window.**
+**Last updated:** 2026-11-24. **Nothing in progress; next: Open link… in the macOS/Linux voter list window.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -19,7 +19,7 @@
     under Windows' value names. Show in Maps… is now also on an Address cell's right-click menu.
   - New: the tables' digits are all of one width (the Mac's system font had proportional
     ones, so Voter IDs of the same length differed in width); GTK asks for the same ("tnum").
-  - New: Export Filter… / Load Filter… in the Filter window (Windows' file, naming rule and
+  - Export Filter… / Load Filter… in the Filter window (Windows' file, naming rule and
     messages). Windows' voter list has no Find: dropped from the list (user, 2026-11-24).
   - Sorting, filtering and finding duplicates run on a worker thread (`EeUiVoters_ComputeView`);
     an export runs on the UI thread, as on Windows (4 s for Dallas in Release).
@@ -32,17 +32,17 @@
     **Remove did nothing** (a click on a rule's text toggled it instead of selecting it), fixed
     in `fd_refresh` and tried again in the VM: it works. Not yet one by one: Add and OK in the Filter window,
     Copy's paste and the Export dialogs. The report windows work in the VM, and the Mac build works.
-    Options work in the VM and on the Mac; the digits line up on the Mac.
-    To try: Export Filter… and Load Filter… (the dialogs, the replace question, a file from Windows).
+    Options work in the VM and on the Mac; the digits line up on the Mac. Export Filter… and Load
+    Filter… work in the VM and on the Mac (the dialogs, the replace question, a file from Windows).
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options and saved-filter lines on `sample_duplicates.csv`.
-- **Next steps:** review and commit. Then:
+- **Next steps:**
   - the voter list window's last items (Open link…; Show Duplicate Voters Voting needs a roster);
   - the other windows (roster, results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.

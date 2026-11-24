@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-23. **In progress (uncommitted): the Precinct and Address reports in the macOS/Linux window.**
+**Last updated:** 2026-11-23. **In progress (uncommitted): docs only — the reports work in the VM.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -24,7 +24,7 @@
     In the VM, Include/Exclude from the right-click menu and the Filter window's Reset work;
     **Remove did nothing** (a click on a rule's text toggled it instead of selecting it), fixed
     in `fd_refresh` and tried again in the VM: it works. Not yet one by one: Add and OK in the Filter window,
-    Copy's paste, the Export dialogs, and the report windows' clicks.
+    Copy's paste and the Export dialogs. The report windows work in the VM.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates and report counts on `sample_duplicates.csv`.
 - **Next steps:** review and commit. Then:
@@ -33,7 +33,7 @@
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** the Precinct and Address reports; Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.

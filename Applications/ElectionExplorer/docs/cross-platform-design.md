@@ -248,7 +248,7 @@ Saved filters (added 2026-11-24), as on Windows:
 - Both dialogs start in the folder of the last filter exported or loaded in this run, as on Windows.
 - **The bridge:** `EeUiFilterFile_Name`, `EeUiFilterFile_Path` (the extension rule), `EeUiVoters_SaveFilter`, `EeUiVoters_LoadFilter` (with Windows' date check and messages).
 - **Windows has no Find in the voter list window** (Edit has Copy and Options… only; the Filter window does the narrowing). "Find" was listed here by mistake from 2026-11-22 on, and is dropped (the user's decision, 2026-11-24). The only Find box on Windows is in Window > Windows…, which the port does not have yet (it has one window).
-- Not yet: Show Duplicate Voters Voting (it needs a roster), Open link… in the right-click menu.
+- Not yet: Show Duplicate Voters Voting (it needs a roster), Open link… in the right-click menu (Windows shows it only on a cell of the scrolling pane whose text holds an `https://` address, `App_ExtractHttpsUrl`; voter lists rarely have one, so it is seldom seen).
 
 - **`src/ui/ee_ui_voters.{h,c}`:** the bridge, plain C types only. It wraps `EeVoterTable` and `EeFilterSet` (load with progress and cancel, UTF-8 titles and cells, numeric columns, rules as `EeUiRule`, views with duplicates marks, `CopyText`, `Export`, the status line's count in the Windows words, `Sort` that toggles and `SortTo` with a direction) and holds the shared `--selftest`, which also filters, copies and finds duplicates. The window code never includes the engine's headers: the stand-in `windows.h` defines `BOOL`, which clashes with Objective-C's.
 - **macOS, `src/ui/macos/app_main.m`** (ARC): an `NSTableView` that asks for the visible cells only, programmatic menus (⌘O, ⌘W, ⌘C, ⌘A, ⌘L, ⌘, for Settings, recent documents), the Filter window as a sheet (`EeFilterSheet`), the right-click menu built in `menuNeedsUpdate:`, `NSAlert` for errors. CMake target `ee_app` builds `Election Explorer.app` (universal).
@@ -301,7 +301,8 @@ Saved filters (added 2026-11-24), as on Windows:
   - In the VM: the Precinct and Address report windows work.
   - **Saved filters (the user, 2026-11-24),** in the VM and on the Mac: Export Filter… and Load Filter… with their file dialogs, the replace question, and a filter file saved by Windows Election Explorer.
   - **Show in Maps… (the user, 2026-11-24),** in the VM and on the Mac: on an Address cell's right-click menu, and after changing the map engine in Options.
-- **Not checked yet, one by one:** the other clicks (Add and OK in the Filter window; Copy's paste; the Export dialogs; the Options window's OK, and the options kept for the next run, which the user tried in the VM and on the Mac). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
+  - **The other clicks (the user, 2026-11-24):** Add and OK in the Filter window, Copy's paste, and the Export dialogs.
+- **Not checked yet, one by one:** none of the window's clicks are left (all tried by the user, above). Snapshots cannot open a menu or press a button; the commands they run are the ones the snapshot options run.
 - **Known limits:** an export runs on the UI thread, as on Windows (4 s for 1.5 million rows in Release), and builds the whole file in memory first (2.9 GB peak with Dallas loaded, on Linux).
 
 ## Known gaps and next steps

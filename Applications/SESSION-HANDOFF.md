@@ -30,15 +30,16 @@
     menus behind the window** from the second time on: try menus and dialogs in the VM.
     In the VM, Include/Exclude from the right-click menu and the Filter window's Reset work;
     **Remove did nothing** (a click on a rule's text toggled it instead of selecting it), fixed
-    in `fd_refresh` and tried again in the VM: it works. Not yet one by one: Add and OK in the Filter window,
-    Copy's paste and the Export dialogs. The report windows work in the VM, and the Mac build works.
+    in `fd_refresh` and tried again in the VM: it works. Add and OK in the Filter window,
+    Copy's paste and the Export dialogs work too (user, 2026-11-24). The report windows work in the VM, and the Mac build works.
     Options work in the VM and on the Mac; the digits line up on the Mac. Export Filter… and Load
     Filter… work in the VM and on the Mac (the dialogs, the replace question, a file from Windows),
     and so does Show in Maps… on an Address cell, with the map engine changed in Options.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options and saved-filter lines on `sample_duplicates.csv`.
 - **Next steps:**
-  - the voter list window's last items (Open link…; Show Duplicate Voters Voting needs a roster);
+  - the voter list window's last items (Open link…, which Windows shows only on a cell holding an
+    `https://` address; Show Duplicate Voters Voting needs a roster);
   - the other windows (roster, results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,

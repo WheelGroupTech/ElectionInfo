@@ -444,6 +444,9 @@ the Options window's OK, but not saved), and `--options-window` makes the PNG of
 window (the Settings sheet on the Mac). The options are read from the settings file
 (`~/.config/WheelGroupTech/ElectionExplorer.ini` on Linux): point `XDG_CONFIG_HOME` (Linux) or
 `HOME` (the Mac) at an empty folder for repeatable snapshots.
+`--load-filter <file>` does what the Filter window's Load Filter... does and `--export-filter
+<file>` its Export Filter... (without the file dialogs; either opens the Filter window, and the
+PNG is of it). A name without .csv or .tsv gets ".filter.csv", as on Windows.
 
 To try the window by hand, use a Linux desktop or a VM (an Ubuntu 24.04 VM in VMware with the
 repository on a shared folder works). Under WSLg the window runs, but its menus open behind it

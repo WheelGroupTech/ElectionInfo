@@ -205,6 +205,53 @@ extern "C"
                                size_t cap);
 
     /* ---------------------------------------------------------------------- */
+    /* Saved filters (Windows' Export Filter... / Load Filter... in the Filter */
+    /* window): the rules in a UTF-8 CSV or TSV that names columns by title    */
+    /* ---------------------------------------------------------------------- */
+
+    /** Windows' suggested name: "<list name> Filter.filter.csv" ("Voter List" without a list). */
+    void EeUiFilterFile_Name(const char *list_path, char *out, size_t cap);
+
+    /**
+     * The file a chosen name saves to, as on Windows: a name ending in .csv or .tsv is kept and
+     * decides the format; another gets the chosen type's ".filter.csv" (@p type 0) or
+     * ".filter.tsv" (1). Returns the field separator (',' or '\t'), or 0 when @p out is too
+     * small. When @p out differs from @p chosen, Windows asks before replacing that file.
+     */
+    char EeUiFilterFile_Path(const char *chosen, int type, char *out, size_t cap);
+
+    /**
+     * Save @p rules (all of them, as listed in the Filter window, on or off) to @p path_utf8.
+     * Returns 1, or 0 with Windows' message in @p err ("There are no filter rules to export."
+     * when @p n is 0).
+     */
+    int EeUiVoters_SaveFilter(const EeUiVoters *v,
+                              const char *path_utf8,
+                              const EeUiRule *rules,
+                              uint32_t n,
+                              char delim,
+                              char *err,
+                              size_t errcap);
+
+    /**
+     * Load a saved filter for this list: columns matched by title, as on Windows. Returns:
+     * - -1: the file could not be read or is not a saved filter (an error, in @p msg);
+     * - 0: it holds no rules ("The file holds no filter rules.", in @p msg);
+     * - 1: @p *rules (malloc(), free() it; NULL when every rule was skipped) and @p *n replace
+     *   the Filter window's rules. When some could not be used, @p msg says how many ("Loaded 2
+     *   rules. 1 rule could not be used here:") and @p detail lists them, a line each;
+     *   otherwise both are empty.
+     */
+    int EeUiVoters_LoadFilter(const EeUiVoters *v,
+                              const char *path_utf8,
+                              EeUiRule **rules,
+                              uint32_t *n,
+                              char *msg,
+                              size_t msgcap,
+                              char *detail,
+                              size_t detailcap);
+
+    /* ---------------------------------------------------------------------- */
     /* Reports (Windows' Reports menu): a row per distinct Precinct or Address */
     /* ---------------------------------------------------------------------- */
 

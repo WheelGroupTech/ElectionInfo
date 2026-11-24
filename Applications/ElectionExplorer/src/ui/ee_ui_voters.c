@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strsafe.h>
+#include <unistd.h> /* (getpid: the self-test's scratch file; the bridge is POSIX-only) */
 
 struct EeUiVoters
 {
@@ -721,6 +722,290 @@ void EeUiVoters_ExportName(const EeUiVoters *v,
         what = "-All_Voters";
     }
     StringCchPrintfA(out, cap, "%s%s.csv", name, what);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Saved filters                                                              */
+/* -------------------------------------------------------------------------- */
+
+static void file_name(const char *path, BOOL extension, char *out, size_t cap);
+
+void EeUiFilterFile_Name(const char *list_path, char *out, size_t cap)
+{
+    char base[256];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(list_path, FALSE, base, sizeof(base));
+    StringCchPrintfA(out, cap, "%s Filter.filter.csv", base[0] ? base : "Voter List");
+}
+
+static BOOL ends_with_ci(const char *s, const char *ext)
+{
+    size_t n = strlen(s), e = strlen(ext), i;
+    if (n < e)
+    {
+        return FALSE;
+    }
+    for (i = 0; i < e; i++)
+    {
+        char a = s[n - e + i], b = ext[i];
+        if (a >= 'A' && a <= 'Z')
+        {
+            a = (char)(a - 'A' + 'a');
+        }
+        if (a != b)
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+char EeUiFilterFile_Path(const char *chosen, int type, char *out, size_t cap)
+{
+    char delim;
+    if (chosen == NULL || out == NULL || cap == 0)
+    {
+        return 0;
+    }
+    if (ends_with_ci(chosen, ".tsv") || ends_with_ci(chosen, ".csv"))
+    {
+        delim = ends_with_ci(chosen, ".tsv") ? '\t' : ',';
+        return SUCCEEDED(StringCchCopyA(out, cap, chosen)) ? delim : 0;
+    }
+    delim = type == 1 ? '\t' : ',';
+    return SUCCEEDED(StringCchPrintfA(out,
+                                      cap,
+                                      "%s%s",
+                                      chosen,
+                                      delim == '\t' ? ".filter.tsv" : ".filter.csv"))
+               ? delim
+               : 0;
+}
+
+/* the list's columns, for a saved filter's titles (free() it) */
+static EeFilterColumnRef *filter_columns(const EeUiVoters *v, uint32_t *n)
+{
+    EeFilterColumnRef *cols;
+    uint32_t c;
+    *n = v->t.column_count;
+    cols = (EeFilterColumnRef *)calloc(*n ? *n : 1, sizeof(EeFilterColumnRef));
+    for (c = 0; cols != NULL && c < *n; c++)
+    {
+        cols[c].column = c;
+        cols[c].title = v->t.column_titles[c] != NULL ? v->t.column_titles[c] : L"";
+    }
+    return cols;
+}
+
+/* a wide message to UTF-8, without the "\r" of the engine's "\r\n" or a last line end */
+static void utf8_text(const wchar_t *w, char *out, size_t cap)
+{
+    char *s = utf8_of(w), *d;
+    const char *p;
+    if (out == NULL || cap == 0)
+    {
+        free(s);
+        return;
+    }
+    out[0] = '\0';
+    if (s == NULL)
+    {
+        return;
+    }
+    for (p = s, d = s; *p; p++)
+    {
+        if (*p != '\r')
+        {
+            *d++ = *p;
+        }
+    }
+    while (d > s && d[-1] == '\n')
+    {
+        d--;
+    }
+    *d = '\0';
+    StringCchCopyA(out, cap, s);
+    free(s);
+}
+
+int EeUiVoters_SaveFilter(const EeUiVoters *v,
+                          const char *path_utf8,
+                          const EeUiRule *rules,
+                          uint32_t n,
+                          char delim,
+                          char *err,
+                          size_t errcap)
+{
+    wchar_t path[4096], werr[256] = L"";
+    EeFilterColumnRef *cols;
+    EeFilterSet set;
+    uint32_t ncols = 0, i;
+    BOOL ok = TRUE;
+    set_err(err, errcap, "");
+    if (n == 0 || rules == NULL)
+    {
+        set_err(err, errcap, "There are no filter rules to export."); /* (Windows' words) */
+        return 0;
+    }
+    if (v == NULL || path_utf8 == NULL ||
+        MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, path, (int)ARRAYSIZE(path)) <= 0)
+    {
+        set_err(err, errcap, "Could not create the filter file.");
+        return 0;
+    }
+    if ((cols = filter_columns(v, &ncols)) == NULL)
+    {
+        set_err(err, errcap, "Out of memory saving the filter.");
+        return 0;
+    }
+    EeFilter_Init(&set);
+    for (i = 0; ok && i < n; i++)
+    {
+        EeFilterRule r;
+        to_engine_rule(&rules[i], &r);
+        ok = EeFilter_Add(&set, &r);
+    }
+    if (!ok)
+    {
+        set_err(err, errcap, "Out of memory saving the filter.");
+    }
+    else if (!EeFilter_SaveFile(path,
+                                &set,
+                                cols,
+                                ncols,
+                                delim == '\t' ? L'\t' : L',',
+                                werr,
+                                ARRAYSIZE(werr)))
+    {
+        utf8_text(werr[0] ? werr : L"Could not write the filter file.", err, errcap);
+        ok = FALSE;
+    }
+    EeFilter_Clear(&set);
+    free(cols);
+    return ok ? 1 : 0;
+}
+
+int EeUiVoters_LoadFilter(const EeUiVoters *v,
+                          const char *path_utf8,
+                          EeUiRule **rules,
+                          uint32_t *n,
+                          char *msg,
+                          size_t msgcap,
+                          char *detail,
+                          size_t detailcap)
+{
+    wchar_t path[4096], werr[256] = L"", skipped[2048] = L"";
+    EeFilterColumnRef *cols;
+    EeFilterSet loaded;
+    EeUiRule *out = NULL;
+    uint32_t ncols = 0, nskip = 0, i;
+    set_err(msg, msgcap, "");
+    set_err(detail, detailcap, "");
+    if (rules != NULL)
+    {
+        *rules = NULL;
+    }
+    if (n != NULL)
+    {
+        *n = 0;
+    }
+    if (v == NULL || path_utf8 == NULL || rules == NULL || n == NULL ||
+        MultiByteToWideChar(CP_UTF8, 0, path_utf8, -1, path, (int)ARRAYSIZE(path)) <= 0)
+    {
+        set_err(msg, msgcap, "Could not open the filter file.");
+        return -1;
+    }
+    if ((cols = filter_columns(v, &ncols)) == NULL)
+    {
+        set_err(msg, msgcap, "Out of memory loading the filter.");
+        return -1;
+    }
+    EeFilter_Init(&loaded);
+    if (!EeFilter_LoadFile(path,
+                           cols,
+                           ncols,
+                           EE_FILTER_REL_ALL,
+                           &loaded,
+                           &nskip,
+                           skipped,
+                           ARRAYSIZE(skipped),
+                           werr,
+                           ARRAYSIZE(werr)))
+    {
+        utf8_text(werr[0] ? werr : L"Could not read the filter file.", msg, msgcap);
+        free(cols);
+        return -1;
+    }
+    free(cols);
+    /* A date column needs a date to compare with less than / more than (as on Windows). */
+    for (i = 0; i < loaded.count;)
+    {
+        if (!EeFilter_RuleIsValid(&loaded.rules[i], &v->t))
+        {
+            wchar_t line[EE_FILTER_VALUE_CCH + 96];
+            StringCchPrintfW(line,
+                             ARRAYSIZE(line),
+                             L"\"%s\": not a date for a date column.\r\n",
+                             loaded.rules[i].value);
+            StringCchCatW(skipped, ARRAYSIZE(skipped), line);
+            EeFilter_Remove(&loaded, i);
+            nskip++;
+            continue;
+        }
+        i++;
+    }
+    if (loaded.count == 0 && nskip == 0)
+    {
+        set_err(msg, msgcap, "The file holds no filter rules.");
+        EeFilter_Clear(&loaded);
+        return 0;
+    }
+    if (loaded.count > 0 && (out = (EeUiRule *)calloc(loaded.count, sizeof(EeUiRule))) == NULL)
+    {
+        set_err(msg, msgcap, "Out of memory loading the filter.");
+        EeFilter_Clear(&loaded);
+        return -1;
+    }
+    for (i = 0; i < loaded.count; i++)
+    {
+        const EeFilterRule *r = &loaded.rules[i];
+        out[i].column = r->column;
+        out[i].relation = (int)r->relation;
+        out[i].exclude = r->action == EeFilt_Exclude;
+        out[i].enabled = r->enabled != FALSE;
+        if (WideCharToMultiByte(CP_UTF8,
+                                0,
+                                r->value,
+                                -1,
+                                out[i].value,
+                                (int)sizeof(out[i].value),
+                                NULL,
+                                NULL) <= 0)
+        {
+            out[i].value[0] = '\0';
+        }
+    }
+    if (nskip > 0)
+    {
+        if (msg != NULL && msgcap > 0)
+        {
+            StringCchPrintfA(msg,
+                             msgcap,
+                             "Loaded %u rule%s. %u rule%s could not be used here:",
+                             loaded.count,
+                             loaded.count == 1 ? "" : "s",
+                             nskip,
+                             nskip == 1 ? "" : "s");
+        }
+        utf8_text(skipped, detail, detailcap);
+    }
+    *rules = out;
+    *n = loaded.count;
+    EeFilter_Clear(&loaded);
+    return 1;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1539,6 +1824,98 @@ static void selftest_options(EeUiVoters *v)
     }
 }
 
+/* a saved filter of two rules (a value with a comma and quotes) */
+static void selftest_filter_rules(EeUiRule *rules)
+{
+    memset(rules, 0, 2 * sizeof(EeUiRule));
+    rules[0].column = 1;
+    rules[0].relation = EE_UI_REL_IS;
+    rules[0].enabled = 1;
+    StringCchCopyA(rules[0].value, sizeof(rules[0].value), "101");
+    rules[1].column = EE_UI_COLUMN_NAME;
+    rules[1].relation = EE_UI_REL_CONTAINS;
+    rules[1].exclude = 1;
+    StringCchCopyA(rules[1].value, sizeof(rules[1].value), "Smith, \"J\" ");
+}
+
+/* Export Filter... / Load Filter...: save and load in CSV and TSV, then the files Windows
+ * warns about (a column the list lacks, a date that is not one, no rules, no file) */
+static void selftest_filter_file(const EeUiVoters *v)
+{
+    const char *tmp = getenv("TMPDIR");
+    char base[512], path[640], msg[256], detail[1024], name[256];
+    EeUiRule rules[2], *got = NULL;
+    uint32_t n = 0;
+    int t, r, saved;
+    FILE *f;
+    if (EeUiVoters_Columns(v) <= EE_UI_COLUMN_ADDRESS)
+    {
+        return;
+    }
+    StringCchPrintfA(base,
+                     sizeof(base),
+                     "%s/ee_selftest_%ld",
+                     tmp != NULL && tmp[0] ? tmp : "/tmp",
+                     (long)getpid());
+    EeUiFilterFile_Name("lists/sample.csv", name, sizeof(name));
+    printf("filter file name: \"%s\"", name);
+    EeUiFilterFile_Name(NULL, name, sizeof(name));
+    printf(", without a list \"%s\"\n", name);
+    selftest_filter_rules(rules);
+    for (t = 0; t < 2; t++)
+    {
+        char delim = EeUiFilterFile_Path(base, t, path, sizeof(path));
+        saved = EeUiVoters_SaveFilter(v, path, rules, 2, delim, msg, sizeof(msg));
+        r = EeUiVoters_LoadFilter(v, path, &got, &n, msg, sizeof(msg), detail, sizeof(detail));
+        printf("filter file %s (%s): saved %d, loaded %d, %u rules, the same %d\n",
+               t == 1 ? "TSV" : "CSV",
+               path + strlen(base),
+               saved,
+               r,
+               n,
+               n == 2 && got != NULL && memcmp(got, rules, sizeof(rules)) == 0);
+        free(got);
+        got = NULL;
+        remove(path);
+    }
+    t = EeUiFilterFile_Path("a.TSV", 0, path, sizeof(path)) == '\t';
+    printf("a typed extension: \"%s\" (tabs %d)\n", path, t);
+
+    StringCchPrintfA(path, sizeof(path), "%s.windows.filter.csv", base);
+    if ((f = fopen(path, "wb")) != NULL)
+    {
+        fprintf(
+            f,
+            "\xEF\xBB\xBF"
+            "Column,Relation,Value,Action\r\nprecinct,is,101,Include\r\nNo Such Column,is,1,Include\r\n"
+            "EDRDAT,less than,soon,Include\r\n");
+        fclose(f);
+    }
+    r = EeUiVoters_LoadFilter(v, path, &got, &n, msg, sizeof(msg), detail, sizeof(detail));
+    printf(
+        "filter file with a column the list lacks and a date that is not one: %d, %u rule (column %u); "
+        "%s\n%s\n",
+        r,
+        n,
+        got != NULL ? got[0].column : 99,
+        msg,
+        detail);
+    free(got);
+    got = NULL;
+    if ((f = fopen(path, "wb")) != NULL)
+    {
+        fprintf(f, "Column,Relation,Value,Action\r\n");
+        fclose(f);
+    }
+    r = EeUiVoters_LoadFilter(v, path, &got, &n, msg, sizeof(msg), detail, sizeof(detail));
+    printf("filter file without rules: %d, %s\n", r, msg);
+    remove(path);
+    r = EeUiVoters_LoadFilter(v, path, &got, &n, msg, sizeof(msg), detail, sizeof(detail));
+    printf("no filter file: %d, %s\n", r, msg);
+    saved = EeUiVoters_SaveFilter(v, path, rules, 0, ',', msg, sizeof(msg));
+    printf("saving no rules: %d, %s\n", saved, msg);
+}
+
 int EeUiVoters_SelfTest(const char *path_utf8)
 {
     char err[1024] = "";
@@ -1599,6 +1976,7 @@ int EeUiVoters_SelfTest(const char *path_utf8)
         selftest_report(v, EE_UI_REPORT_PRECINCT);
         selftest_report(v, EE_UI_REPORT_ADDRESS);
         selftest_options(v);
+        selftest_filter_file(v);
     }
     EeUiVoters_Free(v);
     return 0;

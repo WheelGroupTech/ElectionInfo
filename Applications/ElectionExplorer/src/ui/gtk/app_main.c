@@ -5,7 +5,8 @@
  * The same window as the AppKit prototype (src/ui/macos/app_main.m): File > Open... (or a file
  * on the command line), the load in the background with a progress bar, sorting by a column's
  * heading (again to reverse), numbers and dates right-aligned, the Filter window (Ctrl+L, as on
- * Windows), Reset Filter, right-click Include / Exclude on a cell, Copy (Ctrl+C), Export Voter
+ * Windows, with Export Filter... and Load Filter...), Reset Filter, right-click Include /
+ * Exclude on a cell, Copy (Ctrl+C), Export Voter
  * List... and Export Selected..., Show Duplicate Voter IDs / Voters, Reset View, the Precinct
  * and Address reports (a window each), Edit > Options... (kept between runs, as on Windows),
  * Show in Maps... on an Address cell, and a status line. The list comes from the engine through
@@ -24,6 +25,8 @@
  *   opens the window, loads the list, sorts it as a heading click would and filters it as the
  *   right-click menu would, writes the window's content as a PNG and quits.
  *   With `--filter-window` the PNG is of the Filter window, opened on those rules.
+ *   `--load-filter <file>` then does what its Load Filter... does, and `--export-filter <file>`
+ *   its Export Filter... (without the file dialogs; either opens the Filter window).
  *   `--duplicates ids|voters` shows a duplicates view first (as the Filter menu does), and
  *   `--export <file>` exports the shown rows before the PNG (as Export Voter List... does,
  *   without the dialogs).
@@ -194,7 +197,9 @@ typedef struct VoterWindow
     int snapshot_report;             /* --report: EE_UI_REPORT_* (-1: none) */
     int snapshot_zoom;               /* --zoom: 0 for none */
     int snapshot_names;              /* --names: 1 surname first, 0 given name first, -1 none */
-    gboolean snapshot_options_window; /* --options-window: the PNG is of the Options window */
+    gboolean snapshot_options_window;   /* --options-window: the PNG is of the Options window */
+    const char *snapshot_load_filter;   /* --load-filter: Load Filter... in the Filter window */
+    const char *snapshot_export_filter; /* --export-filter: then Export Filter... */
     int snapshot_tries;
 } VoterWindow;
 
@@ -1058,14 +1063,290 @@ struct FilterDialog
     GtkDropDown *action;
     GtkEntry *value;
     GtkListBox *list;
-    GArray *draft; /* EeUiRule */
+    GArray *draft;         /* EeUiRule */
+    GCancellable *pending; /* an Export / Load Filter file dialog or question that is open */
 };
+
+static void fd_alert_detail(FilterDialog *d, const char *message, const char *detail)
+{
+    GtkAlertDialog *a = gtk_alert_dialog_new("%s", message);
+    if (detail != NULL && detail[0] != '\0')
+    {
+        gtk_alert_dialog_set_detail(a, detail);
+    }
+    gtk_alert_dialog_show(a, d->win);
+    g_object_unref(a);
+}
 
 static void fd_alert(FilterDialog *d, const char *message)
 {
-    GtkAlertDialog *a = gtk_alert_dialog_new("%s", message);
-    gtk_alert_dialog_show(a, d->win);
-    g_object_unref(a);
+    fd_alert_detail(d, message, NULL);
+}
+
+static void fd_refresh(FilterDialog *d, int select);
+
+/* -------------------------------------------------------------------------- */
+/* Export Filter... / Load Filter... (as on Windows: the listed rules, on or  */
+/* off, to a UTF-8 CSV or TSV that names the columns by title)                */
+/* -------------------------------------------------------------------------- */
+
+static char *g_filter_folder; /* the last exported or loaded filter's folder (this run) */
+
+static void fd_remember_folder(const char *path)
+{
+    g_free(g_filter_folder);
+    g_filter_folder = g_path_get_dirname(path);
+}
+
+static void fd_dialog_folder(GtkFileDialog *dlg)
+{
+    if (g_filter_folder != NULL)
+    {
+        GFile *f = g_file_new_for_path(g_filter_folder);
+        gtk_file_dialog_set_initial_folder(dlg, f);
+        g_object_unref(f);
+    }
+}
+
+static void fd_add_filter(GListStore *filters, const char *name, const char *const *suffixes)
+{
+    GtkFileFilter *f = gtk_file_filter_new();
+    gtk_file_filter_set_name(f, name);
+    for (; *suffixes != NULL; suffixes++)
+    {
+        if (strcmp(*suffixes, "*") == 0)
+        {
+            gtk_file_filter_add_pattern(f, "*");
+        }
+        else
+        {
+            gtk_file_filter_add_suffix(f, *suffixes);
+        }
+    }
+    g_list_store_append(filters, f);
+    g_object_unref(f);
+}
+
+/* the file dialog's answer: NULL when dismissed, or when the Filter window has closed (its
+ * cancellable cancelled: @p d is gone then, so it is not touched) */
+static char *fd_finish_path(GFile *file, GError *error, FilterDialog *d, gboolean *gone)
+{
+    char *path = NULL;
+    *gone = error != NULL && g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    if (error != NULL)
+    {
+        g_error_free(error);
+    }
+    if (!*gone)
+    {
+        g_clear_object(&d->pending);
+    }
+    if (file != NULL)
+    {
+        path = g_file_get_path(file);
+        g_object_unref(file);
+    }
+    return path;
+}
+
+/* Save the listed rules to @p path (the name already made whole by EeUiFilterFile_Path) */
+static gboolean fd_save(FilterDialog *d, const char *path, char delim)
+{
+    char err[256];
+    if (!EeUiVoters_SaveFilter(d->w->voters,
+                               path,
+                               (const EeUiRule *)(void *)d->draft->data,
+                               d->draft->len,
+                               delim,
+                               err,
+                               sizeof(err)))
+    {
+        fd_alert(d, err);
+        return FALSE;
+    }
+    fd_remember_folder(path);
+    return TRUE;
+}
+
+typedef struct FdReplace
+{
+    FilterDialog *d;
+    char *path;
+    char delim;
+} FdReplace;
+
+static void fd_on_replace_answer(GObject *source, GAsyncResult *result, gpointer user)
+{
+    FdReplace *q = (FdReplace *)user;
+    GError *error = NULL;
+    int button = gtk_alert_dialog_choose_finish(GTK_ALERT_DIALOG(source), result, &error);
+    gboolean gone = error != NULL && g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+    if (error != NULL)
+    {
+        g_error_free(error);
+    }
+    if (!gone)
+    {
+        g_clear_object(&q->d->pending);
+        if (button == 1)
+        {
+            fd_save(q->d, q->path, q->delim);
+        }
+    }
+    g_free(q->path);
+    g_free(q);
+}
+
+/* Export Filter's file: a name without .csv / .tsv gets ".filter.csv", and Windows then asks
+ * before replacing a file of that name (the save dialog asked only about the name typed) */
+static void fd_save_chosen(FilterDialog *d, const char *chosen)
+{
+    char path[4096];
+    char delim = EeUiFilterFile_Path(chosen, 0, path, sizeof(path));
+    if (delim == 0)
+    {
+        fd_alert(d, "Could not create the filter file.");
+        return;
+    }
+    if (strcmp(path, chosen) != 0 && g_file_test(path, G_FILE_TEST_EXISTS))
+    {
+        const char *buttons[] = {"_Cancel", "_Replace", NULL};
+        char *base = g_path_get_basename(path);
+        GtkAlertDialog *a = gtk_alert_dialog_new("%s already exists.", base);
+        FdReplace *q = g_new0(FdReplace, 1);
+        g_free(base);
+        gtk_alert_dialog_set_detail(a, "Do you want to replace it?");
+        gtk_alert_dialog_set_buttons(a, buttons);
+        gtk_alert_dialog_set_cancel_button(a, 0);
+        gtk_alert_dialog_set_default_button(a, 0);
+        q->d = d;
+        q->path = g_strdup(path);
+        q->delim = delim;
+        d->pending = g_cancellable_new();
+        gtk_alert_dialog_choose(a, d->win, d->pending, fd_on_replace_answer, q);
+        g_object_unref(a);
+        return;
+    }
+    fd_save(d, path, delim);
+}
+
+static void fd_on_export_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, &error);
+    gboolean gone;
+    char *path = fd_finish_path(file, error, (FilterDialog *)user, &gone);
+    if (!gone && path != NULL)
+    {
+        fd_save_chosen((FilterDialog *)user, path);
+    }
+    g_free(path);
+}
+
+static void fd_on_export(GtkWidget *button, gpointer user)
+{
+    FilterDialog *d = (FilterDialog *)user;
+    GtkFileDialog *dlg;
+    GListStore *filters;
+    char name[512];
+    static const char *const csv[] = {"filter.csv", NULL}, *const tsv[] = {"filter.tsv", NULL};
+    (void)button;
+    if (d->pending != NULL)
+    {
+        return;
+    }
+    if (d->draft->len == 0)
+    {
+        fd_alert(d, "There are no filter rules to export."); /* (Windows' words) */
+        return;
+    }
+    filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    fd_add_filter(filters, "Election Explorer filter, CSV (*.filter.csv)", csv);
+    fd_add_filter(filters, "Election Explorer filter, tab-delimited (*.filter.tsv)", tsv);
+    EeUiFilterFile_Name(d->w->path, name, sizeof(name));
+    dlg = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dlg, "Export Filter");
+    gtk_file_dialog_set_filters(dlg, G_LIST_MODEL(filters));
+    gtk_file_dialog_set_initial_name(dlg, name);
+    fd_dialog_folder(dlg);
+    d->pending = g_cancellable_new();
+    gtk_file_dialog_save(dlg, d->win, d->pending, fd_on_export_chosen, d);
+    g_object_unref(dlg);
+    g_object_unref(filters);
+}
+
+/* Load Filter's file: its rules replace the listed ones (they take effect on Apply or OK); the
+ * rules this list cannot use are listed, as on Windows */
+static void fd_load(FilterDialog *d, const char *path)
+{
+    EeUiRule *rules = NULL;
+    uint32_t n = 0;
+    char msg[256], detail[2048];
+    int r = EeUiVoters_LoadFilter(d->w->voters,
+                                  path,
+                                  &rules,
+                                  &n,
+                                  msg,
+                                  sizeof(msg),
+                                  detail,
+                                  sizeof(detail));
+    fd_remember_folder(path);
+    if (r <= 0)
+    {
+        fd_alert(d, msg);
+        return;
+    }
+    g_array_set_size(d->draft, 0);
+    if (n > 0)
+    {
+        g_array_append_vals(d->draft, rules, n);
+    }
+    free(rules);
+    fd_refresh(d, -1);
+    if (msg[0] != '\0')
+    {
+        fd_alert_detail(d, msg, detail);
+    }
+}
+
+static void fd_on_load_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    GError *error = NULL;
+    GFile *file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, &error);
+    gboolean gone;
+    char *path = fd_finish_path(file, error, (FilterDialog *)user, &gone);
+    if (!gone && path != NULL)
+    {
+        fd_load((FilterDialog *)user, path);
+    }
+    g_free(path);
+}
+
+static void fd_on_load(GtkWidget *button, gpointer user)
+{
+    FilterDialog *d = (FilterDialog *)user;
+    GtkFileDialog *dlg;
+    GListStore *filters;
+    static const char *const saved[] = {"filter.csv", "filter.tsv", NULL},
+                             *const delimited[] = {"csv", "tsv", "txt", NULL},
+                             *const all[] = {"*", NULL};
+    (void)button;
+    if (d->pending != NULL)
+    {
+        return;
+    }
+    filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    fd_add_filter(filters, "Election Explorer filters (*.filter.csv, *.filter.tsv)", saved);
+    fd_add_filter(filters, "CSV or tab-delimited files (*.csv, *.tsv, *.txt)", delimited);
+    fd_add_filter(filters, "All files", all);
+    dlg = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dlg, "Load Filter");
+    gtk_file_dialog_set_filters(dlg, G_LIST_MODEL(filters));
+    fd_dialog_folder(dlg);
+    d->pending = g_cancellable_new();
+    gtk_file_dialog_open(dlg, d->win, d->pending, fd_on_load_chosen, d);
+    g_object_unref(dlg);
+    g_object_unref(filters);
 }
 
 static void fd_on_toggled(GtkCheckButton *check, gpointer user)
@@ -1226,6 +1507,12 @@ static void fd_on_destroy(GtkWidget *widget, gpointer user)
     {
         d->w->filter_dialog = NULL;
     }
+    if (d->pending != NULL)
+    {
+        /* (an open file dialog or question: its answer finds this window gone) */
+        g_cancellable_cancel(d->pending);
+        g_clear_object(&d->pending);
+    }
     g_array_unref(d->draft);
     g_free(d);
 }
@@ -1240,7 +1527,7 @@ static GtkWidget *fd_button(const char *label, GCallback cb, FilterDialog *d)
 static void show_filter_dialog(VoterWindow *w)
 {
     FilterDialog *d;
-    GtkWidget *box, *fields, *buttons, *scroll, *bottom, *prompt, *then, *ok;
+    GtkWidget *box, *fields, *buttons, *scroll, *bottom, *prompt, *then, *ok, *spacer;
     GtkStringList *titles;
     GtkExpression *expr;
     const char *relations[EE_UI_REL_COUNT + 1];
@@ -1324,8 +1611,16 @@ static void show_filter_dialog(VoterWindow *w)
     gtk_widget_set_vexpand(scroll, TRUE);
     gtk_box_append(GTK_BOX(box), scroll);
 
+    /* (Windows' bottom row: Export Filter... and Load Filter... at the left, OK, Cancel and
+     * Apply at the right) */
     bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    gtk_widget_set_halign(bottom, GTK_ALIGN_END);
+    gtk_box_append(GTK_BOX(bottom),
+                   fd_button("E_xport Filter\342\200\246", G_CALLBACK(fd_on_export), d));
+    gtk_box_append(GTK_BOX(bottom),
+                   fd_button("_Load Filter\342\200\246", G_CALLBACK(fd_on_load), d));
+    spacer = gtk_label_new(NULL);
+    gtk_widget_set_hexpand(spacer, TRUE);
+    gtk_box_append(GTK_BOX(bottom), spacer);
     ok = fd_button("_OK", G_CALLBACK(fd_on_ok), d);
     gtk_widget_add_css_class(ok, "suggested-action");
     gtk_box_append(GTK_BOX(bottom), ok);
@@ -2303,9 +2598,27 @@ static void snapshot_actions(VoterWindow *w)
                                                              : GTK_SORT_DESCENDING);
         g_object_unref(col);
     }
-    if (w->snapshot_filter_window)
+    if (w->snapshot_filter_window || w->snapshot_load_filter != NULL ||
+        w->snapshot_export_filter != NULL)
     {
         show_filter_dialog(w);
+        /* --load-filter / --export-filter: the Filter window's Load Filter... and Export
+         * Filter..., without the file dialogs */
+        if (w->filter_dialog != NULL && w->snapshot_load_filter != NULL)
+        {
+            fd_load(w->filter_dialog, w->snapshot_load_filter);
+        }
+        if (w->filter_dialog != NULL && w->snapshot_export_filter != NULL)
+        {
+            if (w->filter_dialog->draft->len == 0)
+            {
+                fd_alert(w->filter_dialog, "There are no filter rules to export.");
+            }
+            else
+            {
+                fd_save_chosen(w->filter_dialog, w->snapshot_export_filter);
+            }
+        }
     }
     if (w->snapshot_options_window)
     {
@@ -2789,18 +3102,20 @@ static VoterWindow *voter_window_new(GtkApplication *app)
 
 typedef struct AppArgs
 {
-    const char *pending;     /* a file to open at start */
-    const char *snapshot;    /* --snapshot */
-    int sort_column;         /* --sort, with --snapshot: -1 for none */
+    const char *pending;       /* a file to open at start */
+    const char *snapshot;      /* --snapshot */
+    int sort_column;           /* --sort, with --snapshot: -1 for none */
     gboolean sort_ascending;
-    GPtrArray *quick;        /* --include / --exclude, with --snapshot */
-    gboolean filter_window;  /* --filter-window, with --snapshot */
-    int marks;               /* --duplicates ids|voters, with --snapshot */
-    const char *export_to;   /* --export <file>, with --snapshot */
-    int report;              /* --report precinct|address, with --snapshot: -1 for none */
-    int zoom;                /* --zoom <percent>, with --snapshot: 0 for none */
-    int names;               /* --names given|surname, with --snapshot: -1 for none */
-    gboolean options_window; /* --options-window, with --snapshot */
+    GPtrArray *quick;          /* --include / --exclude, with --snapshot */
+    gboolean filter_window;    /* --filter-window, with --snapshot */
+    int marks;                 /* --duplicates ids|voters, with --snapshot */
+    const char *export_to;     /* --export <file>, with --snapshot */
+    int report;                /* --report precinct|address, with --snapshot: -1 for none */
+    int zoom;                  /* --zoom <percent>, with --snapshot: 0 for none */
+    int names;                 /* --names given|surname, with --snapshot: -1 for none */
+    gboolean options_window;   /* --options-window, with --snapshot */
+    const char *load_filter;   /* --load-filter <file>, with --snapshot */
+    const char *export_filter; /* --export-filter <file>, with --snapshot */
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -2820,6 +3135,8 @@ static void on_activate(GtkApplication *app, gpointer user)
         w->snapshot_zoom = args->zoom;
         w->snapshot_names = args->names;
         w->snapshot_options_window = args->options_window;
+        w->snapshot_load_filter = args->load_filter;
+        w->snapshot_export_filter = args->export_filter;
     }
     gtk_window_present(w->window);
     if (args->pending != NULL)
@@ -2830,7 +3147,8 @@ static void on_activate(GtkApplication *app, gpointer user)
 
 int main(int argc, char **argv)
 {
-    AppArgs args = {NULL, NULL, -1, TRUE, NULL, FALSE, EE_UI_MARKS_NONE, NULL, -1, 0, -1, FALSE};
+    AppArgs args =
+        {NULL, NULL, -1, TRUE, NULL, FALSE, EE_UI_MARKS_NONE, NULL, -1, 0, -1, FALSE, NULL, NULL};
     GtkApplication *app;
     int status, i;
     args.quick = g_ptr_array_new_with_free_func(g_free);
@@ -2891,6 +3209,14 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--options-window") == 0)
         {
             args.options_window = TRUE;
+        }
+        else if (strcmp(argv[i], "--load-filter") == 0 && i + 1 < argc)
+        {
+            args.load_filter = argv[++i];
+        }
+        else if (strcmp(argv[i], "--export-filter") == 0 && i + 1 < argc)
+        {
+            args.export_filter = argv[++i];
         }
         else if (argv[i][0] != '-')
         {

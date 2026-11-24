@@ -30,6 +30,20 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-24 — macOS and Linux: Export Filter and Load Filter
+- **What:** Windows' Export Filter… and Load Filter… in the macOS and Linux Filter window, at the left of its bottom row as on Windows. They write and read Windows' own filter file (UTF-8 CSV or TSV, columns named by title), so a filter saved on one platform loads on the others. Windows' naming rule ("<list> Filter.filter.csv"; a name without .csv / .tsv gets ".filter.csv" or ".filter.tsv", with a question before replacing that file), its date check on load and its messages ("Loaded 1 rule. 1 rule could not be used here:", "The file holds no filter rules.", "There are no filter rules to export."). "Find", listed as still to port, was dropped: Windows' voter list window has none.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiFilterFile_Name`, `EeUiFilterFile_Path`, `EeUiVoters_SaveFilter`, `EeUiVoters_LoadFilter`, `selftest_filter_file`.
+  - `src/ui/gtk/app_main.c`: `fd_on_export`, `fd_save_chosen` (the replace question), `fd_on_load`, `fd_load`; the file dialogs are cancelled if the Filter window closes; `--load-filter` / `--export-filter`.
+  - `src/ui/macos/app_main.m`: `EeFilterSheet` `exportFilter:`, `exportFilterTo:type:`, `loadFilter:`, `loadFilterFrom:`; the same arguments.
+  - `.github/workflows/election-explorer.yml`: checks the self-test's saved-filter lines.
+- **Checked:**
+  - Builds: Linux and Mac, Debug and Release, with no warnings. `--selftest` prints the same on both platforms; the CI checks pass on Linux.
+  - The self-test saves and loads two rules as CSV and TSV, and checks Windows' messages for a column the list lacks, a date that is not one, an empty file, a missing file and no rules.
+  - Snapshots on both platforms: export to a name without an extension; load it and export it as TSV, with the same rules; the replace question leaves the file alone; a filter with a column the list lacks loads its other rule.
+  - The dialogs' clicks are for the user to try (the VM, the Mac).
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-24 — macOS and Linux: digits of one width in the tables
 - **What:** The voter list and report tables show digits of one width, as Windows' Segoe UI does, so Voter IDs, dates and counts line up. On the Mac, Voter IDs of the same length came out of different widths: San Francisco's digits are proportional. The font is the same; only the digits change.
 - **Where:**

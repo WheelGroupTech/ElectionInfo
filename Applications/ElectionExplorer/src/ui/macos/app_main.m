@@ -5,7 +5,8 @@
  * One window with the loaded list in a table: File > Open... (or a file given on the command
  * line, or opened from the Finder), the load in the background with a progress bar, sorting by
  * a column's heading (again to reverse), numbers and dates right-aligned, the Filter sheet
- * (Filter > Filter..., Cmd-L, as Ctrl+L on Windows), Reset Filter, Include / Exclude a cell's
+ * (Filter > Filter..., Cmd-L, as Ctrl+L on Windows, with Export Filter... and Load Filter...),
+ * Reset Filter, Include / Exclude a cell's
  * value from the right-click menu, Copy (Cmd-C), Export Voter List... and Export Selected...,
  * Show Duplicate Voter IDs / Voters, Reset View, the Precinct and Address reports (Reports menu,
  * a window each), Settings... (Windows' Options, kept between runs), Show in Maps... on an Address
@@ -30,6 +31,8 @@
  *   heading and `--export` exports the report (Export All...). `--zoom <percent>` and
  *   `--names given|surname` set those options once the list is loaded, as the Settings sheet's
  *   OK does (without saving them); `--options-window` makes the PNG of the Settings sheet.
+ *   `--load-filter <file>` does what the Filter sheet's Load Filter... does, and
+ *   `--export-filter <file>` its Export Filter... (without the panels; either opens the sheet).
  */
 
 #import <Cocoa/Cocoa.h>
@@ -150,7 +153,12 @@ static void export_type_changed(NSPopUpButton *type)
 @property(strong) NSTextField *value;
 @property(strong) NSTableView *list;
 @property(strong) NSMutableData *draft; /* EeUiRule[] */
+@property(assign) BOOL filePanelOpen;   /* an Export / Load Filter panel or question is open */
+- (void)loadFilterFrom:(NSString *)path;
+- (void)exportFilterTo:(NSString *)chosen type:(NSInteger)type;
 @end
+
+static NSURL *g_filterFolder; /* the last exported or loaded filter's folder (this run) */
 
 @implementation EeFilterSheet
 
@@ -177,7 +185,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     NSTextField *prompt, *then;
     NSScrollView *scroll;
     NSTableColumn *on, *text;
-    NSButton *reset, *add, *remove, *ok, *cancel, *apply;
+    NSButton *reset, *add, *remove, *ok, *cancel, *apply, *exportFilter, *loadFilter;
     uint32_t c;
     int i;
     self = [super init];
@@ -245,13 +253,15 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     cancel = sheet_button(@"Cancel", self, @selector(cancel:));
     cancel.keyEquivalent = @"\033";
     apply = sheet_button(@"Apply", self, @selector(apply:));
+    exportFilter = sheet_button(@"Export Filter…", self, @selector(exportFilter:));
+    loadFilter = sheet_button(@"Load Filter…", self, @selector(loadFilter:));
 
     for (NSView *sub in @[ prompt, self.column, self.relation, self.value, then, self.action, scroll ])
     {
         sub.translatesAutoresizingMaskIntoConstraints = NO;
         [v addSubview:sub];
     }
-    for (NSView *sub in @[ reset, add, remove, ok, cancel, apply ])
+    for (NSView *sub in @[ reset, add, remove, ok, cancel, apply, exportFilter, loadFilter ])
     {
         [v addSubview:sub];
     }
@@ -286,6 +296,11 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         [cancel.trailingAnchor constraintEqualToAnchor:apply.leadingAnchor constant:-6],
         [ok.centerYAnchor constraintEqualToAnchor:apply.centerYAnchor],
         [ok.trailingAnchor constraintEqualToAnchor:cancel.leadingAnchor constant:-6],
+        /* (Windows' bottom row: Export Filter... and Load Filter... at the left) */
+        [exportFilter.centerYAnchor constraintEqualToAnchor:apply.centerYAnchor],
+        [exportFilter.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:12],
+        [loadFilter.centerYAnchor constraintEqualToAnchor:apply.centerYAnchor],
+        [loadFilter.leadingAnchor constraintEqualToAnchor:exportFilter.trailingAnchor constant:6],
     ]];
     [self.list reloadData];
     return self;
@@ -340,11 +355,186 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     self.value.stringValue = ns_utf8(r->value);
 }
 
-- (void)alert:(NSString *)message
+- (void)alert:(NSString *)message detail:(NSString *)detail
 {
     NSAlert *a = [[NSAlert alloc] init];
     a.messageText = message;
+    if (detail.length > 0)
+    {
+        a.informativeText = detail;
+    }
     [a beginSheetModalForWindow:self.sheet completionHandler:nil];
+}
+
+- (void)alert:(NSString *)message
+{
+    [self alert:message detail:nil];
+}
+
+/* Export Filter... / Load Filter... (as on Windows: the listed rules, on or off, to a UTF-8 CSV
+ * or TSV that names the columns by title) */
+
+- (void)saveFilterTo:(NSString *)path delim:(char)delim
+{
+    char err[256];
+    if (!EeUiVoters_SaveFilter(self.owner.voters, path.fileSystemRepresentation, (const EeUiRule *)self.draft.bytes,
+                               (uint32_t)[self count], delim, err, sizeof(err)))
+    {
+        [self alert:ns_utf8(err)];
+        return;
+    }
+    g_filterFolder = [NSURL fileURLWithPath:path.stringByDeletingLastPathComponent isDirectory:YES];
+}
+
+/* A name without .csv / .tsv gets the chosen type's ".filter.csv" or ".filter.tsv" (@p type 0
+ * or 1), and Windows then asks before replacing a file of that name (the save panel asked only
+ * about the name typed) */
+- (void)exportFilterTo:(NSString *)chosen type:(NSInteger)type
+{
+    char path[4096];
+    char delim;
+    NSString *file;
+    if ([self count] == 0)
+    {
+        [self alert:@"There are no filter rules to export."]; /* (Windows' words) */
+        return;
+    }
+    delim = EeUiFilterFile_Path(chosen.fileSystemRepresentation, (int)type, path, sizeof(path));
+    if (delim == 0)
+    {
+        [self alert:@"Could not create the filter file."];
+        return;
+    }
+    file = [NSString stringWithUTF8String:path] ?: chosen;
+    if (![file isEqualToString:chosen] && [[NSFileManager defaultManager] fileExistsAtPath:file])
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = [NSString stringWithFormat:@"%@ already exists.", file.lastPathComponent];
+        a.informativeText = @"Do you want to replace it?";
+        [a addButtonWithTitle:@"Cancel"];
+        [a addButtonWithTitle:@"Replace"];
+        self.filePanelOpen = YES;
+        [a beginSheetModalForWindow:self.sheet
+                  completionHandler:^(NSModalResponse r) {
+                    self.filePanelOpen = NO;
+                    if (r == NSAlertSecondButtonReturn && self.owner.voters != NULL)
+                    {
+                        [self saveFilterTo:file delim:delim];
+                    }
+                  }];
+        return;
+    }
+    [self saveFilterTo:file delim:delim];
+}
+
+- (void)exportTypeChanged:(NSPopUpButton *)sender
+{
+    export_type_changed(sender);
+}
+
+- (void)exportFilter:(id)sender
+{
+    NSSavePanel *panel;
+    NSView *extra;
+    NSPopUpButton *type;
+    char name[512];
+    if (self.filePanelOpen)
+    {
+        return;
+    }
+    if ([self count] == 0)
+    {
+        [self alert:@"There are no filter rules to export."];
+        return;
+    }
+    panel = [NSSavePanel savePanel];
+    panel.title = @"Export Filter";
+    EeUiFilterFile_Name(self.owner.path.fileSystemRepresentation, name, sizeof(name));
+    panel.nameFieldStringValue = ns_utf8(name);
+    if (g_filterFolder != nil)
+    {
+        panel.directoryURL = g_filterFolder;
+    }
+    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 36)];
+    type = export_type_popup(extra, self);
+    [type removeAllItems];
+    [type addItemsWithTitles:@[
+        @"Election Explorer filter, CSV (*.filter.csv)", @"Election Explorer filter, tab-delimited (*.filter.tsv)"
+    ]];
+    type.frame = NSMakeRect(80, 4, 330, 26);
+    panel.accessoryView = extra;
+    self.filePanelOpen = YES;
+    [panel beginSheetModalForWindow:self.sheet
+                  completionHandler:^(NSModalResponse r) {
+                    self.filePanelOpen = NO;
+                    if (r == NSModalResponseOK && panel.URL.path != nil && self.owner.voters != NULL)
+                    {
+                        /* (after the panel has gone, so a question can take its place) */
+                        NSString *chosen = panel.URL.path;
+                        NSInteger t = type.indexOfSelectedItem;
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                          [self exportFilterTo:chosen type:t];
+                        });
+                    }
+                  }];
+}
+
+/* Its rules replace the listed ones (they take effect on Apply or OK); the rules this list
+ * cannot use are listed, as on Windows */
+- (void)loadFilterFrom:(NSString *)path
+{
+    EeUiRule *rules = NULL;
+    uint32_t n = 0;
+    char msg[256], detail[2048];
+    int r = EeUiVoters_LoadFilter(self.owner.voters, path.fileSystemRepresentation, &rules, &n, msg, sizeof(msg),
+                                  detail, sizeof(detail));
+    g_filterFolder = [NSURL fileURLWithPath:path.stringByDeletingLastPathComponent isDirectory:YES];
+    if (r <= 0)
+    {
+        [self alert:ns_utf8(msg)];
+        return;
+    }
+    self.draft.length = 0;
+    if (n > 0)
+    {
+        [self.draft appendBytes:rules length:n * sizeof(EeUiRule)];
+    }
+    free(rules);
+    [self.list reloadData];
+    if (msg[0] != '\0')
+    {
+        [self alert:ns_utf8(msg) detail:ns_utf8(detail)];
+    }
+}
+
+- (void)loadFilter:(id)sender
+{
+    NSOpenPanel *panel;
+    if (self.filePanelOpen)
+    {
+        return;
+    }
+    panel = [NSOpenPanel openPanel];
+    panel.title = @"Load Filter";
+    panel.canChooseFiles = YES;
+    panel.canChooseDirectories = NO;
+    panel.allowsMultipleSelection = NO;
+    if (g_filterFolder != nil)
+    {
+        panel.directoryURL = g_filterFolder;
+    }
+    self.filePanelOpen = YES;
+    [panel beginSheetModalForWindow:self.sheet
+                  completionHandler:^(NSModalResponse r) {
+                    self.filePanelOpen = NO;
+                    if (r == NSModalResponseOK && panel.URL.path != nil && self.owner.voters != NULL)
+                    {
+                        NSString *path = panel.URL.path;
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                          [self loadFilterFrom:path];
+                        });
+                    }
+                  }];
 }
 
 - (void)add:(id)sender
@@ -1870,6 +2060,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 @property(assign) int snapshotZoom;           /* --zoom: 0 for none */
 @property(assign) int snapshotNames;          /* --names: 1 surname first, 0 given name first, -1 none */
 @property(assign) BOOL snapshotOptionsWindow; /* --options-window: the PNG is of the Settings sheet */
+@property(copy) NSString *snapshotLoadFilter;   /* --load-filter: Load Filter... in the Filter sheet */
+@property(copy) NSString *snapshotExportFilter; /* --export-filter: then Export Filter... */
 @property(assign) BOOL snapshotActionsDone;
 @end
 
@@ -1989,9 +2181,19 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         {
             [w sortByColumn:self.snapshotSort ascending:self.snapshotAscending];
         }
-        if (self.snapshotFilterWindow)
+        if (self.snapshotFilterWindow || self.snapshotLoadFilter != nil || self.snapshotExportFilter != nil)
         {
             [w showFilter:nil];
+            /* --load-filter / --export-filter: the Filter sheet's Load Filter... and Export
+             * Filter..., without the panels */
+            if (self.snapshotLoadFilter != nil)
+            {
+                [w.filterSheet loadFilterFrom:self.snapshotLoadFilter];
+            }
+            if (self.snapshotExportFilter != nil)
+            {
+                [w.filterSheet exportFilterTo:self.snapshotExportFilter type:0];
+            }
         }
         if (self.snapshotOptionsWindow)
         {
@@ -2152,6 +2354,14 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--options-window") == 0)
             {
                 delegate.snapshotOptionsWindow = YES;
+            }
+            else if (strcmp(argv[i], "--load-filter") == 0 && i + 1 < argc)
+            {
+                delegate.snapshotLoadFilter = ns_utf8(argv[++i]);
+            }
+            else if (strcmp(argv[i], "--export-filter") == 0 && i + 1 < argc)
+            {
+                delegate.snapshotExportFilter = ns_utf8(argv[++i]);
             }
             else if (argv[i][0] != '-')
             {

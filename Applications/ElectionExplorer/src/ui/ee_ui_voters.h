@@ -52,11 +52,13 @@ extern "C"
         EE_UI_MARKS_COUNT
     };
 
-    /** The columns the duplicates views sort by (Voter ID, Name), as on Windows. */
+    /** The normalized columns the windows use: the duplicates views sort by Voter ID or Name
+     * (as on Windows), and an Address cell has Show in Maps... */
     enum
     {
         EE_UI_COLUMN_VOTER_ID = 0,
-        EE_UI_COLUMN_NAME = 2
+        EE_UI_COLUMN_NAME = 2,
+        EE_UI_COLUMN_ADDRESS = 3
     };
 
 #define EE_UI_RULE_VALUE_BYTES 768 /* UTF-8: the engine keeps 255 UTF-16 units */
@@ -78,9 +80,11 @@ extern "C"
     /**
      * Load a voter list (CSV, TSV, TXT, XLSX: what Election Explorer opens on Windows).
      * Blocks; call it off the UI thread. @p cancel (optional) set non-zero cancels.
-     * Returns NULL with a message in @p err (UTF-8) on failure or cancel.
+     * Returns NULL with a message in @p err (UTF-8) on failure or cancel. @p surname_first:
+     * the Name column as "Last, First Middle" (the Options default), else "First Middle Last".
      */
     EeUiVoters *EeUiVoters_Load(const char *path_utf8,
+                                int surname_first,
                                 EeUiProgressFn fn,
                                 void *user,
                                 volatile int32_t *cancel,
@@ -287,10 +291,72 @@ extern "C"
                                size_t cap);
 
     /**
-     * Show in Maps (Address report): a Google Maps search link for row @p row (Windows' default
-     * map; its Options window is not ported yet). Heap UTF-8 (free()), or NULL for the blank row.
+     * Show in Maps (Address report): a search link for row @p row in map @p engine (EE_UI_MAP_*,
+     * the Options' Map engine). Heap UTF-8 (free()), or NULL for the blank row.
      */
-    char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row);
+    char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row, int engine);
+
+    /* ---------------------------------------------------------------------- */
+    /* Options (Windows' Edit > Options...), kept between runs                 */
+    /* ---------------------------------------------------------------------- */
+
+    /** Map engines, in the Options' order (Windows' EeMapEngine values, as saved). */
+    enum
+    {
+        EE_UI_MAP_GOOGLE = 0,
+        EE_UI_MAP_BING,
+        EE_UI_MAP_APPLE,
+        EE_UI_MAP_OPENSTREETMAP,
+        EE_UI_MAP_COUNT
+    };
+
+#define EE_UI_ZOOM_MIN     50
+#define EE_UI_ZOOM_MAX     250
+#define EE_UI_ZOOM_DEFAULT 100
+
+    /** The voter list's options, as in Windows' Options window. */
+    typedef struct EeUiOptions
+    {
+        int copy_normalized; /* Copy puts the Voter ID, Precinct, Name and Address first */
+        int surname_first;   /* the Name column as "Last, First Middle" */
+        int zoom_percent;    /* the list's text size, EE_UI_ZOOM_MIN..MAX */
+        int map_engine;      /* EE_UI_MAP_*: what Show in Maps... opens */
+    } EeUiOptions;
+
+    /** Windows' defaults: copy normalized, surname first, 100%, Google Maps. */
+    void EeUiOptions_Defaults(EeUiOptions *out);
+
+    /**
+     * The options saved last (Windows' value names, in a settings file: see settings_posix.c),
+     * or the defaults for those never saved; out-of-range values are brought into range.
+     */
+    void EeUiOptions_Load(EeUiOptions *out);
+
+    /** Save the options, keeping the other saved settings. Returns 0 when it fails. */
+    int EeUiOptions_Save(const EeUiOptions *in);
+
+    /** @p zoom brought into EE_UI_ZOOM_MIN..MAX. */
+    int EeUiOptions_ClampZoom(int zoom);
+
+    /** "Google Maps", "Bing Maps", "Apple Maps", "Open Street Maps" (Windows' names). */
+    const char *EeUiOptions_MapName(int engine);
+
+    /**
+     * Show in Maps...: the search link for @p address (UTF-8) in map @p engine, as on Windows.
+     * Heap UTF-8 (free()), or NULL for an empty address.
+     */
+    char *EeUiOptions_MapUrl(int engine, const char *address);
+
+    /**
+     * Rebuild the Name column surname first or given name first (on the UI thread, while no
+     * EeUiVoters_ComputeView runs: it rewrites the cells). Returns 1 when the names changed and
+     * the shown view used them (sorted by Name, or a rule on it: ask for a new view), 0 when
+     * nothing more is needed, -1 when memory runs out.
+     */
+    int EeUiVoters_SetSurnameFirst(EeUiVoters *v, int surname_first);
+
+    /** 1 when the Name column is surname first. */
+    int EeUiVoters_SurnameFirst(const EeUiVoters *v);
 
     /** Sort (on the calling thread) by column @p c; sorting the same column again reverses it. */
     void EeUiVoters_Sort(EeUiVoters *v, uint32_t c);
@@ -300,8 +366,11 @@ extern "C"
 
     /**
      * The windows' `--selftest <file>`: load @p path, sort it by column 1 both ways, filter it,
-     * copy rows, look for duplicates and make the Precinct and Address reports, and print (stdout) what the window would show: the row
-     * and column counts, the first column titles, the first rows' column-1 cells and counts. Returns 0, or 1 when the load fails.
+     * copy rows, look for duplicates, make the Precinct and Address reports and try the Options
+     * (the names both ways, Copy without the normalized fields, the map links; the default
+     * options, no settings file), and print (stdout) what the window would show: the row and
+     * column counts, the first column titles, the first rows' column-1 cells and counts. Returns
+     * 0, or 1 when the load fails.
      */
     int EeUiVoters_SelfTest(const char *path_utf8);
 

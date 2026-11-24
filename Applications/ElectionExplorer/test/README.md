@@ -439,6 +439,11 @@ right-click menu; repeatable), `--duplicates ids|voters` (as the Filter menu), `
 then of the Filter window).
 `--report precinct|address` opens that report and the PNG is of its window; with it, `--sort
 0|1[:desc]` clicks the report's heading and `--export <file>` exports the report.
+`--zoom <percent>` and `--names given|surname` set those options once the list is loaded (as
+the Options window's OK, but not saved), and `--options-window` makes the PNG of the Options
+window (the Settings sheet on the Mac). The options are read from the settings file
+(`~/.config/WheelGroupTech/ElectionExplorer.ini` on Linux): point `XDG_CONFIG_HOME` (Linux) or
+`HOME` (the Mac) at an empty folder for repeatable snapshots.
 
 To try the window by hand, use a Linux desktop or a VM (an Ubuntu 24.04 VM in VMware with the
 repository on a shared folder works). Under WSLg the window runs, but its menus open behind it

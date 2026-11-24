@@ -8,7 +8,8 @@
  * (Filter > Filter..., Cmd-L, as Ctrl+L on Windows), Reset Filter, Include / Exclude a cell's
  * value from the right-click menu, Copy (Cmd-C), Export Voter List... and Export Selected...,
  * Show Duplicate Voter IDs / Voters, Reset View, the Precinct and Address reports (Reports menu,
- * a window each), and a status line. The list comes from the
+ * a window each), Settings... (Windows' Options, kept between runs), Show in Maps... on an Address
+ * cell, and a status line. The list comes from the
  * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
  * Sorting and filtering are the engine's, computed on a background queue
@@ -26,7 +27,9 @@
  *   first (as the Filter menu does); `--export <file>` exports the shown rows before the PNG
  *   (as Export Voter List... does, without the save sheet). `--report precinct|address` opens
  *   that report and the PNG is of its window; then `--sort 0|1[:desc]` clicks the report's
- *   heading and `--export` exports the report (Export All...).
+ *   heading and `--export` exports the report (Export All...). `--zoom <percent>` and
+ *   `--names given|surname` set those options once the list is loaded, as the Settings sheet's
+ *   OK does (without saving them); `--options-window` makes the PNG of the Settings sheet.
  */
 
 #import <Cocoa/Cocoa.h>
@@ -43,6 +46,7 @@ static NSString *ns_utf8(const char *s)
 }
 
 @class EeFilterSheet;
+@class EeOptionsSheet;
 @class EeReportWindow;
 
 /* an export's field separator, as on Windows: a typed .csv or .tsv wins, else the chosen type
@@ -110,6 +114,10 @@ static void export_type_changed(NSPopUpButton *type)
 @property(strong) EeFilterSheet *filterSheet;
 @property(strong) EeReportWindow *precinctReport; /* the open reports */
 @property(strong) EeReportWindow *addressReport;
+@property(strong) EeOptionsSheet *optionsSheet;
+@property(assign) EeUiOptions options; /* Settings... (loaded at start, saved on OK) */
+@property(assign) int zoomShown;       /* the zoom the columns are sized for */
+@property(assign) BOOL namesPending;   /* the Name column to rebuild once a sort or filter is done */
 /* the right-clicked cell */
 @property(assign) uint32_t quickColumn;
 @property(copy) NSString *quickValue;
@@ -124,6 +132,8 @@ static void export_type_changed(NSPopUpButton *type)
 - (void)showDuplicates:(int)marks;
 - (BOOL)exportShownTo:(NSString *)path;
 - (IBAction)showFilter:(id)sender;
+- (IBAction)showOptions:(id)sender;
+- (void)setOptions:(EeUiOptions)options save:(BOOL)save;
 @end
 
 /* -------------------------------------------------------------------------- */
@@ -401,6 +411,150 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
 {
     [self apply:sender];
     [self close];
+}
+
+- (void)cancel:(id)sender
+{
+    [self close];
+}
+
+@end
+
+/* -------------------------------------------------------------------------- */
+/* Settings (Windows' Edit > Options...: the same four options, kept between  */
+/* runs; the Mac's place for them is the application menu)                    */
+/* -------------------------------------------------------------------------- */
+
+@interface EeOptionsSheet : NSObject
+@property(weak) EeVoterWindow *owner;
+@property(strong) NSWindow *sheet;
+@property(strong) NSButton *prepend;
+@property(strong) NSButton *surname;
+@property(strong) NSTextField *zoom;
+@property(strong) NSStepper *stepper;
+@property(strong) NSPopUpButton *map;
+@end
+
+@implementation EeOptionsSheet
+
+- (instancetype)initWithOwner:(EeVoterWindow *)owner
+{
+    NSView *v;
+    NSTextField *zoomLabel, *percent, *mapLabel;
+    NSButton *ok, *cancel;
+    NSNumberFormatter *digits;
+    EeUiOptions o = owner.options;
+    int i;
+    self = [super init];
+    if (self == nil)
+    {
+        return nil;
+    }
+    self.owner = owner;
+    self.sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 470, 210)
+                                             styleMask:NSWindowStyleMaskTitled
+                                               backing:NSBackingStoreBuffered
+                                                 defer:NO];
+    self.sheet.title = @"Settings";
+    v = self.sheet.contentView;
+
+    self.prepend = [NSButton checkboxWithTitle:@"Pre-pend normalized data for copies (ID, Precinct, Name, Address)"
+                                        target:nil
+                                        action:nil];
+    self.prepend.state = o.copy_normalized ? NSControlStateValueOn : NSControlStateValueOff;
+    self.surname = [NSButton checkboxWithTitle:@"Display name in surname-first format" target:nil action:nil];
+    self.surname.state = o.surname_first ? NSControlStateValueOn : NSControlStateValueOff;
+
+    zoomLabel = [NSTextField labelWithString:@"Zoom:"];
+    digits = [[NSNumberFormatter alloc] init];
+    digits.numberStyle = NSNumberFormatterNoStyle;
+    digits.minimum = @(EE_UI_ZOOM_MIN);
+    digits.maximum = @(EE_UI_ZOOM_MAX);
+    digits.allowsFloats = NO;
+    self.zoom = [NSTextField textFieldWithString:[NSString stringWithFormat:@"%d", EeUiOptions_ClampZoom(o.zoom_percent)]];
+    self.zoom.formatter = digits;
+    self.zoom.alignment = NSTextAlignmentRight;
+    self.stepper = [[NSStepper alloc] initWithFrame:NSZeroRect];
+    self.stepper.minValue = EE_UI_ZOOM_MIN;
+    self.stepper.maxValue = EE_UI_ZOOM_MAX;
+    self.stepper.increment = 1;
+    self.stepper.valueWraps = NO;
+    self.stepper.integerValue = EeUiOptions_ClampZoom(o.zoom_percent);
+    self.stepper.target = self;
+    self.stepper.action = @selector(stepped:);
+    percent = [NSTextField labelWithString:@"%  (50–250)"];
+
+    mapLabel = [NSTextField labelWithString:@"Map engine:"];
+    self.map = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    for (i = 0; i < EE_UI_MAP_COUNT; i++)
+    {
+        [self.map addItemWithTitle:ns_utf8(EeUiOptions_MapName(i))];
+    }
+    [self.map selectItemAtIndex:o.map_engine];
+
+    ok = sheet_button(@"OK", self, @selector(ok:));
+    ok.keyEquivalent = @"\r";
+    cancel = sheet_button(@"Cancel", self, @selector(cancel:));
+    cancel.keyEquivalent = @"\033";
+
+    for (NSView *sub in @[ self.prepend, self.surname, zoomLabel, self.zoom, self.stepper, percent, mapLabel, self.map ])
+    {
+        sub.translatesAutoresizingMaskIntoConstraints = NO;
+        [v addSubview:sub];
+    }
+    [v addSubview:ok];
+    [v addSubview:cancel];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.prepend.topAnchor constraintEqualToAnchor:v.topAnchor constant:18],
+        [self.prepend.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:18],
+        [self.prepend.trailingAnchor constraintLessThanOrEqualToAnchor:v.trailingAnchor constant:-18],
+        [self.surname.topAnchor constraintEqualToAnchor:self.prepend.bottomAnchor constant:10],
+        [self.surname.leadingAnchor constraintEqualToAnchor:self.prepend.leadingAnchor],
+        [zoomLabel.leadingAnchor constraintEqualToAnchor:self.prepend.leadingAnchor],
+        [zoomLabel.centerYAnchor constraintEqualToAnchor:self.zoom.centerYAnchor],
+        [mapLabel.leadingAnchor constraintEqualToAnchor:self.prepend.leadingAnchor],
+        [mapLabel.centerYAnchor constraintEqualToAnchor:self.map.centerYAnchor],
+        [self.zoom.topAnchor constraintEqualToAnchor:self.surname.bottomAnchor constant:14],
+        [self.zoom.leadingAnchor constraintEqualToAnchor:mapLabel.trailingAnchor constant:8],
+        [self.zoom.widthAnchor constraintEqualToConstant:52],
+        [self.stepper.leadingAnchor constraintEqualToAnchor:self.zoom.trailingAnchor constant:2],
+        [self.stepper.centerYAnchor constraintEqualToAnchor:self.zoom.centerYAnchor],
+        [percent.leadingAnchor constraintEqualToAnchor:self.stepper.trailingAnchor constant:6],
+        [percent.centerYAnchor constraintEqualToAnchor:self.zoom.centerYAnchor],
+        [self.map.topAnchor constraintEqualToAnchor:self.zoom.bottomAnchor constant:12],
+        [self.map.leadingAnchor constraintEqualToAnchor:self.zoom.leadingAnchor],
+        [self.map.widthAnchor constraintEqualToConstant:180],
+        [cancel.topAnchor constraintEqualToAnchor:self.map.bottomAnchor constant:20],
+        [cancel.bottomAnchor constraintEqualToAnchor:v.bottomAnchor constant:-16],
+        [cancel.trailingAnchor constraintEqualToAnchor:v.trailingAnchor constant:-16],
+        [ok.centerYAnchor constraintEqualToAnchor:cancel.centerYAnchor],
+        [ok.trailingAnchor constraintEqualToAnchor:cancel.leadingAnchor constant:-8],
+        [ok.widthAnchor constraintEqualToAnchor:cancel.widthAnchor],
+    ]];
+    return self;
+}
+
+- (void)stepped:(id)sender
+{
+    self.zoom.integerValue = self.stepper.integerValue;
+}
+
+- (void)close
+{
+    [self.owner.window endSheet:self.sheet];
+    self.owner.optionsSheet = nil;
+}
+
+- (void)ok:(id)sender
+{
+    EeUiOptions o = self.owner.options;
+    o.copy_normalized = self.prepend.state == NSControlStateValueOn;
+    o.surname_first = self.surname.state == NSControlStateValueOn;
+    /* (Windows keeps the zoom when the box holds no number) */
+    o.zoom_percent = self.zoom.stringValue.length > 0 ? (int)self.zoom.integerValue : o.zoom_percent;
+    o.map_engine = (int)self.map.indexOfSelectedItem;
+    [self close];
+    [self.owner setOptions:o save:YES];
 }
 
 - (void)cancel:(id)sender
@@ -694,7 +848,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 /* Show in Maps... (Address report): the address in the browser's map */
 - (void)showInMaps:(id)sender
 {
-    char *url = EeUiReport_MapUrl(self.report, (uint32_t)self.menuRow);
+    char *url = EeUiReport_MapUrl(self.report, (uint32_t)self.menuRow, self.owner.options.map_engine);
     NSURL *u = url != NULL ? [NSURL URLWithString:ns_utf8(url)] : nil;
     free(url);
     if (u == nil)
@@ -849,6 +1003,12 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     self.rules = [NSMutableData data];
     self.wantSort = -1;
     self.wantAscending = YES;
+    {
+        EeUiOptions o;
+        EeUiOptions_Load(&o); /* (as saved last run) */
+        self.options = o;
+        self.zoomShown = EeUiOptions_ClampZoom(o.zoom_percent);
+    }
     self.window = [[NSWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 1100, 700)
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
@@ -871,6 +1031,12 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     self.table.usesAlternatingRowBackgroundColors = YES;
     self.table.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
     self.table.gridStyleMask = NSTableViewSolidVerticalGridLineMask;
+    if (@available(macOS 11.0, *))
+    {
+        /* (rows from edge to edge, as on Windows: the default insets them, with round ends,
+         * once the columns no longer fill the window, as at a small zoom) */
+        self.table.style = NSTableViewStylePlain;
+    }
     self.table.menu = [[NSMenu alloc] initWithTitle:@""];
     self.table.menu.delegate = self; /* (built for the clicked cell in menuNeedsUpdate:) */
 
@@ -918,10 +1084,15 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 /* The table's columns for the loaded list: titles, widths from the title and the first rows,
  * numbers and dates right-aligned. */
+- (NSFont *)listFont
+{
+    return [NSFont systemFontOfSize:NSFont.smallSystemFontSize * EeUiOptions_ClampZoom(self.options.zoom_percent) / 100.0];
+}
+
 - (void)rebuildColumns
 {
     uint32_t c, ncols = EeUiVoters_Columns(self.voters), nrows = EeUiVoters_Rows(self.voters);
-    NSFont *font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    NSFont *font = [self listFont];
     NSDictionary *attrs = @{NSFontAttributeName : font};
     while (self.table.tableColumns.count > 0)
     {
@@ -931,7 +1102,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     {
         NSString *title = ns_utf8(EeUiVoters_Title(self.voters, c));
         NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%u", c]];
-        CGFloat w = [title sizeWithAttributes:attrs].width + 24;
+        /* (the heading keeps its size at any zoom) */
+        CGFloat w = [title sizeWithAttributes:@{NSFontAttributeName : col.headerCell.font}].width + 24;
         uint32_t r;
         for (r = 0; r < nrows && r < 200; r++)
         {
@@ -948,6 +1120,100 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         [self.table addTableColumn:col];
     }
     self.table.rowHeight = font.boundingRectForFont.size.height + 3;
+    self.zoomShown = EeUiOptions_ClampZoom(self.options.zoom_percent);
+}
+
+/* Zoom: the list's text size (its table, as on Windows), and the columns' widths with it */
+- (void)applyZoom
+{
+    int zoom = EeUiOptions_ClampZoom(self.options.zoom_percent), old = self.zoomShown > 0 ? self.zoomShown : 100;
+    NSFont *font = [self listFont];
+    if (zoom == old)
+    {
+        return;
+    }
+    for (NSTableColumn *col in self.table.tableColumns)
+    {
+        /* (the text scales, the cell's padding of 12 does not: see rebuildColumns; the heading
+         * keeps its size, and so stays whole) */
+        CGFloat title = [col.title sizeWithAttributes:@{NSFontAttributeName : col.headerCell.font}].width + 24;
+        ((NSTextFieldCell *)col.dataCell).font = font;
+        col.width = MAX(title, MAX(col.width - 12, 0) * zoom / old + 12);
+    }
+    self.table.rowHeight = font.boundingRectForFont.size.height + 3;
+    self.zoomShown = zoom;
+    [self.table reloadData];
+}
+
+/* Display name in surname-first format: rebuild the Name column on the main thread, as on
+ * Windows (not while a sort or filter reads the cells: once it is done; a load in progress
+ * composes them as the options had them, and its completion brings them up to date) */
+- (void)applyNames
+{
+    CFAbsoluteTime started;
+    int r;
+    if (self.voters == NULL || self.loading ||
+        EeUiVoters_SurnameFirst(self.voters) == (self.options.surname_first != 0))
+    {
+        self.namesPending = NO;
+        return;
+    }
+    if (self.jobRunning)
+    {
+        self.namesPending = YES;
+        return;
+    }
+    self.namesPending = NO;
+    started = CFAbsoluteTimeGetCurrent();
+    r = EeUiVoters_SetSurnameFirst(self.voters, self.options.surname_first);
+    if (r < 0)
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"Could not update the Name column.";
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    fprintf(stderr, "names took %.2f s\n", CFAbsoluteTimeGetCurrent() - started);
+    [self.table reloadData];
+    self.status.stringValue = self.options.surname_first ? @"Names shown surname-first." : @"Names shown given-name first.";
+    if (r > 0)
+    {
+        [self requestView]; /* (sorted by Name, or a rule on it) */
+    }
+}
+
+/* the options as the Settings sheet's OK sets them; saved for the next run when @p save */
+- (void)setOptions:(EeUiOptions)options save:(BOOL)save
+{
+    options.zoom_percent = EeUiOptions_ClampZoom(options.zoom_percent);
+    self.options = options;
+    if (self.voters != NULL)
+    {
+        [self applyZoom];
+    }
+    else
+    {
+        self.zoomShown = options.zoom_percent; /* (the columns are made at this zoom) */
+    }
+    [self applyNames];
+    if (save && !EeUiOptions_Save(&options))
+    {
+        fprintf(stderr, "could not save the options\n");
+    }
+}
+
+- (IBAction)showOptions:(id)sender
+{
+    if (self.optionsSheet != nil || self.filterSheet != nil)
+    {
+        return;
+    }
+    if (!self.window.visible)
+    {
+        [self.window makeKeyAndOrderFront:nil];
+    }
+    self.optionsSheet = [[EeOptionsSheet alloc] initWithOwner:self];
+    [self.window beginSheet:self.optionsSheet.sheet completionHandler:nil];
 }
 
 - (void)showStatus
@@ -1054,6 +1320,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
             [self.progress stopAnimation:nil];
             self.progress.hidden = YES;
             self.progress.indeterminate = NO;
+            [self applyNames]; /* (if the Settings changed them meanwhile) */
         }
       });
     });
@@ -1237,7 +1504,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 }
 
 /* Copy: the selected rows, separated as in the list's file, with the Voter ID / Precinct /
- * Name / Address columns first (Windows' default) */
+ * Name / Address columns first unless the Settings say not to (Windows' default is first) */
 - (IBAction)copy:(id)sender
 {
     NSMutableData *rows;
@@ -1254,7 +1521,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         self.status.stringValue = @"Nothing selected to copy.";
         return;
     }
-    text = EeUiVoters_CopyText(self.voters, (const uint32_t *)rows.bytes, n, 1, NULL);
+    text = EeUiVoters_CopyText(self.voters, (const uint32_t *)rows.bytes, n, self.options.copy_normalized, NULL);
     if (text == NULL)
     {
         self.status.stringValue = @"Not enough memory to copy the rows.";
@@ -1380,9 +1647,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     cx = (LoadCx *)calloc(1, sizeof(LoadCx));
     cx->win = (__bridge void *)self;
     cx->percent = -1;
+    int surname = self.options.surname_first; /* (the names as the options have them now) */
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
       char err[1024] = "";
-      EeUiVoters *v = EeUiVoters_Load(path.fileSystemRepresentation, on_progress, cx, NULL, err, sizeof(err));
+      EeUiVoters *v = EeUiVoters_Load(path.fileSystemRepresentation, surname, on_progress, cx, NULL, err, sizeof(err));
       NSString *msg = ns_utf8(err);
       dispatch_async(dispatch_get_main_queue(), ^{
         free(cx);
@@ -1404,6 +1672,11 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         [self closeReports]; /* (as on Windows: a report is of the list it was made from) */
         EeUiVoters_Free(self.voters);
         self.voters = v;
+        if (EeUiVoters_SurnameFirst(v) != (self.options.surname_first != 0))
+        {
+            /* (the Settings changed while it loaded; nothing is sorted or filtered yet) */
+            EeUiVoters_SetSurnameFirst(v, self.options.surname_first);
+        }
         self.rules = [NSMutableData data]; /* (a new list starts unfiltered, in file order) */
         self.wantMarks = EE_UI_MARKS_NONE;
         self.wantSort = -1;
@@ -1456,7 +1729,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         /* (as on Windows: a right-click outside the selection selects that row) */
         [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
     }
-    /* Windows' order: Copy; Include, Exclude; Filter...; Export Selected... */
+    /* Windows' order: Copy; Include, Exclude; Show in Maps... (an address); Filter...; Export
+     * Selected... */
     [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""].target = self;
     [menu addItem:[NSMenuItem separatorItem]];
     if (self.voters != NULL && !self.jobRunning && row >= 0 && col >= 0)
@@ -1476,10 +1750,31 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
                  keyEquivalent:@""]
             .target = self;
         [menu addItem:[NSMenuItem separatorItem]];
+        if (self.quickColumn == EE_UI_COLUMN_ADDRESS && value.length > 0)
+        {
+            [menu addItemWithTitle:@"Show in Maps…" action:@selector(showCellInMaps:) keyEquivalent:@""].target = self;
+            [menu addItem:[NSMenuItem separatorItem]];
+        }
     }
     [menu addItemWithTitle:@"Filter…" action:@selector(showFilter:) keyEquivalent:@""].target = self;
     [menu addItem:[NSMenuItem separatorItem]];
     [menu addItemWithTitle:@"Export Selected…" action:@selector(exportSelected:) keyEquivalent:@""].target = self;
+}
+
+/* Show in Maps... on an Address cell: the address in the Settings' map, in the browser */
+- (void)showCellInMaps:(id)sender
+{
+    char *url = EeUiOptions_MapUrl(self.options.map_engine, self.quickValue.UTF8String);
+    NSURL *u = url != NULL ? [NSURL URLWithString:ns_utf8(url)] : nil;
+    NSAlert *a;
+    free(url);
+    if (u != nil && [NSWorkspace.sharedWorkspace openURL:u])
+    {
+        return;
+    }
+    a = [[NSAlert alloc] init];
+    a.messageText = u == nil ? @"Could not build a map link for this address." : @"Could not open the map in a browser.";
+    [a beginSheetModalForWindow:self.window completionHandler:nil];
 }
 
 - (void)quickInclude:(id)sender
@@ -1521,6 +1816,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
+    if (item.action == @selector(showOptions:))
+    {
+        return self.optionsSheet == nil && self.filterSheet == nil; /* (Windows: any time) */
+    }
     if (item.action == @selector(showFilter:))
     {
         return self.voters != NULL && !self.loading;
@@ -1562,6 +1861,9 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 @property(assign) int snapshotMarks;          /* --duplicates: EE_UI_MARKS_* */
 @property(copy) NSString *snapshotExport;     /* --export: export the shown rows here first */
 @property(assign) int snapshotReport;         /* --report: EE_UI_REPORT_* (-1: none) */
+@property(assign) int snapshotZoom;           /* --zoom: 0 for none */
+@property(assign) int snapshotNames;          /* --names: 1 surname first, 0 given name first, -1 none */
+@property(assign) BOOL snapshotOptionsWindow; /* --options-window: the PNG is of the Settings sheet */
 @property(assign) BOOL snapshotActionsDone;
 @end
 
@@ -1583,6 +1885,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [bar addItem:reportsItem];
     [bar addItem:winItem];
     [app addItemWithTitle:@"About Election Explorer" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
+    [app addItem:[NSMenuItem separatorItem]];
+    [app addItemWithTitle:@"Settings…" action:@selector(showOptions:) keyEquivalent:@","]; /* (Edit > Options... on Windows) */
     [app addItem:[NSMenuItem separatorItem]];
     [app addItemWithTitle:@"Hide Election Explorer" action:@selector(hide:) keyEquivalent:@"h"];
     [app addItem:[NSMenuItem separatorItem]];
@@ -1638,6 +1942,20 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     if (!waiting && !self.snapshotActionsDone)
     {
         self.snapshotActionsDone = YES;
+        if (self.snapshotZoom > 0 || self.snapshotNames >= 0)
+        {
+            /* --zoom / --names: as the Settings sheet's OK sets them, but not saved */
+            EeUiOptions o = w.options;
+            if (self.snapshotZoom > 0)
+            {
+                o.zoom_percent = self.snapshotZoom;
+            }
+            if (self.snapshotNames >= 0)
+            {
+                o.surname_first = self.snapshotNames;
+            }
+            [w setOptions:o save:NO];
+        }
         if (self.snapshotMarks != EE_UI_MARKS_NONE)
         {
             [w showDuplicates:self.snapshotMarks];
@@ -1669,6 +1987,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         {
             [w showFilter:nil];
         }
+        if (self.snapshotOptionsWindow)
+        {
+            [w showOptions:nil];
+        }
         waiting = YES;
     }
     if (waiting)
@@ -1690,7 +2012,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         self.snapshotExport = nil;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-      NSWindow *target = report != nil ? report.window : w.filterSheet != nil ? w.filterSheet.sheet : w.window;
+      NSWindow *target = report != nil               ? report.window
+                         : w.optionsSheet != nil ? w.optionsSheet.sheet
+                         : w.filterSheet != nil  ? w.filterSheet.sheet
+                                                 : w.window;
       NSView *v = target.contentView.superview ?: target.contentView;
       NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds];
       [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
@@ -1698,6 +2023,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
       if (w.filterSheet != nil)
       {
           [w.filterSheet close]; /* (terminate: does nothing while a sheet is open) */
+      }
+      if (w.optionsSheet != nil)
+      {
+          [w.optionsSheet close];
       }
       if (w.window.attachedSheet != nil)
       {
@@ -1764,6 +2093,7 @@ int main(int argc, const char **argv)
         delegate = [[EeAppDelegate alloc] init];
         delegate.snapshotSort = -1;
         delegate.snapshotReport = -1;
+        delegate.snapshotNames = -1;
         delegate.snapshotAscending = YES;
         delegate.snapshotQuick = [NSMutableArray array];
         for (i = 1; i < argc; i++)
@@ -1803,6 +2133,19 @@ int main(int argc, const char **argv)
             {
                 i++;
                 delegate.snapshotReport = strcmp(argv[i], "address") == 0 ? EE_UI_REPORT_ADDRESS : EE_UI_REPORT_PRECINCT;
+            }
+            else if (strcmp(argv[i], "--zoom") == 0 && i + 1 < argc)
+            {
+                delegate.snapshotZoom = atoi(argv[++i]);
+            }
+            else if (strcmp(argv[i], "--names") == 0 && i + 1 < argc)
+            {
+                i++;
+                delegate.snapshotNames = strcmp(argv[i], "given") == 0 ? 0 : 1;
+            }
+            else if (strcmp(argv[i], "--options-window") == 0)
+            {
+                delegate.snapshotOptionsWindow = YES;
             }
             else if (argv[i][0] != '-')
             {

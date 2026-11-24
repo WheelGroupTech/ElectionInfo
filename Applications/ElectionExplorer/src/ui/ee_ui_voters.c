@@ -5,6 +5,7 @@
 
 #include "ee_ui_voters.h"
 #include "filter.h"
+#include "settings.h"
 #include "voter_table.h"
 
 #include <stdio.h>
@@ -96,6 +97,7 @@ static void to_engine_rule(const EeUiRule *r, EeFilterRule *out)
 }
 
 EeUiVoters *EeUiVoters_Load(const char *path_utf8,
+                            int surname_first,
                             EeUiProgressFn fn,
                             void *user,
                             volatile int32_t *cancel,
@@ -124,6 +126,7 @@ EeUiVoters *EeUiVoters_Load(const char *path_utf8,
     pc.fn = fn;
     pc.user = user;
     EeVoterTable_Init(&v->t);
+    v->t.name_surname_first = surname_first ? TRUE : FALSE; /* (the loader composes the names so) */
     EeFilter_Init(&v->filters);
     st = EeVoterTable_LoadFromFile(path,
                                    &v->t,
@@ -1178,25 +1181,108 @@ void EeUiReport_ExportName(const EeUiReport *r,
                      EeUiReport_Kind(r) == EE_UI_REPORT_ADDRESS ? "Addresses" : "Precincts");
 }
 
-char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row)
+char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row, int engine)
 {
-    static const char prefix[] = "https://www.google.com/maps/search/?api=1&query=";
-    static const char hex[] = "0123456789ABCDEF";
-    const unsigned char *p;
-    char *url, *q;
     if (r == NULL || row >= r->count || EeUiReport_IsBlank(r, row))
     {
         return NULL;
     }
-    url = (char *)malloc(sizeof(prefix) + strlen(r->items[row].text) * 3);
+    return EeUiOptions_MapUrl(engine, r->items[row].text);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Options                                                                    */
+/* -------------------------------------------------------------------------- */
+
+void EeUiOptions_Defaults(EeUiOptions *out)
+{
+    EeSettings s;
+    if (out == NULL)
+    {
+        return;
+    }
+    EeSettings_Defaults(&s);
+    out->copy_normalized = s.copy_prepend_normalized != FALSE;
+    out->surname_first = s.name_surname_first != FALSE;
+    out->zoom_percent = EeUiOptions_ClampZoom(s.zoom_percent);
+    out->map_engine = s.map_engine;
+}
+
+int EeUiOptions_ClampZoom(int zoom)
+{
+    return zoom < EE_UI_ZOOM_MIN ? EE_UI_ZOOM_MIN : zoom > EE_UI_ZOOM_MAX ? EE_UI_ZOOM_MAX : zoom;
+}
+
+static int clamp_engine(int engine)
+{
+    return engine >= 0 && engine < EE_UI_MAP_COUNT ? engine
+                                                   : EE_UI_MAP_GOOGLE; /* (as on Windows) */
+}
+
+void EeUiOptions_Load(EeUiOptions *out)
+{
+    EeSettings s;
+    if (out == NULL)
+    {
+        return;
+    }
+    EeSettings_Load(&s); /* (the defaults for any value never saved) */
+    out->copy_normalized = s.copy_prepend_normalized != FALSE;
+    out->surname_first = s.name_surname_first != FALSE;
+    out->zoom_percent = EeUiOptions_ClampZoom(s.zoom_percent);
+    out->map_engine = clamp_engine(s.map_engine);
+}
+
+int EeUiOptions_Save(const EeUiOptions *in)
+{
+    EeSettings s;
+    if (in == NULL)
+    {
+        return 0;
+    }
+    EeSettings_Load(&s); /* (the settings other windows keep stay as they are) */
+    s.copy_prepend_normalized = in->copy_normalized ? TRUE : FALSE;
+    s.name_surname_first = in->surname_first ? TRUE : FALSE;
+    s.zoom_percent = EeUiOptions_ClampZoom(in->zoom_percent);
+    s.map_engine = clamp_engine(in->map_engine);
+    return EeSettings_Save(&s) ? 1 : 0;
+}
+
+const char *EeUiOptions_MapName(int engine)
+{
+    static const char *const names[EE_UI_MAP_COUNT] = {"Google Maps",
+                                                       "Bing Maps",
+                                                       "Apple Maps",
+                                                       "Open Street Maps"};
+    return names[clamp_engine(engine)];
+}
+
+char *EeUiOptions_MapUrl(int engine, const char *address)
+{
+    /* (Windows' App_BuildMapUrl) */
+    static const char *const prefixes[EE_UI_MAP_COUNT] = {
+        "https://www.google.com/maps/search/?api=1&query=",
+        "https://www.bing.com/maps?q=",
+        "https://maps.apple.com/?q=",
+        "https://www.openstreetmap.org/search?query="};
+    static const char hex[] = "0123456789ABCDEF";
+    const char *prefix = prefixes[clamp_engine(engine)];
+    size_t plen = strlen(prefix);
+    const unsigned char *p;
+    char *url, *q;
+    if (address == NULL || address[0] == '\0')
+    {
+        return NULL;
+    }
+    url = (char *)malloc(plen + strlen(address) * 3 + 1);
     if (url == NULL)
     {
         return NULL;
     }
-    memcpy(url, prefix, sizeof(prefix) - 1);
-    q = url + sizeof(prefix) - 1;
+    memcpy(url, prefix, plen);
+    q = url + plen;
     /* (Windows' App_AppendUrlEncoded: the UTF-8 bytes, all but A-Z a-z 0-9 - _ . ~ as %XX) */
-    for (p = (const unsigned char *)r->items[row].text; *p != '\0'; p++)
+    for (p = (const unsigned char *)address; *p != '\0'; p++)
     {
         if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') ||
             *p == '-' || *p == '_' || *p == '.' || *p == '~')
@@ -1212,6 +1298,38 @@ char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row)
     }
     *q = '\0';
     return url;
+}
+
+int EeUiVoters_SetSurnameFirst(EeUiVoters *v, int surname_first)
+{
+    BOOL want = surname_first ? TRUE : FALSE, used;
+    int sort_column;
+    uint32_t i;
+    if (v == NULL || v->t.name_surname_first == want)
+    {
+        return 0;
+    }
+    /* (the engine re-sorts its own order when it is by Name; the window asks for a new view
+     * instead, off the UI thread, which also brings the filter's map up to date) */
+    sort_column = v->t.sort_column;
+    used = sort_column == EE_COL_NAME;
+    for (i = 0; i < v->filters.count && !used; i++)
+    {
+        used = v->filters.rules[i].enabled && v->filters.rules[i].column == EE_COL_NAME;
+    }
+    v->t.sort_column = -1;
+    if (!EeVoterTable_SetNameSurnameFirst(&v->t, want, NULL, NULL))
+    {
+        v->t.sort_column = sort_column;
+        return -1;
+    }
+    v->t.sort_column = sort_column;
+    return used ? 1 : 0;
+}
+
+int EeUiVoters_SurnameFirst(const EeUiVoters *v)
+{
+    return v != NULL && v->t.name_surname_first != FALSE;
 }
 
 /* the current rules, for a view that only changes the order */
@@ -1364,10 +1482,67 @@ static void selftest_report(const EeUiVoters *v, int kind)
     EeUiReport_Free(r);
 }
 
+/* the Options: the names given name first and back (counts only), Copy without the normalized
+ * fields, and Show in Maps' link in each map (a made-up address) */
+static uint32_t selftest_comma_names(const EeUiVoters *v)
+{
+    uint32_t r, n = 0;
+    for (r = 0; r < EeUiVoters_Rows(v); r++)
+    {
+        n += strchr(EeUiVoters_Cell(v, r, EE_UI_COLUMN_NAME), ',') != NULL;
+    }
+    return n;
+}
+
+static void selftest_options(EeUiVoters *v)
+{
+    uint32_t rows[2] = {0, 1}, n = EeUiVoters_Rows(v) < 2 ? EeUiVoters_Rows(v) : 2;
+    size_t len[2] = {0, 0};
+    char *text[2];
+    int e, changed;
+    EeUiOptions o;
+    EeUiOptions_Defaults(&o);
+    printf("options: copy normalized %d, surname first %d, zoom %d, %s\n",
+           o.copy_normalized,
+           o.surname_first,
+           o.zoom_percent,
+           EeUiOptions_MapName(o.map_engine));
+    if (EeUiVoters_Columns(v) > EE_UI_COLUMN_NAME)
+    {
+        printf("names with a comma: %u of %u", selftest_comma_names(v), EeUiVoters_Rows(v));
+        changed = EeUiVoters_SetSurnameFirst(v, 0);
+        printf("; given name first: %u (new view %d)", selftest_comma_names(v), changed);
+        changed = EeUiVoters_SetSurnameFirst(v, 1);
+        printf("; surname first again: %u (new view %d)\n", selftest_comma_names(v), changed);
+        /* (sorted by Name, a change of the names asks for a new view) */
+        EeUiVoters_SetView(
+            v,
+            EeUiVoters_ComputeView(v, EE_UI_COLUMN_NAME, 1, NULL, 0, EE_UI_MARKS_NONE));
+        changed = EeUiVoters_SetSurnameFirst(v, 0);
+        printf("sorted by Name: given name first (new view %d)", changed);
+        changed = EeUiVoters_SetSurnameFirst(v, 1);
+        printf(", surname first (new view %d)\n", changed);
+    }
+    text[0] = EeUiVoters_CopyText(v, rows, n, 1, &len[0]);
+    text[1] = EeUiVoters_CopyText(v, rows, n, 0, &len[1]);
+    printf("copy of %u rows: %u bytes normalized, %u without\n",
+           n,
+           (unsigned)len[0],
+           (unsigned)len[1]);
+    free(text[0]);
+    free(text[1]);
+    for (e = 0; e < EE_UI_MAP_COUNT; e++)
+    {
+        char *url = EeUiOptions_MapUrl(e, "100 Main St, Austin TX");
+        printf("%s: %s\n", EeUiOptions_MapName(e), url != NULL ? url : "(none)");
+        free(url);
+    }
+}
+
 int EeUiVoters_SelfTest(const char *path_utf8)
 {
     char err[1024] = "";
-    EeUiVoters *v = EeUiVoters_Load(path_utf8, NULL, NULL, NULL, err, sizeof(err));
+    EeUiVoters *v = EeUiVoters_Load(path_utf8, 1, NULL, NULL, NULL, err, sizeof(err));
     uint32_t c, nc;
     if (v == NULL)
     {
@@ -1423,6 +1598,7 @@ int EeUiVoters_SelfTest(const char *path_utf8)
         EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, rules, 1, EE_UI_MARKS_NONE));
         selftest_report(v, EE_UI_REPORT_PRECINCT);
         selftest_report(v, EE_UI_REPORT_ADDRESS);
+        selftest_options(v);
     }
     EeUiVoters_Free(v);
     return 0;

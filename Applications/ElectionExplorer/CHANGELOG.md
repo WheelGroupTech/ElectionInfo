@@ -30,6 +30,21 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-24 — macOS and Linux: Options
+- **What:** Windows' Options in the macOS and Linux voter list window: Edit > Options… on Linux, Election Explorer > Settings… (⌘,) on the Mac. The four options are "Pre-pend normalized data for copies", "Display name in surname-first format", Zoom (50–250 %) and Map engine (Google, Bing, Apple, OpenStreetMap). They are saved for the next run under Windows' value names, in the settings file of `settings_posix.c`. Copy follows the first option. OK rebuilds the Name column on the UI thread, as on Windows, after any sort or filter in progress. Zoom sets the list's text size and scales the column widths. Show in Maps… uses the chosen map, and the voter list's right-click menu now has it on an Address cell. The Mac's voter table now has the plain style, rows from edge to edge.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiOptions_*`, `EeUiVoters_SetSurnameFirst` / `_SurnameFirst`, `EeUiVoters_Load` (the name format), `EeUiReport_MapUrl` (the map), `selftest_options`.
+  - `src/ui/gtk/app_main.c`: `OptionsDialog`, `show_options_dialog`, `set_options`, `apply_zoom`, `apply_names`, `show_in_maps`, `--zoom` / `--names` / `--options-window`.
+  - `src/ui/macos/app_main.m`: `EeOptionsSheet`, `showOptions:`, `setOptions:save:`, `applyZoom`, `applyNames`, `showCellInMaps:`, the Settings… item, the same arguments.
+  - `.github/workflows/election-explorer.yml`: checks the self-test's option lines.
+- **Checked:**
+  - Builds: Linux and Mac, Debug and Release, with no warnings. `--selftest` prints the same on both platforms, and the CI checks pass on both.
+  - Snapshots on both platforms: the Options window; the list at 150 % and at 60 %, with the names given name first and sorted by Name.
+  - Saving, in a scratch settings folder: the options read back, out-of-range zoom is clamped, and other settings are kept.
+  - Dallas: the names rebuilt in 0.28 s on both platforms; the sort by Name in 4.0 s on Linux and 3.2 s on the Mac (Debug).
+  - The clicks are for the user to try (the VM, the Mac).
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-23 — macOS and Linux: the Precinct and Address reports
 - **What:** Reports > Display Precinct Report… and Display Address Report… in the macOS and Linux voter list window, as on Windows: a window each with a row per distinct value and its Number of Voters over every loaded row (a "(blank)" row for empty cells), sorted by the value (precincts as numbers) or by a heading click, Copy, and a right-click menu with Copy, Include / Exclude (rules in the voter list's filter), Show in Maps… (an address; Google Maps, Windows' default) and Export Selected… / Export All…. A report closes when its list is reloaded or its voter list window closes. Also in the GTK window: GTK's column view kept the earlier column's arrow beside a clicked heading's (seen after a duplicates view); the sorter handlers now keep only the clicked column.
 - **Where:** `src/ui/ee_ui_voters.{h,c}` (`EeUiVoters_Report`, `EeUiReport_*`, `selftest_report`); `src/ui/gtk/app_main.c` (`show_report`, `ReportWindow`, `report_*`, `on_report_sorter_changed`, `export_named` / `export_delim` / `export_filters` shared with the voter list's export, `on_sorter_changed`, `show_sort_arrow`, `--report`); `src/ui/macos/app_main.m` (`EeReportWindow`, `showReport:`, `addRules:`, the Reports menu, `export_delim` / `export_type_popup` shared with the voter list's export, `--report`); `.github/workflows/election-explorer.yml` (checks the self-test's report lines).

@@ -7,7 +7,9 @@
  * heading (again to reverse), numbers and dates right-aligned, the Filter window (Ctrl+L, as on
  * Windows), Reset Filter, right-click Include / Exclude on a cell, Copy (Ctrl+C), Export Voter
  * List... and Export Selected..., Show Duplicate Voter IDs / Voters, Reset View, the Precinct
- * and Address reports (a window each), and a status line. The list comes from the engine through ee_ui_voters.h (plain C).
+ * and Address reports (a window each), Edit > Options... (kept between runs, as on Windows),
+ * Show in Maps... on an Address cell, and a status line. The list comes from the engine through
+ * ee_ui_voters.h (plain C).
  *
  * The rows are a GListModel of our own that makes a small row object only for the rows on
  * screen, so a list of 1.5 million voters costs no more than one of five. The column view's
@@ -28,6 +30,9 @@
  *   `--report precinct|address` opens that report (Reports > Display ... Report...) and the PNG
  *   is of its window; then `--sort 0|1[:desc]` clicks the report's heading and `--export`
  *   exports the report (Export All...).
+ *   `--zoom <percent>` and `--names given|surname` set those options once the list is loaded,
+ *   as the Options window's OK does (without saving them), and `--options-window` makes the
+ *   PNG of the Options window.
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -132,6 +137,7 @@ static EeRows *ee_rows_new(guint count)
 
 typedef struct FilterDialog FilterDialog;
 typedef struct ReportWindow ReportWindow;
+typedef struct OptionsDialog OptionsDialog;
 
 typedef struct VoterWindow
 {
@@ -172,6 +178,11 @@ typedef struct VoterWindow
 
     FilterDialog *filter_dialog;
     ReportWindow *reports[EE_UI_REPORT_COUNT]; /* the open Precinct / Address reports */
+    OptionsDialog *options_dialog;
+    EeUiOptions opts;                /* Edit > Options... (loaded at start, saved on OK) */
+    GtkCssProvider *zoom_css;        /* the list's text size */
+    int zoom_shown;                  /* the zoom the columns are sized for */
+    gboolean names_pending;          /* the Name column to rebuild once a sort or filter is done */
 
     char *snapshot;                  /* --snapshot: write the content here once loaded, then quit */
     int snapshot_sort;               /* --sort: click this column's heading first (-1: none) */
@@ -181,12 +192,16 @@ typedef struct VoterWindow
     int snapshot_marks;              /* --duplicates: EE_UI_MARKS_* */
     char *snapshot_export;           /* --export: export the shown rows here first */
     int snapshot_report;             /* --report: EE_UI_REPORT_* (-1: none) */
+    int snapshot_zoom;               /* --zoom: 0 for none */
+    int snapshot_names;              /* --names: 1 surname first, 0 given name first, -1 none */
+    gboolean snapshot_options_window; /* --options-window: the PNG is of the Options window */
     int snapshot_tries;
 } VoterWindow;
 
 typedef struct LoadDone
 {
     VoterWindow *w;
+    int surname_first; /* the names as the options had them when the load began */
     EeUiVoters *voters;
     char err[1024];
     gint64 started;
@@ -241,6 +256,7 @@ static void set_status(VoterWindow *w)
 /* -------------------------------------------------------------------------- */
 
 static void start_view_job(VoterWindow *w);
+static void apply_names(VoterWindow *w);
 static void alert(VoterWindow *w, const char *message, const char *detail);
 static void show_sort_arrow(VoterWindow *w, int column, gboolean ascending);
 
@@ -286,6 +302,7 @@ static gboolean view_done(gpointer user)
         set_status(w);
         gtk_label_set_text(w->status, "Not enough memory to sort or filter the list.");
         view_job_free(job);
+        apply_names(w); /* (if the Options changed them meanwhile) */
         return G_SOURCE_REMOVE;
     }
     fprintf(stderr,
@@ -308,6 +325,7 @@ static gboolean view_done(gpointer user)
             set_status(w);
             alert(w, EeUiVoters_MarksNoneText(kind), NULL);
             view_job_free(job);
+            apply_names(w);
             return G_SOURCE_REMOVE;
         }
     }
@@ -325,6 +343,7 @@ static gboolean view_done(gpointer user)
     else
     {
         stop_progress(w);
+        apply_names(w);
     }
     view_job_free(job);
     return G_SOURCE_REMOVE;
@@ -588,7 +607,7 @@ static GListModel *export_filters(void)
 }
 
 /* Copy: the selected rows, separated as in the file, with the Voter ID / Precinct / Name /
- * Address columns first (Windows' default) */
+ * Address columns first unless the Options say not to (Windows' default is first) */
 static void copy_selection(VoterWindow *w)
 {
     guint n = 0;
@@ -605,7 +624,7 @@ static void copy_selection(VoterWindow *w)
         g_free(rows);
         return;
     }
-    text = EeUiVoters_CopyText(w->voters, rows, n, 1, NULL);
+    text = EeUiVoters_CopyText(w->voters, rows, n, w->opts.copy_normalized, NULL);
     g_free(rows);
     if (text == NULL)
     {
@@ -889,7 +908,8 @@ static void on_cell_right_click(GtkGestureClick *g, int n_press, double x, doubl
         }
     }
 
-    /* Windows' order: Copy; Include, Exclude; Filter...; Export Selected... */
+    /* Windows' order: Copy; Include, Exclude; Show in Maps... (an address); Filter...; Export
+     * Selected... */
     menu = g_menu_new();
     section = g_menu_new();
     g_menu_append(section, "Copy", "win.copy");
@@ -906,6 +926,13 @@ static void on_cell_right_click(GtkGestureClick *g, int n_press, double x, doubl
     g_free(shown);
     g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
     g_object_unref(section);
+    if (w->quick_column == EE_UI_COLUMN_ADDRESS && w->quick_value[0] != '\0')
+    {
+        section = g_menu_new();
+        g_menu_append(section, "Show in Maps\xE2\x80\xA6", "win.show-in-maps");
+        g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
+        g_object_unref(section);
+    }
     section = g_menu_new();
     g_menu_append(section, "Filter\xE2\x80\xA6", "win.filter");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
@@ -1476,7 +1503,7 @@ static void on_maps_launched(GObject *source, GAsyncResult *result, gpointer use
 /* Show in Maps... (Address report): the address in a browser's map */
 static void report_maps(ReportWindow *rw, guint row)
 {
-    char *url = EeUiReport_MapUrl(rw->report, row);
+    char *url = EeUiReport_MapUrl(rw->report, row, rw->w->opts.map_engine);
     GtkUriLauncher *launcher;
     if (url == NULL)
     {
@@ -1878,6 +1905,251 @@ static void enable_reports(VoterWindow *w, gboolean on)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Options (as on Windows: Edit > Options..., kept between runs)              */
+/* -------------------------------------------------------------------------- */
+
+struct OptionsDialog
+{
+    VoterWindow *w;
+    GtkWindow *win;
+    GtkCheckButton *prepend;
+    GtkCheckButton *surname;
+    GtkSpinButton *zoom;
+    GtkDropDown *map;
+};
+
+/* Zoom: the list's text size (its table only, as on Windows), and the columns' widths with it */
+static void apply_zoom(VoterWindow *w, int zoom)
+{
+    char css[96];
+    int old = w->zoom_shown > 0 ? w->zoom_shown : EE_UI_ZOOM_DEFAULT;
+    GListModel *cols = gtk_column_view_get_columns(w->view);
+    guint i;
+    zoom = EeUiOptions_ClampZoom(zoom);
+    if (w->zoom_css == NULL)
+    {
+        w->zoom_css = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_display(gtk_widget_get_display(GTK_WIDGET(w->window)),
+                                                   GTK_STYLE_PROVIDER(w->zoom_css),
+                                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    }
+    g_snprintf(css, sizeof(css), "columnview.voter-list { font-size: %d%%; }", zoom);
+    gtk_css_provider_load_from_string(w->zoom_css, css);
+    w->zoom_shown = zoom;
+    for (i = 0; old != zoom && i < g_list_model_get_n_items(cols); i++)
+    {
+        GtkColumnViewColumn *col = g_list_model_get_item(cols, i);
+        /* (the text scales, the cell's padding of 24 does not: see rebuild_columns) */
+        int width = gtk_column_view_column_get_fixed_width(col) - 24;
+        width = (width > 0 ? width : 0) * zoom / old + 24;
+        gtk_column_view_column_set_fixed_width(col, width < 40 ? 40 : width);
+        g_object_unref(col);
+    }
+}
+
+/* Display name in surname-first format: rebuild the Name column on the UI thread, as on
+ * Windows (not while a sort or filter reads the cells: once it is done; a load in progress
+ * composes them as the options had them, and load_done brings them up to date) */
+static void apply_names(VoterWindow *w)
+{
+    gint64 started;
+    int r;
+    if (w->voters == NULL || w->worker != NULL ||
+        EeUiVoters_SurnameFirst(w->voters) == (w->opts.surname_first != 0))
+    {
+        w->names_pending = FALSE;
+        return;
+    }
+    if (w->job != NULL)
+    {
+        w->names_pending = TRUE;
+        return;
+    }
+    w->names_pending = FALSE;
+    started = g_get_monotonic_time();
+    r = EeUiVoters_SetSurnameFirst(w->voters, w->opts.surname_first);
+    if (r < 0)
+    {
+        alert(w, "Could not update the Name column.", NULL);
+        return;
+    }
+    fprintf(stderr, "names took %.2f s\n", (g_get_monotonic_time() - started) / 1e6);
+    g_list_model_items_changed(G_LIST_MODEL(w->rows), 0, w->rows->count, w->rows->count);
+    gtk_label_set_text(w->status,
+                       w->opts.surname_first ? "Names shown surname-first."
+                                             : "Names shown given-name first.");
+    if (r > 0)
+    {
+        request_view(w); /* (sorted by Name, or a rule on it) */
+    }
+}
+
+/* the options as the Options window's OK sets them; saved for the next run when @p save */
+static void set_options(VoterWindow *w, const EeUiOptions *o, gboolean save)
+{
+    w->opts = *o;
+    w->opts.zoom_percent = EeUiOptions_ClampZoom(o->zoom_percent);
+    apply_zoom(w, w->opts.zoom_percent);
+    apply_names(w);
+    if (save && !EeUiOptions_Save(&w->opts))
+    {
+        fprintf(stderr, "could not save the options\n");
+    }
+}
+
+static void od_on_ok(GtkButton *button, gpointer user)
+{
+    OptionsDialog *d = (OptionsDialog *)user;
+    VoterWindow *w = d->w;
+    EeUiOptions o = w->opts;
+    (void)button;
+    o.copy_normalized = gtk_check_button_get_active(d->prepend) ? 1 : 0;
+    o.surname_first = gtk_check_button_get_active(d->surname) ? 1 : 0;
+    gtk_spin_button_update(d->zoom); /* (a number typed but not yet taken) */
+    o.zoom_percent = gtk_spin_button_get_value_as_int(d->zoom);
+    o.map_engine = (int)gtk_drop_down_get_selected(d->map);
+    gtk_window_destroy(d->win);
+    set_options(w, &o, TRUE);
+}
+
+static void od_on_cancel(GtkButton *button, gpointer user)
+{
+    OptionsDialog *d = (OptionsDialog *)user;
+    (void)button;
+    gtk_window_destroy(d->win);
+}
+
+static void od_on_destroy(GtkWidget *widget, gpointer user)
+{
+    OptionsDialog *d = (OptionsDialog *)user;
+    (void)widget;
+    if (d->w->options_dialog == d)
+    {
+        d->w->options_dialog = NULL;
+    }
+    g_free(d);
+}
+
+/* Edit > Options...: Windows' four options, OK and Cancel (Esc) */
+static void show_options_dialog(VoterWindow *w)
+{
+    OptionsDialog *d;
+    GtkWidget *box, *row, *label, *bottom, *ok, *cancel;
+    GtkShortcutController *keys;
+    const char *maps[EE_UI_MAP_COUNT + 1];
+    int i;
+    if (w->options_dialog != NULL)
+    {
+        gtk_window_present(w->options_dialog->win);
+        return;
+    }
+    d = g_new0(OptionsDialog, 1);
+    d->w = w;
+    w->options_dialog = d;
+    d->win = GTK_WINDOW(gtk_window_new());
+    gtk_window_set_title(d->win, "Options");
+    gtk_window_set_transient_for(d->win, w->window);
+    gtk_window_set_modal(d->win, TRUE);
+    gtk_window_set_resizable(d->win, FALSE);
+    gtk_window_set_destroy_with_parent(d->win, TRUE);
+
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 16);
+    d->prepend = GTK_CHECK_BUTTON(gtk_check_button_new_with_label(
+        "Pre-pend normalized data for copies (ID, Precinct, Name, Address)"));
+    gtk_check_button_set_active(d->prepend, w->opts.copy_normalized != 0);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(d->prepend));
+    d->surname =
+        GTK_CHECK_BUTTON(gtk_check_button_new_with_label("Display name in surname-first format"));
+    gtk_check_button_set_active(d->surname, w->opts.surname_first != 0);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(d->surname));
+
+    row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    label = gtk_label_new("Zoom:");
+    gtk_box_append(GTK_BOX(row), label);
+    d->zoom = GTK_SPIN_BUTTON(gtk_spin_button_new_with_range(EE_UI_ZOOM_MIN, EE_UI_ZOOM_MAX, 1));
+    gtk_spin_button_set_numeric(d->zoom, TRUE);
+    gtk_spin_button_set_value(d->zoom, EeUiOptions_ClampZoom(w->opts.zoom_percent));
+    gtk_editable_set_width_chars(GTK_EDITABLE(d->zoom), 4);
+    gtk_box_append(GTK_BOX(row), GTK_WIDGET(d->zoom));
+    gtk_box_append(GTK_BOX(row), gtk_label_new("%  (50\342\200\223250)")); /* (an en dash) */
+    gtk_box_append(GTK_BOX(box), row);
+
+    row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(row), gtk_label_new("Map engine:"));
+    for (i = 0; i < EE_UI_MAP_COUNT; i++)
+    {
+        maps[i] = EeUiOptions_MapName(i);
+    }
+    maps[EE_UI_MAP_COUNT] = NULL;
+    d->map = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(maps));
+    gtk_drop_down_set_selected(d->map, (guint)w->opts.map_engine);
+    gtk_box_append(GTK_BOX(row), GTK_WIDGET(d->map));
+    gtk_box_append(GTK_BOX(box), row);
+
+    bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_halign(bottom, GTK_ALIGN_END);
+    gtk_widget_set_margin_top(bottom, 8);
+    ok = gtk_button_new_with_mnemonic("_OK");
+    gtk_widget_add_css_class(ok, "suggested-action");
+    g_signal_connect(ok, "clicked", G_CALLBACK(od_on_ok), d);
+    cancel = gtk_button_new_with_mnemonic("_Cancel");
+    g_signal_connect(cancel, "clicked", G_CALLBACK(od_on_cancel), d);
+    gtk_box_append(GTK_BOX(bottom), ok);
+    gtk_box_append(GTK_BOX(bottom), cancel);
+    gtk_box_append(GTK_BOX(box), bottom);
+
+    /* Enter is OK (also in the zoom box), Esc is Cancel, as in a Windows dialog */
+    gtk_window_set_default_widget(d->win, ok);
+    {
+        /* (a spin button's text is a GtkText; gtk_spin_button_set_activates_default is 4.14) */
+        GtkEditable *text = gtk_editable_get_delegate(GTK_EDITABLE(d->zoom));
+        if (GTK_IS_TEXT(text))
+        {
+            gtk_text_set_activates_default(GTK_TEXT(text), TRUE);
+        }
+    }
+    keys = GTK_SHORTCUT_CONTROLLER(gtk_shortcut_controller_new());
+    gtk_shortcut_controller_add_shortcut(
+        keys,
+        gtk_shortcut_new(gtk_shortcut_trigger_parse_string("Escape"),
+                         gtk_named_action_new("window.close")));
+    gtk_widget_add_controller(GTK_WIDGET(d->win), GTK_EVENT_CONTROLLER(keys));
+
+    gtk_window_set_child(d->win, box);
+    g_signal_connect(d->win, "destroy", G_CALLBACK(od_on_destroy), d);
+    gtk_window_present(d->win);
+}
+
+/* Show in Maps... on an Address cell: the address in the Options' map, in a browser */
+static void on_cell_maps_launched(GObject *source, GAsyncResult *result, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    if (!gtk_uri_launcher_launch_finish(GTK_URI_LAUNCHER(source), result, NULL) && !w->closed)
+    {
+        alert(w, "Could not open the map in a browser.", NULL);
+    }
+}
+
+static void show_in_maps(VoterWindow *w)
+{
+    char *url = EeUiOptions_MapUrl(w->opts.map_engine, w->quick_value);
+    GtkUriLauncher *launcher;
+    if (url == NULL)
+    {
+        alert(w, "Could not build a map link for this address.", NULL);
+        return;
+    }
+    launcher = gtk_uri_launcher_new(url);
+    gtk_uri_launcher_launch(launcher, w->window, NULL, on_cell_maps_launched, w);
+    g_object_unref(launcher);
+    free(url);
+}
+
+/* -------------------------------------------------------------------------- */
 /* Loading                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -1885,9 +2157,10 @@ static gboolean take_snapshot(gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
     ReportWindow *rw = w->snapshot_report >= 0 ? w->reports[w->snapshot_report] : NULL;
-    GtkWindow *target = rw != NULL                 ? rw->win
-                        : w->filter_dialog != NULL ? w->filter_dialog->win
-                                                   : w->window;
+    GtkWindow *target = rw != NULL                  ? rw->win
+                        : w->options_dialog != NULL ? w->options_dialog->win
+                        : w->filter_dialog != NULL  ? w->filter_dialog->win
+                                                    : w->window;
     GtkWidget *content = gtk_window_get_child(target);
     int width = gtk_widget_get_width(content), height = gtk_widget_get_height(content);
     GdkPaintable *paint;
@@ -1944,6 +2217,20 @@ static gboolean take_snapshot(gpointer user)
 static void snapshot_actions(VoterWindow *w)
 {
     guint i;
+    if (w->snapshot_zoom > 0 || w->snapshot_names >= 0)
+    {
+        /* --zoom / --names: as the Options window's OK sets them, but not saved */
+        EeUiOptions o = w->opts;
+        if (w->snapshot_zoom > 0)
+        {
+            o.zoom_percent = w->snapshot_zoom;
+        }
+        if (w->snapshot_names >= 0)
+        {
+            o.surname_first = w->snapshot_names;
+        }
+        set_options(w, &o, FALSE);
+    }
     if (w->voters != NULL && w->snapshot_marks != EE_UI_MARKS_NONE)
     {
         show_duplicates(w, w->snapshot_marks);
@@ -1994,6 +2281,10 @@ static void snapshot_actions(VoterWindow *w)
     if (w->snapshot_filter_window)
     {
         show_filter_dialog(w);
+    }
+    if (w->snapshot_options_window)
+    {
+        show_options_dialog(w);
     }
     g_timeout_add(800, take_snapshot, w); /* (time for the window to lay out and draw) */
 }
@@ -2060,6 +2351,11 @@ static gboolean load_done(gpointer user)
         close_reports(w); /* (as on Windows: a report is of the list it was made from) */
         EeUiVoters_Free(w->voters);
         w->voters = done->voters;
+        if (EeUiVoters_SurnameFirst(w->voters) != (w->opts.surname_first != 0))
+        {
+            /* (the Options changed while it loaded; nothing is sorted or filtered yet) */
+            EeUiVoters_SetSurnameFirst(w->voters, w->opts.surname_first);
+        }
         g_array_set_size(w->rules, 0); /* (a new list starts unfiltered, in file order) */
         w->want_marks = EE_UI_MARKS_NONE;
         w->want_sort = -1;
@@ -2087,6 +2383,7 @@ static gpointer load_worker(gpointer user)
 {
     LoadDone *done = (LoadDone *)user;
     done->voters = EeUiVoters_Load(done->w->loading_path,
+                                   done->surname_first,
                                    on_progress,
                                    done->w,
                                    &done->w->cancel,
@@ -2105,6 +2402,7 @@ static void open_path(VoterWindow *w, const char *path)
     }
     done = g_new0(LoadDone, 1);
     done->w = w;
+    done->surname_first = w->opts.surname_first;
     done->started = g_get_monotonic_time();
     w->loading_path = g_strdup(path);
     g_free(w->name);
@@ -2260,6 +2558,22 @@ static void action_quick_exclude(GSimpleAction *action, GVariant *param, gpointe
     add_quick_rule(w, w->quick_column, w->quick_value, TRUE);
 }
 
+static void action_options(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    (void)action;
+    (void)param;
+    show_options_dialog(w);
+}
+
+static void action_show_in_maps(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    (void)action;
+    (void)param;
+    show_in_maps(w);
+}
+
 static void action_about(GSimpleAction *action, GVariant *param, gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
@@ -2335,6 +2649,8 @@ static VoterWindow *voter_window_new(GtkApplication *app)
         {"report-address", action_report_address, NULL, NULL, NULL, {0}},
         {"quick-include", action_quick_include, NULL, NULL, NULL, {0}},
         {"quick-exclude", action_quick_exclude, NULL, NULL, NULL, {0}},
+        {"options", action_options, NULL, NULL, NULL, {0}},
+        {"show-in-maps", action_show_in_maps, NULL, NULL, NULL, {0}},
         {"about", action_about, NULL, NULL, NULL, {0}},
     };
     const char *open_accels[] = {"<Control>o", NULL}, *close_accels[] = {"<Control>w", NULL},
@@ -2347,6 +2663,8 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     w->want_ascending = TRUE;
     w->snapshot_sort = -1;
     w->snapshot_report = -1;
+    w->snapshot_names = -1;
+    EeUiOptions_Load(&w->opts); /* (as saved last run) */
     w->window = GTK_WINDOW(gtk_application_window_new(app));
     gtk_window_set_title(w->window, "Election Explorer");
     gtk_window_set_default_size(w->window, 1100, 700);
@@ -2366,6 +2684,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     g_menu_append(file, "Close", "win.close");
     g_menu_append(file, "Quit", "win.quit");
     g_menu_append(edit, "Copy", "win.copy");
+    g_menu_append(edit, "Options\xE2\x80\xA6", "win.options");
     g_menu_append(filt, "Filter\xE2\x80\xA6", "win.filter");
     g_menu_append(filt, "Reset Filter", "win.reset-filter");
     g_menu_append(filt, "Show Duplicate Voter IDs\xE2\x80\xA6", "win.dup-ids");
@@ -2405,6 +2724,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     gtk_column_view_set_show_row_separators(w->view, FALSE);
     gtk_column_view_set_reorderable(w->view, FALSE);
     gtk_widget_add_css_class(GTK_WIDGET(w->view), "data-table"); /* (compact rows) */
+    gtk_widget_add_css_class(GTK_WIDGET(w->view), "voter-list"); /* (the zoom) */
     g_signal_connect(gtk_column_view_get_sorter(w->view),
                      "changed",
                      G_CALLBACK(on_sorter_changed),
@@ -2432,6 +2752,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     gtk_box_append(GTK_BOX(box), bar);
     gtk_window_set_child(w->window, box);
     g_signal_connect(w->window, "destroy", G_CALLBACK(on_destroy), w);
+    apply_zoom(w, w->opts.zoom_percent);
     set_status(w);
     return w;
 }
@@ -2442,15 +2763,18 @@ static VoterWindow *voter_window_new(GtkApplication *app)
 
 typedef struct AppArgs
 {
-    const char *pending;    /* a file to open at start */
-    const char *snapshot;   /* --snapshot */
-    int sort_column;        /* --sort, with --snapshot: -1 for none */
+    const char *pending;     /* a file to open at start */
+    const char *snapshot;    /* --snapshot */
+    int sort_column;         /* --sort, with --snapshot: -1 for none */
     gboolean sort_ascending;
-    GPtrArray *quick;       /* --include / --exclude, with --snapshot */
-    gboolean filter_window; /* --filter-window, with --snapshot */
-    int marks;              /* --duplicates ids|voters, with --snapshot */
-    const char *export_to;  /* --export <file>, with --snapshot */
-    int report;             /* --report precinct|address, with --snapshot: -1 for none */
+    GPtrArray *quick;        /* --include / --exclude, with --snapshot */
+    gboolean filter_window;  /* --filter-window, with --snapshot */
+    int marks;               /* --duplicates ids|voters, with --snapshot */
+    const char *export_to;   /* --export <file>, with --snapshot */
+    int report;              /* --report precinct|address, with --snapshot: -1 for none */
+    int zoom;                /* --zoom <percent>, with --snapshot: 0 for none */
+    int names;               /* --names given|surname, with --snapshot: -1 for none */
+    gboolean options_window; /* --options-window, with --snapshot */
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -2467,6 +2791,9 @@ static void on_activate(GtkApplication *app, gpointer user)
         w->snapshot_marks = args->marks;
         w->snapshot_export = g_strdup(args->export_to);
         w->snapshot_report = args->report;
+        w->snapshot_zoom = args->zoom;
+        w->snapshot_names = args->names;
+        w->snapshot_options_window = args->options_window;
     }
     gtk_window_present(w->window);
     if (args->pending != NULL)
@@ -2477,7 +2804,7 @@ static void on_activate(GtkApplication *app, gpointer user)
 
 int main(int argc, char **argv)
 {
-    AppArgs args = {NULL, NULL, -1, TRUE, NULL, FALSE, EE_UI_MARKS_NONE, NULL, -1};
+    AppArgs args = {NULL, NULL, -1, TRUE, NULL, FALSE, EE_UI_MARKS_NONE, NULL, -1, 0, -1, FALSE};
     GtkApplication *app;
     int status, i;
     args.quick = g_ptr_array_new_with_free_func(g_free);
@@ -2525,6 +2852,19 @@ int main(int argc, char **argv)
             i++;
             args.report =
                 strcmp(argv[i], "address") == 0 ? EE_UI_REPORT_ADDRESS : EE_UI_REPORT_PRECINCT;
+        }
+        else if (strcmp(argv[i], "--zoom") == 0 && i + 1 < argc)
+        {
+            args.zoom = atoi(argv[++i]);
+        }
+        else if (strcmp(argv[i], "--names") == 0 && i + 1 < argc)
+        {
+            i++;
+            args.names = strcmp(argv[i], "given") == 0 ? 0 : 1;
+        }
+        else if (strcmp(argv[i], "--options-window") == 0)
+        {
+            args.options_window = TRUE;
         }
         else if (argv[i][0] != '-')
         {

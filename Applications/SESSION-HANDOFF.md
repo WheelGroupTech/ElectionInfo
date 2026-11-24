@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-23. **In progress (uncommitted): docs only — the reports work in the VM.**
+**Last updated:** 2026-11-24. **In progress (uncommitted): Options in the macOS/Linux window.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -14,26 +14,30 @@
   - New: Reports > Display Precinct / Address Report… (a window each; Copy, Include / Exclude,
     Show in Maps…, Export Selected… / All…), over `EeUiVoters_Report`. Dallas: 732 precincts
     in 0.2 s, 779,668 addresses in 2 s (UI thread, as on Windows).
+  - New: Options. Edit > Options… on Linux, Election Explorer > Settings… (⌘,) on the Mac.
+    Copy prepend, surname-first names, zoom and the map engine, saved in the settings file
+    under Windows' value names. Show in Maps… is now also on an Address cell's right-click menu.
   - Sorting, filtering and finding duplicates run on a worker thread (`EeUiVoters_ComputeView`);
     an export runs on the UI thread, as on Windows (4 s for Dallas in Release).
   - Checked by `--selftest` and `--snapshot` (`--sort`, `--include`, `--exclude`, `--duplicates`,
-    `--export`, `--filter-window`, `--report`) on both platforms and on Dallas's 1.5M rows.
+    `--export`, `--filter-window`, `--report`, `--zoom`, `--names`, `--options-window`) on both platforms and on Dallas's 1.5M rows.
   - **Checked by hand (user):** on WSLg, sorting and opening Dallas; in an Ubuntu 24.04 VM
     (VMware, H: on a shared folder), the window with no issues, menus included. **WSLg opens the
     menus behind the window** from the second time on: try menus and dialogs in the VM.
     In the VM, Include/Exclude from the right-click menu and the Filter window's Reset work;
     **Remove did nothing** (a click on a rule's text toggled it instead of selecting it), fixed
     in `fd_refresh` and tried again in the VM: it works. Not yet one by one: Add and OK in the Filter window,
-    Copy's paste and the Export dialogs. The report windows work in the VM.
+    Copy's paste and the Export dialogs. The report windows work in the VM, and the Mac build works.
+    To try: Options (OK, the options kept for the next run, zoom, names) and Show in Maps… on a cell.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
-  it now also checks the duplicates and report counts on `sample_duplicates.csv`.
+  it now also checks the duplicates, report and options lines on `sample_duplicates.csv`.
 - **Next steps:** review and commit. Then:
-  - the rest of the voter list window (Find, saved filters, Options);
+  - the rest of the voter list window (Find, saved filters);
   - the other windows (roster, results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** the Precinct and Address reports; Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.

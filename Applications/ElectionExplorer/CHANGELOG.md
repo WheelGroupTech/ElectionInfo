@@ -30,6 +30,14 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-24 — macOS and Linux: digits of one width in the tables
+- **What:** The voter list and report tables show digits of one width, as Windows' Segoe UI does, so Voter IDs, dates and counts line up. On the Mac, Voter IDs of the same length came out of different widths: San Francisco's digits are proportional. The font is the same; only the digits change.
+- **Where:**
+  - `src/ui/macos/app_main.m`: `listFont` and `EeReportWindow`'s font use `monospacedDigitSystemFontOfSize:weight:`.
+  - `src/ui/gtk/app_main.c`: `add_table_css` (`font-feature-settings: "tnum"` on every `columnview`), and `text_width` measures with it.
+- **Checked:** Linux and Mac, Debug and Release, with no warnings; the self-test unchanged. Mac snapshots of the list (100 % and 150 %) and the Precinct report: the IDs and dates line up. On Linux (DejaVu Sans, whose digits are already of one width) the list looks as before.
+- **Details:** [docs/cross-platform-design.md](docs/cross-platform-design.md), "The voter list window, prototype".
+
 ### 2026-11-24 — macOS and Linux: Options
 - **What:** Windows' Options in the macOS and Linux voter list window: Edit > Options… on Linux, Election Explorer > Settings… (⌘,) on the Mac. The four options are "Pre-pend normalized data for copies", "Display name in surname-first format", Zoom (50–250 %) and Map engine (Google, Bing, Apple, OpenStreetMap). They are saved for the next run under Windows' value names, in the settings file of `settings_posix.c`. Copy follows the first option. OK rebuilds the Name column on the UI thread, as on Windows, after any sort or filter in progress. Zoom sets the list's text size and scales the column widths. Show in Maps… uses the chosen map, and the voter list's right-click menu now has it on an Address cell. The Mac's voter table now has the plain style, rows from edge to edge.
 - **Where:**

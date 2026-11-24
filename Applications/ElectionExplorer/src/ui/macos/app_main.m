@@ -614,7 +614,9 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 {
     NSScrollView *scroll;
     NSView *content;
-    NSFont *font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    /* (the system font with digits of one width, as Windows' Segoe UI has them, so the
+     * counts line up) */
+    NSFont *font = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightRegular];
     NSRect frame;
     CGFloat width;
     char text[600];
@@ -1086,7 +1088,11 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
  * numbers and dates right-aligned. */
 - (NSFont *)listFont
 {
-    return [NSFont systemFontOfSize:NSFont.smallSystemFontSize * EeUiOptions_ClampZoom(self.options.zoom_percent) / 100.0];
+    /* (the system font with digits of one width, as Windows' Segoe UI has them: San Francisco's
+     * own digits are proportional, so IDs of the same length came out of different widths) */
+    return [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize *
+                                                   EeUiOptions_ClampZoom(self.options.zoom_percent) / 100.0
+                                            weight:NSFontWeightRegular];
 }
 
 - (void)rebuildColumns

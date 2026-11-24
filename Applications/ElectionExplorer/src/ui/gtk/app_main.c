@@ -975,10 +975,15 @@ static int no_compare(gconstpointer a, gconstpointer b, gpointer user)
     return 0;
 }
 
+/* (measured with the tables' digits of one width: see add_table_css) */
 static int text_width(GtkWidget *widget, const char *text)
 {
     PangoLayout *layout = gtk_widget_create_pango_layout(widget, text);
+    PangoAttrList *attrs = pango_attr_list_new();
     int width = 0, height = 0;
+    pango_attr_list_insert(attrs, pango_attr_font_features_new("tnum 1"));
+    pango_layout_set_attributes(layout, attrs);
+    pango_attr_list_unref(attrs);
     pango_layout_get_pixel_size(layout, &width, &height);
     g_object_unref(layout);
     return width;
@@ -1918,6 +1923,26 @@ struct OptionsDialog
     GtkDropDown *map;
 };
 
+/* The tables' digits all of one width ("tnum"), as Windows' Segoe UI has them, so IDs and
+ * counts line up whatever the font: Ubuntu's own has them so, but not every font does. Once
+ * for the display, for the voter list and the report windows. */
+static void add_table_css(GdkDisplay *display)
+{
+    static GdkDisplay *added;
+    GtkCssProvider *css;
+    if (added == display)
+    {
+        return;
+    }
+    css = gtk_css_provider_new();
+    gtk_css_provider_load_from_string(css, "columnview { font-feature-settings: \"tnum\"; }");
+    gtk_style_context_add_provider_for_display(display,
+                                               GTK_STYLE_PROVIDER(css),
+                                               GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(css);
+    added = display;
+}
+
 /* Zoom: the list's text size (its table only, as on Windows), and the columns' widths with it */
 static void apply_zoom(VoterWindow *w, int zoom)
 {
@@ -2725,6 +2750,7 @@ static VoterWindow *voter_window_new(GtkApplication *app)
     gtk_column_view_set_reorderable(w->view, FALSE);
     gtk_widget_add_css_class(GTK_WIDGET(w->view), "data-table"); /* (compact rows) */
     gtk_widget_add_css_class(GTK_WIDGET(w->view), "voter-list"); /* (the zoom) */
+    add_table_css(gtk_widget_get_display(GTK_WIDGET(w->window)));
     g_signal_connect(gtk_column_view_get_sorter(w->view),
                      "changed",
                      G_CALLBACK(on_sorter_changed),

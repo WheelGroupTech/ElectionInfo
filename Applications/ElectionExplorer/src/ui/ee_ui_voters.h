@@ -12,6 +12,11 @@
  * (EeUiVoters_ComputeView: a sort of 1.5 million rows takes seconds) while the window keeps
  * showing the old one, then swapped in on the UI thread (EeUiVoters_SetView, which is cheap).
  * Only one ComputeView may run at a time, and SetView must not run while one does.
+ *
+ * Columns are *shown columns*: every column of a voter list; for a voter roster
+ * (EeUiVoters_LoadRoster), Windows' roster columns (Voter ID, Precinct, Name, then Voting
+ * Method, Date Voted and the roster's other columns, not the VUID and name parts behind them).
+ * Rules, sorting and titles all use them.
  */
 #pragma once
 
@@ -91,6 +96,34 @@ extern "C"
                                 char *err,
                                 size_t errcap);
 
+    /**
+     * Load a voter roster from @p n files, as Windows' File > Load Voter Roster... does
+     * (EeRoster_LoadFiles: ZIPs of workbooks, .xlsx, .xls, .csv, .tsv, .txt, .pdf; corrections
+     * replace their originals). Blocks; call it off the UI thread. Returns NULL with a message
+     * in @p err on failure or cancel.
+     */
+    EeUiVoters *EeUiVoters_LoadRoster(const char *const *paths_utf8,
+                                      uint32_t n,
+                                      int surname_first,
+                                      EeUiProgressFn fn,
+                                      void *user,
+                                      volatile int32_t *cancel,
+                                      char *err,
+                                      size_t errcap);
+
+    /** 1 for a voter roster: Windows' Voter Roster window, with its own menus and words. */
+    int EeUiVoters_IsRoster(const EeUiVoters *v);
+
+    /**
+     * A roster's load summary (Reports > Display Load Summary...: what was read, per voting
+     * method, and what was skipped; UTF-8, lines ending in "\n"), or NULL. @p notable (optional)
+     * is 1 when it says more than the counts: Windows opens it after loading then.
+     */
+    const char *EeUiVoters_LoadSummary(const EeUiVoters *v, int *notable);
+
+    /** The shown Address column (Show in Maps..., the Address report), or -1 (a roster). */
+    int EeUiVoters_AddressColumn(const EeUiVoters *v);
+
     void EeUiVoters_Free(EeUiVoters *v);
 
     /** Shown rows (after the filter), and all rows in the list. */
@@ -139,7 +172,7 @@ extern "C"
     /**
      * The status line's count, in the Windows words: "5 voters", "Filtered: 3 of 5 voters",
      * "Showing 4 duplicate Voter IDs of 8 voters", "duplicate Voter IDs within filter: 2 of 8
-     * voters".
+     * voters"; a roster counts "voter records".
      */
     void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap);
 
@@ -172,7 +205,8 @@ extern "C"
      * Shown rows @p rows (in that order) as text for the clipboard, as Windows' Copy: a line a
      * row, fields separated as in the list's file (commas for a CSV, tabs for a TSV).
      * @p normalized: with the Voter ID, Precinct, Name and Address columns first (Windows'
-     * default). Returns heap UTF-8 (free()), or NULL when out of memory.
+     * default; never for a roster, as on Windows). Returns heap UTF-8 (free()), or NULL when out
+     * of memory.
      */
     char *EeUiVoters_CopyText(const EeUiVoters *v,
                               const uint32_t *rows,
@@ -196,7 +230,8 @@ extern "C"
 
     /**
      * Windows' suggested export name for the list at @p list_path: "<name>-All_Voters.csv",
-     * "-Filtered_Voters" (filtered or a duplicates view) or "-Selected_Voters".
+     * "-Filtered_Voters" (filtered or a duplicates view) or "-Selected_Voters"; for a roster
+     * "-Roster", "-Filtered_Roster" or "-Selected_Roster".
      */
     void EeUiVoters_ExportName(const EeUiVoters *v,
                                const char *list_path,
@@ -395,13 +430,14 @@ extern "C"
     char *EeUiOptions_MapUrl(int engine, const char *address);
 
     /**
-     * Open link...: the first "https://" address (any case) in @p text, a cell of column
-     * @p column, as on Windows (App_ExtractHttpsUrl): only in the file's own columns (not Voter
-     * ID, Precinct, Name or Address); it ends at a space, tab, line break, < > " ' ( or ),
-     * without a trailing . , ; : or ]; at most 2047 bytes. Heap UTF-8 (free()), or NULL when
-     * the cell has no link.
+     * Open link...: the first "https://" address (any case) in @p text, a cell of shown column
+     * @p column, as on Windows (App_ExtractHttpsUrl): in a voter list only in the file's own
+     * columns (not Voter ID, Precinct, Name or Address), in a roster in any column (@p v NULL:
+     * a voter list's column); it ends at a space, tab, line break, < > " ' ( or ), without a
+     * trailing . , ; : or ]; at most 2047 bytes. Heap UTF-8 (free()), or NULL when the cell has
+     * no link.
      */
-    char *EeUiVoters_CellLink(uint32_t column, const char *text);
+    char *EeUiVoters_CellLink(const EeUiVoters *v, uint32_t column, const char *text);
 
     /**
      * Rebuild the Name column surname first or given name first (on the UI thread, while no
@@ -429,6 +465,14 @@ extern "C"
      * 0, or 1 when the load fails.
      */
     int EeUiVoters_SelfTest(const char *path_utf8);
+
+    /**
+     * The windows' `--selftest-roster <files...>`: load the roster, then print its columns, the
+     * status line, a sort, a filter on Voting Method, Copy, the duplicate Voter IDs, the export
+     * names, the Precinct report, a saved filter and the load summary, as the Voter Roster
+     * window would show them. Returns 0, or 1 when the load fails.
+     */
+    int EeUiVoters_RosterSelfTest(const char *const *paths_utf8, uint32_t n);
 
 #ifdef __cplusplus
 }

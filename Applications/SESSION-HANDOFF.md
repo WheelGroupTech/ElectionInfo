@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-24. **Nothing in progress; next: the other windows in the macOS/Linux port.**
+**Last updated:** 2026-11-25. **The Voter Roster window is in the macOS/Linux port (uncommitted until the user commits it); next: its Voting Totals.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -38,12 +38,21 @@
     Filter… work in the VM and on the Mac (the dialogs, the replace question, a file from Windows),
     and so does Show in Maps… on an Address cell, with the map engine changed in Options.
     Open link… works on Linux and on the Mac.
+- **Voter Roster window (2026-11-25):** File > Open Voter Roster… (several files) opens a window
+  of its own with Windows' roster columns, words and menus (Export Voter Roster…, Display Load
+  Summary…, Options with names and zoom only). Open Voter List… now opens a second list in a new
+  window, as on Windows. Bridge: shown columns, `EeUiVoters_LoadRoster`, `--selftest-roster`;
+  made-up `test/sample_roster*.csv`. Checked by self-test and snapshots on both, and on real Travis
+  rosters (G26 552,364 records in 3.4 s). **Not yet tried by hand:** the Open Voter Roster dialog
+  (several files), the windows' menus, the Load Summary's OK, the roster Settings.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options, saved-filter and link lines on
   `sample_duplicates.csv`, and the link count on `sample_links.csv`.
 - **Next steps:**
-  - Show Duplicate Voters Voting waits for a roster window;
-  - the other windows (roster, results, CVRs, audit logs);
+  - the roster's Display Voting Totals…;
+  - Show Duplicate Voters Voting in the voter list window (needs an open roster window);
+  - the roster Compare menu, later;
+  - the other windows (results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.

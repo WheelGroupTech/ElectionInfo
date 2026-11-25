@@ -66,6 +66,20 @@ jobs:
           grep -qF "link in the Address column: (none)" selftest.txt
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest test/sample_links.csv > links.txt
           grep -qF "shown cells with a link: 4" links.txt
+      - name: Roster window self-test (made-up rosters)
+        run: |
+          ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-roster test/sample_roster.csv test/sample_roster_mail.csv > roster.txt
+          cat roster.txt
+          grep -qF "roster 1: rows 11, columns 6" roster.txt
+          grep -qF "column 3: \"Voting Method\"" roster.txt
+          grep -qF "status: 11 voter records" roster.txt
+          grep -qF "filter Voting Method is \"Mail Ballot\": Filtered: 3 of 11 voter records" roster.txt
+          grep -qF "copy: 2 rows, 2 lines, 14 separators" roster.txt
+          grep -qF "export names: \"sample_roster-Filtered_Roster.csv\", \"sample_roster-Selected_Roster.csv\", \"sample_roster-Roster.csv\"" roster.txt
+          grep -qF "roster filter file: loaded 1, 1 rule on column 3" roster.txt
+          grep -qF "Showing 2 duplicate Voter IDs of 11 voter records" roster.txt
+          grep -qF "Precinct report: 3 unique precincts" roster.txt
+          grep -qF "load summary (notable 1):" roster.txt
 
   macos:
     name: macOS (Apple Silicon, Apple Vision)
@@ -107,3 +121,17 @@ jobs:
           grep -qF "link in the Address column: (none)" selftest.txt
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest test/sample_links.csv > links.txt
           grep -qF "shown cells with a link: 4" links.txt
+      - name: Roster window self-test (made-up rosters)
+        run: |
+          "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-roster test/sample_roster.csv test/sample_roster_mail.csv > roster.txt
+          cat roster.txt
+          grep -qF "roster 1: rows 11, columns 6" roster.txt
+          grep -qF "column 3: \"Voting Method\"" roster.txt
+          grep -qF "status: 11 voter records" roster.txt
+          grep -qF "filter Voting Method is \"Mail Ballot\": Filtered: 3 of 11 voter records" roster.txt
+          grep -qF "copy: 2 rows, 2 lines, 14 separators" roster.txt
+          grep -qF "export names: \"sample_roster-Filtered_Roster.csv\", \"sample_roster-Selected_Roster.csv\", \"sample_roster-Roster.csv\"" roster.txt
+          grep -qF "roster filter file: loaded 1, 1 rule on column 3" roster.txt
+          grep -qF "Showing 2 duplicate Voter IDs of 11 voter records" roster.txt
+          grep -qF "Precinct report: 3 unique precincts" roster.txt
+          grep -qF "load summary (notable 1):" roster.txt

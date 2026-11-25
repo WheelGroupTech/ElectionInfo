@@ -6,6 +6,7 @@
 #include "ee_ui_voters.h"
 #include "filter.h"
 #include "settings.h"
+#include "voter_roster.h"
 #include "voter_table.h"
 
 #include <stdio.h>
@@ -25,7 +26,35 @@ struct EeUiVoters
     uint8_t *marks; /* per physical row: 1 for a duplicate (a duplicates view), else NULL */
     int mark_kind;  /* EE_UI_MARKS_* */
     uint32_t marked;
+
+    /* the shown columns: every column of a voter list; a roster's display columns (Windows'
+     * App_BuildRosterColumns), so a shown column c is the table's column cols[c] */
+    BOOL roster;
+    uint32_t ncols;
+    uint32_t cols[EE_MAX_COLUMNS];
+    char *summary;        /* a roster's load summary (UTF-8), or NULL */
+    BOOL summary_notable; /* it says more than the counts (Windows opens it after loading) */
 };
+
+/* the table's column for shown column @p c, or UINT32_MAX */
+static uint32_t tcol(const EeUiVoters *v, uint32_t c)
+{
+    return v != NULL && c < v->ncols ? v->cols[c] : UINT32_MAX;
+}
+
+/* the shown column of the table's column @p t, or -1 */
+static int scol(const EeUiVoters *v, uint32_t t)
+{
+    uint32_t i;
+    for (i = 0; v != NULL && i < v->ncols; i++)
+    {
+        if (v->cols[i] == t)
+        {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 /* A computed order and filter, ready to swap in. */
 struct EeUiView
@@ -85,16 +114,60 @@ static void wide_value(const char *s, wchar_t *out, size_t outcch)
     StringCchCopyW(out, outcch, buf);
 }
 
-static void to_engine_rule(const EeUiRule *r, EeFilterRule *out)
+static void to_engine_rule(const EeUiVoters *v, const EeUiRule *r, EeFilterRule *out)
 {
     memset(out, 0, sizeof(*out));
-    out->column = r->column;
+    out->column = tcol(v, r->column);
     out->relation = (r->relation >= 0 && r->relation < EE_UI_REL_COUNT)
                         ? (EeFilterRelation)r->relation
                         : EeRel_Is;
     out->action = r->exclude ? EeFilt_Exclude : EeFilt_Include;
     out->enabled = r->enabled ? TRUE : FALSE;
     wide_value(r->value, out->value, ARRAYSIZE(out->value));
+}
+
+static void set_err(char *err, size_t errcap, const char *text);
+
+/* After a load: on failure the message (UTF-8) and the list freed (FALSE); else the titles */
+static BOOL loaded(EeUiVoters *v,
+                   EeLoadStatus st,
+                   const wchar_t *werr,
+                   const wchar_t *fallback,
+                   char *err,
+                   size_t errcap)
+{
+    uint32_t c;
+    if (st != EeLoadStatus_Ok)
+    {
+        if (err != NULL && errcap > 0)
+        {
+            if (st == EeLoadStatus_Cancelled)
+            {
+                StringCchCopyA(err, errcap, "Loading was cancelled.");
+            }
+            else if (WideCharToMultiByte(CP_UTF8,
+                                         0,
+                                         werr[0] ? werr : fallback,
+                                         -1,
+                                         err,
+                                         (int)errcap,
+                                         NULL,
+                                         NULL) <= 0)
+            {
+                StringCchCopyA(err, errcap, "The file could not be loaded.");
+            }
+        }
+        free(v->summary);
+        EeVoterTable_Clear(&v->t);
+        free(v);
+        return FALSE;
+    }
+    for (c = 0; c < v->t.column_count; c++)
+    {
+        v->titles[c] = utf8_of(v->t.column_titles[c]);
+    }
+    v->shown = v->t.row_count;
+    return TRUE;
 }
 
 EeUiVoters *EeUiVoters_Load(const char *path_utf8,
@@ -136,36 +209,154 @@ EeUiVoters *EeUiVoters_Load(const char *path_utf8,
                                    &pc,
                                    werr,
                                    ARRAYSIZE(werr));
-    if (st != EeLoadStatus_Ok)
+    if (!loaded(v, st, werr, L"The file could not be loaded.", err, errcap))
     {
-        if (err != NULL && errcap > 0)
-        {
-            if (st == EeLoadStatus_Cancelled)
-            {
-                StringCchCopyA(err, errcap, "Loading was cancelled.");
-            }
-            else if (WideCharToMultiByte(CP_UTF8,
-                                         0,
-                                         werr[0] ? werr : L"The file could not be loaded.",
-                                         -1,
-                                         err,
-                                         (int)errcap,
-                                         NULL,
-                                         NULL) <= 0)
-            {
-                StringCchCopyA(err, errcap, "The file could not be loaded.");
-            }
-        }
-        EeVoterTable_Clear(&v->t);
-        free(v);
         return NULL;
     }
     for (c = 0; c < v->t.column_count; c++)
     {
-        v->titles[c] = utf8_of(v->t.column_titles[c]);
+        v->cols[v->ncols++] = c;
     }
-    v->shown = v->t.row_count;
     return v;
+}
+
+/* Windows' App_BuildRosterColumns: Voter ID, Precinct, Name, then the source columns other than
+ * the VUID and name parts behind them (Voting Method, Date Voted, Party, extras, Source File) */
+static void roster_columns(EeUiVoters *v)
+{
+    static const wchar_t *const hidden[] =
+        {L"VUID", L"Precinct", L"Last Name", L"First Name", L"Middle Name", L"Name Suffix"};
+    uint32_t c;
+    size_t k;
+    v->ncols = 0;
+    v->cols[v->ncols++] = EE_COL_VOTER_ID;
+    v->cols[v->ncols++] = EE_COL_PRECINCT;
+    v->cols[v->ncols++] = EE_COL_NAME;
+    for (c = EE_FROZEN_COLUMN_COUNT; c < v->t.column_count && v->ncols < EE_MAX_COLUMNS; c++)
+    {
+        const wchar_t *t = v->t.column_titles[c] != NULL ? v->t.column_titles[c] : L"";
+        BOOL hide = FALSE;
+        for (k = 0; k < ARRAYSIZE(hidden) && !hide; k++)
+        {
+            hide = _wcsicmp(t, hidden[k]) == 0;
+        }
+        if (!hide)
+        {
+            v->cols[v->ncols++] = c;
+        }
+    }
+}
+
+/* (Windows' Roster_InfoIsNotable: skipped or unread files, recovered sheets, unusual or
+ * duplicate Voter IDs) */
+static BOOL roster_notable(const EeRosterLoadInfo *in)
+{
+    return in->repeated_files > 0 || in->copy_files > 0 || in->unsupported_files > 0 ||
+           in->recovered_sheets > 0 || in->skipped_sheets > 0 || in->vuids_malformed > 0 ||
+           in->vuids_missing > 0 || in->vuids_duplicated > 0;
+}
+
+EeUiVoters *EeUiVoters_LoadRoster(const char *const *paths_utf8,
+                                  uint32_t n,
+                                  int surname_first,
+                                  EeUiProgressFn fn,
+                                  void *user,
+                                  volatile int32_t *cancel,
+                                  char *err,
+                                  size_t errcap)
+{
+    EeUiVoters *v = (EeUiVoters *)calloc(1, sizeof(EeUiVoters));
+    wchar_t **paths = (wchar_t **)calloc(n > 0 ? n : 1, sizeof(wchar_t *));
+    wchar_t werr[1024] = L"";
+    EeRosterLoadInfo info;
+    ProgressCx pc;
+    EeLoadStatus st;
+    uint32_t i;
+    BOOL ok = v != NULL && paths != NULL && paths_utf8 != NULL && n > 0;
+    set_err(err, errcap, "");
+    for (i = 0; ok && i < n; i++)
+    {
+        int cch = MultiByteToWideChar(CP_UTF8, 0, paths_utf8[i], -1, NULL, 0);
+        paths[i] = cch > 0 ? (wchar_t *)malloc((size_t)cch * sizeof(wchar_t)) : NULL;
+        ok = paths[i] != NULL &&
+             MultiByteToWideChar(CP_UTF8, 0, paths_utf8[i], -1, paths[i], cch) > 0;
+    }
+    if (!ok)
+    {
+        for (i = 0; paths != NULL && i < n; i++)
+        {
+            free(paths[i]);
+        }
+        free(paths);
+        free(v);
+        set_err(err, errcap, "The voter roster could not be opened.");
+        return NULL;
+    }
+    pc.fn = fn;
+    pc.user = user;
+    memset(&info, 0, sizeof(info));
+    EeVoterTable_Init(&v->t);
+    v->t.name_surname_first = surname_first ? TRUE : FALSE;
+    EeFilter_Init(&v->filters);
+    st = EeRoster_LoadFiles((const wchar_t *const *)paths,
+                            (int)n,
+                            &v->t,
+                            &info,
+                            (volatile LONG *)cancel,
+                            on_progress,
+                            &pc,
+                            werr,
+                            ARRAYSIZE(werr));
+    for (i = 0; i < n; i++)
+    {
+        free(paths[i]);
+    }
+    free(paths);
+    if (st == EeLoadStatus_Ok && info.note != NULL)
+    {
+        char *s = utf8_of(info.note), *d;
+        const char *p;
+        for (p = s, d = s; s != NULL && *p; p++)
+        {
+            if (*p != '\r')
+            {
+                *d++ = *p;
+            }
+        }
+        if (s != NULL)
+        {
+            *d = '\0';
+        }
+        v->summary = s;
+        v->summary_notable = roster_notable(&info);
+    }
+    EeRoster_FreeInfo(&info);
+    if (!loaded(v, st, werr, L"Could not load the voter roster.", err, errcap))
+    {
+        return NULL;
+    }
+    v->roster = TRUE;
+    roster_columns(v);
+    return v;
+}
+
+int EeUiVoters_IsRoster(const EeUiVoters *v)
+{
+    return v != NULL && v->roster;
+}
+
+const char *EeUiVoters_LoadSummary(const EeUiVoters *v, int *notable)
+{
+    if (notable != NULL)
+    {
+        *notable = v != NULL && v->summary_notable;
+    }
+    return v != NULL ? v->summary : NULL;
+}
+
+int EeUiVoters_AddressColumn(const EeUiVoters *v)
+{
+    return v != NULL && !v->roster ? scol(v, EE_COL_ADDRESS) : -1;
 }
 
 void EeUiVoters_Free(EeUiVoters *v)
@@ -182,6 +373,7 @@ void EeUiVoters_Free(EeUiVoters *v)
     EeFilter_Clear(&v->filters);
     free(v->map);
     free(v->marks);
+    free(v->summary);
     EeVoterTable_Clear(&v->t);
     free(v);
 }
@@ -198,26 +390,29 @@ uint32_t EeUiVoters_TotalRows(const EeUiVoters *v)
 
 uint32_t EeUiVoters_Columns(const EeUiVoters *v)
 {
-    return v != NULL ? v->t.column_count : 0;
+    return v != NULL ? v->ncols : 0;
 }
 
 const char *EeUiVoters_Title(const EeUiVoters *v, uint32_t c)
 {
-    return v != NULL && c < v->t.column_count && v->titles[c] != NULL ? v->titles[c] : "";
+    uint32_t t = tcol(v, c);
+    return v != NULL && t < v->t.column_count && v->titles[t] != NULL ? v->titles[t] : "";
 }
 
 const char *EeUiVoters_Cell(const EeUiVoters *v, uint32_t row, uint32_t c)
 {
-    if (v == NULL || row >= v->shown || c >= v->t.column_count)
+    uint32_t t = tcol(v, c);
+    if (v == NULL || row >= v->shown || t >= v->t.column_count)
     {
         return "";
     }
-    return EeVoterTable_GetViewCellUtf8(&v->t, v->map != NULL ? v->map[row] : row, c);
+    return EeVoterTable_GetViewCellUtf8(&v->t, v->map != NULL ? v->map[row] : row, t);
 }
 
 int EeUiVoters_IsNumeric(const EeUiVoters *v, uint32_t c)
 {
-    return v != NULL && c < v->t.column_count && EeVoterTable_ColumnIsNumericOrDate(&v->t, c);
+    uint32_t t = tcol(v, c);
+    return v != NULL && t < v->t.column_count && EeVoterTable_ColumnIsNumericOrDate(&v->t, t);
 }
 
 int EeUiVoters_SortColumn(const EeUiVoters *v, int *ascending)
@@ -226,7 +421,7 @@ int EeUiVoters_SortColumn(const EeUiVoters *v, int *ascending)
     {
         *ascending = v != NULL && v->t.sort_ascending;
     }
-    return v != NULL ? v->t.sort_column : -1;
+    return v != NULL && v->t.sort_column >= 0 ? scol(v, (uint32_t)v->t.sort_column) : -1;
 }
 
 uint32_t EeUiVoters_RuleCount(const EeUiVoters *v)
@@ -243,7 +438,7 @@ int EeUiVoters_GetRule(const EeUiVoters *v, uint32_t i, EeUiRule *out)
     }
     r = &v->filters.rules[i];
     memset(out, 0, sizeof(*out));
-    out->column = r->column;
+    out->column = (uint32_t)scol(v, r->column);
     out->relation = (int)r->relation;
     out->exclude = r->action == EeFilt_Exclude;
     out->enabled = r->enabled != FALSE;
@@ -273,7 +468,7 @@ int EeUiVoters_RuleIsValid(const EeUiVoters *v, const EeUiRule *rule, char *why,
     {
         why[0] = '\0';
     }
-    if (v == NULL || rule == NULL || rule->column >= v->t.column_count)
+    if (v == NULL || rule == NULL || rule->column >= v->ncols)
     {
         if (why != NULL && whycap > 0)
         {
@@ -281,7 +476,7 @@ int EeUiVoters_RuleIsValid(const EeUiVoters *v, const EeUiRule *rule, char *why,
         }
         return 0;
     }
-    to_engine_rule(rule, &r);
+    to_engine_rule(v, rule, &r);
     if (!EeFilter_RuleIsValid(&r, &v->t))
     {
         if (why != NULL && whycap > 0)
@@ -341,6 +536,7 @@ const char *EeUiVoters_MarksNoneText(int marks)
 
 void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap)
 {
+    const char *noun = v != NULL && v->roster ? "voter records" : "voters"; /* (Windows' words) */
     if (out == NULL || cap == 0)
     {
         return;
@@ -353,27 +549,29 @@ void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap)
     {
         StringCchPrintfA(out,
                          cap,
-                         "%s within filter: %u of %u voters",
+                         "%s within filter: %u of %u %s",
                          EeUiVoters_MarksLabel(v->mark_kind),
                          v->shown,
-                         v->t.row_count);
+                         v->t.row_count,
+                         noun);
     }
     else if (v->mark_kind != EE_UI_MARKS_NONE)
     {
         StringCchPrintfA(out,
                          cap,
-                         "Showing %u %s of %u voters",
+                         "Showing %u %s of %u %s",
                          v->shown,
                          EeUiVoters_MarksLabel(v->mark_kind),
-                         v->t.row_count);
+                         v->t.row_count,
+                         noun);
     }
     else if (v->filtered)
     {
-        StringCchPrintfA(out, cap, "Filtered: %u of %u voters", v->shown, v->t.row_count);
+        StringCchPrintfA(out, cap, "Filtered: %u of %u %s", v->shown, v->t.row_count, noun);
     }
     else
     {
-        StringCchPrintfA(out, cap, "%u voters", v->shown);
+        StringCchPrintfA(out, cap, "%u %s", v->shown, noun);
     }
 }
 
@@ -500,15 +698,16 @@ EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
     }
     tmp->sort_column = -1;
     tmp->sort_ascending = TRUE;
-    if (sort_column >= 0 && (uint32_t)sort_column < v->t.column_count && n > 0)
+    if (sort_column >= 0 && tcol(v, (uint32_t)sort_column) < v->t.column_count && n > 0)
     {
+        uint32_t t = tcol(v, (uint32_t)sort_column);
         if (!ascending)
         {
             /* (SortByColumn reverses a column that is already the sort column) */
-            tmp->sort_column = sort_column;
+            tmp->sort_column = (int)t;
             tmp->sort_ascending = TRUE;
         }
-        EeVoterTable_SortByColumn(tmp, (uint32_t)sort_column);
+        EeVoterTable_SortByColumn(tmp, t);
     }
     view->sort_column = tmp->sort_column;
     view->sort_ascending = tmp->sort_ascending;
@@ -517,7 +716,7 @@ EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
     for (i = 0; i < nrules; i++)
     {
         EeFilterRule r;
-        to_engine_rule(&rules[i], &r);
+        to_engine_rule(v, &rules[i], &r);
         if (!EeFilter_Add(&view->filters, &r))
         {
             free(tmp);
@@ -608,7 +807,12 @@ char *EeUiVoters_CopyText(const EeUiVoters *v,
     {
         return NULL;
     }
-    if (!EeVoterTable_FormatCopyUtf8(&v->t, vr, n, normalized ? TRUE : FALSE, &text, len))
+    if (!EeVoterTable_FormatCopyUtf8(&v->t,
+                                     vr,
+                                     n,
+                                     normalized && !v->roster ? TRUE : FALSE,
+                                     &text,
+                                     len))
     {
         text = NULL;
     }
@@ -648,7 +852,7 @@ long EeUiVoters_Export(const EeUiVoters *v,
     ok = EeVoterTable_FormatDelimitedUtf8(&v->t,
                                           vr,
                                           n,
-                                          normalized ? TRUE : FALSE,
+                                          normalized && !v->roster ? TRUE : FALSE,
                                           delim == '\t' ? '\t' : ',',
                                           TRUE,
                                           &text,
@@ -711,15 +915,15 @@ void EeUiVoters_ExportName(const EeUiVoters *v,
     name[blen] = '\0';
     if (selection)
     {
-        what = "-Selected_Voters";
+        what = v != NULL && v->roster ? "-Selected_Roster" : "-Selected_Voters";
     }
     else if (v != NULL && (v->filtered || v->mark_kind != EE_UI_MARKS_NONE))
     {
-        what = "-Filtered_Voters";
+        what = v->roster ? "-Filtered_Roster" : "-Filtered_Voters";
     }
     else
     {
-        what = "-All_Voters";
+        what = v != NULL && v->roster ? "-Roster" : "-All_Voters";
     }
     StringCchPrintfA(out, cap, "%s%s.csv", name, what);
 }
@@ -790,12 +994,13 @@ static EeFilterColumnRef *filter_columns(const EeUiVoters *v, uint32_t *n)
 {
     EeFilterColumnRef *cols;
     uint32_t c;
-    *n = v->t.column_count;
+    *n = v->ncols; /* (a roster offers the columns it shows, as on Windows) */
     cols = (EeFilterColumnRef *)calloc(*n ? *n : 1, sizeof(EeFilterColumnRef));
     for (c = 0; cols != NULL && c < *n; c++)
     {
-        cols[c].column = c;
-        cols[c].title = v->t.column_titles[c] != NULL ? v->t.column_titles[c] : L"";
+        uint32_t t = v->cols[c];
+        cols[c].column = t;
+        cols[c].title = v->t.column_titles[t] != NULL ? v->t.column_titles[t] : L"";
     }
     return cols;
 }
@@ -865,7 +1070,7 @@ int EeUiVoters_SaveFilter(const EeUiVoters *v,
     for (i = 0; ok && i < n; i++)
     {
         EeFilterRule r;
-        to_engine_rule(&rules[i], &r);
+        to_engine_rule(v, &rules[i], &r);
         ok = EeFilter_Add(&set, &r);
     }
     if (!ok)
@@ -972,7 +1177,7 @@ int EeUiVoters_LoadFilter(const EeUiVoters *v,
     for (i = 0; i < loaded.count; i++)
     {
         const EeFilterRule *r = &loaded.rules[i];
-        out[i].column = r->column;
+        out[i].column = (uint32_t)scol(v, r->column);
         out[i].relation = (int)r->relation;
         out[i].exclude = r->action == EeFilt_Exclude;
         out[i].enabled = r->enabled != FALSE;
@@ -1022,7 +1227,8 @@ typedef struct ReportItem
 struct EeUiReport
 {
     int kind;
-    uint32_t column; /* the list's column (EE_COL_PRECINCT / EE_COL_ADDRESS) */
+    uint32_t column;      /* the list's column (EE_COL_PRECINCT / EE_COL_ADDRESS) */
+    uint32_t rule_column; /* the window's (shown) column for Include / Exclude */
     ReportItem *items;
     uint32_t count;
     BOOL has_blank;
@@ -1122,6 +1328,7 @@ EeUiReport *EeUiVoters_Report(const EeUiVoters *v, int kind, char *err, size_t e
     }
     r->kind = kind == EE_UI_REPORT_ADDRESS ? EE_UI_REPORT_ADDRESS : EE_UI_REPORT_PRECINCT;
     r->column = column;
+    r->rule_column = scol(v, column) >= 0 ? (uint32_t)scol(v, column) : column;
     for (i = 0; i < n; i++)
     {
         ReportItem *it = &r->items[r->count++];
@@ -1199,7 +1406,7 @@ uint32_t EeUiReport_Count(const EeUiReport *r, uint32_t row)
 void EeUiReport_Rule(const EeUiReport *r, uint32_t row, int exclude, EeUiRule *out)
 {
     memset(out, 0, sizeof(*out));
-    out->column = r != NULL ? r->column : EE_COL_PRECINCT;
+    out->column = r != NULL ? r->rule_column : EE_COL_PRECINCT;
     out->relation = EE_UI_REL_IS;
     out->exclude = exclude ? 1 : 0;
     out->enabled = 1;
@@ -1585,14 +1792,24 @@ char *EeUiOptions_MapUrl(int engine, const char *address)
     return url;
 }
 
-char *EeUiVoters_CellLink(uint32_t column, const char *text)
+char *EeUiVoters_CellLink(const EeUiVoters *v, uint32_t column, const char *text)
 {
-    /* (Windows' App_ExtractHttpsUrl, which Open link... uses in the scrolling pane only) */
+    /* (Windows' App_ExtractHttpsUrl, which Open link... uses in the scrolling pane only: a
+     * voter list's own columns, or every column of a roster, whose other pane is hidden) */
     static const char prefix[] = "https://";
     const char *start = NULL, *p;
     size_t n, i;
     char *url;
-    if (column < EE_FROZEN_COLUMN_COUNT || text == NULL)
+    BOOL scrolling;
+    if (v == NULL)
+    {
+        scrolling = column >= EE_FROZEN_COLUMN_COUNT; /* (a column of a voter list) */
+    }
+    else
+    {
+        scrolling = v->roster ? column < v->ncols : tcol(v, column) >= EE_FROZEN_COLUMN_COUNT;
+    }
+    if (text == NULL || !scrolling)
     {
         return NULL;
     }
@@ -1699,7 +1916,7 @@ void EeUiVoters_SortTo(EeUiVoters *v, uint32_t c, int ascending)
 {
     uint32_t n;
     EeUiRule *rules;
-    if (v == NULL || c >= v->t.column_count)
+    if (v == NULL || c >= v->ncols)
     {
         return;
     }
@@ -1718,7 +1935,7 @@ void EeUiVoters_SortTo(EeUiVoters *v, uint32_t c, int ascending)
 void EeUiVoters_Sort(EeUiVoters *v, uint32_t c)
 {
     int asc = 0;
-    if (v != NULL && c < v->t.column_count)
+    if (v != NULL && c < v->ncols)
     {
         int sc = EeUiVoters_SortColumn(v, &asc);
         EeUiVoters_SortTo(v, c, sc == (int)c ? !asc : 1);
@@ -1913,18 +2130,18 @@ static void selftest_links(const EeUiVoters *v)
     char *url;
     for (i = 0; i < sizeof(cells) / sizeof(cells[0]); i++)
     {
-        url = EeUiVoters_CellLink(EE_FROZEN_COLUMN_COUNT, cells[i]);
+        url = EeUiVoters_CellLink(NULL, EE_FROZEN_COLUMN_COUNT, cells[i]);
         printf("link %u: %s\n", (unsigned)i + 1, url != NULL ? url : "(none)");
         free(url);
     }
-    url = EeUiVoters_CellLink(EE_UI_COLUMN_ADDRESS, cells[0]);
+    url = EeUiVoters_CellLink(NULL, EE_UI_COLUMN_ADDRESS, cells[0]);
     printf("link in the Address column: %s\n", url != NULL ? url : "(none)");
     free(url);
     for (r = 0; r < EeUiVoters_Rows(v); r++)
     {
         for (c = 0; c < columns; c++)
         {
-            url = EeUiVoters_CellLink(c, EeUiVoters_Cell(v, r, c));
+            url = EeUiVoters_CellLink(v, c, EeUiVoters_Cell(v, r, c));
             n += url != NULL;
             free(url);
         }
@@ -2073,6 +2290,107 @@ int EeUiVoters_SelfTest(const char *path_utf8)
         selftest_filter_file(v);
         selftest_links(v);
     }
+    EeUiVoters_Free(v);
+    return 0;
+}
+
+/* the shown column titled @p title, or -1 */
+static int selftest_column(const EeUiVoters *v, const char *title)
+{
+    uint32_t c;
+    for (c = 0; c < EeUiVoters_Columns(v); c++)
+    {
+        if (strcmp(EeUiVoters_Title(v, c), title) == 0)
+        {
+            return (int)c;
+        }
+    }
+    return -1;
+}
+
+int EeUiVoters_RosterSelfTest(const char *const *paths_utf8, uint32_t n)
+{
+    char err[1024] = "", text[256], path[640], msg[256], detail[512];
+    const char *tmp = getenv("TMPDIR"), *summary;
+    EeUiVoters *v = EeUiVoters_LoadRoster(paths_utf8, n, 1, NULL, NULL, NULL, err, sizeof(err));
+    EeUiRule rule, *got = NULL;
+    uint32_t c, nc, ngot = 0;
+    int method, notable = 0, r;
+    char *link;
+    if (v == NULL)
+    {
+        printf("roster load failed: %s\n", err);
+        return 1;
+    }
+    nc = EeUiVoters_Columns(v);
+    printf("roster %d: rows %u, columns %u\n", EeUiVoters_IsRoster(v), EeUiVoters_Rows(v), nc);
+    for (c = 0; c < nc; c++)
+    {
+        printf("column %u: \"%s\"%s\n",
+               c,
+               EeUiVoters_Title(v, c),
+               EeUiVoters_IsNumeric(v, c) ? " (numeric)" : "");
+    }
+    EeUiVoters_CountText(v, text, sizeof(text));
+    printf("status: %s\n", text);
+    printf("address column: %d\n", EeUiVoters_AddressColumn(v));
+    method = selftest_column(v, "Voting Method");
+    if (method < 0 || EeUiVoters_Rows(v) == 0)
+    {
+        printf("no Voting Method column\n");
+        EeUiVoters_Free(v);
+        return 0;
+    }
+
+    /* a heading click, then the right-click Include on a Voting Method cell */
+    EeUiVoters_SortTo(v, (uint32_t)method, 1);
+    selftest_rows(v);
+    printf("first row's method: \"%s\"\n", EeUiVoters_Cell(v, 0, (uint32_t)method));
+    memset(&rule, 0, sizeof(rule));
+    rule.column = (uint32_t)method;
+    rule.relation = EE_UI_REL_IS;
+    rule.enabled = 1;
+    StringCchCopyA(rule.value, sizeof(rule.value), "Mail Ballot");
+    EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, method, 1, &rule, 1, EE_UI_MARKS_NONE));
+    EeUiVoters_CountText(v, text, sizeof(text));
+    printf("filter Voting Method is \"Mail Ballot\": %s\n", text);
+    EeUiVoters_GetRule(v, 0, &rule);
+    printf("rule kept on column %u\n", rule.column);
+    selftest_copy(v); /* (never the normalized fields first: a roster's own columns) */
+    EeUiVoters_ExportName(v, "rosters/sample_roster.csv", 0, text, sizeof(text));
+    printf("export names: \"%s\"", text);
+    EeUiVoters_ExportName(v, "rosters/sample_roster.csv", 1, text, sizeof(text));
+    printf(", \"%s\"", text);
+    EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, NULL, 0, EE_UI_MARKS_NONE));
+    EeUiVoters_ExportName(v, "rosters/sample_roster.csv", 0, text, sizeof(text));
+    printf(", \"%s\"\n", text);
+
+    /* a saved filter names Voting Method, and loads back onto the same shown column */
+    StringCchPrintfA(path,
+                     sizeof(path),
+                     "%s/ee_selftest_roster_%ld.filter.csv",
+                     tmp != NULL && tmp[0] ? tmp : "/tmp",
+                     (long)getpid());
+    rule.enabled = 1;
+    r = EeUiVoters_SaveFilter(v, path, &rule, 1, ',', msg, sizeof(msg));
+    r = r == 1
+            ? EeUiVoters_LoadFilter(v, path, &got, &ngot, msg, sizeof(msg), detail, sizeof(detail))
+            : -1;
+    printf("roster filter file: loaded %d, %u rule on column %u\n",
+           r,
+           ngot,
+           got != NULL ? got[0].column : 99);
+    free(got);
+    remove(path);
+
+    selftest_marks(v, EE_UI_MARKS_DUP_IDS, EE_UI_COLUMN_VOTER_ID);
+    EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, NULL, 0, EE_UI_MARKS_NONE));
+    selftest_report(v, EE_UI_REPORT_PRECINCT);
+    link = EeUiVoters_CellLink(v, 0, "see https://example.org/roster.");
+    printf("roster link in the Voter ID column: %s\n", link != NULL ? link : "(none)");
+    free(link);
+    summary = EeUiVoters_LoadSummary(v, &notable);
+    printf("load summary (notable %d):\n%s\n", notable, summary != NULL ? summary : "(none)");
     EeUiVoters_Free(v);
     return 0;
 }

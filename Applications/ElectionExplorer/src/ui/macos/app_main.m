@@ -13,6 +13,12 @@
  * cell, Open link... on a cell with an https:// link, and a status line. The list comes from the
  * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
+ * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
+ * Windows: the same window with Windows' roster columns and words; the menu bar, shared by every
+ * window, hides Show Duplicate Voters and the Address report there and shows Display Load
+ * Summary... Open Voter List... loads into the window in front while it is an empty voter list
+ * window, else into a new one, as on Windows.
+ *
  * Sorting and filtering are the engine's, computed on a background queue
  * (EeUiVoters_ComputeView) while the table keeps showing the old order, then swapped in on the
  * main thread (EeUiVoters_SetView).
@@ -33,6 +39,10 @@
  *   OK does (without saving them); `--options-window` makes the PNG of the Settings sheet.
  *   `--load-filter <file>` does what the Filter sheet's Load Filter... does, and
  *   `--export-filter <file>` its Export Filter... (without the panels; either opens the sheet).
+ *   `--roster` opens the files named as one voter roster (Open Voter Roster...), and the PNG is
+ *   of its window; `--load-summary` makes it of its Load Summary.
+ * - `--selftest-roster <files...>` loads the files as a roster without a window and prints what
+ *   the Voter Roster window would show.
  */
 
 #import <Cocoa/Cocoa.h>
@@ -105,8 +115,13 @@ static void export_type_changed(NSPopUpButton *type)
 @property(strong) NSTextField *status;
 @property(strong) NSProgressIndicator *progress;
 @property(copy) NSString *path;
+@property(copy) NSString *name; /* the file's name; a roster of several "<first> (+2 more)" */
 @property(assign) EeUiVoters *voters;
 @property(assign) BOOL loading;
+@property(assign) BOOL roster;               /* a Voter Roster window (Windows' roster mode) */
+@property(weak) EeVoterWindow *opener;       /* the window whose Open Voter Roster... made it */
+@property(strong) NSAlert *summaryAlert;     /* the Load Summary while it is open */
+@property(assign) BOOL snapshotting;         /* --snapshot: no Load Summary on its own */
 /* the view the window asks for; a job computes it in the background (the latest wins) */
 @property(assign) int wantSort;
 @property(assign) BOOL wantAscending;
@@ -125,7 +140,10 @@ static void export_type_changed(NSPopUpButton *type)
 @property(assign) uint32_t quickColumn;
 @property(copy) NSString *quickValue;
 @property(copy) NSString *quickLink; /* the cell's link for Open link..., or nil */
+- (instancetype)initRoster:(BOOL)roster;
 - (void)openPath:(NSString *)path;
+- (void)openRosterPaths:(NSArray<NSString *> *)paths;
+- (IBAction)showLoadSummary:(id)sender;
 - (void)setRules:(const EeUiRule *)rules count:(NSUInteger)n;
 - (void)addRules:(NSData *)rules;
 - (void)showReport:(int)kind;
@@ -635,6 +653,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     NSButton *ok, *cancel;
     NSNumberFormatter *digits;
     EeUiOptions o = owner.options;
+    BOOL roster = owner.roster;
     int i;
     self = [super init];
     if (self == nil)
@@ -642,7 +661,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         return nil;
     }
     self.owner = owner;
-    self.sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 470, 210)
+    self.sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 470, roster ? 130 : 210)
                                              styleMask:NSWindowStyleMaskTitled
                                                backing:NSBackingStoreBuffered
                                                  defer:NO];
@@ -695,11 +714,17 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     }
     [v addSubview:ok];
     [v addSubview:cancel];
+    /* (a roster: no Copy prefix, since it copies its own columns, and no map, since it has no
+     * addresses; the two stay laid out, hidden, so the zoom box keeps its place) */
+    self.prepend.hidden = roster;
+    mapLabel.hidden = roster;
+    self.map.hidden = roster;
     [NSLayoutConstraint activateConstraints:@[
         [self.prepend.topAnchor constraintEqualToAnchor:v.topAnchor constant:18],
         [self.prepend.leadingAnchor constraintEqualToAnchor:v.leadingAnchor constant:18],
         [self.prepend.trailingAnchor constraintLessThanOrEqualToAnchor:v.trailingAnchor constant:-18],
-        [self.surname.topAnchor constraintEqualToAnchor:self.prepend.bottomAnchor constant:10],
+        [self.surname.topAnchor constraintEqualToAnchor:roster ? v.topAnchor : self.prepend.bottomAnchor
+                                               constant:roster ? 18 : 10],
         [self.surname.leadingAnchor constraintEqualToAnchor:self.prepend.leadingAnchor],
         [zoomLabel.leadingAnchor constraintEqualToAnchor:self.prepend.leadingAnchor],
         [zoomLabel.centerYAnchor constraintEqualToAnchor:self.zoom.centerYAnchor],
@@ -715,7 +740,8 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         [self.map.topAnchor constraintEqualToAnchor:self.zoom.bottomAnchor constant:12],
         [self.map.leadingAnchor constraintEqualToAnchor:self.zoom.leadingAnchor],
         [self.map.widthAnchor constraintEqualToConstant:180],
-        [cancel.topAnchor constraintEqualToAnchor:self.map.bottomAnchor constant:20],
+        [cancel.topAnchor constraintEqualToAnchor:roster ? self.zoom.bottomAnchor : self.map.bottomAnchor
+                                         constant:20],
         [cancel.bottomAnchor constraintEqualToAnchor:v.bottomAnchor constant:-16],
         [cancel.trailingAnchor constraintEqualToAnchor:v.trailingAnchor constant:-16],
         [ok.centerYAnchor constraintEqualToAnchor:cancel.centerYAnchor],
@@ -739,6 +765,14 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
 - (void)ok:(id)sender
 {
     EeUiOptions o = self.owner.options;
+    if (self.owner.roster)
+    {
+        /* (the two it does not show are kept as saved, perhaps by another window since) */
+        EeUiOptions saved;
+        EeUiOptions_Load(&saved);
+        self.prepend.state = saved.copy_normalized ? NSControlStateValueOn : NSControlStateValueOff;
+        [self.map selectItemAtIndex:saved.map_engine];
+    }
     o.copy_normalized = self.prepend.state == NSControlStateValueOn;
     o.surname_first = self.surname.state == NSControlStateValueOn;
     /* (Windows keeps the zoom when the box holds no number) */
@@ -1182,17 +1216,26 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 @end
 
+static void app_window_closed(EeVoterWindow *w);
+
 @implementation EeVoterWindow
 
 - (instancetype)init
 {
+    return [self initRoster:NO];
+}
+
+- (instancetype)initRoster:(BOOL)roster
+{
     NSScrollView *scroll;
     NSView *content;
+    static NSPoint cascade;
     self = [super init];
     if (self == nil)
     {
         return nil;
     }
+    self.roster = roster;
     self.rules = [NSMutableData data];
     self.wantSort = -1;
     self.wantAscending = YES;
@@ -1208,11 +1251,15 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
                             NSWindowStyleMaskResizable
                     backing:NSBackingStoreBuffered
                       defer:NO];
-    self.window.title = @"Election Explorer";
+    self.window.title = roster ? @"Voter Roster" : @"Election Explorer";
     self.window.delegate = self;
     self.window.releasedWhenClosed = NO;
     [self.window center];
-    [self.window setFrameAutosaveName:@"VoterWindow"];
+    if (![self.window setFrameAutosaveName:@"VoterWindow"])
+    {
+        /* (the name is the first window's: the others step down from it) */
+        cascade = [self.window cascadeTopLeftFromPoint:cascade];
+    }
     content = self.window.contentView;
 
     self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
@@ -1240,7 +1287,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     scroll.autohidesScrollers = NO;
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.status = [NSTextField labelWithString:@"Open a voter list with File > Open…"];
+    self.status = [NSTextField labelWithString:roster ? @"No voter roster loaded." /* (Windows' words) */
+                                                      : @"Open a voter list with File > Open…"];
     self.status.translatesAutoresizingMaskIntoConstraints = NO;
     self.status.lineBreakMode = NSLineBreakByTruncatingMiddle;
     self.progress = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
@@ -1420,7 +1468,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     char count[256];
     EeUiVoters_CountText(self.voters, count, sizeof(count)); /* (the Windows words) */
     [s appendString:ns_utf8(count)];
-    [s appendFormat:@", %u columns — %@", EeUiVoters_Columns(self.voters), self.path.lastPathComponent ?: @""];
+    [s appendFormat:@", %u columns — %@", EeUiVoters_Columns(self.voters), self.name ?: @""];
     if (sc >= 0)
     {
         [s appendFormat:@" — sorted by %@, %@", ns_utf8(EeUiVoters_Title(self.voters, (uint32_t)sc)),
@@ -1687,6 +1735,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 - (void)windowWillClose:(NSNotification *)note
 {
     [self closeReports];
+    app_window_closed(self);
 }
 
 /* the selected shown rows, in order */
@@ -1762,10 +1811,13 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     panel.title = @"Export";
     EeUiVoters_ExportName(self.voters, self.path.fileSystemRepresentation, selection, name, sizeof(name));
     panel.nameFieldStringValue = ns_utf8(name);
-    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 64)];
+    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, self.roster ? 36 : 64)];
     normalized = [NSButton checkboxWithTitle:@"Include normalized data fields" target:nil action:nil];
     normalized.frame = NSMakeRect(20, 36, 380, 20);
-    [extra addSubview:normalized];
+    if (!self.roster) /* (as on Windows: a roster exports its own columns, which reload as one) */
+    {
+        [extra addSubview:normalized];
+    }
     type = export_type_popup(extra, self);
     panel.accessoryView = extra;
     [panel beginSheetModalForWindow:self.window
@@ -1830,14 +1882,54 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 - (void)openPath:(NSString *)path
 {
+    [self startLoad:@[ path ] roster:NO];
+}
+
+- (void)openRosterPaths:(NSArray<NSString *> *)paths
+{
+    [self startLoad:paths roster:YES];
+}
+
+/* a roster that did not load: as on Windows, no window is left; say so over the window it was
+ * opened from */
+- (void)rosterFailed:(NSString *)msg
+{
+    NSAlert *a = [[NSAlert alloc] init];
+    NSWindow *over = self.opener != nil && self.opener.window.visible ? self.opener.window : nil;
+    if (self.snapshotting)
+    {
+        fprintf(stderr, "roster load failed: %s\n", msg.UTF8String);
+        [NSApp terminate:nil];
+        return;
+    }
+    a.messageText = @"Could not load the voter roster.";
+    a.informativeText = msg;
+    [self.window close];
+    if (over != nil)
+    {
+        [a beginSheetModalForWindow:over completionHandler:nil];
+    }
+    else
+    {
+        [a runModal];
+    }
+}
+
+- (void)startLoad:(NSArray<NSString *> *)paths roster:(BOOL)roster
+{
     LoadCx *cx;
-    if (self.loading || self.jobRunning)
+    NSString *path = paths.firstObject;
+    if (self.loading || self.jobRunning || path == nil)
     {
         return;
     }
     self.loading = YES;
     self.path = path;
-    self.window.title = [NSString stringWithFormat:@"Election Explorer — %@", path.lastPathComponent];
+    self.name = paths.count > 1 ? [NSString stringWithFormat:@"%@ (+%lu more)", path.lastPathComponent,
+                                                             (unsigned long)(paths.count - 1)]
+                                : path.lastPathComponent;
+    self.window.title = roster ? [NSString stringWithFormat:@"%@ — Voter Roster", self.name]
+                               : [NSString stringWithFormat:@"Election Explorer — %@", self.name];
     self.progress.doubleValue = 0;
     self.progress.hidden = NO;
     self.status.stringValue = @"Loading…";
@@ -1847,12 +1939,34 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     int surname = self.options.surname_first; /* (the names as the options have them now) */
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
       char err[1024] = "";
-      EeUiVoters *v = EeUiVoters_Load(path.fileSystemRepresentation, surname, on_progress, cx, NULL, err, sizeof(err));
+      EeUiVoters *v;
+      if (roster)
+      {
+          const char **files = (const char **)calloc(paths.count, sizeof(char *));
+          NSUInteger i;
+          for (i = 0; files != NULL && i < paths.count; i++)
+          {
+              files[i] = paths[i].fileSystemRepresentation;
+          }
+          v = files != NULL ? EeUiVoters_LoadRoster(files, (uint32_t)paths.count, surname, on_progress, cx, NULL,
+                                                    err, sizeof(err))
+                            : NULL;
+          free(files);
+      }
+      else
+      {
+          v = EeUiVoters_Load(path.fileSystemRepresentation, surname, on_progress, cx, NULL, err, sizeof(err));
+      }
       NSString *msg = ns_utf8(err);
       dispatch_async(dispatch_get_main_queue(), ^{
         free(cx);
         self.loading = NO;
         self.progress.hidden = YES;
+        if (v == NULL && roster)
+        {
+            [self rosterFailed:msg];
+            return;
+        }
         if (v == NULL)
         {
             NSAlert *a = [[NSAlert alloc] init];
@@ -1882,9 +1996,56 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         [self.table reloadData];
         [self showSortIndicator];
         [self showStatus];
-        [[NSDocumentController sharedDocumentController] noteNewRecentDocumentURL:[NSURL fileURLWithPath:path]];
+        if (!roster)
+        {
+            [[NSDocumentController sharedDocumentController] noteNewRecentDocumentURL:[NSURL fileURLWithPath:path]];
+        }
+        else if (!self.snapshotting)
+        {
+            int notable = 0;
+            EeUiVoters_LoadSummary(v, &notable);
+            if (notable)
+            {
+                [self showLoadSummary:nil]; /* (as on Windows: when it says more than the counts) */
+            }
+        }
       });
     });
+}
+
+/* Reports > Display Load Summary...: what the load read and skipped, as Windows shows it */
+- (IBAction)showLoadSummary:(id)sender
+{
+    const char *text = EeUiVoters_LoadSummary(self.voters, NULL);
+    NSAlert *a;
+    NSScrollView *scroll;
+    NSTextView *view;
+    if (text == NULL || self.window.attachedSheet != nil)
+    {
+        return;
+    }
+    a = [[NSAlert alloc] init];
+    a.messageText = @"Voter Roster Load Summary";
+    scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 520, 220)];
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSBezelBorder;
+    view = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, scroll.contentSize.width, scroll.contentSize.height)];
+    view.editable = NO;
+    view.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
+    view.textContainerInset = NSMakeSize(4, 4);
+    view.verticallyResizable = YES;
+    view.horizontallyResizable = NO;
+    view.autoresizingMask = NSViewWidthSizable;
+    view.textContainer.widthTracksTextView = YES;
+    view.string = ns_utf8(text);
+    scroll.documentView = view;
+    a.accessoryView = scroll;
+    [a addButtonWithTitle:@"OK"];
+    self.summaryAlert = a;
+    [a beginSheetModalForWindow:self.window
+              completionHandler:^(NSModalResponse r) {
+                self.summaryAlert = nil;
+              }];
 }
 
 /* ---- the table: cells on demand, sorting by a heading ---- */
@@ -1948,13 +2109,13 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
                  keyEquivalent:@""]
             .target = self;
         [menu addItem:[NSMenuItem separatorItem]];
-        if (self.quickColumn == EE_UI_COLUMN_ADDRESS && value.length > 0)
+        if ((int)self.quickColumn == EeUiVoters_AddressColumn(self.voters) && value.length > 0)
         {
             [menu addItemWithTitle:@"Show in Maps…" action:@selector(showCellInMaps:) keyEquivalent:@""].target = self;
             [menu addItem:[NSMenuItem separatorItem]];
         }
         {
-            char *link = EeUiVoters_CellLink(self.quickColumn, value.UTF8String);
+            char *link = EeUiVoters_CellLink(self.voters, self.quickColumn, value.UTF8String);
             self.quickLink = link != NULL ? ns_utf8(link) : nil;
             free(link);
         }
@@ -2051,6 +2212,21 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item
 {
+    /* (one menu bar for every window: a roster window has Windows' roster menus, without
+     * Show Duplicate Voters or the Address report, and with the Load Summary) */
+    if (item.action == @selector(showDuplicateVoters:) || item.action == @selector(showAddressReport:))
+    {
+        item.hidden = self.roster;
+    }
+    if (item.action == @selector(exportVoters:))
+    {
+        item.title = self.roster ? @"Export Voter Roster…" : @"Export Voter List…";
+    }
+    if (item.action == @selector(showLoadSummary:))
+    {
+        item.hidden = !self.roster;
+        return self.roster && self.voters != NULL && !self.loading && self.window.attachedSheet == nil;
+    }
     if (item.action == @selector(showOptions:))
     {
         return self.optionsSheet == nil && self.filterSheet == nil; /* (Windows: any time) */
@@ -2086,8 +2262,12 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 /* -------------------------------------------------------------------------- */
 
 @interface EeAppDelegate : NSObject <NSApplicationDelegate>
-@property(strong) EeVoterWindow *main;
+@property(strong) EeVoterWindow *main;               /* the first window (the snapshot's) */
+@property(strong) NSMutableArray<EeVoterWindow *> *windows; /* every open window */
 @property(copy) NSString *pending;  /* a file to open once launched */
+@property(strong) NSMutableArray<NSString *> *pendingFiles; /* the files named (a roster's with --roster) */
+@property(assign) BOOL roster;      /* --roster: open the files as one voter roster */
+@property(assign) BOOL snapshotSummary; /* --load-summary: the PNG is of the Load Summary */
 @property(copy) NSString *snapshot; /* --snapshot: write the window here as PNG once loaded, then quit */
 @property(assign) int snapshotSort; /* --sort: -1 for none */
 @property(assign) BOOL snapshotAscending;
@@ -2130,6 +2310,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     [app addItemWithTitle:@"Quit Election Explorer" action:@selector(terminate:) keyEquivalent:@"q"];
     appItem.submenu = app;
     [file addItemWithTitle:@"Open Voter List…" action:@selector(openDocument:) keyEquivalent:@"o"];
+    [file addItemWithTitle:@"Open Voter Roster…" action:@selector(openRoster:) keyEquivalent:@""];
     [file addItemWithTitle:@"Export Voter List…" action:@selector(exportVoters:) keyEquivalent:@""];
     [file addItem:[NSMenuItem separatorItem]];
     [file addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];
@@ -2146,6 +2327,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     filterItem.submenu = filter;
     [reports addItemWithTitle:@"Display Precinct Report…" action:@selector(showPrecinctReport:) keyEquivalent:@""];
     [reports addItemWithTitle:@"Display Address Report…" action:@selector(showAddressReport:) keyEquivalent:@""];
+    [reports addItemWithTitle:@"Display Load Summary…" action:@selector(showLoadSummary:) keyEquivalent:@""];
     reportsItem.submenu = reports;
     [win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     winItem.submenu = win;
@@ -2153,11 +2335,64 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     NSApp.windowsMenu = win;
 }
 
+/* a new window, kept until it closes */
+- (EeVoterWindow *)addWindowRoster:(BOOL)roster
+{
+    EeVoterWindow *w = [[EeVoterWindow alloc] initRoster:roster];
+    w.snapshotting = self.snapshot != nil;
+    [self.windows addObject:w];
+    return w;
+}
+
+- (void)windowClosed:(EeVoterWindow *)w
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      /* (kept until its window has finished closing) */
+      [self.windows removeObject:w];
+    });
+}
+
+/* the voter list or roster window in front (a report's window counts as its list's) */
+- (EeVoterWindow *)currentWindow
+{
+    id d = (NSApp.keyWindow ?: NSApp.mainWindow).delegate;
+    if ([d isKindOfClass:[EeVoterWindow class]])
+    {
+        return d;
+    }
+    if ([d isKindOfClass:[EeReportWindow class]] && ((EeReportWindow *)d).owner != nil)
+    {
+        return ((EeReportWindow *)d).owner;
+    }
+    return self.windows.lastObject;
+}
+
+/* where a voter list opens, as on Windows: in @p w while it is an empty voter list window, else
+ * in a new one */
+- (EeVoterWindow *)listWindowFrom:(EeVoterWindow *)w
+{
+    if (w != nil && !w.roster && w.voters == NULL && !w.loading && w.window.visible)
+    {
+        return w;
+    }
+    return [self addWindowRoster:NO];
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)note
 {
     [self buildMenu];
-    self.main = [[EeVoterWindow alloc] init];
-    if (self.pending != nil)
+    self.windows = [NSMutableArray array];
+    self.main = [self addWindowRoster:NO];
+    if (self.roster && self.pendingFiles.count > 0)
+    {
+        /* (the roster's own window, as Open Voter Roster... opens it; the empty voter list
+         * window stays, as on Windows) */
+        EeVoterWindow *r = [self addWindowRoster:YES];
+        r.opener = self.main;
+        self.main = r;
+        [r openRosterPaths:self.pendingFiles];
+    }
+    else if (self.pending != nil)
     {
         [self.main openPath:self.pending];
     }
@@ -2175,7 +2410,8 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 {
     EeVoterWindow *w = self.main;
     BOOL waiting = w.loading || w.jobRunning ||
-                   (self.pending != nil && w.voters == NULL && ![w.status.stringValue containsString:@"could"]);
+                   ((self.pending != nil || self.roster) && w.voters == NULL &&
+                    ![w.status.stringValue containsString:@"could"]);
     if (!waiting && !self.snapshotActionsDone)
     {
         self.snapshotActionsDone = YES;
@@ -2238,6 +2474,10 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
         {
             [w showOptions:nil];
         }
+        if (self.snapshotSummary)
+        {
+            [w showLoadSummary:nil];
+        }
         waiting = YES;
     }
     if (waiting)
@@ -2260,6 +2500,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
       NSWindow *target = report != nil               ? report.window
+                         : w.summaryAlert != nil ? w.summaryAlert.window
                          : w.optionsSheet != nil ? w.optionsSheet.sheet
                          : w.filterSheet != nil  ? w.filterSheet.sheet
                                                  : w.window;
@@ -2285,34 +2526,75 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 - (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename
 {
-    if (self.main == nil)
+    if (self.windows == nil)
     {
-        self.pending = filename;
+        self.pending = filename; /* (before launching finished: the file named at start) */
     }
     else
     {
-        [self.main.window makeKeyAndOrderFront:nil];
-        [self.main openPath:filename];
+        EeVoterWindow *w = [self listWindowFrom:[self currentWindow]];
+        [w.window makeKeyAndOrderFront:nil];
+        [w openPath:filename];
     }
     return YES;
 }
 
+/* File > Open Voter List...: into the window in front while it is an empty voter list, else into
+ * a new window, as on Windows */
 - (void)openDocument:(id)sender
 {
     NSOpenPanel *panel = [NSOpenPanel openPanel];
+    EeVoterWindow *from = [self currentWindow];
     panel.allowsMultipleSelection = NO;
     panel.message = @"Choose a voter list (CSV, TSV, TXT or XLSX).";
-    if (self.main == nil || !self.main.window.visible)
+    if (from == nil || !from.window.visible)
     {
-        self.main = [[EeVoterWindow alloc] init];
+        from = [self addWindowRoster:NO];
     }
-    [panel beginSheetModalForWindow:self.main.window
+    [panel beginSheetModalForWindow:from.window
                   completionHandler:^(NSModalResponse r) {
                     if (r == NSModalResponseOK && panel.URL != nil)
                     {
-                        [self.main openPath:panel.URL.path];
+                        [[self listWindowFrom:from] openPath:panel.URL.path];
                     }
                   }];
+}
+
+/* File > Open Voter Roster...: one or more files, in a Voter Roster window of its own, as on
+ * Windows */
+- (void)openRoster:(id)sender
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    EeVoterWindow *from = [self currentWindow];
+    void (^chosen)(NSModalResponse) = ^(NSModalResponse r) {
+      NSMutableArray<NSString *> *paths = [NSMutableArray array];
+      EeVoterWindow *w;
+      if (r != NSModalResponseOK)
+      {
+          return;
+      }
+      for (NSURL *u in panel.URLs)
+      {
+          [paths addObject:u.path];
+      }
+      if (paths.count == 0)
+      {
+          return;
+      }
+      w = [self addWindowRoster:YES];
+      w.opener = from;
+      [w openRosterPaths:paths];
+    };
+    panel.allowsMultipleSelection = YES;
+    panel.message = @"Choose a voter roster's files (ZIP, XLSX, XLS, CSV, TSV, TXT or PDF).";
+    if (from != nil && from.window.visible && from.window.attachedSheet == nil)
+    {
+        [panel beginSheetModalForWindow:from.window completionHandler:chosen];
+    }
+    else
+    {
+        chosen([panel runModal]);
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
@@ -2321,6 +2603,15 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 }
 
 @end
+
+static void app_window_closed(EeVoterWindow *w)
+{
+    id d = NSApp.delegate;
+    if ([d isKindOfClass:[EeAppDelegate class]])
+    {
+        [(EeAppDelegate *)d windowClosed:w];
+    }
+}
 
 int main(int argc, const char **argv)
 {
@@ -2334,6 +2625,10 @@ int main(int argc, const char **argv)
             {
                 return EeUiVoters_SelfTest(argv[i + 1]);
             }
+            if (strcmp(argv[i], "--selftest-roster") == 0)
+            {
+                return EeUiVoters_RosterSelfTest((const char *const *)&argv[i + 1], (uint32_t)(argc - i - 1));
+            }
         }
         [NSApplication sharedApplication];
         NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
@@ -2343,11 +2638,20 @@ int main(int argc, const char **argv)
         delegate.snapshotNames = -1;
         delegate.snapshotAscending = YES;
         delegate.snapshotQuick = [NSMutableArray array];
+        delegate.pendingFiles = [NSMutableArray array];
         for (i = 1; i < argc; i++)
         {
             if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc)
             {
                 delegate.snapshot = ns_utf8(argv[++i]);
+            }
+            else if (strcmp(argv[i], "--roster") == 0)
+            {
+                delegate.roster = YES;
+            }
+            else if (strcmp(argv[i], "--load-summary") == 0)
+            {
+                delegate.snapshotSummary = YES;
             }
             else if (strcmp(argv[i], "--sort") == 0 && i + 1 < argc)
             {
@@ -2405,6 +2709,7 @@ int main(int argc, const char **argv)
             else if (argv[i][0] != '-')
             {
                 delegate.pending = ns_utf8(argv[i]); /* (also the file the Finder opens with) */
+                [delegate.pendingFiles addObject:delegate.pending];
             }
         }
         NSApp.delegate = delegate;

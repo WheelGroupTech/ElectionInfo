@@ -1,0 +1,9 @@
+VUID,Precinct,Last Name,First Name,Middle Name,Voting Method,Date Voted
+1000000101,101,Smith,John,A,Early Vote In-Person,10/20/2026
+1000000102,102,Jones,Maria,L,Early Vote In-Person,10/20/2026
+1000000103,101,Garcia,Carlos,,Early Vote In-Person,10/21/2026
+1000000104,203,Williams,Ann,Marie,Early Vote In-Person,10/22/2026
+1000000105,101,Brown,Robert,J,Election Day In-Person,11/03/2026
+1000000106,102,Davis,Linda,,Election Day In-Person,11/03/2026
+1000000107,203,Miller,James,T,Provisional,11/03/2026
+1000000108,101,Wilson,Karen,,Election Day In-Person,11/03/2026

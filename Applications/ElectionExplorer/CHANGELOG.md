@@ -30,6 +30,16 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-25 — macOS and Linux: the Voter Roster window
+- **What:** File > Open Voter Roster… in the macOS and Linux windows opens one or more roster files in a Voter Roster window of its own, as on Windows: Windows' roster columns (Voter ID, Precinct, Name, Voting Method, Date Voted, the roster's other columns), "voter records", Export Voter Roster… (its own columns, `-Roster.csv` names, no Export Options), Copy without the normalized fields, Filter and Show Duplicate Voter IDs, the Precinct report, Display Load Summary… (opened by itself when the load found something to say), and Options with the names and the zoom only. Open Voter List… now opens a second list in a new window, as Windows does, instead of replacing the first.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: shown columns (`tcol` / `scol`, every bridge call that takes a column), `EeUiVoters_LoadRoster` (`roster_columns`, `roster_notable`), `EeUiVoters_IsRoster`, `EeUiVoters_LoadSummary`, `EeUiVoters_AddressColumn`; the roster words in `CountText` and `ExportName`; `CellLink` takes the list; `EeUiVoters_RosterSelfTest`.
+  - `src/ui/gtk/app_main.c`: `voter_window_new(app, roster)` (the roster menu), `start_load` / `open_path` / `open_roster`, `action_open_roster`, `show_load_summary`, `export_choose_file`, the roster Options; `--roster`, `--load-summary`, `--selftest-roster`.
+  - `src/ui/macos/app_main.m`: `initRoster:`, `startLoad:roster:`, `rosterFailed:`, `showLoadSummary:`, `validateMenuItem:` (the shared menu bar), the roster Settings sheet; the delegate keeps every window (`addWindowRoster:`, `listWindowFrom:`, `openRoster:`).
+  - `test/sample_roster.csv`, `test/sample_roster_mail.csv` (made up); `.github/workflows/election-explorer.yml` runs `--selftest-roster` on both runners.
+- **Checked:** Linux and Mac, Debug and Release, no warnings. `--selftest-roster` prints the same on both, and the voter list self-tests are unchanged. Snapshots of the roster window, Load Summary, roster Options, duplicates, and a Mail Ballot filter whose export loads back as a roster. Real Travis rosters on Linux: G26 552,364 records (61 files) in 3.4 s, G24 583,202, two inputs at once 568,436, with `data_check`'s counts per method.
+- **Details:** [cross-platform-design.md, "The Voter Roster window"](docs/cross-platform-design.md#the-voter-list-window-prototype-2026-11-22).
+
 ### 2026-11-24 — macOS and Linux: Open link
 - **What:** Windows' Open link… in the macOS and Linux voter list window's right-click menu, after Show in Maps…: on a cell of the file's own columns whose text holds an `https://` address, it opens that address in the browser. The link is found by Windows' rule (`App_ExtractHttpsUrl`): the first "https://" in any case, up to a space, tab, line break, < > " ' ( or ), without a trailing . , ; : or ]. On the Mac an address NSURL will not take as it is is escaped first. A made-up list with links, `test/sample_links.csv`, is for trying it.
 - **Where:**

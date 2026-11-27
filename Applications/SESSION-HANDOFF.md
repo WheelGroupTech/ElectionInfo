@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-25. **The roster's Voting Totals are in the macOS/Linux port (uncommitted until the user commits them); next: Show Duplicate Voters Voting.**
+**Last updated:** 2026-11-27. **Show Duplicate Voters Voting is in the macOS/Linux port (uncommitted until the user commits it); next: the roster Compare menu.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -47,19 +47,25 @@
 - **Voting Totals (2026-11-25):** Reports > Display Voting Totals… in the roster window, as on
   Windows (`EeUiVoters_Totals`, `EeUiTotals_*`; GTK `show_totals`, Mac `EeTotalsWindow`;
   `--voting-totals`). Checked by self-test, snapshots on both (made-up and P26 with parties) and
-  real Travis rosters. **Not yet tried by hand:** the right-click Copy / Export, Cmd-C / Ctrl+C,
-  the menu item showing only in roster windows on the Mac.
+  real Travis rosters. Tried by hand on Linux and the Mac.
+- **Show Duplicate Voters Voting (2026-11-27):** Filter > Show Duplicate Voters Voting… in the
+  voter list window, as on Windows (`EeUiVoters_DuplicatesVoting`, `EeUiVoters_ComputeViewWith`;
+  GTK `show_duplicates_voting` / `pick_roster`, Mac `showDuplicateVotersVoting:`;
+  `--selftest-voting`, `--voting-roster`, `--duplicates voting`; made-up
+  `test/sample_roster_voting.csv`). Checked by self-test and snapshots on both; P26 marks the 2
+  voters the county confirmed are two people, G26 none. **Not yet tried by hand:** Select Voter
+  Roster with two rosters open, the menu item grayed / hidden on the Mac, closing the roster
+  while the view is shown.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options, saved-filter and link lines on
   `sample_duplicates.csv`, and the link count on `sample_links.csv`.
 - **Next steps:**
-  - Show Duplicate Voters Voting in the voter list window (needs an open roster window);
-  - the roster Compare menu, later;
+  - the roster Compare menu;
   - the other windows (results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** Open link (tried on Linux and the Mac); Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** roster Voting Totals and the Voter Roster window (both tried on Linux and the Mac); Open link (tried on Linux and the Mac); Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.

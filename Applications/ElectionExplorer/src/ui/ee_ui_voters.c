@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strsafe.h>
+#include <time.h>   /* (clock_gettime: the voting self-test's time, on stderr) */
 #include <unistd.h> /* (getpid: the self-test's scratch file; the bridge is POSIX-only) */
 
 struct EeUiVoters
@@ -26,6 +27,8 @@ struct EeUiVoters
     uint8_t *marks; /* per physical row: 1 for a duplicate (a duplicates view), else NULL */
     int mark_kind;  /* EE_UI_MARKS_* */
     uint32_t marked;
+    /* a Duplicate Voters Voting view's status words (they name its roster), or NULL */
+    char *marks_label;
 
     /* the shown columns: every column of a voter list; a roster's display columns (Windows'
      * App_BuildRosterColumns), so a shown column c is the table's column cols[c] */
@@ -71,6 +74,16 @@ struct EeUiView
     uint8_t *marks;
     int mark_kind;
     uint32_t marked;
+    char *marks_label;
+};
+
+/* Duplicates found in advance, for EeUiVoters_ComputeViewWith. */
+struct EeUiMarks
+{
+    uint8_t *marks; /* per physical row */
+    uint32_t n;     /* the list's rows */
+    uint32_t marked;
+    char *label;    /* the status words */
 };
 
 typedef struct ProgressCx
@@ -380,6 +393,7 @@ void EeUiVoters_Free(EeUiVoters *v)
     EeFilter_Clear(&v->filters);
     free(v->map);
     free(v->marks);
+    free(v->marks_label);
     free(v->summary);
     EeVoterTable_Clear(&v->t);
     free(v);
@@ -530,15 +544,24 @@ int EeUiVoters_HasBirthDate(const EeUiVoters *v)
 /* (the Windows words) */
 const char *EeUiVoters_MarksLabel(int marks)
 {
-    return marks == EE_UI_MARKS_DUP_VOTERS ? "duplicate voters (name + DOB)"
-           : marks == EE_UI_MARKS_DUP_IDS  ? "duplicate Voter IDs"
-                                           : "";
+    return marks == EE_UI_MARKS_DUP_VOTERS   ? "duplicate voters (name + DOB)"
+           : marks == EE_UI_MARKS_DUP_VOTING ? "duplicate voters (name + DOB) voting"
+           : marks == EE_UI_MARKS_DUP_IDS    ? "duplicate Voter IDs"
+                                             : "";
 }
 
 const char *EeUiVoters_MarksNoneText(int marks)
 {
     return marks == EE_UI_MARKS_DUP_VOTERS ? "No duplicate voters (same name and date of birth)."
-                                           : "No duplicate Voter IDs.";
+           : marks == EE_UI_MARKS_DUP_VOTING
+               ? "No voters with the same name and date of birth voted under different Voter IDs."
+               : "No duplicate Voter IDs.";
+}
+
+/* the shown view's status words: a Duplicate Voters Voting view's name its roster */
+static const char *marks_words(const EeUiVoters *v)
+{
+    return v->marks_label != NULL ? v->marks_label : EeUiVoters_MarksLabel(v->mark_kind);
 }
 
 void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap)
@@ -557,7 +580,7 @@ void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap)
         StringCchPrintfA(out,
                          cap,
                          "%s within filter: %u of %u %s",
-                         EeUiVoters_MarksLabel(v->mark_kind),
+                         marks_words(v),
                          v->shown,
                          v->t.row_count,
                          noun);
@@ -568,7 +591,7 @@ void EeUiVoters_CountText(const EeUiVoters *v, char *out, size_t cap)
                          cap,
                          "Showing %u %s of %u %s",
                          v->shown,
-                         EeUiVoters_MarksLabel(v->mark_kind),
+                         marks_words(v),
                          v->t.row_count,
                          noun);
     }
@@ -590,6 +613,7 @@ void EeUiView_Free(EeUiView *view)
         EeFilter_Clear(&view->filters);
         free(view->map);
         free(view->marks);
+        free(view->marks_label);
         free(view);
     }
 }
@@ -603,10 +627,23 @@ int EeUiView_Marks(const EeUiView *view, uint32_t *marked)
     return view != NULL ? view->mark_kind : EE_UI_MARKS_NONE;
 }
 
-/* the view's duplicates: those of the shown view when the same kind, else found anew */
-static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks)
+static char *copy_text(const char *s)
+{
+    size_t n = s != NULL ? strlen(s) + 1 : 0;
+    char *c = n > 0 ? (char *)malloc(n) : NULL;
+    if (c != NULL)
+    {
+        memcpy(c, s, n);
+    }
+    return c;
+}
+
+/* the view's duplicates: those given (found in advance), else those of the shown view when the
+ * same kind, else found anew */
+static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks, const EeUiMarks *given)
 {
     uint32_t n = v->t.row_count;
+    const char *label;
     if (marks <= EE_UI_MARKS_NONE || marks >= EE_UI_MARKS_COUNT)
     {
         return TRUE;
@@ -617,13 +654,23 @@ static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks)
     {
         return FALSE;
     }
-    if (marks == v->mark_kind && v->marks != NULL)
+    if (marks == EE_UI_MARKS_DUP_VOTING && given != NULL && given->n == n)
+    {
+        memcpy(view->marks, given->marks, n);
+        view->marked = given->marked;
+        label = given->label;
+    }
+    else if (marks == v->mark_kind && v->marks != NULL)
     {
         memcpy(view->marks, v->marks, n);
         view->marked = v->marked;
-        return TRUE;
+        label = v->marks_label;
     }
-    if (marks == EE_UI_MARKS_DUP_VOTERS)
+    else if (marks == EE_UI_MARKS_DUP_VOTING)
+    {
+        return TRUE; /* (they need a roster: without one, none are shown) */
+    }
+    else if (marks == EE_UI_MARKS_DUP_VOTERS)
     {
         return EeVoterTable_MarkDuplicateVotersByNameDob(&v->t,
                                                          view->marks,
@@ -632,7 +679,16 @@ static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks)
                                                          NULL,
                                                          NULL);
     }
-    return EeVoterTable_MarkDuplicateVoterIds(&v->t, view->marks, &view->marked, NULL, NULL, NULL);
+    else
+    {
+        return EeVoterTable_MarkDuplicateVoterIds(&v->t,
+                                                  view->marks,
+                                                  &view->marked,
+                                                  NULL,
+                                                  NULL,
+                                                  NULL);
+    }
+    return label == NULL || (view->marks_label = copy_text(label)) != NULL;
 }
 
 /* keep only the shown rows that are duplicates (as Windows ANDs its marks with the filter) */
@@ -669,6 +725,17 @@ EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
                                  const EeUiRule *rules,
                                  uint32_t nrules,
                                  int marks)
+{
+    return EeUiVoters_ComputeViewWith(v, sort_column, ascending, rules, nrules, marks, NULL);
+}
+
+EeUiView *EeUiVoters_ComputeViewWith(const EeUiVoters *v,
+                                     int sort_column,
+                                     int ascending,
+                                     const EeUiRule *rules,
+                                     uint32_t nrules,
+                                     int marks,
+                                     const EeUiMarks *given)
 {
     EeUiView *view;
     EeVoterTable *tmp;
@@ -741,7 +808,7 @@ EeUiView *EeUiVoters_ComputeView(const EeUiVoters *v,
     free(tmp);
 
     /* the duplicates, if asked for */
-    if (!view_marks(v, view, marks) || !view_keep_marked(view, n))
+    if (!view_marks(v, view, marks, given) || !view_keep_marked(view, n))
     {
         EeUiView_Free(view);
         return NULL;
@@ -770,7 +837,101 @@ void EeUiVoters_SetView(EeUiVoters *v, EeUiView *view)
     v->marks = view->marks;
     v->mark_kind = view->mark_kind;
     v->marked = view->marked;
+    free(v->marks_label);
+    v->marks_label = view->marks_label;
     free(view);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Show Duplicate Voters Voting (Windows' App_ShowDuplicateVotersVoting)       */
+/* -------------------------------------------------------------------------- */
+
+EeUiMarks *EeUiVoters_DuplicatesVoting(const EeUiVoters *list,
+                                       const EeUiVoters *roster,
+                                       const char *roster_name,
+                                       char *msg,
+                                       size_t cap)
+{
+    EeUiMarks *m;
+    char label[320];
+    const char *name = roster_name != NULL ? roster_name : "";
+    if (msg != NULL && cap > 0)
+    {
+        msg[0] = '\0';
+    }
+    if (list == NULL || list->roster || list->t.row_count == 0)
+    {
+        StringCchCopyA(msg, cap, "Load a voter list before checking for duplicate voters.");
+        return NULL;
+    }
+    if (!EeUiVoters_HasBirthDate(list))
+    {
+        StringCchCopyA(msg, cap, "No birth date data is available");
+        return NULL;
+    }
+    if (roster == NULL || !roster->roster || roster->t.row_count == 0)
+    {
+        /* (Windows names its File menu's Load Voter Roster...; here it is Open Voter Roster...) */
+        StringCchCopyA(msg,
+                       cap,
+                       "Load a voter roster (File > Open Voter Roster\xE2\x80\xA6) to check which "
+                       "duplicate voters voted.");
+        return NULL;
+    }
+    m = (EeUiMarks *)calloc(1, sizeof(EeUiMarks));
+    if (m != NULL)
+    {
+        m->n = list->t.row_count;
+        m->marks = (uint8_t *)calloc(m->n, 1);
+    }
+    if (m == NULL || m->marks == NULL ||
+        !EeVoterTable_MarkDuplicateVotersVoting(&list->t,
+                                                &roster->t,
+                                                m->marks,
+                                                &m->marked,
+                                                NULL,
+                                                NULL,
+                                                NULL,
+                                                NULL))
+    {
+        EeUiMarks_Free(m);
+        StringCchCopyA(msg, cap, "Out of memory.");
+        return NULL;
+    }
+    if (m->marked == 0)
+    {
+        EeUiMarks_Free(m);
+        StringCchPrintfA(msg,
+                         cap,
+                         "No voters with the same name and date of birth voted under different "
+                         "Voter IDs in %s.",
+                         name);
+        return NULL;
+    }
+    StringCchPrintfA(label, sizeof(label), "duplicate voters (name + DOB) voting in %s", name);
+    m->label = copy_text(label);
+    if (m->label == NULL)
+    {
+        EeUiMarks_Free(m);
+        StringCchCopyA(msg, cap, "Out of memory.");
+        return NULL;
+    }
+    return m;
+}
+
+uint32_t EeUiMarks_Count(const EeUiMarks *m)
+{
+    return m != NULL ? m->marked : 0;
+}
+
+void EeUiMarks_Free(EeUiMarks *m)
+{
+    if (m != NULL)
+    {
+        free(m->marks);
+        free(m->label);
+        free(m);
+    }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3000,5 +3161,111 @@ int EeUiVoters_RosterSelfTest(const char *const *paths_utf8, uint32_t n)
     summary = EeUiVoters_LoadSummary(v, &notable);
     printf("load summary (notable %d):\n%s\n", notable, summary != NULL ? summary : "(none)");
     EeUiVoters_Free(v);
+    return 0;
+}
+
+/* the shown rows' Voter IDs (no names: a real list's are voters' data) */
+static void selftest_voting_rows(const EeUiVoters *v, const char *what)
+{
+    uint32_t r;
+    int asc = 0;
+    int c = EeUiVoters_SortColumn(v, &asc);
+    printf("%s: sorted by column %d, ascending %d; %u of %u rows shown; Voter IDs",
+           what,
+           c,
+           asc,
+           EeUiVoters_Rows(v),
+           EeUiVoters_TotalRows(v));
+    for (r = 0; r < EeUiVoters_Rows(v) && r < 6; r++)
+    {
+        printf(" %s", EeUiVoters_Cell(v, r, EE_UI_COLUMN_VOTER_ID));
+    }
+    printf("%s\n", EeUiVoters_Rows(v) > 6 ? " ..." : "");
+}
+
+int EeUiVoters_VotingSelfTest(const char *list_utf8, const char *const *roster_utf8, uint32_t n)
+{
+    char err[1024] = "", msg[512], text[512];
+    const char *name, *slash;
+    EeUiVoters *list = EeUiVoters_Load(list_utf8, 1, NULL, NULL, NULL, err, sizeof(err));
+    EeUiVoters *roster = NULL;
+    EeUiMarks *m;
+    EeUiRule rule;
+    if (list == NULL)
+    {
+        printf("list load failed: %s\n", err);
+        return 1;
+    }
+    roster = EeUiVoters_LoadRoster(roster_utf8, n, 1, NULL, NULL, NULL, err, sizeof(err));
+    if (roster == NULL)
+    {
+        printf("roster load failed: %s\n", err);
+        EeUiVoters_Free(list);
+        return 1;
+    }
+    slash = n > 0 ? strrchr(roster_utf8[0], '/') : NULL;
+    name = slash != NULL ? slash + 1 : n > 0 ? roster_utf8[0] : "";
+    printf("voting: list %u rows, roster %u records\n",
+           EeUiVoters_TotalRows(list),
+           EeUiVoters_TotalRows(roster));
+
+    /* what Windows says without a roster, and of a roster as the list */
+    m = EeUiVoters_DuplicatesVoting(list, NULL, name, msg, sizeof(msg));
+    printf("voting without a roster: %s\n", m == NULL ? msg : "(marks)");
+    EeUiMarks_Free(m);
+    m = EeUiVoters_DuplicatesVoting(roster, roster, name, msg, sizeof(msg));
+    printf("voting in a roster window: %s\n", m == NULL ? msg : "(marks)");
+    EeUiMarks_Free(m);
+
+    {
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        m = EeUiVoters_DuplicatesVoting(list, roster, name, msg, sizeof(msg));
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        fprintf(stderr,
+                "duplicate voters voting found in %.2f s\n",
+                (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9);
+    }
+    if (m == NULL)
+    {
+        printf("voting: %s\n", msg);
+        EeUiVoters_Free(roster);
+        EeUiVoters_Free(list);
+        return 0;
+    }
+    printf("voting: %u marked\n", EeUiMarks_Count(m));
+    /* as the window asks for it: grouped by Name, ascending (Windows' EE_COL_NAME) */
+    EeUiVoters_SetView(
+        list,
+        EeUiVoters_ComputeViewWith(list, EE_UI_COLUMN_NAME, 1, NULL, 0, EE_UI_MARKS_DUP_VOTING, m));
+    EeUiMarks_Free(m); /* (the view has its own) */
+    EeUiVoters_CountText(list, text, sizeof(text));
+    printf("voting status: %s\n", text);
+    selftest_voting_rows(list, "voting view");
+
+    /* a heading click keeps the duplicates (no roster needed again) */
+    EeUiVoters_SortTo(list, EE_UI_COLUMN_VOTER_ID, 0);
+    selftest_voting_rows(list, "voting sorted");
+
+    /* the right-click Include on the first row's Voter ID */
+    memset(&rule, 0, sizeof(rule));
+    rule.column = EE_UI_COLUMN_VOTER_ID;
+    rule.relation = EE_UI_REL_IS;
+    rule.enabled = 1;
+    StringCchCopyA(rule.value, sizeof(rule.value), EeUiVoters_Cell(list, 0, EE_UI_COLUMN_VOTER_ID));
+    EeUiVoters_SetView(
+        list,
+        EeUiVoters_ComputeView(list, EE_UI_COLUMN_VOTER_ID, 0, &rule, 1, EE_UI_MARKS_DUP_VOTING));
+    EeUiVoters_CountText(list, text, sizeof(text));
+    printf("voting filtered: %s\n", text);
+    EeUiVoters_ExportName(list, "lists/sample_duplicates.csv", 0, text, sizeof(text));
+    printf("voting export name: \"%s\"\n", text);
+
+    /* Reset View: all rows */
+    EeUiVoters_SetView(list, EeUiVoters_ComputeView(list, -1, 1, NULL, 0, EE_UI_MARKS_NONE));
+    EeUiVoters_CountText(list, text, sizeof(text));
+    printf("voting reset: %s\n", text);
+    EeUiVoters_Free(roster);
+    EeUiVoters_Free(list);
     return 0;
 }

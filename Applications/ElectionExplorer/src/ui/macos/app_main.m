@@ -8,14 +8,15 @@
  * (Filter > Filter..., Cmd-L, as Ctrl+L on Windows, with Export Filter... and Load Filter...),
  * Reset Filter, Include / Exclude a cell's
  * value from the right-click menu, Copy (Cmd-C), Export Voter List... and Export Selected...,
- * Show Duplicate Voter IDs / Voters, Reset View, the Precinct and Address reports (Reports menu,
+ * Show Duplicate Voter IDs / Voters / Voters Voting (with a roster open), Reset View, the
+ * Precinct and Address reports (Reports menu,
  * a window each), Settings... (Windows' Options, kept between runs), Show in Maps... on an Address
  * cell, Open link... on a cell with an https:// link, and a status line. The list comes from the
  * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns and words; the menu bar, shared by every
- * window, hides Show Duplicate Voters and the Address report there and shows Display Voting
+ * window, hides Show Duplicate Voters (and Voters Voting) and the Address report there and shows Display Voting
  * Totals... and Display Load Summary... Open Voter List... loads into the window in front while
  * it is an empty voter list window, else into a new one, as on Windows.
  *
@@ -30,8 +31,9 @@
  *   [--filter-window] <file>` opens the window, loads the list, sorts it as a heading click
  *   would and filters it as the right-click menu would, writes the window (or, with
  *   --filter-window, the Filter sheet) as a PNG and quits. The window draws itself, so no
- *   screen recording permission is needed. `--duplicates ids|voters` shows a duplicates view
- *   first (as the Filter menu does); `--export <file>` exports the shown rows before the PNG
+ *   screen recording permission is needed. `--duplicates ids|voters|voting` shows a duplicates
+ *   view first (as the Filter menu does; voting needs `--voting-roster <file>`, repeatable, each
+ *   opened as a roster window); `--export <file>` exports the shown rows before the PNG
  *   (as Export Voter List... does, without the save sheet). `--report precinct|address` opens
  *   that report and the PNG is of its window; then `--sort 0|1[:desc]` clicks the report's
  *   heading and `--export` exports the report (Export All...). `--zoom <percent>` and
@@ -44,6 +46,8 @@
  *   Voting Totals (then `--export` exports them, as Export All... does).
  * - `--selftest-roster <files...>` loads the files as a roster without a window and prints what
  *   the Voter Roster window would show.
+ * - `--selftest-voting <list> <roster files...>` prints Show Duplicate Voters Voting of the list
+ *   in that roster, as the voter list window would show it.
  */
 
 #import <Cocoa/Cocoa.h>
@@ -129,6 +133,7 @@ static void export_type_changed(NSPopUpButton *type)
 @property(assign) BOOL wantAscending;
 @property(strong) NSMutableData *rules; /* EeUiRule[] */
 @property(assign) int wantMarks;        /* EE_UI_MARKS_*: a duplicates view */
+@property(assign) EeUiMarks *votingMarks; /* Show Duplicate Voters Voting's, for the next job */
 @property(assign) NSUInteger wantGen;
 @property(assign) BOOL jobRunning;
 @property(strong) EeFilterSheet *filterSheet;
@@ -157,6 +162,7 @@ static void export_type_changed(NSPopUpButton *type)
 - (void)addQuickRuleColumn:(uint32_t)column value:(NSString *)value exclude:(BOOL)exclude;
 - (void)sortByColumn:(int)column ascending:(BOOL)ascending;
 - (void)showDuplicates:(int)marks;
+- (IBAction)showDuplicateVotersVoting:(id)sender;
 - (BOOL)exportShownTo:(NSString *)path;
 - (IBAction)showFilter:(id)sender;
 - (IBAction)showOptions:(id)sender;
@@ -1626,6 +1632,7 @@ static void app_window_closed(EeVoterWindow *w);
 
 - (void)dealloc
 {
+    EeUiMarks_Free(_votingMarks);
     EeUiVoters_Free(_voters);
 }
 
@@ -1812,8 +1819,14 @@ static void app_window_closed(EeVoterWindow *w);
     NSUInteger gen = self.wantGen;
     EeUiVoters *v = self.voters;
     int marks = self.wantMarks;
+    EeUiMarks *given = marks == EE_UI_MARKS_DUP_VOTING ? self.votingMarks : NULL; /* (the job's now) */
     NSString *label;
     CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    if (given == NULL)
+    {
+        EeUiMarks_Free(self.votingMarks); /* (asked for something else meanwhile) */
+    }
+    self.votingMarks = NULL;
     /* (named for what changes: duplicates to find, a new order, else the filter) */
     if (marks != EE_UI_MARKS_NONE && marks != EeUiVoters_Marks(v, NULL))
     {
@@ -1831,8 +1844,9 @@ static void app_window_closed(EeVoterWindow *w);
     self.progress.hidden = NO;
     [self.progress startAnimation:nil];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-      EeUiView *view = EeUiVoters_ComputeView(v, sort, ascending, (const EeUiRule *)rules.bytes,
-                                              (uint32_t)(rules.length / sizeof(EeUiRule)), marks);
+      EeUiView *view = EeUiVoters_ComputeViewWith(v, sort, ascending, (const EeUiRule *)rules.bytes,
+                                                  (uint32_t)(rules.length / sizeof(EeUiRule)), marks, given);
+      EeUiMarks_Free(given);
       dispatch_async(dispatch_get_main_queue(), ^{
         uint32_t marked = 0;
         int kind = EeUiView_Marks(view, &marked);
@@ -1949,6 +1963,104 @@ static void app_window_closed(EeVoterWindow *w);
 - (IBAction)showDuplicateVoters:(id)sender
 {
     [self showDuplicates:EE_UI_MARKS_DUP_VOTERS];
+}
+
+/* the roster windows with a roster loaded (as Windows looks through its open windows) */
++ (NSArray<EeVoterWindow *> *)openRosters
+{
+    NSMutableArray<EeVoterWindow *> *a = [NSMutableArray array];
+    for (NSWindow *nw in NSApp.windows)
+    {
+        EeVoterWindow *o = (EeVoterWindow *)nw.delegate;
+        if ([o isKindOfClass:[EeVoterWindow class]] && (nw.visible || nw.miniaturized) && o.roster &&
+            o.voters != NULL && !o.loading && EeUiVoters_TotalRows(o.voters) > 0)
+        {
+            [a addObject:o];
+        }
+    }
+    return a;
+}
+
+/* Show Duplicate Voters Voting with roster window @p r: found here (it reads the roster, which
+ * its window may free) and shown as the other duplicates views, grouped by Name */
+- (void)showVotingWith:(EeVoterWindow *)r
+{
+    char msg[512];
+    EeUiMarks *m;
+    int column = EE_UI_COLUMN_NAME;
+    if (!(r.window.visible || r.window.miniaturized) || r.voters == NULL || r.loading || self.voters == NULL)
+    {
+        return; /* (closed or reloaded meanwhile) */
+    }
+    m = EeUiVoters_DuplicatesVoting(self.loading ? NULL : self.voters, r.voters,
+                                    r.path.lastPathComponent.UTF8String, msg, sizeof(msg));
+    if (m == NULL)
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = ns_utf8(msg);
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    EeUiMarks_Free(self.votingMarks);
+    self.votingMarks = m;
+    self.wantMarks = EE_UI_MARKS_DUP_VOTING;
+    [self sortByColumn:(uint32_t)column < EeUiVoters_Columns(self.voters) ? column : -1 ascending:YES];
+}
+
+/* Filter > Show Duplicate Voters Voting...: the list's voters with the same name and birth date
+ * who voted (Voter ID in a loaded roster) under different Voter IDs, as on Windows. With several
+ * rosters open, the user picks one (Windows' Select Voter Roster). */
+- (IBAction)showDuplicateVotersVoting:(id)sender
+{
+    NSArray<EeVoterWindow *> *rosters;
+    NSAlert *a;
+    NSPopUpButton *pick;
+    char msg[512];
+    if (self.roster || self.voters == NULL || self.loading)
+    {
+        return;
+    }
+    if (!EeUiVoters_HasBirthDate(self.voters))
+    {
+        a = [[NSAlert alloc] init];
+        a.messageText = @"No birth date data is available";
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    rosters = [EeVoterWindow openRosters];
+    if (rosters.count == 0)
+    {
+        EeUiMarks_Free(EeUiVoters_DuplicatesVoting(self.voters, NULL, NULL, msg, sizeof(msg)));
+        a = [[NSAlert alloc] init];
+        a.messageText = ns_utf8(msg);
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    if (rosters.count == 1)
+    {
+        [self showVotingWith:rosters[0]];
+        return;
+    }
+    pick = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 360, 26) pullsDown:NO];
+    for (EeVoterWindow *r in rosters)
+    {
+        /* (through the menu: addItemWithTitle: would drop a title already listed) */
+        [pick.menu addItemWithTitle:r.window.title action:NULL keyEquivalent:@""];
+    }
+    a = [[NSAlert alloc] init];
+    a.messageText = @"Select Voter Roster";
+    a.informativeText = @"Several voter rosters are open. Choose the one to check:";
+    a.accessoryView = pick;
+    [a addButtonWithTitle:@"OK"];
+    [a addButtonWithTitle:@"Cancel"];
+    [a beginSheetModalForWindow:self.window
+              completionHandler:^(NSModalResponse r) {
+                NSInteger i = pick.indexOfSelectedItem;
+                if (r == NSAlertFirstButtonReturn && i >= 0 && (NSUInteger)i < rosters.count)
+                {
+                    [self showVotingWith:rosters[(NSUInteger)i]];
+                }
+              }];
 }
 
 /* a report's Include / Exclude: its rules added to the filter */
@@ -2336,6 +2448,8 @@ static void app_window_closed(EeVoterWindow *w);
         }
         self.rules = [NSMutableData data]; /* (a new list starts unfiltered, in file order) */
         self.wantMarks = EE_UI_MARKS_NONE;
+        EeUiMarks_Free(self.votingMarks);
+        self.votingMarks = NULL;
         self.wantSort = -1;
         self.wantAscending = YES;
         [self rebuildColumns];
@@ -2560,9 +2674,16 @@ static void app_window_closed(EeVoterWindow *w);
 {
     /* (one menu bar for every window: a roster window has Windows' roster menus, without
      * Show Duplicate Voters or the Address report, and with the Load Summary) */
-    if (item.action == @selector(showDuplicateVoters:) || item.action == @selector(showAddressReport:))
+    if (item.action == @selector(showDuplicateVoters:) || item.action == @selector(showAddressReport:) ||
+        item.action == @selector(showDuplicateVotersVoting:))
     {
         item.hidden = self.roster;
+    }
+    if (item.action == @selector(showDuplicateVotersVoting:))
+    {
+        /* (as on Windows: birth dates in this list and a loaded roster to check) */
+        return !self.roster && self.voters != NULL && !self.loading && !self.jobRunning &&
+               EeUiVoters_HasBirthDate(self.voters) && [EeVoterWindow openRosters].count > 0;
     }
     if (item.action == @selector(exportVoters:))
     {
@@ -2620,6 +2741,7 @@ static void app_window_closed(EeVoterWindow *w);
 @property(assign) BOOL roster;      /* --roster: open the files as one voter roster */
 @property(assign) BOOL snapshotSummary; /* --load-summary: the PNG is of the Load Summary */
 @property(assign) BOOL snapshotTotals;  /* --voting-totals: the PNG is of the Voting Totals */
+@property(strong) NSMutableArray<NSString *> *votingRosters; /* --voting-roster: each a roster first */
 @property(copy) NSString *snapshot; /* --snapshot: write the window here as PNG once loaded, then quit */
 @property(assign) int snapshotSort; /* --sort: -1 for none */
 @property(assign) BOOL snapshotAscending;
@@ -2674,6 +2796,8 @@ static void app_window_closed(EeVoterWindow *w);
     [filter addItemWithTitle:@"Reset Filter" action:@selector(resetFilter:) keyEquivalent:@""];
     [filter addItemWithTitle:@"Show Duplicate Voter IDs…" action:@selector(showDuplicateVoterIds:) keyEquivalent:@""];
     [filter addItemWithTitle:@"Show Duplicate Voters…" action:@selector(showDuplicateVoters:) keyEquivalent:@""];
+    [filter addItemWithTitle:@"Show Duplicate Voters Voting…" action:@selector(showDuplicateVotersVoting:)
+               keyEquivalent:@""];
     [filter addItem:[NSMenuItem separatorItem]];
     [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""];
     filterItem.submenu = filter;
@@ -2749,9 +2873,19 @@ static void app_window_closed(EeVoterWindow *w);
         self.main = r;
         [r openRosterPaths:self.pendingFiles];
     }
-    else if (self.pending != nil)
+    else
     {
-        [self.main openPath:self.pending];
+        for (NSString *path in self.votingRosters)
+        {
+            /* (each in a roster window of its own, as Open Voter Roster... opens it) */
+            EeVoterWindow *r = [self addWindowRoster:YES];
+            r.opener = self.main;
+            [r openRosterPaths:@[ path ]];
+        }
+        if (self.pending != nil)
+        {
+            [self.main openPath:self.pending];
+        }
     }
     [NSApp activateIgnoringOtherApps:YES];
     if (self.snapshot != nil)
@@ -2769,6 +2903,10 @@ static void app_window_closed(EeVoterWindow *w);
     BOOL waiting = w.loading || w.jobRunning ||
                    ((self.pending != nil || self.roster) && w.voters == NULL &&
                     ![w.status.stringValue containsString:@"could"]);
+    for (EeVoterWindow *o in self.windows)
+    {
+        waiting = waiting || (self.snapshotMarks == EE_UI_MARKS_DUP_VOTING && o.roster && o.loading);
+    }
     if (!waiting && !self.snapshotActionsDone)
     {
         self.snapshotActionsDone = YES;
@@ -2786,7 +2924,11 @@ static void app_window_closed(EeVoterWindow *w);
             }
             [w setOptions:o save:NO];
         }
-        if (self.snapshotMarks != EE_UI_MARKS_NONE)
+        if (self.snapshotMarks == EE_UI_MARKS_DUP_VOTING)
+        {
+            [w showDuplicateVotersVoting:nil];
+        }
+        else if (self.snapshotMarks != EE_UI_MARKS_NONE)
         {
             [w showDuplicates:self.snapshotMarks];
         }
@@ -2997,6 +3139,11 @@ int main(int argc, const char **argv)
             {
                 return EeUiVoters_RosterSelfTest((const char *const *)&argv[i + 1], (uint32_t)(argc - i - 1));
             }
+            if (strcmp(argv[i], "--selftest-voting") == 0 && i + 2 < argc)
+            {
+                return EeUiVoters_VotingSelfTest(argv[i + 1], (const char *const *)&argv[i + 2],
+                                                 (uint32_t)(argc - i - 2));
+            }
         }
         [NSApplication sharedApplication];
         NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
@@ -3007,6 +3154,7 @@ int main(int argc, const char **argv)
         delegate.snapshotAscending = YES;
         delegate.snapshotQuick = [NSMutableArray array];
         delegate.pendingFiles = [NSMutableArray array];
+        delegate.votingRosters = [NSMutableArray array];
         for (i = 1; i < argc; i++)
         {
             if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc)
@@ -3016,6 +3164,10 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--roster") == 0)
             {
                 delegate.roster = YES;
+            }
+            else if (strcmp(argv[i], "--voting-roster") == 0 && i + 1 < argc)
+            {
+                [delegate.votingRosters addObject:ns_utf8(argv[++i])];
             }
             else if (strcmp(argv[i], "--load-summary") == 0)
             {
@@ -3046,7 +3198,9 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--duplicates") == 0 && i + 1 < argc)
             {
                 i++;
-                delegate.snapshotMarks = strcmp(argv[i], "voters") == 0 ? EE_UI_MARKS_DUP_VOTERS : EE_UI_MARKS_DUP_IDS;
+                delegate.snapshotMarks = strcmp(argv[i], "voters") == 0   ? EE_UI_MARKS_DUP_VOTERS
+                                         : strcmp(argv[i], "voting") == 0 ? EE_UI_MARKS_DUP_VOTING
+                                                                          : EE_UI_MARKS_DUP_IDS;
             }
             else if (strcmp(argv[i], "--export") == 0 && i + 1 < argc)
             {

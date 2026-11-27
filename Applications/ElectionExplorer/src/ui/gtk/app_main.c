@@ -7,8 +7,8 @@
  * heading (again to reverse), numbers and dates right-aligned, the Filter window (Ctrl+L, as on
  * Windows, with Export Filter... and Load Filter...), Reset Filter, right-click Include /
  * Exclude on a cell, Copy (Ctrl+C), Export Voter
- * List... and Export Selected..., Show Duplicate Voter IDs / Voters, Reset View, the Precinct
- * and Address reports (a window each), Edit > Options... (kept between runs, as on Windows),
+ * List... and Export Selected..., Show Duplicate Voter IDs / Voters / Voters Voting (with a
+ * roster open), Reset View, the Precinct and Address reports (a window each), Edit > Options... (kept between runs, as on Windows),
  * Show in Maps... on an Address cell, Open link... on a cell with an https:// link, and a status
  * line. The list comes from the engine through
  * ee_ui_voters.h (plain C).
@@ -34,7 +34,8 @@
  *   With `--filter-window` the PNG is of the Filter window, opened on those rules.
  *   `--load-filter <file>` then does what its Load Filter... does, and `--export-filter <file>`
  *   its Export Filter... (without the file dialogs; either opens the Filter window).
- *   `--duplicates ids|voters` shows a duplicates view first (as the Filter menu does), and
+ *   `--duplicates ids|voters|voting` shows a duplicates view first (as the Filter menu does;
+ *   voting needs `--voting-roster <file>`, repeatable, each opened as a roster window), and
  *   `--export <file>` exports the shown rows before the PNG (as Export Voter List... does,
  *   without the dialogs).
  *   `--report precinct|address` opens that report (Reports > Display ... Report...) and the PNG
@@ -48,6 +49,8 @@
  *   Voting Totals (then `--export` exports them, as Export All... does).
  * - `--selftest-roster <files...>` loads the files as a roster without a window and prints what
  *   the Voter Roster window would show.
+ * - `--selftest-voting <list> <roster files...>` prints Show Duplicate Voters Voting of the list
+ *   in that roster, as the voter list window would show it.
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -188,6 +191,8 @@ typedef struct VoterWindow
     gboolean want_ascending;
     GArray *rules;  /* EeUiRule */
     int want_marks; /* EE_UI_MARKS_*: a duplicates view */
+    /* Show Duplicate Voters Voting's duplicates, for the next job (or NULL) */
+    EeUiMarks *voting_marks;
     guint want_gen;
     GThread *job;
     const char *job_label; /* the running job's "Sorting" or "Filtering" */
@@ -211,7 +216,7 @@ typedef struct VoterWindow
     gboolean snapshot_ascending;
     GPtrArray *snapshot_quick;       /* --include / --exclude: "+column=value" / "-column=value" */
     gboolean snapshot_filter_window; /* --filter-window: the PNG is of the Filter window */
-    int snapshot_marks;              /* --duplicates: EE_UI_MARKS_* */
+    int snapshot_marks;              /* --duplicates: EE_UI_MARKS_* (voting: once rosters load) */
     char *snapshot_export;           /* --export: export the shown rows here first */
     int snapshot_report;             /* --report: EE_UI_REPORT_* (-1: none) */
     int snapshot_zoom;               /* --zoom: 0 for none */
@@ -241,6 +246,7 @@ typedef struct ViewJob
     EeUiRule *rules;
     guint nrules;
     int marks;
+    EeUiMarks *given; /* Show Duplicate Voters Voting's (found in advance), or NULL */
     guint gen;
     EeUiView *view;
     gint64 started;
@@ -309,6 +315,7 @@ static void stop_progress(VoterWindow *w)
 static void view_job_free(ViewJob *job)
 {
     EeUiView_Free(job->view);
+    EeUiMarks_Free(job->given);
     g_free(job->rules);
     g_free(job);
 }
@@ -381,12 +388,13 @@ static gboolean view_done(gpointer user)
 static gpointer view_worker(gpointer user)
 {
     ViewJob *job = (ViewJob *)user;
-    job->view = EeUiVoters_ComputeView(job->w->voters,
-                                       job->sort,
-                                       job->ascending,
-                                       job->rules,
-                                       job->nrules,
-                                       job->marks);
+    job->view = EeUiVoters_ComputeViewWith(job->w->voters,
+                                           job->sort,
+                                           job->ascending,
+                                           job->rules,
+                                           job->nrules,
+                                           job->marks,
+                                           job->given);
     g_idle_add(view_done, job);
     return NULL;
 }
@@ -403,6 +411,15 @@ static void start_view_job(VoterWindow *w)
                      ? (EeUiRule *)g_memdup2(w->rules->data, (gsize)job->nrules * sizeof(EeUiRule))
                      : NULL;
     job->marks = w->want_marks;
+    if (job->marks == EE_UI_MARKS_DUP_VOTING)
+    {
+        job->given = w->voting_marks; /* (NULL: the shown view's are kept) */
+    }
+    else
+    {
+        EeUiMarks_Free(w->voting_marks); /* (asked for something else meanwhile) */
+    }
+    w->voting_marks = NULL;
     job->gen = w->want_gen;
     job->started = g_get_monotonic_time();
     {
@@ -552,6 +569,182 @@ static void show_duplicates(VoterWindow *w, int marks)
     w->want_ascending = TRUE;
     show_sort_arrow(w, column, TRUE);
     request_view(w);
+}
+
+/* the roster windows with a roster loaded (as Windows looks through its open windows) */
+static GPtrArray *open_rosters(VoterWindow *w)
+{
+    GPtrArray *a = g_ptr_array_new();
+    GList *l;
+    for (l = gtk_application_get_windows(w->app); l != NULL; l = l->next)
+    {
+        VoterWindow *o = (VoterWindow *)g_object_get_data(G_OBJECT(l->data), "ee-voter-window");
+        if (o != NULL && !o->closed && o->roster && o->voters != NULL && o->worker == NULL &&
+            EeUiVoters_TotalRows(o->voters) > 0)
+        {
+            g_ptr_array_add(a, o);
+        }
+    }
+    return a;
+}
+
+/* Show Duplicate Voters Voting with roster window @p r: found here (it reads the roster, which
+ * its window may free) and shown as the other duplicates views, grouped by Name */
+static void show_voting_with(VoterWindow *w, VoterWindow *r)
+{
+    char msg[512], *base;
+    EeUiMarks *m;
+    int column = EE_UI_COLUMN_NAME;
+    if (w->closed || r->closed || r->voters == NULL || r->worker != NULL)
+    {
+        return; /* (closed or reloaded meanwhile) */
+    }
+    base = g_path_get_basename(r->path != NULL ? r->path : "");
+    m = EeUiVoters_DuplicatesVoting(w->worker == NULL ? w->voters : NULL,
+                                    r->voters,
+                                    base,
+                                    msg,
+                                    sizeof(msg));
+    g_free(base);
+    if (m == NULL)
+    {
+        alert(w, msg, NULL);
+        return;
+    }
+    EeUiMarks_Free(w->voting_marks);
+    w->voting_marks = m;
+    if ((guint)column >= EeUiVoters_Columns(w->voters))
+    {
+        column = -1;
+    }
+    w->want_marks = EE_UI_MARKS_DUP_VOTING;
+    w->want_sort = column;
+    w->want_ascending = TRUE;
+    show_sort_arrow(w, column, TRUE);
+    request_view(w);
+}
+
+/* Select Voter Roster: with several rosters open, the one to check (Windows' App_PickItem) */
+typedef struct RosterPick
+{
+    VoterWindow *w;
+    GtkWindow *win;
+    GtkDropDown *list;
+    GPtrArray *rosters; /* VoterWindow * */
+} RosterPick;
+
+static void on_pick_destroy(GtkWidget *widget, gpointer user)
+{
+    RosterPick *p = (RosterPick *)user;
+    (void)widget;
+    g_ptr_array_unref(p->rosters);
+    g_free(p);
+}
+
+static void on_pick_ok(GtkButton *button, gpointer user)
+{
+    RosterPick *p = (RosterPick *)user;
+    guint i = gtk_drop_down_get_selected(p->list);
+    VoterWindow *w = p->w, *r = i < p->rosters->len ? g_ptr_array_index(p->rosters, i) : NULL;
+    (void)button;
+    gtk_window_destroy(p->win); /* (frees p) */
+    if (r != NULL)
+    {
+        show_voting_with(w, r);
+    }
+}
+
+static void on_pick_cancel(GtkButton *button, gpointer user)
+{
+    (void)button;
+    gtk_window_destroy(((RosterPick *)user)->win);
+}
+
+static void pick_roster(VoterWindow *w, GPtrArray *rosters)
+{
+    RosterPick *p = g_new0(RosterPick, 1);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget *prompt = gtk_label_new("Several voter rosters are open. Choose the one to check:");
+    GtkWidget *cancel = gtk_button_new_with_label("Cancel");
+    GtkWidget *ok = gtk_button_new_with_label("OK");
+    GtkStringList *titles = gtk_string_list_new(NULL);
+    GtkEventController *keys = gtk_shortcut_controller_new();
+    guint i;
+    p->w = w;
+    p->rosters = rosters;
+    for (i = 0; i < rosters->len; i++)
+    {
+        VoterWindow *r = (VoterWindow *)g_ptr_array_index(rosters, i);
+        gtk_string_list_append(titles, gtk_window_get_title(r->window));
+    }
+    p->list = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(titles), NULL)); /* (takes titles) */
+    p->win = GTK_WINDOW(gtk_window_new());
+    gtk_window_set_title(p->win, "Select Voter Roster");
+    gtk_window_set_transient_for(p->win, w->window);
+    gtk_window_set_modal(p->win, TRUE);
+    gtk_window_set_resizable(p->win, FALSE);
+    gtk_label_set_xalign(GTK_LABEL(prompt), 0.0f);
+    gtk_widget_set_halign(buttons, GTK_ALIGN_END);
+    gtk_widget_add_css_class(ok, "suggested-action");
+    gtk_box_append(GTK_BOX(buttons), cancel);
+    gtk_box_append(GTK_BOX(buttons), ok);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 16);
+    gtk_box_append(GTK_BOX(box), prompt);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(p->list));
+    gtk_box_append(GTK_BOX(box), buttons);
+    gtk_window_set_child(p->win, box);
+    gtk_window_set_default_widget(p->win, ok);
+    gtk_shortcut_controller_add_shortcut(GTK_SHORTCUT_CONTROLLER(keys),
+                                         gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_Escape, 0),
+                                                          gtk_named_action_new("window.close")));
+    gtk_widget_add_controller(GTK_WIDGET(p->win), keys);
+    g_signal_connect(ok, "clicked", G_CALLBACK(on_pick_ok), p);
+    g_signal_connect(cancel, "clicked", G_CALLBACK(on_pick_cancel), p);
+    g_signal_connect(p->win, "destroy", G_CALLBACK(on_pick_destroy), p);
+    gtk_window_present(p->win);
+}
+
+/* Filter > Show Duplicate Voters Voting...: the list's voters with the same name and birth date
+ * who voted (Voter ID in a loaded roster) under different Voter IDs, as on Windows. With
+ * several rosters open, the user picks one. */
+static void show_duplicates_voting(VoterWindow *w)
+{
+    GPtrArray *rosters;
+    char msg[512];
+    if (w->roster)
+    {
+        return; /* (as on Windows: not in a roster window) */
+    }
+    if (w->voters == NULL || w->worker != NULL || EeUiVoters_TotalRows(w->voters) == 0)
+    {
+        alert(w, "Load a voter list before checking for duplicate voters.", NULL);
+        return;
+    }
+    if (!EeUiVoters_HasBirthDate(w->voters))
+    {
+        alert(w, "No birth date data is available", NULL);
+        return;
+    }
+    rosters = open_rosters(w);
+    if (rosters->len == 0)
+    {
+        EeUiMarks_Free(EeUiVoters_DuplicatesVoting(w->voters, NULL, NULL, msg, sizeof(msg)));
+        alert(w, msg, NULL);
+        g_ptr_array_unref(rosters);
+    }
+    else if (rosters->len == 1)
+    {
+        show_voting_with(w, (VoterWindow *)g_ptr_array_index(rosters, 0));
+        g_ptr_array_unref(rosters);
+    }
+    else
+    {
+        pick_roster(w, rosters); /* (takes rosters) */
+    }
 }
 
 /* Reset Filter / Reset View: all rows (no rules, no duplicates view), as on Windows */
@@ -3081,9 +3274,30 @@ static gboolean take_snapshot(gpointer user)
 
 /* --snapshot with --sort / --include / --exclude: what a heading click and the right-click
  * menu do, then the PNG once the window has drawn the result */
+static void snapshot_actions(VoterWindow *w);
+
+static gboolean retry_snapshot_actions(gpointer user)
+{
+    snapshot_actions((VoterWindow *)user);
+    return G_SOURCE_REMOVE;
+}
+
 static void snapshot_actions(VoterWindow *w)
 {
     guint i;
+    if (w->snapshot_marks == EE_UI_MARKS_DUP_VOTING)
+    {
+        GList *l;
+        for (l = gtk_application_get_windows(w->app); l != NULL; l = l->next)
+        {
+            VoterWindow *o = (VoterWindow *)g_object_get_data(G_OBJECT(l->data), "ee-voter-window");
+            if (o != NULL && o->roster && o->worker != NULL)
+            {
+                g_timeout_add(200, retry_snapshot_actions, w); /* (a roster still loading) */
+                return;
+            }
+        }
+    }
     if (w->snapshot_zoom > 0 || w->snapshot_names >= 0)
     {
         /* --zoom / --names: as the Options window's OK sets them, but not saved */
@@ -3098,7 +3312,11 @@ static void snapshot_actions(VoterWindow *w)
         }
         set_options(w, &o, FALSE);
     }
-    if (w->voters != NULL && w->snapshot_marks != EE_UI_MARKS_NONE)
+    if (w->voters != NULL && w->snapshot_marks == EE_UI_MARKS_DUP_VOTING)
+    {
+        show_duplicates_voting(w);
+    }
+    else if (w->voters != NULL && w->snapshot_marks != EE_UI_MARKS_NONE)
     {
         show_duplicates(w, w->snapshot_marks);
     }
@@ -3273,6 +3491,7 @@ static gboolean load_done(gpointer user)
         }
         g_array_set_size(w->rules, 0); /* (a new list starts unfiltered, in file order) */
         w->want_marks = EE_UI_MARKS_NONE;
+        g_clear_pointer(&w->voting_marks, EeUiMarks_Free);
         w->want_sort = -1;
         w->want_ascending = TRUE;
         g_free(w->name);
@@ -3549,6 +3768,13 @@ static void action_dup_voters(GSimpleAction *action, GVariant *param, gpointer u
     show_duplicates((VoterWindow *)user, EE_UI_MARKS_DUP_VOTERS);
 }
 
+static void action_dup_voting(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    (void)action;
+    (void)param;
+    show_duplicates_voting((VoterWindow *)user);
+}
+
 static void action_copy(GSimpleAction *action, GVariant *param, gpointer user)
 {
     (void)action;
@@ -3683,6 +3909,7 @@ static void on_destroy(GtkWidget *widget, gpointer user)
     close_reports(w);
     EeUiVoters_Free(w->voters);
     w->voters = NULL;
+    g_clear_pointer(&w->voting_marks, EeUiMarks_Free);
     g_free(w->quick_value);
     w->quick_value = NULL;
     free(w->quick_link);
@@ -3711,6 +3938,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
         {"reset-filter", action_reset_filter, NULL, NULL, NULL, {0}},
         {"dup-ids", action_dup_ids, NULL, NULL, NULL, {0}},
         {"dup-voters", action_dup_voters, NULL, NULL, NULL, {0}},
+        {"dup-voting", action_dup_voting, NULL, NULL, NULL, {0}},
         {"reset-view", action_reset_filter, NULL, NULL, NULL, {0}},
         {"copy", action_copy, NULL, NULL, NULL, {0}},
         {"export", action_export, NULL, NULL, NULL, {0}},
@@ -3740,6 +3968,8 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     w->snapshot_names = -1;
     EeUiOptions_Load(&w->opts); /* (as saved last run) */
     w->window = GTK_WINDOW(gtk_application_window_new(app));
+    /* (open_rosters finds the window's list through it) */
+    g_object_set_data(G_OBJECT(w->window), "ee-voter-window", w);
     gtk_window_set_title(w->window, roster ? "Voter Roster" : "Election Explorer");
     gtk_window_set_default_size(w->window, 1100, 700);
 
@@ -3770,6 +4000,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     if (!roster)
     {
         g_menu_append(filt, "Show Duplicate Voters\xE2\x80\xA6", "win.dup-voters");
+        g_menu_append(filt, "Show Duplicate Voters Voting\xE2\x80\xA6", "win.dup-voting");
     }
     g_menu_append(dups, "Reset View\xE2\x80\xA6", "win.reset-view");
     g_menu_append(reports, "Display Precinct Report\xE2\x80\xA6", "win.report-precinct");
@@ -3871,6 +4102,7 @@ typedef struct AppArgs
     gboolean roster;           /* --roster: open the files as one voter roster */
     gboolean load_summary;     /* --load-summary, with --snapshot */
     gboolean voting_totals;    /* --voting-totals, with --snapshot */
+    GPtrArray *voting_rosters; /* --voting-roster <file>: each opened as a roster first */
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -3884,6 +4116,21 @@ static void on_activate(GtkApplication *app, gpointer user)
         gtk_window_present(first->window);
         w = voter_window_new(app, TRUE);
         w->opener = first;
+    }
+    else
+    {
+        guint k;
+        for (k = 0; k < args->voting_rosters->len; k++)
+        {
+            /* (each in a roster window of its own, as Open Voter Roster... opens it) */
+            VoterWindow *rw = voter_window_new(app, TRUE);
+            const char *path = (const char *)g_ptr_array_index(args->voting_rosters, k);
+            GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
+            g_ptr_array_add(paths, g_strdup(path));
+            rw->opener = first;
+            gtk_window_present(rw->window);
+            start_load(rw, path, paths);
+        }
     }
     if (args->snapshot != NULL)
     {
@@ -3938,11 +4185,13 @@ int main(int argc, char **argv)
                     NULL,
                     FALSE,
                     FALSE,
-                    FALSE};
+                    FALSE,
+                    NULL};
     GtkApplication *app;
     int status, i;
     args.quick = g_ptr_array_new_with_free_func(g_free);
     args.files = g_ptr_array_new();
+    args.voting_rosters = g_ptr_array_new();
     for (i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "--selftest") == 0 && i + 1 < argc)
@@ -3954,9 +4203,19 @@ int main(int argc, char **argv)
             return EeUiVoters_RosterSelfTest((const char *const *)&argv[i + 1],
                                              (uint32_t)(argc - i - 1));
         }
+        else if (strcmp(argv[i], "--selftest-voting") == 0 && i + 2 < argc)
+        {
+            return EeUiVoters_VotingSelfTest(argv[i + 1],
+                                             (const char *const *)&argv[i + 2],
+                                             (uint32_t)(argc - i - 2));
+        }
         else if (strcmp(argv[i], "--roster") == 0)
         {
             args.roster = TRUE;
+        }
+        else if (strcmp(argv[i], "--voting-roster") == 0 && i + 1 < argc)
+        {
+            g_ptr_array_add(args.voting_rosters, argv[++i]);
         }
         else if (strcmp(argv[i], "--load-summary") == 0)
         {
@@ -3992,8 +4251,9 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--duplicates") == 0 && i + 1 < argc)
         {
             i++;
-            args.marks =
-                strcmp(argv[i], "voters") == 0 ? EE_UI_MARKS_DUP_VOTERS : EE_UI_MARKS_DUP_IDS;
+            args.marks = strcmp(argv[i], "voters") == 0   ? EE_UI_MARKS_DUP_VOTERS
+                         : strcmp(argv[i], "voting") == 0 ? EE_UI_MARKS_DUP_VOTING
+                                                          : EE_UI_MARKS_DUP_IDS;
         }
         else if (strcmp(argv[i], "--export") == 0 && i + 1 < argc)
         {
@@ -4038,5 +4298,6 @@ int main(int argc, char **argv)
     g_object_unref(app);
     g_ptr_array_unref(args.quick);
     g_ptr_array_unref(args.files);
+    g_ptr_array_unref(args.voting_rosters);
     return status;
 }

@@ -54,6 +54,7 @@ extern "C"
         EE_UI_MARKS_NONE = 0,
         EE_UI_MARKS_DUP_IDS,    /* rows sharing a Voter ID with another row */
         EE_UI_MARKS_DUP_VOTERS, /* rows sharing first, middle and last name and birth date */
+        EE_UI_MARKS_DUP_VOTING, /* those of them who voted (in a roster) under different IDs */
         EE_UI_MARKS_COUNT
     };
 
@@ -165,7 +166,8 @@ extern "C"
     /** 1 when the list has a birth date column (Show Duplicate Voters needs one). */
     int EeUiVoters_HasBirthDate(const EeUiVoters *v);
 
-    /** For EE_UI_MARKS_*: "duplicate Voter IDs", ... and "No duplicate Voter IDs.", ... */
+    /** For EE_UI_MARKS_*: "duplicate Voter IDs", ... and "No duplicate Voter IDs.", ... (the
+     * status line of a Duplicate Voters Voting view also names its roster) */
     const char *EeUiVoters_MarksLabel(int marks);
     const char *EeUiVoters_MarksNoneText(int marks);
 
@@ -187,6 +189,41 @@ extern "C"
                                      const EeUiRule *rules,
                                      uint32_t nrules,
                                      int marks);
+
+    /** Duplicates found in advance (Show Duplicate Voters Voting's), with their status words. */
+    typedef struct EeUiMarks EeUiMarks;
+
+    /**
+     * Show Duplicate Voters Voting (Windows' App_ShowDuplicateVotersVoting): the rows of voter
+     * list @p list whose first, middle and last name and birth date match another voter's, and
+     * who voted (their Voter ID is in @p roster) under two or more different Voter IDs.
+     * @p roster_name (its first file's name) goes in the status line. UI thread (it reads the
+     * roster, which its window may free). Returns NULL with @p msg in Windows' words when there
+     * is nothing to show: no list, no birth dates, no roster, none found or out of memory.
+     */
+    EeUiMarks *EeUiVoters_DuplicatesVoting(const EeUiVoters *list,
+                                           const EeUiVoters *roster,
+                                           const char *roster_name,
+                                           char *msg,
+                                           size_t cap);
+
+    /** How many rows @p m marks. */
+    uint32_t EeUiMarks_Count(const EeUiMarks *m);
+
+    void EeUiMarks_Free(EeUiMarks *m);
+
+    /**
+     * EeUiVoters_ComputeView with duplicates found in advance: with @p marks
+     * EE_UI_MARKS_DUP_VOTING, @p given (read, not taken) is the view's duplicates. Without
+     * it the shown view's are reused, as for the other kinds.
+     */
+    EeUiView *EeUiVoters_ComputeViewWith(const EeUiVoters *v,
+                                         int sort_column,
+                                         int ascending,
+                                         const EeUiRule *rules,
+                                         uint32_t nrules,
+                                         int marks,
+                                         const EeUiMarks *given);
 
     /**
      * A computed view's duplicates (EE_UI_MARKS_*) and how many rows are duplicates. When a
@@ -550,6 +587,16 @@ extern "C"
      * window would show them. Returns 0, or 1 when the load fails.
      */
     int EeUiVoters_RosterSelfTest(const char *const *paths_utf8, uint32_t n);
+
+    /**
+     * The windows' `--selftest-voting <list> <roster files...>`: load the voter list and the
+     * roster, then print Show Duplicate Voters Voting as the voter list window would show it:
+     * the status line and the duplicates' Voter IDs (no names), then a sort and a filter that
+     * keep them, and the export name. Returns 0, or 1 when a load fails.
+     */
+    int EeUiVoters_VotingSelfTest(const char *list_utf8,
+                                  const char *const *roster_utf8,
+                                  uint32_t n);
 
 #ifdef __cplusplus
 }

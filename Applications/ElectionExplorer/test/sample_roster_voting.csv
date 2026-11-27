@@ -1,0 +1,7 @@
+VUID,Precinct,Last Name,First Name,Middle Name,Voting Method,Date Voted
+300001,101,Sample,Ana,Marie,Early Vote In-Person,10/21/2026
+300002,101,Sample,Ana,Marie,Mail Ballot,10/24/2026
+300003,102,Example,Lee,Alan,Early Vote In-Person,10/22/2026
+300005,103,Twin,Sam,James,Election Day In-Person,11/03/2026
+300006,103,Twin,Sam,Kyle,Election Day In-Person,11/03/2026
+300009,105,Single,Max,Q,Election Day In-Person,11/03/2026

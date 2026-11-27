@@ -30,6 +30,16 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-27 — macOS and Linux: Show Duplicate Voters Voting
+- **What:** Filter > Show Duplicate Voters Voting… in the macOS and Linux voter list window, as on Windows: the list's voters with the same full name and birth date who voted (Voter ID in an open roster) under two or more different Voter IDs, grouped by Name, with Windows' status line and messages. With several rosters open, Select Voter Roster asks which. Not in a roster window. The Mac grays it until there are birth dates and a roster; GTK keeps it on and says why.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EE_UI_MARKS_DUP_VOTING`, `EeUiMarks`, `EeUiVoters_DuplicatesVoting`, `EeUiVoters_ComputeViewWith` (`view_marks` takes marks found in advance; the view keeps their status words); `EeUiVoters_VotingSelfTest`.
+  - `src/ui/gtk/app_main.c`: `show_duplicates_voting`, `open_rosters`, `show_voting_with`, `pick_roster`; the job takes `voting_marks`; `--selftest-voting`, `--voting-roster`, `--duplicates voting`.
+  - `src/ui/macos/app_main.m`: `showDuplicateVotersVoting:`, `openRosters`, `showVotingWith:` (the picker is an alert sheet with a popup); the same arguments.
+  - `test/sample_roster_voting.csv` (made-up); `.github/workflows/election-explorer.yml`: a voting step on both runners.
+- **Checked:** Linux and Mac, Debug and Release, no warnings; `--selftest-voting` the same on both; the other self-tests unchanged; snapshots of the view, its export and none found on both. Real Travis data: P26 marks the 2 voters the county confirmed are two people with the same name and birth date (0.24 s on the UI thread); G26 marks none, as an independent Python count agrees.
+- **Details:** [cross-platform-design.md, "The Voter Roster window"](docs/cross-platform-design.md#the-voter-list-window-prototype-2026-11-22).
+
 ### 2026-11-25 — macOS and Linux: the roster's Voting Totals
 - **What:** Reports > Display Voting Totals… in the macOS and Linux Voter Roster window, as on Windows: voters per Date Voted (and Party) and Voting Method over every loaded record, each Voter ID counted once; "All parties" and Total rows in bold, "not available" / "not loaded" methods, the status line, right-click Copy / Export Selected… / Export All… (`-Voting_Totals.csv`), Cmd-C / Ctrl+C. Not sortable, and closed with its roster window, as on Windows.
 - **Where:**

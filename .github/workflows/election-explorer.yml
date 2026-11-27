@@ -84,6 +84,18 @@ jobs:
           grep -qF "totals status: 10 voters, each counted once (1 later record of 1 Voter ID not counted)" roster.txt
           grep -qF "totals export: 8 rows, BOM 1" roster.txt
           grep -qF "load summary (notable 1):" roster.txt
+      - name: Duplicate voters voting self-test (made-up list and roster)
+        run: |
+          ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-voting test/sample_duplicates.csv test/sample_roster_voting.csv > voting.txt
+          cat voting.txt
+          grep -qF "voting without a roster: Load a voter roster (File > Open Voter Roster" voting.txt
+          grep -qF "voting: 2 marked" voting.txt
+          grep -qF "voting status: Showing 2 duplicate voters (name + DOB) voting in sample_roster_voting.csv of 9 voters" voting.txt
+          grep -qF "voting sorted: sorted by column 0, ascending 0; 2 of 9 rows shown; Voter IDs 300002 300001" voting.txt
+          grep -qF "voting filtered: duplicate voters (name + DOB) voting in sample_roster_voting.csv within filter: 1 of 9 voters" voting.txt
+          grep -qF "voting reset: 9 voters" voting.txt
+          ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-voting test/sample_duplicates.csv test/sample_roster.csv > none.txt
+          grep -qF "voting: No voters with the same name and date of birth voted under different Voter IDs in sample_roster.csv." none.txt
 
   macos:
     name: macOS (Apple Silicon, Apple Vision)
@@ -143,3 +155,15 @@ jobs:
           grep -qF "totals status: 10 voters, each counted once (1 later record of 1 Voter ID not counted)" roster.txt
           grep -qF "totals export: 8 rows, BOM 1" roster.txt
           grep -qF "load summary (notable 1):" roster.txt
+      - name: Duplicate voters voting self-test (made-up list and roster)
+        run: |
+          "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-voting test/sample_duplicates.csv test/sample_roster_voting.csv > voting.txt
+          cat voting.txt
+          grep -qF "voting without a roster: Load a voter roster (File > Open Voter Roster" voting.txt
+          grep -qF "voting: 2 marked" voting.txt
+          grep -qF "voting status: Showing 2 duplicate voters (name + DOB) voting in sample_roster_voting.csv of 9 voters" voting.txt
+          grep -qF "voting sorted: sorted by column 0, ascending 0; 2 of 9 rows shown; Voter IDs 300002 300001" voting.txt
+          grep -qF "voting filtered: duplicate voters (name + DOB) voting in sample_roster_voting.csv within filter: 1 of 9 voters" voting.txt
+          grep -qF "voting reset: 9 voters" voting.txt
+          "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-voting test/sample_duplicates.csv test/sample_roster.csv > none.txt
+          grep -qF "voting: No voters with the same name and date of birth voted under different Voter IDs in sample_roster.csv." none.txt

@@ -547,6 +547,7 @@ const char *EeUiVoters_MarksLabel(int marks)
     return marks == EE_UI_MARKS_DUP_VOTERS   ? "duplicate voters (name + DOB)"
            : marks == EE_UI_MARKS_DUP_VOTING ? "duplicate voters (name + DOB) voting"
            : marks == EE_UI_MARKS_DUP_IDS    ? "duplicate Voter IDs"
+           : marks == EE_UI_MARKS_COMPARE    ? "marked rows" /* (Windows' words without a label) */
                                              : "";
 }
 
@@ -555,7 +556,8 @@ const char *EeUiVoters_MarksNoneText(int marks)
     return marks == EE_UI_MARKS_DUP_VOTERS ? "No duplicate voters (same name and date of birth)."
            : marks == EE_UI_MARKS_DUP_VOTING
                ? "No voters with the same name and date of birth voted under different Voter IDs."
-               : "No duplicate Voter IDs.";
+           : marks == EE_UI_MARKS_COMPARE ? "No voters in that category."
+                                          : "No duplicate Voter IDs.";
 }
 
 /* the shown view's status words: a Duplicate Voters Voting view's name its roster */
@@ -654,7 +656,8 @@ static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks, const EeU
     {
         return FALSE;
     }
-    if (marks == EE_UI_MARKS_DUP_VOTING && given != NULL && given->n == n)
+    if ((marks == EE_UI_MARKS_DUP_VOTING || marks == EE_UI_MARKS_COMPARE) && given != NULL &&
+        given->n == n)
     {
         memcpy(view->marks, given->marks, n);
         view->marked = given->marked;
@@ -666,9 +669,9 @@ static BOOL view_marks(const EeUiVoters *v, EeUiView *view, int marks, const EeU
         view->marked = v->marked;
         label = v->marks_label;
     }
-    else if (marks == EE_UI_MARKS_DUP_VOTING)
+    else if (marks == EE_UI_MARKS_DUP_VOTING || marks == EE_UI_MARKS_COMPARE)
     {
-        return TRUE; /* (they need a roster: without one, none are shown) */
+        return TRUE; /* (they need a roster or a compare: without one, none are shown) */
     }
     else if (marks == EE_UI_MARKS_DUP_VOTERS)
     {
@@ -2379,6 +2382,559 @@ void EeUiTotals_ExportName(const EeUiTotals *t,
 }
 
 /* -------------------------------------------------------------------------- */
+/* Compare (Windows' Compare menu and Compare Summary window, main.c)          */
+/* -------------------------------------------------------------------------- */
+
+/* the Compare Summary's rows, in Windows' order (k_CompareBuckets) */
+enum
+{
+    CMP_ONLY = 0,
+    CMP_REPEATED,
+    CMP_NAME_MINOR,
+    CMP_NAME_MAJOR,
+    CMP_ADDR_MINOR,
+    CMP_ADDR_MAJOR,
+    CMP_PCT,
+    CMP_METHOD,
+    CMP_DATE,
+    CMP_IDENTICAL,
+    CMP_COUNT
+};
+
+static const struct
+{
+    const char *label;  /* the summary row */
+    const char *phrase; /* the status line of the rows shown */
+    uint16_t mask;      /* the class bit; 0 for Identical */
+} k_cmp[CMP_COUNT] = {
+    {"Only here", "voters only here vs", EE_CMP_ONLY_HERE},
+    {"Voter ID repeated", "rows with a repeated Voter ID vs", EE_CMP_REPEATED},
+    {"Name (minor)", "name (minor) changes vs", EE_CMP_NAME_MINOR},
+    {"Name (major)", "name (major) changes vs", EE_CMP_NAME_MAJOR},
+    {"Address (minor)", "address (minor) changes vs", EE_CMP_ADDR_MINOR},
+    {"Address (major)", "address (major) changes vs", EE_CMP_ADDR_MAJOR},
+    {"Precinct changed", "precinct changes vs", EE_CMP_PCT_CHANGED},
+    {"Voting Method changed", "voting method changes vs", EE_CMP_METHOD_CHANGED},
+    {"Date Voted changed", "date voted changes vs", EE_CMP_DATE_CHANGED},
+    {"Identical", "identical voters vs", 0},
+};
+
+struct EeUiCompare
+{
+    EeCompareResult result;
+    uint16_t *cls[2]; /* per physical row of A and B */
+    uint32_t rows[2]; /* the files' rows when compared */
+    BOOL roster[2];
+    char *path[2];
+    char name[2][256]; /* the file names ("" without one) */
+    int buckets[CMP_COUNT];
+    uint32_t nbuckets;
+};
+
+void EeUiCompare_MenuLabel(const char *other_path,
+                           int other_roster,
+                           int this_roster,
+                           char *out,
+                           size_t cap)
+{
+    char name[256];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    if (other_path == NULL)
+    {
+        StringCchCopyA(out,
+                       cap,
+                       this_roster ? "(open another voter roster or a voter list to compare)"
+                                   : "(open another voter list or a voter roster to compare)");
+        return;
+    }
+    file_name(other_path, TRUE, name, sizeof(name));
+    StringCchPrintfA(out,
+                     cap,
+                     "Compare with %s%s",
+                     name[0] != '\0' ? name : "(voter list)",
+                     other_roster  ? " (voter roster)"
+                     : this_roster ? " (voter list)"
+                                   : "");
+}
+
+/* Windows' App_CompareOptions */
+static void compare_options(BOOL roster_a, BOOL roster_b, EeCompareOptions *o)
+{
+    memset(o, 0, sizeof(*o));
+    if (!roster_a && !roster_b)
+    {
+        o->compare_address = TRUE;
+        o->names = EE_CMP_NAMES_FULL;
+        return;
+    }
+    o->compare_address = FALSE;
+    o->loose_precinct = TRUE;
+    if (roster_a && roster_b)
+    {
+        o->names = EE_CMP_NAMES_PARTS;
+        o->compare_vote = TRUE;
+    }
+    else
+    {
+        o->names = EE_CMP_NAMES_FIRST_LAST;
+    }
+}
+
+void EeUiCompare_Free(EeUiCompare *c)
+{
+    if (c != NULL)
+    {
+        free(c->cls[0]);
+        free(c->cls[1]);
+        free(c->path[0]);
+        free(c->path[1]);
+        free(c);
+    }
+}
+
+EeUiCompare *EeUiVoters_Compare(const EeUiVoters *a,
+                                const EeUiVoters *b,
+                                const char *path_a,
+                                const char *path_b,
+                                volatile int32_t *cancel,
+                                char *err,
+                                size_t errcap)
+{
+    EeUiCompare *c;
+    EeCompareOptions opts;
+    int k, s;
+    set_err(err, errcap, "");
+    if (a == NULL || b == NULL || a == b || a->t.row_count == 0 || b->t.row_count == 0)
+    {
+        set_err(err, errcap, "Both windows must have a voter list loaded to compare.");
+        return NULL;
+    }
+    c = (EeUiCompare *)calloc(1, sizeof(EeUiCompare));
+    if (c == NULL)
+    {
+        set_err(err, errcap, "Out of memory.");
+        return NULL;
+    }
+    c->rows[0] = a->t.row_count;
+    c->rows[1] = b->t.row_count;
+    c->roster[0] = a->roster;
+    c->roster[1] = b->roster;
+    c->cls[0] = (uint16_t *)calloc((size_t)c->rows[0] + 1u, sizeof(uint16_t));
+    c->cls[1] = (uint16_t *)calloc((size_t)c->rows[1] + 1u, sizeof(uint16_t));
+    c->path[0] = copy_text(path_a != NULL ? path_a : "");
+    c->path[1] = copy_text(path_b != NULL ? path_b : "");
+    if (c->cls[0] == NULL || c->cls[1] == NULL || c->path[0] == NULL || c->path[1] == NULL)
+    {
+        EeUiCompare_Free(c);
+        set_err(err, errcap, "Out of memory.");
+        return NULL;
+    }
+    for (s = 0; s < 2; s++)
+    {
+        file_name(c->path[s], TRUE, c->name[s], sizeof(c->name[s]));
+    }
+    compare_options(a->roster, b->roster, &opts);
+    if (!EeVoterTable_CompareByVoterIdEx(&a->t,
+                                         &b->t,
+                                         &opts,
+                                         c->cls[0],
+                                         c->cls[1],
+                                         &c->result,
+                                         (volatile LONG *)cancel,
+                                         NULL,
+                                         NULL))
+    {
+        EeUiCompare_Free(c);
+        set_err(err, errcap, "Could not compare the two voter lists.");
+        return NULL;
+    }
+    if (cancel != NULL && *cancel != 0)
+    {
+        EeUiCompare_Free(c); /* (cancelled: err stays "") */
+        return NULL;
+    }
+    /* the rows Windows shows: Address only for two voter lists, Voting Method and Date
+     * Voted only for two rosters */
+    for (k = 0; k < CMP_COUNT; k++)
+    {
+        BOOL lists = !a->roster && !b->roster, rosters = a->roster && b->roster;
+        if ((k == CMP_ADDR_MINOR || k == CMP_ADDR_MAJOR) && !lists)
+        {
+            continue;
+        }
+        if ((k == CMP_METHOD || k == CMP_DATE) && !rosters)
+        {
+            continue;
+        }
+        c->buckets[c->nbuckets++] = k;
+    }
+    return c;
+}
+
+uint32_t EeUiCompare_Rows(const EeUiCompare *c)
+{
+    return c != NULL ? c->nbuckets : 0;
+}
+
+const char *EeUiCompare_Category(const EeUiCompare *c, uint32_t row)
+{
+    return c != NULL && row < c->nbuckets ? k_cmp[c->buckets[row]].label : "";
+}
+
+uint32_t EeUiCompare_Count(const EeUiCompare *c, uint32_t row, int side)
+{
+    const EeCompareResult *r;
+    BOOL b = side != 0;
+    if (c == NULL || row >= c->nbuckets)
+    {
+        return 0;
+    }
+    r = &c->result;
+    switch (c->buckets[row])
+    {
+        case CMP_ONLY:
+            return b ? r->only_b : r->only_a;
+        case CMP_REPEATED:
+            return b ? r->repeated_b : r->repeated_a;
+        case CMP_NAME_MINOR:
+            return b ? r->name_minor_b : r->name_minor_a;
+        case CMP_NAME_MAJOR:
+            return b ? r->name_major_b : r->name_major_a;
+        case CMP_ADDR_MINOR:
+            return b ? r->addr_minor_b : r->addr_minor_a;
+        case CMP_ADDR_MAJOR:
+            return b ? r->addr_major_b : r->addr_major_a;
+        case CMP_PCT:
+            return b ? r->pct_changed_b : r->pct_changed_a;
+        case CMP_METHOD:
+            return b ? r->method_changed_b : r->method_changed_a;
+        case CMP_DATE:
+            return b ? r->date_changed_b : r->date_changed_a;
+        default:
+            return b ? r->identical_b : r->identical_a;
+    }
+}
+
+const char *EeUiCompare_Name(const EeUiCompare *c, int side)
+{
+    side = side != 0;
+    if (c == NULL || c->name[side][0] == '\0')
+    {
+        return side ? "file B" : "file A";
+    }
+    return c->name[side];
+}
+
+void EeUiCompare_WindowTitle(const EeUiCompare *c, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    StringCchPrintfA(out,
+                     cap,
+                     "Compare - %s vs %s",
+                     c != NULL && c->name[0][0] != '\0' ? c->name[0] : "(A)",
+                     c != NULL && c->name[1][0] != '\0' ? c->name[1] : "(B)");
+}
+
+const char *EeUiCompare_StatusText(void)
+{
+    return "Matched by Voter ID. Right-click a row to show it in a file.";
+}
+
+/* Windows' compare_row_in_bucket */
+static BOOL cmp_in(uint16_t cls, int bucket)
+{
+    if (bucket == CMP_IDENTICAL)
+    {
+        return (cls & EE_CMP_MATCHED) != 0 && (cls & EE_CMP_CHANGE_BITS) == 0;
+    }
+    return (cls & k_cmp[bucket].mask) != 0;
+}
+
+EeUiMarks *EeUiCompare_Marks(const EeUiCompare *c,
+                             uint32_t row,
+                             int side,
+                             const EeUiVoters *v,
+                             char *msg,
+                             size_t cap)
+{
+    EeUiMarks *m;
+    char label[400];
+    const char *other;
+    uint32_t i;
+    int bucket;
+    side = side != 0;
+    set_err(msg, cap, "");
+    if (c == NULL || v == NULL || row >= c->nbuckets)
+    {
+        return NULL;
+    }
+    if (v->t.row_count != c->rows[side] || c->rows[side] == 0)
+    {
+        set_err(msg, cap, "The file changed since the comparison was run. Run Compare again.");
+        return NULL;
+    }
+    bucket = c->buckets[row];
+    m = (EeUiMarks *)calloc(1, sizeof(EeUiMarks));
+    if (m != NULL)
+    {
+        m->n = c->rows[side];
+        m->marks = (uint8_t *)calloc(m->n, 1);
+    }
+    if (m == NULL || m->marks == NULL)
+    {
+        EeUiMarks_Free(m);
+        set_err(msg, cap, "Out of memory.");
+        return NULL;
+    }
+    for (i = 0; i < m->n; i++)
+    {
+        if (cmp_in(c->cls[side][i], bucket))
+        {
+            m->marks[i] = 1;
+            m->marked++;
+        }
+    }
+    if (m->marked == 0)
+    {
+        EeUiMarks_Free(m);
+        set_err(msg, cap, "No voters in that category.");
+        return NULL;
+    }
+    other = c->name[!side][0] != '\0' ? c->name[!side] : "other file";
+    StringCchPrintfA(label, sizeof(label), "%s %s", k_cmp[bucket].phrase, other);
+    m->label = copy_text(label);
+    if (m->label == NULL)
+    {
+        EeUiMarks_Free(m);
+        set_err(msg, cap, "Out of memory.");
+        return NULL;
+    }
+    return m;
+}
+
+/* write @p b (UTF-8 with a BOM) to @p path, as Windows' App_WriteExportUtf8 */
+static long write_export(const char *path, TextBuf *b, long rows, char *err, size_t errcap)
+{
+    static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+    FILE *f;
+    BOOL ok;
+    if (b->failed)
+    {
+        free(b->data);
+        set_err(err, errcap, "Out of memory building the export.");
+        return -1;
+    }
+    f = fopen(path, "wb");
+    if (f == NULL)
+    {
+        free(b->data);
+        set_err(err, errcap, "Could not create the export file.");
+        return -1;
+    }
+    ok = fwrite(bom, 1, sizeof(bom), f) == sizeof(bom) &&
+         (b->len == 0 || fwrite(b->data, 1, b->len, f) == b->len);
+    if (fclose(f) != 0)
+    {
+        ok = FALSE;
+    }
+    free(b->data);
+    if (!ok)
+    {
+        set_err(err, errcap, "Could not write the export file.");
+        remove(path);
+        return -1;
+    }
+    return rows;
+}
+
+/* one exported line of @p n fields */
+static void tb_line(TextBuf *b, const char *const *fields, uint32_t n, char delim)
+{
+    uint32_t i;
+    for (i = 0; i < n; i++)
+    {
+        if (i > 0)
+        {
+            tb_add(b, &delim, 1);
+        }
+        tb_field(b, fields[i] != NULL ? fields[i] : "", delim);
+    }
+    tb_add(b, "\r\n", 2);
+}
+
+long EeUiCompare_ExportSummary(const EeUiCompare *c,
+                               const char *path_utf8,
+                               char delim,
+                               char *err,
+                               size_t errcap)
+{
+    TextBuf b = {NULL, 0, 0, FALSE};
+    const char *f[3];
+    char na[32], nb[32];
+    uint32_t r;
+    set_err(err, errcap, "");
+    if (c == NULL || path_utf8 == NULL)
+    {
+        return -1;
+    }
+    delim = delim == '\t' ? '\t' : ',';
+    f[0] = "Category";
+    f[1] = c->name[0]; /* (Windows' headings: the file names, empty without one) */
+    f[2] = c->name[1];
+    tb_line(&b, f, 3, delim);
+    for (r = 0; r < c->nbuckets; r++)
+    {
+        StringCchPrintfA(na, sizeof(na), "%u", EeUiCompare_Count(c, r, 0));
+        StringCchPrintfA(nb, sizeof(nb), "%u", EeUiCompare_Count(c, r, 1));
+        f[0] = EeUiCompare_Category(c, r);
+        f[1] = na;
+        f[2] = nb;
+        tb_line(&b, f, 3, delim);
+    }
+    return write_export(path_utf8, &b, (long)c->nbuckets, err, errcap);
+}
+
+/* Windows' Compare_RecordCell "Result" and "Changed Fields" */
+static const char *cmp_result(uint16_t cls)
+{
+    return (cls & EE_CMP_ONLY_HERE)            ? "Only here"
+           : (cls & EE_CMP_REPEATED)           ? "Voter ID repeated"
+           : ((cls & EE_CMP_CHANGE_BITS) == 0) ? "Identical"
+                                               : "Changed";
+}
+
+static void cmp_changed(uint16_t cls, char *out, size_t cap)
+{
+    static const struct
+    {
+        uint16_t bit;
+        const char *label;
+    } k_fields[] = {{EE_CMP_NAME_MINOR, "Name (minor)"},
+                    {EE_CMP_NAME_MAJOR, "Name (major)"},
+                    {EE_CMP_ADDR_MINOR, "Address (minor)"},
+                    {EE_CMP_ADDR_MAJOR, "Address (major)"},
+                    {EE_CMP_PCT_CHANGED, "Precinct"},
+                    {EE_CMP_METHOD_CHANGED, "Voting Method"},
+                    {EE_CMP_DATE_CHANGED, "Date Voted"}};
+    size_t k;
+    out[0] = '\0';
+    for (k = 0; k < sizeof(k_fields) / sizeof(k_fields[0]); k++)
+    {
+        if (cls & k_fields[k].bit)
+        {
+            if (out[0] != '\0')
+            {
+                StringCchCatA(out, cap, "; ");
+            }
+            StringCchCatA(out, cap, k_fields[k].label);
+        }
+    }
+}
+
+long EeUiCompare_ExportRecords(const EeUiCompare *c,
+                               const EeUiVoters *a,
+                               const EeUiVoters *b,
+                               const char *path_utf8,
+                               char delim,
+                               char *err,
+                               size_t errcap)
+{
+    TextBuf tb = {NULL, 0, 0, FALSE};
+    const EeUiVoters *v[2];
+    const char *f[10];
+    int method[2], date[2], s;
+    BOOL address, vote;
+    uint32_t n = 0, r;
+    char changed[160];
+    set_err(err, errcap, "");
+    if (c == NULL || a == NULL || b == NULL || path_utf8 == NULL)
+    {
+        return -1;
+    }
+    if (a->t.row_count != c->rows[0] || b->t.row_count != c->rows[1])
+    {
+        set_err(err, errcap, "A file changed since the comparison was run. Run Compare again.");
+        return -1;
+    }
+    delim = delim == '\t' ? '\t' : ',';
+    v[0] = a;
+    v[1] = b;
+    address = !c->roster[0] && !c->roster[1];
+    vote = c->roster[0] || c->roster[1];
+    for (s = 0; s < 2; s++)
+    {
+        method[s] = EeVoterTable_FindColumnByTitle(&v[s]->t, L"Voting Method");
+        date[s] = EeVoterTable_FindColumnByTitle(&v[s]->t, L"Date Voted");
+    }
+    f[n++] = "File";
+    f[n++] = "Voter ID";
+    f[n++] = "Precinct";
+    f[n++] = "Name";
+    if (address)
+    {
+        f[n++] = "Address";
+    }
+    if (vote)
+    {
+        f[n++] = "Voting Method";
+        f[n++] = "Date Voted";
+    }
+    f[n++] = "Result";
+    f[n++] = "Changed Fields";
+    tb_line(&tb, f, n, delim);
+    for (s = 0; s < 2 && !tb.failed; s++)
+    {
+        const EeVoterTable *t = &v[s]->t;
+        for (r = 0; r < c->rows[s] && !tb.failed; r++)
+        {
+            uint16_t cls = c->cls[s][r];
+            n = 0;
+            f[n++] = c->name[s];
+            f[n++] = EeVoterTable_GetCellUtf8(t, r, EE_COL_VOTER_ID);
+            f[n++] = EeVoterTable_GetCellUtf8(t, r, EE_COL_PRECINCT);
+            f[n++] = EeVoterTable_GetCellUtf8(t, r, EE_COL_NAME);
+            if (address)
+            {
+                f[n++] = EeVoterTable_GetCellUtf8(t, r, EE_COL_ADDRESS);
+            }
+            if (vote)
+            {
+                f[n++] = method[s] >= 0 ? EeVoterTable_GetCellUtf8(t, r, (uint32_t)method[s]) : "";
+                f[n++] = date[s] >= 0 ? EeVoterTable_GetCellUtf8(t, r, (uint32_t)date[s]) : "";
+            }
+            f[n++] = cmp_result(cls);
+            cmp_changed(cls, changed, sizeof(changed));
+            f[n++] = changed;
+            tb_line(&tb, f, n, delim);
+        }
+    }
+    return write_export(path_utf8, &tb, (long)c->rows[0] + (long)c->rows[1], err, errcap);
+}
+
+void EeUiCompare_ExportName(const EeUiCompare *c, int records, char *out, size_t cap)
+{
+    char a[96], b[96];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(c != NULL ? c->path[0] : "", FALSE, a, sizeof(a));
+    file_name(c != NULL ? c->path[1] : "", FALSE, b, sizeof(b));
+    StringCchPrintfA(out,
+                     cap,
+                     "%s-vs-%s-%s.csv",
+                     a,
+                     b,
+                     records ? "Compare_Records" : "Compare_Summary");
+}
+
+/* -------------------------------------------------------------------------- */
 /* Options                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -3267,5 +3823,190 @@ int EeUiVoters_VotingSelfTest(const char *list_utf8, const char *const *roster_u
     printf("voting reset: %s\n", text);
     EeUiVoters_Free(roster);
     EeUiVoters_Free(list);
+    return 0;
+}
+
+/* a file for --selftest-compare: a voter list, or a roster of one file */
+static EeUiVoters *selftest_load(int roster, const char *path)
+{
+    char err[1024] = "";
+    EeUiVoters *v = roster ? EeUiVoters_LoadRoster(&path, 1, 1, NULL, NULL, NULL, err, sizeof(err))
+                           : EeUiVoters_Load(path, 1, NULL, NULL, NULL, err, sizeof(err));
+    if (v == NULL)
+    {
+        printf("load failed: %s\n", err);
+    }
+    return v;
+}
+
+/* the first line of an export file (its heading), and its line count */
+static void selftest_export_file(const char *what, const char *path, long wrote)
+{
+    char line[1024];
+    unsigned lines = 0;
+    int bom = 0;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+    {
+        printf("%s: not written\n", what);
+        return;
+    }
+    if (fgets(line, sizeof(line), f) != NULL)
+    {
+        bom = (unsigned char)line[0] == 0xEF && (unsigned char)line[1] == 0xBB &&
+              (unsigned char)line[2] == 0xBF;
+        lines = 1;
+        line[strcspn(line, "\r\n")] = '\0';
+        printf("%s: %ld rows, BOM %d, heading: %s\n", what, wrote, bom, line + (bom ? 3 : 0));
+    }
+    while (fgets(line, sizeof(line), f) != NULL)
+    {
+        lines++;
+    }
+    printf("%s: %u lines\n", what, lines);
+    fclose(f);
+    remove(path);
+}
+
+int EeUiVoters_CompareSelfTest(int roster_a, const char *a_utf8, int roster_b, const char *b_utf8)
+{
+    char err[512], text[600], path[640];
+    const char *tmp = getenv("TMPDIR");
+    EeUiVoters *v[2];
+    EeUiCompare *c;
+    uint32_t r;
+    int s;
+    long wrote;
+    struct timespec t0, t1;
+    v[0] = selftest_load(roster_a, a_utf8);
+    v[1] = v[0] != NULL ? selftest_load(roster_b, b_utf8) : NULL;
+    if (v[0] == NULL || v[1] == NULL)
+    {
+        EeUiVoters_Free(v[0]);
+        return 1;
+    }
+    printf("compare: A %u rows (%s), B %u rows (%s)\n",
+           EeUiVoters_TotalRows(v[0]),
+           roster_a ? "roster" : "list",
+           EeUiVoters_TotalRows(v[1]),
+           roster_b ? "roster" : "list");
+    EeUiCompare_MenuLabel(b_utf8, roster_b, roster_a, text, sizeof(text));
+    printf("compare menu in A: %s\n", text);
+    EeUiCompare_MenuLabel(a_utf8, roster_a, roster_b, text, sizeof(text));
+    printf("compare menu in B: %s\n", text);
+    EeUiCompare_MenuLabel(NULL, 0, roster_a, text, sizeof(text));
+    printf("compare menu alone: %s\n", text);
+
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    c = EeUiVoters_Compare(v[0], v[1], a_utf8, b_utf8, NULL, err, sizeof(err));
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    fprintf(stderr,
+            "compared in %.2f s\n",
+            (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9);
+    if (c == NULL)
+    {
+        printf("compare failed: %s\n", err);
+        EeUiVoters_Free(v[0]);
+        EeUiVoters_Free(v[1]);
+        return 1;
+    }
+    EeUiCompare_WindowTitle(c, text, sizeof(text));
+    printf("compare window: \"%s\", columns Category | %s | %s\n",
+           text,
+           EeUiCompare_Name(c, 0),
+           EeUiCompare_Name(c, 1));
+    printf("compare status: %s\n", EeUiCompare_StatusText());
+    for (r = 0; r < EeUiCompare_Rows(c); r++)
+    {
+        printf("compare row %u: %s | %u | %u\n",
+               r,
+               EeUiCompare_Category(c, r),
+               EeUiCompare_Count(c, r, 0),
+               EeUiCompare_Count(c, r, 1));
+    }
+
+    /* Show these rows in A / in B: each row's view, grouped by Voter ID */
+    for (r = 0; r < EeUiCompare_Rows(c); r++)
+    {
+        for (s = 0; s < 2; s++)
+        {
+            EeUiMarks *m = EeUiCompare_Marks(c, r, s, v[s], err, sizeof(err));
+            if (m == NULL)
+            {
+                printf("show row %u in %c: %s\n", r, 'A' + s, err);
+                continue;
+            }
+            EeUiVoters_SetView(v[s],
+                               EeUiVoters_ComputeViewWith(v[s],
+                                                          EE_UI_COLUMN_VOTER_ID,
+                                                          1,
+                                                          NULL,
+                                                          0,
+                                                          EE_UI_MARKS_COMPARE,
+                                                          m));
+            EeUiMarks_Free(m);
+            EeUiVoters_CountText(v[s], text, sizeof(text));
+            printf("show row %u in %c: %s\n", r, 'A' + s, text);
+            selftest_voting_rows(v[s], "  shown");
+        }
+    }
+    for (s = 0; s < 2; s++)
+    {
+        EeUiVoters_SetView(v[s], EeUiVoters_ComputeView(v[s], -1, 1, NULL, 0, EE_UI_MARKS_NONE));
+    }
+    /* (a list that is not the one compared: as after a reload) */
+    if (EeUiVoters_TotalRows(v[0]) != EeUiVoters_TotalRows(v[1]))
+    {
+        EeUiMarks *m = EeUiCompare_Marks(c, 0, 0, v[1], err, sizeof(err));
+        printf("show in a changed file: %s\n", m == NULL ? err : "(marks)");
+        EeUiMarks_Free(m);
+        wrote =
+            EeUiCompare_ExportRecords(c, v[1], v[0], "/nonexistent/x.csv", ',', err, sizeof(err));
+        printf("export records of a changed file: %ld, %s\n", wrote, err);
+    }
+
+    /* the exports */
+    EeUiCompare_ExportName(c, 0, text, sizeof(text));
+    printf("compare export names: \"%s\"", text);
+    EeUiCompare_ExportName(c, 1, text, sizeof(text));
+    printf(", \"%s\"\n", text);
+    StringCchPrintfA(path,
+                     sizeof(path),
+                     "%s/ee_selftest_compare_%ld.csv",
+                     tmp != NULL && tmp[0] ? tmp : "/tmp",
+                     (long)getpid());
+    wrote = EeUiCompare_ExportSummary(c, path, ',', err, sizeof(err));
+    if (wrote >= 0)
+    {
+        FILE *f = fopen(path, "rb");
+        char line[512];
+        while (f != NULL && fgets(line, sizeof(line), f) != NULL)
+        {
+            line[strcspn(line, "\r\n")] = '\0';
+            printf("summary export: %s\n",
+                   (unsigned char)line[0] == 0xEF ? line + 3 : line); /* (counts only) */
+        }
+        if (f != NULL)
+        {
+            fclose(f);
+        }
+        remove(path);
+    }
+    else
+    {
+        printf("summary export failed: %s\n", err);
+    }
+    wrote = EeUiCompare_ExportRecords(c, v[0], v[1], path, '\t', err, sizeof(err));
+    if (wrote >= 0)
+    {
+        selftest_export_file("records export", path, wrote);
+    }
+    else
+    {
+        printf("records export failed: %s\n", err);
+    }
+    EeUiCompare_Free(c);
+    EeUiVoters_Free(v[0]);
+    EeUiVoters_Free(v[1]);
     return 0;
 }

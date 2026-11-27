@@ -13,6 +13,11 @@
  * line. The list comes from the engine through
  * ee_ui_voters.h (plain C).
  *
+ * The Compare section of the menu lists the other windows, as Windows' Compare menu does: a
+ * compare matches the two files by Voter ID (in the background, with a progress window, for
+ * large files) and opens the Compare window of categories and counts, with Show these rows in
+ * either file, Export Summary... and Export All Records...
+ *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns, menus and words (no duplicate voters,
  * Address report, Copy prefix or map; Display Voting Totals... and Display Load Summary...).
@@ -51,6 +56,12 @@
  *   the Voter Roster window would show.
  * - `--selftest-voting <list> <roster files...>` prints Show Duplicate Voters Voting of the list
  *   in that roster, as the voter list window would show it.
+ * - `--selftest-compare list|roster <file A> list|roster <file B>` prints the compare of the two
+ *   files as the Compare window shows it.
+ * - `--compare list|roster <file>` (with --snapshot) opens that file in a second window, then
+ *   compares the first with it; the PNG is of the Compare window, and `--export` exports all
+ *   records. `--compare-show <row>[:b]` then shows that row's voters in file A (or B), as the
+ *   right-click menu does, and the PNG is of that file's window.
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -157,6 +168,7 @@ typedef struct FilterDialog FilterDialog;
 typedef struct ReportWindow ReportWindow;
 typedef struct TotalsWindow TotalsWindow;
 typedef struct OptionsDialog OptionsDialog;
+typedef struct CompareWindow CompareWindow;
 
 typedef struct VoterWindow
 {
@@ -176,6 +188,9 @@ typedef struct VoterWindow
     char *path;          /* the list's path, for the export's name */
     gboolean rebuilding; /* columns being replaced: ignore the sorter's changes */
     gboolean closed;     /* the window is gone (the struct stays for queued idle calls) */
+    guint serial;        /* the Compare menu's name for the window */
+    GMenu *compare_menu; /* the menu's Compare section: the other windows */
+    gboolean comparing;  /* a compare of this list runs in the background */
 
     /* the load in progress (the worker writes these, the UI timer reads them) */
     GThread *worker;
@@ -191,8 +206,9 @@ typedef struct VoterWindow
     gboolean want_ascending;
     GArray *rules;  /* EeUiRule */
     int want_marks; /* EE_UI_MARKS_*: a duplicates view */
-    /* Show Duplicate Voters Voting's duplicates, for the next job (or NULL) */
-    EeUiMarks *voting_marks;
+    /* rows found in advance (Show Duplicate Voters Voting, a compare's Show these rows in...),
+     * for the next job (or NULL) */
+    EeUiMarks *given_marks;
     guint want_gen;
     GThread *job;
     const char *job_label; /* the running job's "Sorting" or "Filtering" */
@@ -227,6 +243,11 @@ typedef struct VoterWindow
     gboolean snapshot_summary;          /* --load-summary: the PNG is of the Load Summary */
     gboolean snapshot_totals;           /* --voting-totals: the PNG is of the Voting Totals */
     int snapshot_tries;
+    /* --compare: the window to compare with; --compare-show <row>[:b]: the row (-1: none) to
+     * show in file A (or B) */
+    struct VoterWindow *snapshot_compare;
+    int snapshot_compare_row;
+    gboolean snapshot_compare_b;
 } VoterWindow;
 
 typedef struct LoadDone
@@ -246,7 +267,7 @@ typedef struct ViewJob
     EeUiRule *rules;
     guint nrules;
     int marks;
-    EeUiMarks *given; /* Show Duplicate Voters Voting's (found in advance), or NULL */
+    EeUiMarks *given; /* rows found in advance (Duplicate Voters Voting, a compare), or NULL */
     guint gen;
     EeUiView *view;
     gint64 started;
@@ -411,15 +432,15 @@ static void start_view_job(VoterWindow *w)
                      ? (EeUiRule *)g_memdup2(w->rules->data, (gsize)job->nrules * sizeof(EeUiRule))
                      : NULL;
     job->marks = w->want_marks;
-    if (job->marks == EE_UI_MARKS_DUP_VOTING)
+    if (job->marks == EE_UI_MARKS_DUP_VOTING || job->marks == EE_UI_MARKS_COMPARE)
     {
-        job->given = w->voting_marks; /* (NULL: the shown view's are kept) */
+        job->given = w->given_marks; /* (NULL: the shown view's are kept) */
     }
     else
     {
-        EeUiMarks_Free(w->voting_marks); /* (asked for something else meanwhile) */
+        EeUiMarks_Free(w->given_marks); /* (asked for something else meanwhile) */
     }
-    w->voting_marks = NULL;
+    w->given_marks = NULL;
     job->gen = w->want_gen;
     job->started = g_get_monotonic_time();
     {
@@ -611,8 +632,8 @@ static void show_voting_with(VoterWindow *w, VoterWindow *r)
         alert(w, msg, NULL);
         return;
     }
-    EeUiMarks_Free(w->voting_marks);
-    w->voting_marks = m;
+    EeUiMarks_Free(w->given_marks);
+    w->given_marks = m;
     if ((guint)column >= EeUiVoters_Columns(w->voters))
     {
         column = -1;
@@ -2788,6 +2809,690 @@ static void show_totals(VoterWindow *w)
     gtk_window_present(tw->win);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Compare (Windows' Compare menu, App_StartCompare and the Compare Summary)    */
+/* -------------------------------------------------------------------------- */
+
+/* (as on Windows: one Compare window at a time, and one compare running) */
+struct CompareWindow
+{
+    VoterWindow *a, *b; /* file A (the window whose Compare menu ran it) and file B */
+    int refs;           /* the window, and each export dialog or menu still to finish */
+    gboolean closed;
+    GtkWindow *win;
+    GtkColumnView *view;
+    GtkWidget *menu; /* the right-click menu while it is open */
+    guint menu_row;  /* its row (G_MAXUINT: outside the rows) */
+    EeUiCompare *c;
+    EeRows *rows;
+};
+
+static CompareWindow *g_compare;
+
+typedef struct CompareJob
+{
+    VoterWindow *a, *b;
+    char *path_a, *path_b;
+    volatile int32_t cancel;
+    EeUiCompare *c;
+    char err[256];
+    GThread *thread;
+    GtkWindow *progress; /* "Comparing voter lists" */
+    GtkProgressBar *bar;
+    GtkWidget *cancel_button;
+    guint timer;
+} CompareJob;
+
+static CompareJob *g_compare_job;
+
+static void compare_unref(CompareWindow *cw)
+{
+    if (--cw->refs == 0)
+    {
+        EeUiCompare_Free(cw->c);
+        g_clear_object(&cw->rows);
+        g_free(cw);
+    }
+}
+
+/* Show these rows in <file>: the category's voters in file A or B, grouped by Voter ID, as a
+ * duplicates view is shown (Windows' App_ShowCompareCategory) */
+static void compare_show_row(CompareWindow *cw, guint row, gboolean in_b)
+{
+    VoterWindow *t = in_b ? cw->b : cw->a;
+    char msg[256];
+    EeUiMarks *m;
+    if (cw->closed || t->closed || t->voters == NULL || row >= cw->rows->count)
+    {
+        return;
+    }
+    m = EeUiCompare_Marks(cw->c, row, in_b ? 1 : 0, t->voters, msg, sizeof(msg));
+    if (m == NULL)
+    {
+        alert(t, msg, NULL);
+        return;
+    }
+    EeUiMarks_Free(t->given_marks);
+    t->given_marks = m;
+    t->want_marks = EE_UI_MARKS_COMPARE;
+    t->want_sort = EE_UI_COLUMN_VOTER_ID;
+    t->want_ascending = TRUE;
+    show_sort_arrow(t, EE_UI_COLUMN_VOTER_ID, TRUE);
+    request_view(t);
+    gtk_window_present(t->window);
+}
+
+static void compare_alert(CompareWindow *cw, const char *message)
+{
+    GtkAlertDialog *d = gtk_alert_dialog_new("%s", message);
+    gtk_alert_dialog_show(d, cw->win);
+    g_object_unref(d);
+}
+
+/* Export Summary... (@p records FALSE) or Export All Records... to @p path */
+static void compare_export_to(CompareWindow *cw, const char *path, gboolean records)
+{
+    char err[256];
+    long wrote = records
+                     ? EeUiCompare_ExportRecords(cw->c,
+                                                 cw->a->voters,
+                                                 cw->b->voters,
+                                                 path,
+                                                 export_delim(path),
+                                                 err,
+                                                 sizeof(err))
+                     : EeUiCompare_ExportSummary(cw->c, path, export_delim(path), err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "compare export: %s\n", err);
+        compare_alert(cw, err);
+        return;
+    }
+    fprintf(stderr, "exported %ld compare %s\n", wrote, records ? "records" : "summary rows");
+}
+
+typedef struct CompareExport
+{
+    CompareWindow *cw;
+    gboolean records;
+} CompareExport;
+
+static void on_compare_export_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    CompareExport *e = (CompareExport *)user;
+    GFile *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, NULL);
+    if (file != NULL)
+    {
+        char *path = g_file_get_path(file);
+        if (path != NULL && !e->cw->closed)
+        {
+            char *named = export_named(path);
+            compare_export_to(e->cw, named, e->records);
+            g_free(named);
+        }
+        g_free(path);
+        g_object_unref(file);
+    }
+    compare_unref(e->cw);
+    g_free(e);
+}
+
+static void compare_export(CompareWindow *cw, gboolean records)
+{
+    CompareExport *e = g_new0(CompareExport, 1);
+    GtkFileDialog *d = gtk_file_dialog_new();
+    GListModel *filters = export_filters();
+    char name[600];
+    e->cw = cw;
+    e->records = records;
+    cw->refs++;
+    EeUiCompare_ExportName(cw->c, records, name, sizeof(name));
+    gtk_file_dialog_set_title(d, "Export");
+    gtk_file_dialog_set_filters(d, filters);
+    gtk_file_dialog_set_initial_name(d, name);
+    gtk_file_dialog_save(d, cw->win, NULL, on_compare_export_chosen, e);
+    g_object_unref(filters);
+    g_object_unref(d);
+}
+
+static void compare_action(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    const char *name = g_action_get_name(G_ACTION(action));
+    (void)param;
+    if (cw->closed)
+    {
+        return;
+    }
+    if (strcmp(name, "show-a") == 0 || strcmp(name, "show-b") == 0)
+    {
+        compare_show_row(cw, cw->menu_row, name[5] == 'b');
+    }
+    else if (strcmp(name, "export-summary") == 0 || strcmp(name, "export-records") == 0)
+    {
+        compare_export(cw, name[7] == 'r');
+    }
+}
+
+static gboolean compare_drop_menu(gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    if (!cw->closed && cw->menu != NULL && !gtk_widget_get_visible(cw->menu))
+    {
+        gtk_widget_unparent(cw->menu);
+        cw->menu = NULL;
+    }
+    compare_unref(cw);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_compare_menu_closed(GtkPopover *popover, gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    (void)popover;
+    cw->refs++;
+    g_idle_add(compare_drop_menu, cw); /* (later: the menu's action runs after "closed") */
+}
+
+/* the right-click menu, as on Windows: Show these rows in <A> / <B>, then the exports (only
+ * the exports outside the rows) */
+static void compare_menu_at(CompareWindow *cw, GtkWidget *from, double x, double y, guint row)
+{
+    GMenu *menu = g_menu_new(), *section;
+    graphene_point_t at;
+    char text[400];
+    cw->menu_row = row;
+    if (row < cw->rows->count)
+    {
+        section = g_menu_new();
+        g_snprintf(text, sizeof(text), "Show these rows in %s", EeUiCompare_Name(cw->c, 0));
+        g_menu_append(section, text, "cmp.show-a");
+        g_snprintf(text, sizeof(text), "Show these rows in %s", EeUiCompare_Name(cw->c, 1));
+        g_menu_append(section, text, "cmp.show-b");
+        menu_section(menu, section);
+    }
+    section = g_menu_new();
+    g_menu_append(section, "Export Summary\xE2\x80\xA6", "cmp.export-summary");
+    g_menu_append(section, "Export All Records\xE2\x80\xA6", "cmp.export-records");
+    menu_section(menu, section);
+    if (cw->menu != NULL)
+    {
+        gtk_widget_unparent(cw->menu);
+    }
+    cw->menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    gtk_widget_set_parent(cw->menu, GTK_WIDGET(cw->view));
+    gtk_popover_set_has_arrow(GTK_POPOVER(cw->menu), FALSE);
+    gtk_widget_set_halign(cw->menu, GTK_ALIGN_START);
+    g_signal_connect(cw->menu, "closed", G_CALLBACK(on_compare_menu_closed), cw);
+    g_object_unref(menu);
+    if (gtk_widget_compute_point(from,
+                                 GTK_WIDGET(cw->view),
+                                 &GRAPHENE_POINT_INIT((float)x, (float)y),
+                                 &at))
+    {
+        GdkRectangle r = {(int)at.x, (int)at.y, 1, 1};
+        gtk_popover_set_pointing_to(GTK_POPOVER(cw->menu), &r);
+    }
+    gtk_popover_popup(GTK_POPOVER(cw->menu));
+}
+
+/* a click on a cell: the right button's menu, or a double click (Windows: in the B column it
+ * shows the rows in B, elsewhere in A) */
+static void on_compare_cell_click(GtkGestureClick *g,
+                                  int n_press,
+                                  double x,
+                                  double y,
+                                  gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    GtkWidget *label = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(g));
+    guint row = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(label), "row"));
+    guint column = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(label), "column"));
+    GtkSelectionModel *model = gtk_column_view_get_model(cw->view);
+    if (cw->closed || row >= cw->rows->count)
+    {
+        return;
+    }
+    if (gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(g)) == GDK_BUTTON_SECONDARY)
+    {
+        gtk_selection_model_select_item(model, row, TRUE); /* (as on Windows) */
+        compare_menu_at(cw, label, x, y, row);
+        gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+    }
+    else if (n_press == 2)
+    {
+        compare_show_row(cw, row, column == 2);
+    }
+}
+
+/* the right button outside the rows: the exports only */
+static void on_compare_empty_click(GtkGestureClick *g,
+                                   int n_press,
+                                   double x,
+                                   double y,
+                                   gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    (void)n_press;
+    if (!cw->closed)
+    {
+        compare_menu_at(cw,
+                        gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(g)),
+                        x,
+                        y,
+                        G_MAXUINT);
+    }
+}
+
+static void compare_cell_setup(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    GtkWidget *label = gtk_label_new(NULL);
+    GtkGesture *click = gtk_gesture_click_new();
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    gtk_label_set_xalign(GTK_LABEL(label),
+                         c == 0 ? 0.0f : 1.0f); /* (Windows: counts at the right) */
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_single_line_mode(GTK_LABEL(label), TRUE);
+    g_object_set_data(G_OBJECT(label), "column", GUINT_TO_POINTER(c));
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0); /* (either button) */
+    g_signal_connect(click, "pressed", G_CALLBACK(on_compare_cell_click), cw);
+    gtk_widget_add_controller(label, GTK_EVENT_CONTROLLER(click));
+    gtk_list_item_set_child(item, label);
+}
+
+static void compare_cell_bind(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    EeRow *row = EE_ROW(gtk_list_item_get_item(item));
+    GtkWidget *label = gtk_list_item_get_child(item);
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    char text[64];
+    g_object_set_data(G_OBJECT(label), "row", GUINT_TO_POINTER(row->index));
+    if (c == 0)
+    {
+        gtk_label_set_text(GTK_LABEL(label), EeUiCompare_Category(cw->c, row->index));
+        return;
+    }
+    g_snprintf(text, sizeof(text), "%u", EeUiCompare_Count(cw->c, row->index, (int)c - 1));
+    gtk_label_set_text(GTK_LABEL(label), text);
+}
+
+static void on_compare_destroy(GtkWidget *widget, gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    (void)widget;
+    cw->closed = TRUE;
+    if (cw->menu != NULL)
+    {
+        gtk_widget_unparent(cw->menu);
+        cw->menu = NULL;
+    }
+    if (g_compare == cw)
+    {
+        g_compare = NULL;
+    }
+    compare_unref(cw);
+}
+
+static void on_compare_button(GtkButton *button, gpointer user)
+{
+    CompareWindow *cw = (CompareWindow *)user;
+    if (!cw->closed)
+    {
+        compare_export(cw, g_object_get_data(G_OBJECT(button), "records") != NULL);
+    }
+}
+
+/* the Compare window (Windows' App_ShowCompareWindow): replaces the one open; takes @p c */
+static void show_compare_window(VoterWindow *a, VoterWindow *b, EeUiCompare *c)
+{
+    static const GActionEntry actions[] = {
+        {"show-a", compare_action, NULL, NULL, NULL, {0}},
+        {"show-b", compare_action, NULL, NULL, NULL, {0}},
+        {"export-summary", compare_action, NULL, NULL, NULL, {0}},
+        {"export-records", compare_action, NULL, NULL, NULL, {0}},
+    };
+    static const int widths[3] = {170, 150, 150}; /* (Windows' at 100%) */
+    CompareWindow *cw;
+    GSimpleActionGroup *group;
+    GtkWidget *box, *scroll, *buttons, *summary, *records;
+    GtkLabel *status;
+    GtkSelectionModel *sel;
+    GtkGesture *empty;
+    char text[600];
+    guint k;
+    int total_width = 24;
+    if (g_compare != NULL)
+    {
+        gtk_window_destroy(g_compare->win); /* (on_compare_destroy clears g_compare) */
+    }
+    cw = g_new0(CompareWindow, 1);
+    cw->a = a;
+    cw->b = b;
+    cw->refs = 1;
+    cw->c = c;
+    cw->rows = ee_rows_new(EeUiCompare_Rows(c));
+    g_compare = cw;
+
+    cw->win = GTK_WINDOW(gtk_window_new());
+    EeUiCompare_WindowTitle(c, text, sizeof(text));
+    gtk_window_set_title(cw->win, text);
+    group = g_simple_action_group_new();
+    g_action_map_add_action_entries(G_ACTION_MAP(group), actions, G_N_ELEMENTS(actions), cw);
+    gtk_widget_insert_action_group(GTK_WIDGET(cw->win), "cmp", G_ACTION_GROUP(group));
+    g_object_unref(group);
+
+    cw->view = GTK_COLUMN_VIEW(gtk_column_view_new(NULL));
+    gtk_column_view_set_show_column_separators(cw->view, TRUE);
+    gtk_column_view_set_show_row_separators(cw->view, TRUE); /* (Windows' grid lines) */
+    gtk_column_view_set_reorderable(cw->view, FALSE);
+    gtk_widget_add_css_class(GTK_WIDGET(cw->view), "data-table");
+    for (k = 0; k < 3; k++)
+    {
+        GtkListItemFactory *f = gtk_signal_list_item_factory_new();
+        GtkColumnViewColumn *col;
+        const char *title = k == 0 ? "Category" : EeUiCompare_Name(c, (int)k - 1);
+        int width = widths[k], need = text_width(GTK_WIDGET(cw->view), title) * 11 / 10 + 32;
+        uint32_t r;
+        width = need > width ? need : width;
+        for (r = 0; k == 0 && r < EeUiCompare_Rows(c); r++)
+        {
+            /* (Windows' width fits "Voting Method changed" in its font; here, the widest) */
+            need = text_width(GTK_WIDGET(cw->view), EeUiCompare_Category(c, r)) + 24;
+            width = need > width ? need : width;
+        }
+        total_width += width;
+        g_object_set_data(G_OBJECT(f), "column", GUINT_TO_POINTER(k));
+        g_signal_connect(f, "setup", G_CALLBACK(compare_cell_setup), cw);
+        g_signal_connect(f, "bind", G_CALLBACK(compare_cell_bind), cw);
+        col = gtk_column_view_column_new(title, f);
+        gtk_column_view_column_set_resizable(col, TRUE);
+        gtk_column_view_column_set_fixed_width(col, width);
+        gtk_column_view_append_column(cw->view, col);
+        g_object_unref(col);
+    }
+    sel = GTK_SELECTION_MODEL(gtk_single_selection_new(G_LIST_MODEL(g_object_ref(cw->rows))));
+    gtk_single_selection_set_autoselect(GTK_SINGLE_SELECTION(sel), FALSE);
+    gtk_single_selection_set_can_unselect(GTK_SINGLE_SELECTION(sel), TRUE);
+    gtk_single_selection_set_selected(GTK_SINGLE_SELECTION(sel),
+                                      GTK_INVALID_LIST_POSITION); /* (none, as on Windows) */
+    gtk_column_view_set_model(cw->view, sel);
+    g_object_unref(sel);
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), GTK_WIDGET(cw->view));
+    gtk_widget_set_vexpand(scroll, TRUE);
+    empty = gtk_gesture_click_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(empty), GDK_BUTTON_SECONDARY);
+    g_signal_connect(empty, "pressed", G_CALLBACK(on_compare_empty_click), cw);
+    gtk_widget_add_controller(scroll, GTK_EVENT_CONTROLLER(empty));
+
+    /* the buttons at the bottom right, as on Windows */
+    buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    summary = gtk_button_new_with_label("Export Summary\xE2\x80\xA6");
+    records = gtk_button_new_with_label("Export All Records\xE2\x80\xA6");
+    g_object_set_data(G_OBJECT(records), "records", GINT_TO_POINTER(1));
+    g_signal_connect(summary, "clicked", G_CALLBACK(on_compare_button), cw);
+    g_signal_connect(records, "clicked", G_CALLBACK(on_compare_button), cw);
+    gtk_widget_set_halign(buttons, GTK_ALIGN_END);
+    gtk_widget_set_margin_top(buttons, 6);
+    gtk_widget_set_margin_end(buttons, 8);
+    gtk_box_append(GTK_BOX(buttons), summary);
+    gtk_box_append(GTK_BOX(buttons), records);
+
+    status = GTK_LABEL(gtk_label_new(EeUiCompare_StatusText()));
+    gtk_label_set_xalign(status, 0.0f);
+    gtk_label_set_ellipsize(status, PANGO_ELLIPSIZE_END);
+    gtk_widget_set_margin_start(GTK_WIDGET(status), 8);
+    gtk_widget_set_margin_end(GTK_WIDGET(status), 8);
+    gtk_widget_set_margin_top(GTK_WIDGET(status), 4);
+    gtk_widget_set_margin_bottom(GTK_WIDGET(status), 4);
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(box), scroll);
+    gtk_box_append(GTK_BOX(box), buttons);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(status));
+    gtk_window_set_child(cw->win, box);
+    gtk_window_set_default_size(cw->win, total_width > 560 ? total_width : 560, 380);
+    g_signal_connect(cw->win, "destroy", G_CALLBACK(on_compare_destroy), cw);
+    gtk_window_present(cw->win);
+}
+
+/* close the Compare window of @p w's list (it closed or loads another), as on Windows */
+static void close_compare_of(VoterWindow *w)
+{
+    if (g_compare != NULL && (g_compare->a == w || g_compare->b == w))
+    {
+        gtk_window_destroy(g_compare->win);
+    }
+}
+
+static gboolean pulse_compare(gpointer user)
+{
+    gtk_progress_bar_pulse(((CompareJob *)user)->bar);
+    return G_SOURCE_CONTINUE;
+}
+
+static void compare_job_free(CompareJob *job)
+{
+    if (job->timer != 0)
+    {
+        g_source_remove(job->timer);
+    }
+    if (job->progress != NULL)
+    {
+        gtk_window_destroy(job->progress);
+    }
+    EeUiCompare_Free(job->c);
+    g_free(job->path_a);
+    g_free(job->path_b);
+    g_free(job);
+}
+
+/* the background compare finished (or was stopped): the Compare window, or why not */
+static gboolean compare_done(gpointer user)
+{
+    CompareJob *job = (CompareJob *)user;
+    VoterWindow *a = job->a, *b = job->b;
+    if (job->thread != NULL)
+    {
+        g_thread_join(job->thread);
+        job->thread = NULL;
+    }
+    if (g_compare_job == job)
+    {
+        g_compare_job = NULL;
+    }
+    a->comparing = FALSE;
+    b->comparing = FALSE;
+    if (!b->closed)
+    {
+        gtk_widget_set_sensitive(GTK_WIDGET(b->window), TRUE);
+    }
+    if (a->closed || b->closed)
+    {
+        compare_job_free(job); /* (a window closed meanwhile) */
+        return G_SOURCE_REMOVE;
+    }
+    if (job->c == NULL)
+    {
+        gtk_label_set_text(a->status, job->cancel != 0 ? "Compare cancelled." : "Compare failed.");
+        if (job->cancel == 0)
+        {
+            alert(a, job->err, NULL);
+        }
+    }
+    else
+    {
+        EeUiCompare *c = job->c;
+        job->c = NULL;
+        show_compare_window(a, b, c);
+    }
+    compare_job_free(job);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer compare_worker(gpointer user)
+{
+    CompareJob *job = (CompareJob *)user;
+    gint64 started = g_get_monotonic_time();
+    job->c = EeUiVoters_Compare(job->a->voters,
+                                job->b->voters,
+                                job->path_a,
+                                job->path_b,
+                                &job->cancel,
+                                job->err,
+                                sizeof(job->err));
+    fprintf(stderr, "compared in %.2f s\n", (g_get_monotonic_time() - started) / 1e6);
+    g_idle_add(compare_done, job);
+    return NULL;
+}
+
+static void on_compare_cancel(GtkButton *button, gpointer user)
+{
+    CompareJob *job = (CompareJob *)user;
+    job->cancel = 1;
+    gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
+}
+
+/* Compare with <file> (Windows' App_StartCompare): at once for smaller files; in the background
+ * for large ones, with Windows' progress window over A and B unavailable meanwhile */
+static void start_compare(VoterWindow *a, VoterWindow *b)
+{
+    CompareJob *job;
+    GtkWidget *box, *label;
+    char err[256];
+    if (a == b || a->closed || b->closed || g_compare_job != NULL)
+    {
+        return;
+    }
+    if (a->worker != NULL || b->worker != NULL)
+    {
+        alert(a, "Finish loading or scanning both files before comparing.", NULL);
+        return;
+    }
+    if (a->voters == NULL || b->voters == NULL || EeUiVoters_TotalRows(a->voters) == 0 ||
+        EeUiVoters_TotalRows(b->voters) == 0)
+    {
+        alert(a, "Both windows must have a voter list loaded to compare.", NULL);
+        return;
+    }
+    if (EeUiVoters_TotalRows(a->voters) < 250000 && EeUiVoters_TotalRows(b->voters) < 250000)
+    {
+        /* (Windows' k_ScanModalMinRows: smaller files are compared at once) */
+        EeUiCompare *c =
+            EeUiVoters_Compare(a->voters, b->voters, a->path, b->path, NULL, err, sizeof(err));
+        if (c == NULL)
+        {
+            alert(a, err, NULL);
+            return;
+        }
+        show_compare_window(a, b, c);
+        return;
+    }
+    job = g_new0(CompareJob, 1);
+    job->a = a;
+    job->b = b;
+    job->path_a = g_strdup(a->path);
+    job->path_b = g_strdup(b->path);
+    a->comparing = TRUE;
+    b->comparing = TRUE;
+    gtk_widget_set_sensitive(GTK_WIDGET(b->window), FALSE); /* (Windows disables both) */
+    job->progress = GTK_WINDOW(gtk_window_new());
+    gtk_window_set_title(job->progress, "Comparing voter lists");
+    gtk_window_set_transient_for(job->progress, a->window);
+    gtk_window_set_modal(job->progress, TRUE);
+    gtk_window_set_deletable(job->progress, FALSE);
+    gtk_window_set_resizable(job->progress, FALSE);
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_margin_start(box, 16);
+    gtk_widget_set_margin_end(box, 16);
+    gtk_widget_set_margin_top(box, 16);
+    gtk_widget_set_margin_bottom(box, 16);
+    label = gtk_label_new("Matching by Voter ID\xE2\x80\xA6");
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+    job->bar = GTK_PROGRESS_BAR(gtk_progress_bar_new());
+    gtk_widget_set_size_request(GTK_WIDGET(job->bar), 320, -1);
+    job->cancel_button = gtk_button_new_with_label("Cancel");
+    gtk_widget_set_halign(job->cancel_button, GTK_ALIGN_END);
+    g_signal_connect(job->cancel_button, "clicked", G_CALLBACK(on_compare_cancel), job);
+    gtk_box_append(GTK_BOX(box), label);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(job->bar));
+    gtk_box_append(GTK_BOX(box), job->cancel_button);
+    gtk_window_set_child(job->progress, box);
+    gtk_window_present(job->progress);
+    job->timer = g_timeout_add(100, pulse_compare, job);
+    g_compare_job = job;
+    job->thread = g_thread_new("ee-compare", compare_worker, job);
+}
+
+/* the menu's Compare section in every window: Compare with each other window (Windows'
+ * App_BuildCompareMenu; grayed while that window has no list) */
+static void refresh_compare_menus(GtkApplication *app)
+{
+    GList *l, *m;
+    for (l = gtk_application_get_windows(app); l != NULL; l = l->next)
+    {
+        VoterWindow *w = (VoterWindow *)g_object_get_data(G_OBJECT(l->data), "ee-voter-window");
+        guint items = 0;
+        char label[600];
+        if (w == NULL || w->closed || w->compare_menu == NULL)
+        {
+            continue;
+        }
+        g_menu_remove_all(w->compare_menu);
+        for (m = gtk_application_get_windows(app); m != NULL; m = m->next)
+        {
+            VoterWindow *o = (VoterWindow *)g_object_get_data(G_OBJECT(m->data), "ee-voter-window");
+            GMenuItem *item;
+            if (o == NULL || o == w || o->closed)
+            {
+                continue;
+            }
+            EeUiCompare_MenuLabel(o->path != NULL ? o->path : "",
+                                  o->roster,
+                                  w->roster,
+                                  label,
+                                  sizeof(label));
+            if (o->voters != NULL && o->worker == NULL)
+            {
+                item = g_menu_item_new(label, NULL);
+                g_menu_item_set_action_and_target_value(item,
+                                                        "win.compare",
+                                                        g_variant_new_uint32(o->serial));
+            }
+            else
+            {
+                item = g_menu_item_new(label, "win.compare-none"); /* (no such action: grayed) */
+            }
+            g_menu_append_item(w->compare_menu, item);
+            g_object_unref(item);
+            items++;
+        }
+        if (items == 0)
+        {
+            EeUiCompare_MenuLabel(NULL, 0, w->roster, label, sizeof(label));
+            g_menu_append(w->compare_menu, label, "win.compare-none");
+        }
+    }
+}
+
+static void action_compare(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    guint serial = g_variant_get_uint32(param);
+    GList *l;
+    (void)action;
+    for (l = gtk_application_get_windows(w->app); l != NULL; l = l->next)
+    {
+        VoterWindow *o = (VoterWindow *)g_object_get_data(G_OBJECT(l->data), "ee-voter-window");
+        if (o != NULL && !o->closed && o->serial == serial)
+        {
+            start_compare(w, o);
+            return;
+        }
+    }
+}
+
 static void close_reports(VoterWindow *w)
 {
     int k;
@@ -3210,7 +3915,13 @@ static gboolean take_snapshot(gpointer user)
     VoterWindow *w = (VoterWindow *)user;
     ReportWindow *rw = w->snapshot_report >= 0 ? w->reports[w->snapshot_report] : NULL;
     TotalsWindow *tw = w->snapshot_totals ? w->totals : NULL;
-    GtkWindow *target = tw != NULL                                  ? tw->win
+    CompareWindow *cw = w->snapshot_compare != NULL ? g_compare : NULL;
+    VoterWindow *shown = cw != NULL && w->snapshot_compare_row >= 0
+                             ? (w->snapshot_compare_b ? cw->b : cw->a)
+                             : NULL; /* (--compare-show: the file the rows are shown in) */
+    GtkWindow *target = shown != NULL                               ? shown->window
+                        : cw != NULL                                ? cw->win
+                        : tw != NULL                                ? tw->win
                         : rw != NULL                                ? rw->win
                         : w->snapshot_summary && w->summary != NULL ? w->summary
                         : w->options_dialog != NULL                 ? w->options_dialog->win
@@ -3221,11 +3932,16 @@ static gboolean take_snapshot(gpointer user)
     GdkPaintable *paint;
     GtkSnapshot *snap;
     GskRenderNode *node;
-    if (w->job != NULL)
+    if (w->job != NULL || (shown != NULL && shown->job != NULL) || g_compare_job != NULL)
     {
-        return G_SOURCE_CONTINUE; /* (a sort or filter is still running) */
+        return G_SOURCE_CONTINUE; /* (a sort, filter or compare is still running) */
     }
-    if (w->snapshot_export != NULL && tw != NULL)
+    if (w->snapshot_export != NULL && cw != NULL && shown == NULL)
+    {
+        compare_export_to(cw, w->snapshot_export, TRUE); /* (Export All Records..., no dialog) */
+        g_clear_pointer(&w->snapshot_export, g_free);
+    }
+    else if (w->snapshot_export != NULL && tw != NULL)
     {
         totals_export_to(tw, w->snapshot_export, NULL, 0); /* (Export All..., no dialog) */
         g_clear_pointer(&w->snapshot_export, g_free);
@@ -3285,15 +4001,15 @@ static gboolean retry_snapshot_actions(gpointer user)
 static void snapshot_actions(VoterWindow *w)
 {
     guint i;
-    if (w->snapshot_marks == EE_UI_MARKS_DUP_VOTING)
+    if (w->snapshot_marks == EE_UI_MARKS_DUP_VOTING || w->snapshot_compare != NULL)
     {
         GList *l;
         for (l = gtk_application_get_windows(w->app); l != NULL; l = l->next)
         {
             VoterWindow *o = (VoterWindow *)g_object_get_data(G_OBJECT(l->data), "ee-voter-window");
-            if (o != NULL && o->roster && o->worker != NULL)
+            if (o != NULL && o != w && o->worker != NULL)
             {
-                g_timeout_add(200, retry_snapshot_actions, w); /* (a roster still loading) */
+                g_timeout_add(200, retry_snapshot_actions, w); /* (another file still loading) */
                 return;
             }
         }
@@ -3397,6 +4113,14 @@ static void snapshot_actions(VoterWindow *w)
     {
         show_totals(w);
     }
+    if (w->snapshot_compare != NULL)
+    {
+        start_compare(w, w->snapshot_compare); /* (Compare with <file>) */
+        if (g_compare != NULL && w->snapshot_compare_row >= 0)
+        {
+            compare_show_row(g_compare, (guint)w->snapshot_compare_row, w->snapshot_compare_b);
+        }
+    }
     g_timeout_add(800, take_snapshot, w); /* (time for the window to lay out and draw) */
 }
 
@@ -3481,7 +4205,8 @@ static gboolean load_done(gpointer user)
         {
             gtk_window_destroy(w->filter_dialog->win);
         }
-        close_reports(w); /* (as on Windows: a report is of the list it was made from) */
+        close_reports(w);    /* (as on Windows: a report is of the list it was made from) */
+        close_compare_of(w); /* (and a compare, of the list it compared) */
         EeUiVoters_Free(w->voters);
         w->voters = done->voters;
         if (EeUiVoters_SurnameFirst(w->voters) != (w->opts.surname_first != 0))
@@ -3491,7 +4216,7 @@ static gboolean load_done(gpointer user)
         }
         g_array_set_size(w->rules, 0); /* (a new list starts unfiltered, in file order) */
         w->want_marks = EE_UI_MARKS_NONE;
-        g_clear_pointer(&w->voting_marks, EeUiMarks_Free);
+        g_clear_pointer(&w->given_marks, EeUiMarks_Free);
         w->want_sort = -1;
         w->want_ascending = TRUE;
         g_free(w->name);
@@ -3509,6 +4234,7 @@ static gboolean load_done(gpointer user)
     enable_reports(w, w->voters != NULL);
     g_clear_pointer(&w->loading_path, g_free);
     g_clear_pointer(&w->loading_roster, g_ptr_array_unref);
+    refresh_compare_menus(w->app); /* (its name in the other windows' Compare menus) */
     if (w->snapshot != NULL)
     {
         snapshot_actions(w);
@@ -3896,6 +4622,13 @@ static void on_destroy(GtkWidget *widget, gpointer user)
         g_thread_join(w->job); /* (a sort cannot be stopped: wait for it; view_done frees it) */
         w->job = NULL;
     }
+    if (g_compare_job != NULL && (g_compare_job->a == w || g_compare_job->b == w) &&
+        g_compare_job->thread != NULL)
+    {
+        g_compare_job->cancel = 1; /* (it reads this list: stop it; compare_done frees it) */
+        g_thread_join(g_compare_job->thread);
+        g_compare_job->thread = NULL;
+    }
     if (w->progress_timer != 0)
     {
         g_source_remove(w->progress_timer);
@@ -3907,14 +4640,23 @@ static void on_destroy(GtkWidget *widget, gpointer user)
         w->cell_menu = NULL;
     }
     close_reports(w);
+    close_compare_of(w);
     EeUiVoters_Free(w->voters);
     w->voters = NULL;
-    g_clear_pointer(&w->voting_marks, EeUiMarks_Free);
+    g_clear_pointer(&w->given_marks, EeUiMarks_Free);
     g_free(w->quick_value);
     w->quick_value = NULL;
     free(w->quick_link);
     w->quick_link = NULL;
     g_clear_pointer(&w->loading_roster, g_ptr_array_unref);
+    refresh_compare_menus(w->app); /* (the other windows' Compare menus lose it) */
+}
+
+/* while a compare reads the list, its window stays (Windows disables both windows) */
+static gboolean on_close_request(GtkWindow *window, gpointer user)
+{
+    (void)window;
+    return ((VoterWindow *)user)->comparing;
 }
 
 static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
@@ -3927,7 +4669,8 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     GtkWidget *open = gtk_button_new_from_icon_name("document-open-symbolic");
     GtkWidget *filter = gtk_button_new_from_icon_name("edit-find-symbolic");
     GMenu *menu = g_menu_new(), *file = g_menu_new(), *edit = g_menu_new(), *filt = g_menu_new(),
-          *dups = g_menu_new(), *reports = g_menu_new(), *help = g_menu_new();
+          *dups = g_menu_new(), *reports = g_menu_new(), *help = g_menu_new(),
+          *compare = g_menu_new();
     GtkWidget *menu_button = gtk_menu_button_new();
     const GActionEntry actions[] = {
         {"open", action_open, NULL, NULL, NULL, {0}},
@@ -3939,6 +4682,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
         {"dup-ids", action_dup_ids, NULL, NULL, NULL, {0}},
         {"dup-voters", action_dup_voters, NULL, NULL, NULL, {0}},
         {"dup-voting", action_dup_voting, NULL, NULL, NULL, {0}},
+        {"compare", action_compare, "u", NULL, NULL, {0}},
         {"reset-view", action_reset_filter, NULL, NULL, NULL, {0}},
         {"copy", action_copy, NULL, NULL, NULL, {0}},
         {"export", action_export, NULL, NULL, NULL, {0}},
@@ -3960,12 +4704,17 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
 
     w->app = app;
     w->roster = roster;
+    {
+        static guint serials;
+        w->serial = ++serials;
+    }
     w->rules = g_array_new(FALSE, TRUE, sizeof(EeUiRule));
     w->want_sort = -1;
     w->want_ascending = TRUE;
     w->snapshot_sort = -1;
     w->snapshot_report = -1;
     w->snapshot_names = -1;
+    w->snapshot_compare_row = -1;
     EeUiOptions_Load(&w->opts); /* (as saved last run) */
     w->window = GTK_WINDOW(gtk_application_window_new(app));
     /* (open_rosters finds the window's list through it) */
@@ -4019,6 +4768,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     g_menu_append_section(menu, NULL, G_MENU_MODEL(filt));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(dups));
     g_menu_append_section(menu, "Reports", G_MENU_MODEL(reports));
+    g_menu_append_section(menu, "Compare", G_MENU_MODEL(compare)); /* (refresh_compare_menus) */
     g_menu_append_section(menu, NULL, G_MENU_MODEL(help));
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_button), G_MENU_MODEL(menu));
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(menu_button), "open-menu-symbolic");
@@ -4037,6 +4787,8 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     g_object_unref(dups);
     g_object_unref(reports);
     g_object_unref(help);
+    /* (the Compare section: the menu keeps it, and the window the menu) */
+    w->compare_menu = compare;
     enable_reports(w, FALSE); /* (until a list is loaded) */
 
     /* the table */
@@ -4074,8 +4826,10 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     gtk_box_append(GTK_BOX(box), bar);
     gtk_window_set_child(w->window, box);
     g_signal_connect(w->window, "destroy", G_CALLBACK(on_destroy), w);
+    g_signal_connect(w->window, "close-request", G_CALLBACK(on_close_request), w);
     apply_zoom(w, w->opts.zoom_percent);
     set_status(w);
+    refresh_compare_menus(app); /* (every window's Compare menu lists the new one) */
     return w;
 }
 
@@ -4103,6 +4857,12 @@ typedef struct AppArgs
     gboolean load_summary;     /* --load-summary, with --snapshot */
     gboolean voting_totals;    /* --voting-totals, with --snapshot */
     GPtrArray *voting_rosters; /* --voting-roster <file>: each opened as a roster first */
+    struct
+    {
+        int roster;       /* --compare list|roster <file>: 1 for a roster */
+        const char *file; /* (NULL: none) */
+        const char *show; /* --compare-show <row>[:b] */
+    } compare;
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -4131,6 +4891,25 @@ static void on_activate(GtkApplication *app, gpointer user)
             gtk_window_present(rw->window);
             start_load(rw, path, paths);
         }
+    }
+    if (args->compare.file != NULL)
+    {
+        /* (the file to compare with, in a window of its own, as Open Voter List... or Open
+         * Voter Roster... opens it) */
+        VoterWindow *ow = voter_window_new(app, args->compare.roster);
+        GPtrArray *paths = NULL;
+        if (args->compare.roster)
+        {
+            paths = g_ptr_array_new_with_free_func(g_free);
+            g_ptr_array_add(paths, g_strdup(args->compare.file));
+        }
+        ow->opener = first;
+        gtk_window_present(ow->window);
+        start_load(ow, args->compare.file, paths);
+        w->snapshot_compare = ow;
+        w->snapshot_compare_row = args->compare.show != NULL ? atoi(args->compare.show) : -1;
+        w->snapshot_compare_b =
+            args->compare.show != NULL && strstr(args->compare.show, ":b") != NULL;
     }
     if (args->snapshot != NULL)
     {
@@ -4186,7 +4965,8 @@ int main(int argc, char **argv)
                     FALSE,
                     FALSE,
                     FALSE,
-                    NULL};
+                    NULL,
+                    {0, NULL, NULL}};
     GtkApplication *app;
     int status, i;
     args.quick = g_ptr_array_new_with_free_func(g_free);
@@ -4209,6 +4989,13 @@ int main(int argc, char **argv)
                                              (const char *const *)&argv[i + 2],
                                              (uint32_t)(argc - i - 2));
         }
+        else if (strcmp(argv[i], "--selftest-compare") == 0 && i + 4 < argc)
+        {
+            return EeUiVoters_CompareSelfTest(strcmp(argv[i + 1], "roster") == 0,
+                                              argv[i + 2],
+                                              strcmp(argv[i + 3], "roster") == 0,
+                                              argv[i + 4]);
+        }
         else if (strcmp(argv[i], "--roster") == 0)
         {
             args.roster = TRUE;
@@ -4216,6 +5003,16 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--voting-roster") == 0 && i + 1 < argc)
         {
             g_ptr_array_add(args.voting_rosters, argv[++i]);
+        }
+        else if (strcmp(argv[i], "--compare") == 0 && i + 2 < argc)
+        {
+            args.compare.roster = strcmp(argv[i + 1], "roster") == 0;
+            args.compare.file = argv[i + 2];
+            i += 2;
+        }
+        else if (strcmp(argv[i], "--compare-show") == 0 && i + 1 < argc)
+        {
+            args.compare.show = argv[++i];
         }
         else if (strcmp(argv[i], "--load-summary") == 0)
         {

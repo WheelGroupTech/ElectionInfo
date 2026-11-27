@@ -4,6 +4,7 @@
 |------|----------------|-------|
 | `sample_voters.csv` | **Travis County** style headers (`VUIDNO`, `LSTNAM`, `FSTNAM`, …) | Comma-delimited |
 | `sample_voters.txt` | **Dallas County** style headers (`SOS_VoterID`, `lastname`, …) | Tab-delimited |
+| `sample_voters_later.csv` | The same as `sample_voters.csv` | A changed copy of `sample_voters.csv` for Compare (`--selftest-compare list test/sample_voters.csv list test/sample_voters_later.csv`): one voter each only here, a name changed a little and one a lot, an address changed a little and one a lot, a precinct changed, one identical, and one Voter ID on two rows |
 | `sample_duplicates.csv` | **Travis County** style headers with `DOB` | Made-up rows for the duplicates views: 4 share a Voter ID, 4 share a name and birth date, twins differ by middle name |
 | `sample_links.csv` | **Travis County** style headers with `NOTES` and `SOURCE` | Made-up rows with `https://` links in two columns, for the macOS/Linux window's Open link... (4 links; an `http://` one is not a link) |
 | `sample_roster.csv`, `sample_roster_mail.csv` | Election Explorer's own roster export (`VUID`, `Precinct`, `Last Name`, …, `Voting Method`, `Date Voted`) | A made-up voter roster in two files, for the macOS/Linux Voter Roster window (`--selftest-roster`): 8 in-person and 3 mail records, one voter on both |

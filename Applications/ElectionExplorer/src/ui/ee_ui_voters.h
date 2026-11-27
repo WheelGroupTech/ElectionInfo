@@ -55,6 +55,7 @@ extern "C"
         EE_UI_MARKS_DUP_IDS,    /* rows sharing a Voter ID with another row */
         EE_UI_MARKS_DUP_VOTERS, /* rows sharing first, middle and last name and birth date */
         EE_UI_MARKS_DUP_VOTING, /* those of them who voted (in a roster) under different IDs */
+        EE_UI_MARKS_COMPARE,    /* a compare's category (Show these rows in ...) */
         EE_UI_MARKS_COUNT
     };
 
@@ -213,9 +214,9 @@ extern "C"
     void EeUiMarks_Free(EeUiMarks *m);
 
     /**
-     * EeUiVoters_ComputeView with duplicates found in advance: with @p marks
-     * EE_UI_MARKS_DUP_VOTING, @p given (read, not taken) is the view's duplicates. Without
-     * it the shown view's are reused, as for the other kinds.
+     * EeUiVoters_ComputeView with rows found in advance: with @p marks EE_UI_MARKS_DUP_VOTING
+     * or EE_UI_MARKS_COMPARE, @p given (read, not taken) is the view's rows. Without it the
+     * shown view's are reused, as for the other kinds.
      */
     EeUiView *EeUiVoters_ComputeViewWith(const EeUiVoters *v,
                                          int sort_column,
@@ -493,6 +494,97 @@ extern "C"
                                size_t cap);
 
     /* ---------------------------------------------------------------------- */
+    /* Compare (Windows' Compare menu and Compare Summary window)              */
+    /* ---------------------------------------------------------------------- */
+
+    /** Two files matched by Voter ID, and the counts of each category on each side. */
+    typedef struct EeUiCompare EeUiCompare;
+
+    /**
+     * The Compare menu's item for another window (Windows' App_BuildCompareMenu): "Compare
+     * with <file>", naming the kind when it is a roster or differs from this window's
+     * ("(voter roster)", "(voter list)"). With @p other_path NULL, the grayed item Windows
+     * shows when there is no other window.
+     */
+    void EeUiCompare_MenuLabel(const char *other_path,
+                               int other_roster,
+                               int this_roster,
+                               char *out,
+                               size_t cap);
+
+    /**
+     * Compare list or roster @p a (this window's) with @p b (Windows' App_StartCompare): rows
+     * matched by Voter ID, with what Windows compares for the pair (two lists: Name, Address,
+     * Precinct; with a roster: no Address, first + last names; two rosters: also Voting
+     * Method and Date Voted). @p path_a and @p path_b are the files (a roster's first).
+     * Any thread; reads both lists and changes nothing; non-zero @p *cancel stops it. Returns
+     * NULL with @p err in Windows' words, or "" when cancelled.
+     */
+    EeUiCompare *EeUiVoters_Compare(const EeUiVoters *a,
+                                    const EeUiVoters *b,
+                                    const char *path_a,
+                                    const char *path_b,
+                                    volatile int32_t *cancel,
+                                    char *err,
+                                    size_t errcap);
+
+    void EeUiCompare_Free(EeUiCompare *c);
+
+    /** The summary's rows (the categories that apply to the pair) and their words. */
+    uint32_t EeUiCompare_Rows(const EeUiCompare *c);
+    const char *EeUiCompare_Category(const EeUiCompare *c, uint32_t row);
+
+    /** A row's count in file A (@p side 0) or B (1). */
+    uint32_t EeUiCompare_Count(const EeUiCompare *c, uint32_t row, int side);
+
+    /** File A's or B's name, for the headings and menu ("file A" / "file B" without one). */
+    const char *EeUiCompare_Name(const EeUiCompare *c, int side);
+
+    /** "Compare - <A> vs <B>". */
+    void EeUiCompare_WindowTitle(const EeUiCompare *c, char *out, size_t cap);
+
+    /** Windows' status line: "Matched by Voter ID. Right-click a row to show it in a file." */
+    const char *EeUiCompare_StatusText(void);
+
+    /**
+     * Show these rows in <file> (Windows' App_ShowCompareCategory): the rows of @p row's
+     * category in side @p side's list @p v, for EeUiVoters_ComputeViewWith with
+     * EE_UI_MARKS_COMPARE (grouped by Voter ID), with Windows' status words ("voters only
+     * here vs <other file>"). NULL with @p msg when there are none ("No voters in that
+     * category."), when the file changed since ("... Run Compare again.") or out of memory.
+     */
+    EeUiMarks *EeUiCompare_Marks(const EeUiCompare *c,
+                                 uint32_t row,
+                                 int side,
+                                 const EeUiVoters *v,
+                                 char *msg,
+                                 size_t cap);
+
+    /**
+     * Export Summary... (Category, <A>, <B>) and Export All Records... (every record of both
+     * files: File, Voter ID, Precinct, Name, Address for two lists, Voting Method and Date
+     * Voted with a roster, Result, Changed Fields), as Windows writes them: UTF-8 with a BOM,
+     * @p delim ',' or '\t'. Records need the two lists compared (unchanged since: else "A file
+     * changed since the comparison was run. Run Compare again."). Returns the rows written,
+     * or -1 with @p err.
+     */
+    long EeUiCompare_ExportSummary(const EeUiCompare *c,
+                                   const char *path_utf8,
+                                   char delim,
+                                   char *err,
+                                   size_t errcap);
+    long EeUiCompare_ExportRecords(const EeUiCompare *c,
+                                   const EeUiVoters *a,
+                                   const EeUiVoters *b,
+                                   const char *path_utf8,
+                                   char delim,
+                                   char *err,
+                                   size_t errcap);
+
+    /** "<A>-vs-<B>-Compare_Summary.csv" (@p records 0) or "-Compare_Records.csv". */
+    void EeUiCompare_ExportName(const EeUiCompare *c, int records, char *out, size_t cap);
+
+    /* ---------------------------------------------------------------------- */
     /* Options (Windows' Edit > Options...), kept between runs                 */
     /* ---------------------------------------------------------------------- */
 
@@ -597,6 +689,17 @@ extern "C"
     int EeUiVoters_VotingSelfTest(const char *list_utf8,
                                   const char *const *roster_utf8,
                                   uint32_t n);
+
+    /**
+     * The windows' `--selftest-compare list|roster <file A> list|roster <file B>`: load the two
+     * files, then print the Compare menu's item, the summary window (title, rows, counts),
+     * Show these rows in each file and the exports, as the windows would show them (counts
+     * and Voter IDs only). Returns 0, or 1 when a load or the compare fails.
+     */
+    int EeUiVoters_CompareSelfTest(int roster_a,
+                                   const char *a_utf8,
+                                   int roster_b,
+                                   const char *b_utf8);
 
 #ifdef __cplusplus
 }

@@ -30,6 +30,16 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-27 — macOS and Linux: Compare (the menu and the Compare window)
+- **What:** Windows' Compare menu in the macOS and Linux windows: Compare with any other open list or roster, matched by Voter ID with what Windows compares for the pair; large files in the background behind Windows' progress window (Cancel), smaller at once. The Compare window of categories and counts for A and B, with Show these rows in <file> (right-click, or a double click), Export Summary… and Export All Records…, as on Windows; it closes with either file's window. Show Differences… is not yet in.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiCompare` (`EeUiVoters_Compare`, `EeUiCompare_MenuLabel`, `_Rows`, `_Category`, `_Count`, `_Name`, `_WindowTitle`, `_StatusText`, `_Marks`, `_ExportSummary`, `_ExportRecords`, `_ExportName`), `EE_UI_MARKS_COMPARE` (rows found in advance, as for Duplicate Voters Voting); `EeUiVoters_CompareSelfTest`.
+  - `src/ui/gtk/app_main.c`: `CompareWindow`, `show_compare_window`, `compare_show_row`, `start_compare` / `compare_worker` / `compare_done` (the progress window), `refresh_compare_menus`, `action_compare`, `close_compare_of`, `on_close_request`; `given_marks` (was `voting_marks`); `--selftest-compare`, `--compare`, `--compare-show`.
+  - `src/ui/macos/app_main.m`: `EeCompareWindow`, `startCompareWith:` (the progress sheet), `showCompareMarks:`, the delegate's Compare menu (`menuNeedsUpdate:`, `compareWith:`), `windowShouldClose:`; `givenMarks`; the same arguments.
+  - `test/sample_voters_later.csv` (made-up); `.github/workflows/election-explorer.yml`: a compare step on both runners.
+- **Checked:** Linux and Mac, Debug and Release, no warnings; `--selftest-compare` the same on both for two lists, two rosters and a roster with a list; the other self-tests unchanged; snapshots of the window, its records export and Show these rows in B on both. Real Travis files: two 958,000-row lists compared in 1.5 s (in the background in the windows, on both), two G26 rosters in 0.3 s, the OLRV with a roster in 0.5 s; the matched categories count the same on both sides.
+- **Details:** [cross-platform-design.md, "The Voter Roster window"](docs/cross-platform-design.md#the-voter-list-window-prototype-2026-11-22).
+
 ### 2026-11-27 — macOS and Linux: Show Duplicate Voters Voting
 - **What:** Filter > Show Duplicate Voters Voting… in the macOS and Linux voter list window, as on Windows: the list's voters with the same full name and birth date who voted (Voter ID in an open roster) under two or more different Voter IDs, grouped by Name, with Windows' status line and messages. With several rosters open, Select Voter Roster asks which. Not in a roster window. The Mac grays it until there are birth dates and a roster; GTK keeps it on and says why.
 - **Where:**

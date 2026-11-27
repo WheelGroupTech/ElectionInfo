@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-27. **Show Duplicate Voters Voting is in the macOS/Linux port (uncommitted until the user commits it); next: the roster Compare menu.**
+**Last updated:** 2026-11-27. **Compare (the menu and the Compare window) is in the macOS/Linux port (uncommitted until the user commits it); next: its Show Differences….**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -53,19 +53,26 @@
   GTK `show_duplicates_voting` / `pick_roster`, Mac `showDuplicateVotersVoting:`;
   `--selftest-voting`, `--voting-roster`, `--duplicates voting`; made-up
   `test/sample_roster_voting.csv`). Checked by self-test and snapshots on both; P26 marks the 2
-  voters the county confirmed are two people, G26 none. **Not yet tried by hand:** Select Voter
-  Roster with two rosters open, the menu item grayed / hidden on the Mac, closing the roster
-  while the view is shown.
+  voters the county confirmed are two people, G26 none. Tried by hand on Linux and the Mac.
+- **Compare (2026-11-27):** Windows' Compare menu (every other window) and Compare window
+  (categories and counts, Show these rows in <file>, Export Summary… / Export All Records…);
+  large files in the background behind a progress window with Cancel. Bridge `EeUiCompare_*`,
+  `EeUiVoters_Compare`, `EE_UI_MARKS_COMPARE`; GTK `start_compare` / `show_compare_window`, Mac
+  `startCompareWith:` / `EeCompareWindow`; `--selftest-compare`, `--compare`, `--compare-show`;
+  made-up `test/sample_voters_later.csv`. Checked by self-test and snapshots on both and on real
+  Travis lists and rosters. **Not yet tried by hand:** the Compare menu on both, the progress
+  window's Cancel, double clicks and the right-click menu, the export dialogs, closing a file
+  while its compare runs or its Compare window is open.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options, saved-filter and link lines on
   `sample_duplicates.csv`, and the link count on `sample_links.csv`.
 - **Next steps:**
-  - the roster Compare menu;
+  - Compare's Show Differences… (Windows' side-by-side field list: sortable, Copy, Export);
   - the other windows (results, CVRs, audit logs);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** roster Voting Totals and the Voter Roster window (both tried on Linux and the Mac); Open link (tried on Linux and the Mac); Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** Show Duplicate Voters Voting, roster Voting Totals and the Voter Roster window (both tried on Linux and the Mac); Open link (tried on Linux and the Mac); Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.

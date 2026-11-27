@@ -14,6 +14,11 @@
  * cell, Open link... on a cell with an https:// link, and a status line. The list comes from the
  * engine through ee_ui_voters.h (plain C). Compiled with ARC.
  *
+ * The Compare menu lists the other windows, as on Windows: a compare matches the two files by
+ * Voter ID (in the background, behind a progress sheet, for large files) and opens the Compare
+ * window of categories and counts, with Show these rows in either file, Export Summary... and
+ * Export All Records...
+ *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns and words; the menu bar, shared by every
  * window, hides Show Duplicate Voters (and Voters Voting) and the Address report there and shows Display Voting
@@ -48,6 +53,12 @@
  *   the Voter Roster window would show.
  * - `--selftest-voting <list> <roster files...>` prints Show Duplicate Voters Voting of the list
  *   in that roster, as the voter list window would show it.
+ * - `--selftest-compare list|roster <file A> list|roster <file B>` prints the compare of the two
+ *   files as the Compare window shows it.
+ * - `--compare list|roster <file>` (with --snapshot) opens that file in a second window, then
+ *   compares the first with it; the PNG is of the Compare window, and `--export` exports all
+ *   records. `--compare-show <row>[:b]` then shows that row's voters in file A (or B), as the
+ *   right-click menu does, and the PNG is of that file's window.
  */
 
 #import <Cocoa/Cocoa.h>
@@ -67,6 +78,7 @@ static NSString *ns_utf8(const char *s)
 @class EeOptionsSheet;
 @class EeReportWindow;
 @class EeTotalsWindow;
+@class EeCompareWindow;
 
 /* an export's field separator, as on Windows: a typed .csv or .tsv wins, else the chosen type
  * (0 CSV, 1 TSV), whose extension is then added to *path */
@@ -133,7 +145,9 @@ static void export_type_changed(NSPopUpButton *type)
 @property(assign) BOOL wantAscending;
 @property(strong) NSMutableData *rules; /* EeUiRule[] */
 @property(assign) int wantMarks;        /* EE_UI_MARKS_*: a duplicates view */
-@property(assign) EeUiMarks *votingMarks; /* Show Duplicate Voters Voting's, for the next job */
+@property(assign) EeUiMarks *givenMarks; /* rows found in advance (Duplicate Voters Voting, a
+                                           * compare's Show these rows in...), for the next job */
+@property(assign) BOOL comparing;          /* a compare reads this list in the background */
 @property(assign) NSUInteger wantGen;
 @property(assign) BOOL jobRunning;
 @property(strong) EeFilterSheet *filterSheet;
@@ -163,6 +177,8 @@ static void export_type_changed(NSPopUpButton *type)
 - (void)sortByColumn:(int)column ascending:(BOOL)ascending;
 - (void)showDuplicates:(int)marks;
 - (IBAction)showDuplicateVotersVoting:(id)sender;
+- (void)showCompareMarks:(EeUiMarks *)marks;
+- (void)startCompareWith:(EeVoterWindow *)other;
 - (BOOL)exportShownTo:(NSString *)path;
 - (IBAction)showFilter:(id)sender;
 - (IBAction)showOptions:(id)sender;
@@ -1528,6 +1544,326 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 @end
 
+/* -------------------------------------------------------------------------- */
+/* The Compare window (Windows' Compare Summary: one at a time)               */
+/* -------------------------------------------------------------------------- */
+
+@interface EeCompareWindow : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate>
+@property(weak) EeVoterWindow *a; /* file A (the window whose Compare menu ran it) */
+@property(weak) EeVoterWindow *b;
+@property(strong) NSWindow *window;
+@property(strong) NSTableView *table;
+@property(assign) EeUiCompare *compare;
+@property(assign) NSInteger menuRow; /* the right-clicked row (-1: outside the rows) */
+- (instancetype)initWithA:(EeVoterWindow *)a b:(EeVoterWindow *)b compare:(EeUiCompare *)compare;
+- (void)showRow:(NSInteger)row inB:(BOOL)inB;
+- (BOOL)exportTo:(NSString *)path records:(BOOL)records;
+- (void)close;
+@end
+
+static EeCompareWindow *g_compare; /* (the open one) */
+
+@implementation EeCompareWindow
+
+- (instancetype)initWithA:(EeVoterWindow *)a b:(EeVoterWindow *)b compare:(EeUiCompare *)compare
+{
+    static const CGFloat widths[3] = {170, 150, 150}; /* (Windows' at 100%) */
+    NSScrollView *scroll;
+    NSView *content;
+    NSButton *summary, *records;
+    NSTextField *status;
+    NSRect frame;
+    NSFont *font = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightRegular];
+    CGFloat width = 20;
+    char text[600];
+    int c;
+    self = [super init];
+    if (self == nil)
+    {
+        EeUiCompare_Free(compare);
+        return nil;
+    }
+    self.a = a;
+    self.b = b;
+    self.compare = compare;
+    self.menuRow = -1;
+
+    self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.allowsColumnReordering = NO;
+    self.table.allowsColumnSelection = NO;
+    self.table.allowsMultipleSelection = NO;
+    self.table.allowsEmptySelection = YES;
+    self.table.usesAlternatingRowBackgroundColors = YES;
+    self.table.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
+    self.table.gridStyleMask = NSTableViewSolidVerticalGridLineMask | NSTableViewSolidHorizontalGridLineMask;
+    if (@available(macOS 11.0, *))
+    {
+        self.table.style = NSTableViewStylePlain;
+    }
+    self.table.target = self;
+    self.table.doubleAction = @selector(rowDoubleClicked:);
+    self.table.menu = [[NSMenu alloc] initWithTitle:@""];
+    self.table.menu.delegate = self;
+    for (c = 0; c < 3; c++)
+    {
+        NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%d", c]];
+        NSTextFieldCell *cell = [[NSTextFieldCell alloc] initTextCell:@""];
+        /* (as on Windows: the category at the left, the counts at the right) */
+        NSTextAlignment align = c == 0 ? NSTextAlignmentLeft : NSTextAlignmentRight;
+        col.title = c == 0 ? @"Category" : ns_utf8(EeUiCompare_Name(compare, c - 1));
+        col.headerCell.alignment = align;
+        cell.font = font;
+        cell.lineBreakMode = NSLineBreakByTruncatingTail;
+        cell.alignment = align;
+        col.dataCell = cell;
+        col.minWidth = 40;
+        col.resizingMask = NSTableColumnUserResizingMask;
+        col.width = MAX(widths[c], ceil(col.headerCell.cellSize.width) + 16);
+        width += col.width + self.table.intercellSpacing.width;
+        [self.table addTableColumn:col];
+    }
+
+    self.window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, MAX(width, 540), 360)
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    EeUiCompare_WindowTitle(compare, text, sizeof(text));
+    self.window.title = ns_utf8(text);
+    self.window.delegate = self;
+    self.window.releasedWhenClosed = NO;
+    /* (as on Windows: below and right of file A's window) */
+    frame = a.window.frame;
+    [self.window setFrameTopLeftPoint:NSMakePoint(NSMinX(frame) + 60, NSMaxY(frame) - 60)];
+    content = self.window.contentView;
+
+    scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.documentView = self.table;
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = YES;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    summary = [NSButton buttonWithTitle:@"Export Summary…" target:self action:@selector(exportSummary:)];
+    records = [NSButton buttonWithTitle:@"Export All Records…" target:self action:@selector(exportRecords:)];
+    summary.translatesAutoresizingMaskIntoConstraints = NO;
+    records.translatesAutoresizingMaskIntoConstraints = NO;
+    status = [NSTextField labelWithString:ns_utf8(EeUiCompare_StatusText())];
+    status.lineBreakMode = NSLineBreakByTruncatingTail;
+    status.translatesAutoresizingMaskIntoConstraints = NO;
+    [status setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [content addSubview:scroll];
+    [content addSubview:summary];
+    [content addSubview:records];
+    [content addSubview:status];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:records.topAnchor constant:-8],
+        [records.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-10],
+        [summary.trailingAnchor constraintEqualToAnchor:records.leadingAnchor constant:-8],
+        [summary.centerYAnchor constraintEqualToAnchor:records.centerYAnchor],
+        [records.bottomAnchor constraintEqualToAnchor:status.topAnchor constant:-8],
+        [status.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:10],
+        [status.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor constant:-10],
+        [status.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-6],
+    ]];
+    [self.window makeKeyAndOrderFront:nil];
+    return self;
+}
+
+- (void)dealloc
+{
+    EeUiCompare_Free(_compare);
+}
+
+- (void)close
+{
+    [self.window close];
+}
+
+- (void)windowWillClose:(NSNotification *)note
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      /* (kept until its window has finished closing) */
+      if (g_compare == self)
+      {
+          g_compare = nil;
+      }
+    });
+}
+
+- (void)alert:(NSString *)message
+{
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = message;
+    [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    return EeUiCompare_Rows(self.compare);
+}
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    int c = (int)column.identifier.integerValue;
+    if (c == 0)
+    {
+        return ns_utf8(EeUiCompare_Category(self.compare, (uint32_t)row));
+    }
+    return [NSString stringWithFormat:@"%u", EeUiCompare_Count(self.compare, (uint32_t)row, c - 1)];
+}
+
+- (BOOL)tableView:(NSTableView *)tableView shouldEditTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    return NO;
+}
+
+/* Show these rows in <file> (Windows' App_ShowCompareCategory): in that file's window, grouped
+ * by Voter ID */
+- (void)showRow:(NSInteger)row inB:(BOOL)inB
+{
+    EeVoterWindow *t = inB ? self.b : self.a;
+    char msg[256];
+    EeUiMarks *m;
+    if (t == nil || t.voters == NULL || row < 0)
+    {
+        return;
+    }
+    m = EeUiCompare_Marks(self.compare, (uint32_t)row, inB ? 1 : 0, t.voters, msg, sizeof(msg));
+    if (m == NULL)
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = ns_utf8(msg);
+        [t.window makeKeyAndOrderFront:nil];
+        [a beginSheetModalForWindow:t.window completionHandler:nil];
+        return;
+    }
+    [t showCompareMarks:m];
+}
+
+/* a double click: in the B column it shows the rows in B, elsewhere in A (as on Windows) */
+- (void)rowDoubleClicked:(id)sender
+{
+    if (self.table.clickedRow >= 0)
+    {
+        [self showRow:self.table.clickedRow inB:self.table.clickedColumn == 2];
+    }
+}
+
+- (void)showFromMenu:(NSMenuItem *)item
+{
+    [self showRow:self.menuRow inB:item.tag == 1];
+}
+
+/* the right-click menu, as on Windows: Show these rows in <A> / <B>, then the exports (only the
+ * exports outside the rows) */
+- (void)menuNeedsUpdate:(NSMenu *)menu
+{
+    NSInteger row = self.table.clickedRow;
+    [menu removeAllItems];
+    self.menuRow = row;
+    if (row >= 0)
+    {
+        NSMenuItem *item;
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+        item = [menu addItemWithTitle:[NSString stringWithFormat:@"Show these rows in %s", EeUiCompare_Name(self.compare, 0)]
+                               action:@selector(showFromMenu:)
+                        keyEquivalent:@""];
+        item.target = self;
+        item.tag = 0;
+        item = [menu addItemWithTitle:[NSString stringWithFormat:@"Show these rows in %s", EeUiCompare_Name(self.compare, 1)]
+                               action:@selector(showFromMenu:)
+                        keyEquivalent:@""];
+        item.target = self;
+        item.tag = 1;
+        [menu addItem:[NSMenuItem separatorItem]];
+    }
+    [menu addItemWithTitle:@"Export Summary…" action:@selector(exportSummary:) keyEquivalent:@""].target = self;
+    [menu addItemWithTitle:@"Export All Records…" action:@selector(exportRecords:) keyEquivalent:@""].target = self;
+}
+
+/* Export Summary... / Export All Records... to @p path */
+- (BOOL)exportTo:(NSString *)path records:(BOOL)records delim:(char)delim
+{
+    char err[256];
+    long wrote;
+    if (records && (self.a == nil || self.b == nil))
+    {
+        return NO;
+    }
+    wrote = records ? EeUiCompare_ExportRecords(self.compare, self.a.voters, self.b.voters, path.fileSystemRepresentation,
+                                                delim, err, sizeof(err))
+                    : EeUiCompare_ExportSummary(self.compare, path.fileSystemRepresentation, delim, err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "compare export: %s\n", err);
+        [self alert:ns_utf8(err)];
+        return NO;
+    }
+    fprintf(stderr, "exported %ld compare %s\n", wrote, records ? "records" : "summary rows");
+    return YES;
+}
+
+/* --export with --compare: Export All Records..., as a CSV, without the sheet */
+- (BOOL)exportTo:(NSString *)path records:(BOOL)records
+{
+    return [self exportTo:path records:records delim:','];
+}
+
+- (void)exportRows:(BOOL)records
+{
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    NSView *extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 36)];
+    NSPopUpButton *type = export_type_popup(extra, self);
+    char name[600];
+    panel.title = @"Export";
+    EeUiCompare_ExportName(self.compare, records, name, sizeof(name));
+    panel.nameFieldStringValue = ns_utf8(name);
+    panel.accessoryView = extra;
+    [panel beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse r) {
+                    NSString *path = panel.URL.path;
+                    char delim;
+                    if (r != NSModalResponseOK || path == nil)
+                    {
+                        return;
+                    }
+                    delim = export_delim(&path, type.indexOfSelectedItem);
+                    [self exportTo:path records:records delim:delim];
+                  }];
+}
+
+- (void)exportTypeChanged:(NSPopUpButton *)type
+{
+    export_type_changed(type);
+}
+
+- (IBAction)exportSummary:(id)sender
+{
+    [self exportRows:NO];
+}
+
+- (IBAction)exportRecords:(id)sender
+{
+    [self exportRows:YES];
+}
+
+@end
+
+/* close the Compare window of @p w's list (it closed or loads another), as on Windows */
+static void close_compare_of(EeVoterWindow *w)
+{
+    if (g_compare != nil && (g_compare.a == w || g_compare.b == w))
+    {
+        [g_compare close];
+    }
+}
+
 static void app_window_closed(EeVoterWindow *w);
 
 @implementation EeVoterWindow
@@ -1632,7 +1968,7 @@ static void app_window_closed(EeVoterWindow *w);
 
 - (void)dealloc
 {
-    EeUiMarks_Free(_votingMarks);
+    EeUiMarks_Free(_givenMarks);
     EeUiVoters_Free(_voters);
 }
 
@@ -1819,14 +2155,15 @@ static void app_window_closed(EeVoterWindow *w);
     NSUInteger gen = self.wantGen;
     EeUiVoters *v = self.voters;
     int marks = self.wantMarks;
-    EeUiMarks *given = marks == EE_UI_MARKS_DUP_VOTING ? self.votingMarks : NULL; /* (the job's now) */
+    EeUiMarks *given = marks == EE_UI_MARKS_DUP_VOTING || marks == EE_UI_MARKS_COMPARE ? self.givenMarks
+                                                                                       : NULL; /* (the job's now) */
     NSString *label;
     CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
     if (given == NULL)
     {
-        EeUiMarks_Free(self.votingMarks); /* (asked for something else meanwhile) */
+        EeUiMarks_Free(self.givenMarks); /* (asked for something else meanwhile) */
     }
-    self.votingMarks = NULL;
+    self.givenMarks = NULL;
     /* (named for what changes: duplicates to find, a new order, else the filter) */
     if (marks != EE_UI_MARKS_NONE && marks != EeUiVoters_Marks(v, NULL))
     {
@@ -2001,10 +2338,121 @@ static void app_window_closed(EeVoterWindow *w);
         [a beginSheetModalForWindow:self.window completionHandler:nil];
         return;
     }
-    EeUiMarks_Free(self.votingMarks);
-    self.votingMarks = m;
+    EeUiMarks_Free(self.givenMarks);
+    self.givenMarks = m;
     self.wantMarks = EE_UI_MARKS_DUP_VOTING;
     [self sortByColumn:(uint32_t)column < EeUiVoters_Columns(self.voters) ? column : -1 ascending:YES];
+}
+
+/* Show these rows in <file>: a compare's rows, shown as a duplicates view is, grouped by Voter
+ * ID (takes @p marks) */
+- (void)showCompareMarks:(EeUiMarks *)marks
+{
+    EeUiMarks_Free(self.givenMarks);
+    self.givenMarks = marks;
+    self.wantMarks = EE_UI_MARKS_COMPARE;
+    [self sortByColumn:EE_UI_COLUMN_VOTER_ID ascending:YES];
+    [self.window makeKeyAndOrderFront:nil];
+}
+
+/* Compare with <file> (Windows' App_StartCompare): at once for smaller files; in the background
+ * for large ones, behind Windows' progress (a sheet on A; B stays open meanwhile) */
+- (void)startCompareWith:(EeVoterWindow *)b
+{
+    NSAlert *a;
+    NSProgressIndicator *bar;
+    char err[256];
+    int32_t *cancel;
+    EeUiVoters *va = self.voters, *vb = b.voters;
+    NSString *pa = self.path ?: @"", *pb = b.path ?: @"";
+    if (b == nil || b == self || self.comparing || b.comparing)
+    {
+        return;
+    }
+    if (self.loading || b.loading)
+    {
+        a = [[NSAlert alloc] init];
+        a.messageText = @"Finish loading or scanning both files before comparing.";
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    if (va == NULL || vb == NULL || EeUiVoters_TotalRows(va) == 0 || EeUiVoters_TotalRows(vb) == 0)
+    {
+        a = [[NSAlert alloc] init];
+        a.messageText = @"Both windows must have a voter list loaded to compare.";
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    if (EeUiVoters_TotalRows(va) < 250000 && EeUiVoters_TotalRows(vb) < 250000)
+    {
+        /* (Windows' k_ScanModalMinRows: smaller files are compared at once) */
+        EeUiCompare *c = EeUiVoters_Compare(va, vb, pa.fileSystemRepresentation, pb.fileSystemRepresentation, NULL,
+                                            err, sizeof(err));
+        if (c == NULL)
+        {
+            a = [[NSAlert alloc] init];
+            a.messageText = ns_utf8(err);
+            [a beginSheetModalForWindow:self.window completionHandler:nil];
+            return;
+        }
+        [g_compare close];
+        g_compare = [[EeCompareWindow alloc] initWithA:self b:b compare:c];
+        return;
+    }
+    cancel = (int32_t *)calloc(1, sizeof(int32_t));
+    if (cancel == NULL)
+    {
+        return;
+    }
+    self.comparing = YES;
+    b.comparing = YES;
+    a = [[NSAlert alloc] init];
+    a.messageText = @"Comparing voter lists";
+    a.informativeText = @"Matching by Voter ID…";
+    bar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 300, 20)];
+    bar.indeterminate = YES;
+    bar.style = NSProgressIndicatorStyleBar;
+    [bar startAnimation:nil];
+    a.accessoryView = bar;
+    [a addButtonWithTitle:@"Cancel"];
+    [a beginSheetModalForWindow:self.window
+              completionHandler:^(NSModalResponse r) {
+                if (r == NSAlertFirstButtonReturn)
+                {
+                    *cancel = 1; /* (Cancel: the compare stops, and says so when it does) */
+                }
+              }];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+      char why[256];
+      CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+      EeUiCompare *c = EeUiVoters_Compare(va, vb, pa.fileSystemRepresentation, pb.fileSystemRepresentation,
+                                          (volatile int32_t *)cancel, why, sizeof(why));
+      NSString *whyText = ns_utf8(why); /* (a block cannot use the array) */
+      fprintf(stderr, "compared in %.2f s\n", CFAbsoluteTimeGetCurrent() - started);
+      dispatch_async(dispatch_get_main_queue(), ^{
+        BOOL cancelled = *cancel != 0;
+        self.comparing = NO;
+        b.comparing = NO;
+        if (self.window.attachedSheet == a.window)
+        {
+            [self.window endSheet:a.window returnCode:NSModalResponseStop];
+        }
+        free(cancel);
+        if (c == NULL)
+        {
+            self.status.stringValue = cancelled ? @"Compare cancelled." : @"Compare failed.";
+            if (!cancelled)
+            {
+                NSAlert *e = [[NSAlert alloc] init];
+                e.messageText = whyText;
+                [e beginSheetModalForWindow:self.window completionHandler:nil];
+            }
+            return;
+        }
+        [g_compare close];
+        g_compare = [[EeCompareWindow alloc] initWithA:self b:b compare:c];
+      });
+    });
 }
 
 /* Filter > Show Duplicate Voters Voting...: the list's voters with the same name and birth date
@@ -2190,9 +2638,15 @@ static void app_window_closed(EeVoterWindow *w);
     [self.totalsWindow close];
 }
 
+- (BOOL)windowShouldClose:(NSWindow *)sender
+{
+    return !self.comparing; /* (while a compare reads the list; Windows disables both windows) */
+}
+
 - (void)windowWillClose:(NSNotification *)note
 {
     [self closeReports];
+    close_compare_of(self);
     app_window_closed(self);
 }
 
@@ -2439,6 +2893,7 @@ static void app_window_closed(EeVoterWindow *w);
             [self.filterSheet close];
         }
         [self closeReports]; /* (as on Windows: a report is of the list it was made from) */
+        close_compare_of(self); /* (and a compare, of the list it compared) */
         EeUiVoters_Free(self.voters);
         self.voters = v;
         if (EeUiVoters_SurnameFirst(v) != (self.options.surname_first != 0))
@@ -2448,8 +2903,8 @@ static void app_window_closed(EeVoterWindow *w);
         }
         self.rules = [NSMutableData data]; /* (a new list starts unfiltered, in file order) */
         self.wantMarks = EE_UI_MARKS_NONE;
-        EeUiMarks_Free(self.votingMarks);
-        self.votingMarks = NULL;
+        EeUiMarks_Free(self.givenMarks);
+        self.givenMarks = NULL;
         self.wantSort = -1;
         self.wantAscending = YES;
         [self rebuildColumns];
@@ -2701,7 +3156,8 @@ static void app_window_closed(EeVoterWindow *w);
     }
     if (item.action == @selector(showOptions:))
     {
-        return self.optionsSheet == nil && self.filterSheet == nil; /* (Windows: any time) */
+        /* (Windows: any time; not while a compare reads the list, as its names may change) */
+        return self.optionsSheet == nil && self.filterSheet == nil && !self.comparing;
     }
     if (item.action == @selector(showFilter:))
     {
@@ -2733,7 +3189,7 @@ static void app_window_closed(EeVoterWindow *w);
 /* The application                                                            */
 /* -------------------------------------------------------------------------- */
 
-@interface EeAppDelegate : NSObject <NSApplicationDelegate>
+@interface EeAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property(strong) EeVoterWindow *main;               /* the first window (the snapshot's) */
 @property(strong) NSMutableArray<EeVoterWindow *> *windows; /* every open window */
 @property(copy) NSString *pending;  /* a file to open once launched */
@@ -2742,6 +3198,10 @@ static void app_window_closed(EeVoterWindow *w);
 @property(assign) BOOL snapshotSummary; /* --load-summary: the PNG is of the Load Summary */
 @property(assign) BOOL snapshotTotals;  /* --voting-totals: the PNG is of the Voting Totals */
 @property(strong) NSMutableArray<NSString *> *votingRosters; /* --voting-roster: each a roster first */
+@property(assign) BOOL compareRoster;          /* --compare list|roster <file> */
+@property(copy) NSString *compareFile;
+@property(strong) EeVoterWindow *compareWith;  /* (its window) */
+@property(copy) NSString *compareShow;         /* --compare-show <row>[:b] */
 @property(copy) NSString *snapshot; /* --snapshot: write the window here as PNG once loaded, then quit */
 @property(assign) int snapshotSort; /* --sort: -1 for none */
 @property(assign) BOOL snapshotAscending;
@@ -2765,15 +3225,18 @@ static void app_window_closed(EeVoterWindow *w);
     NSMenu *bar = [[NSMenu alloc] init];
     NSMenuItem *appItem = [[NSMenuItem alloc] init], *fileItem = [[NSMenuItem alloc] init],
                *editItem = [[NSMenuItem alloc] init], *filterItem = [[NSMenuItem alloc] init],
-               *reportsItem = [[NSMenuItem alloc] init], *winItem = [[NSMenuItem alloc] init];
+               *reportsItem = [[NSMenuItem alloc] init], *winItem = [[NSMenuItem alloc] init],
+               *compareItem = [[NSMenuItem alloc] init];
     NSMenu *app = [[NSMenu alloc] init], *file = [[NSMenu alloc] initWithTitle:@"File"],
            *edit = [[NSMenu alloc] initWithTitle:@"Edit"], *filter = [[NSMenu alloc] initWithTitle:@"Filter"],
-           *reports = [[NSMenu alloc] initWithTitle:@"Reports"], *win = [[NSMenu alloc] initWithTitle:@"Window"];
+           *reports = [[NSMenu alloc] initWithTitle:@"Reports"], *win = [[NSMenu alloc] initWithTitle:@"Window"],
+           *compare = [[NSMenu alloc] initWithTitle:@"Compare"];
     [bar addItem:appItem];
     [bar addItem:fileItem];
     [bar addItem:editItem];
     [bar addItem:filterItem];
     [bar addItem:reportsItem];
+    [bar addItem:compareItem];
     [bar addItem:winItem];
     [app addItemWithTitle:@"About Election Explorer" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
     [app addItem:[NSMenuItem separatorItem]];
@@ -2806,6 +3269,9 @@ static void app_window_closed(EeVoterWindow *w);
     [reports addItemWithTitle:@"Display Address Report…" action:@selector(showAddressReport:) keyEquivalent:@""];
     [reports addItemWithTitle:@"Display Load Summary…" action:@selector(showLoadSummary:) keyEquivalent:@""];
     reportsItem.submenu = reports;
+    compare.delegate = self; /* (menuNeedsUpdate: lists the other windows, as on Windows) */
+    compare.autoenablesItems = NO;
+    compareItem.submenu = compare;
     [win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     winItem.submenu = win;
     NSApp.mainMenu = bar;
@@ -2845,7 +3311,43 @@ static void app_window_closed(EeVoterWindow *w);
     {
         return ((EeTotalsWindow *)d).owner;
     }
+    if ([d isKindOfClass:[EeCompareWindow class]] && ((EeCompareWindow *)d).a != nil)
+    {
+        return ((EeCompareWindow *)d).a;
+    }
     return self.windows.lastObject;
+}
+
+/* Compare: Compare with each other window (Windows' App_BuildCompareMenu; grayed while that
+ * window has no list) */
+- (void)menuNeedsUpdate:(NSMenu *)menu
+{
+    EeVoterWindow *w = [self currentWindow];
+    char label[600];
+    [menu removeAllItems];
+    for (EeVoterWindow *o in self.windows)
+    {
+        NSMenuItem *item;
+        if (o == w || !(o.window.visible || o.window.miniaturized))
+        {
+            continue;
+        }
+        EeUiCompare_MenuLabel(o.path.fileSystemRepresentation ?: "", o.roster, w.roster, label, sizeof(label));
+        item = [menu addItemWithTitle:ns_utf8(label) action:@selector(compareWith:) keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = o;
+        item.enabled = w != nil && o.voters != NULL && !o.loading && !o.comparing && !w.comparing;
+    }
+    if (menu.numberOfItems == 0)
+    {
+        EeUiCompare_MenuLabel(NULL, 0, w.roster, label, sizeof(label));
+        [menu addItemWithTitle:ns_utf8(label) action:NULL keyEquivalent:@""].enabled = NO;
+    }
+}
+
+- (void)compareWith:(NSMenuItem *)item
+{
+    [[self currentWindow] startCompareWith:item.representedObject];
 }
 
 /* where a voter list opens, as on Windows: in @p w while it is an empty voter list window, else
@@ -2887,6 +3389,22 @@ static void app_window_closed(EeVoterWindow *w);
             [self.main openPath:self.pending];
         }
     }
+    if (self.compareFile != nil)
+    {
+        /* (the file to compare with, in a window of its own, as Open Voter List... or Open Voter
+         * Roster... opens it) */
+        EeVoterWindow *o = [self addWindowRoster:self.compareRoster];
+        o.opener = self.main;
+        if (self.compareRoster)
+        {
+            [o openRosterPaths:@[ self.compareFile ]];
+        }
+        else
+        {
+            [o openPath:self.compareFile];
+        }
+        self.compareWith = o;
+    }
     [NSApp activateIgnoringOtherApps:YES];
     if (self.snapshot != nil)
     {
@@ -2905,7 +3423,8 @@ static void app_window_closed(EeVoterWindow *w);
                     ![w.status.stringValue containsString:@"could"]);
     for (EeVoterWindow *o in self.windows)
     {
-        waiting = waiting || (self.snapshotMarks == EE_UI_MARKS_DUP_VOTING && o.roster && o.loading);
+        waiting = waiting || ((self.snapshotMarks == EE_UI_MARKS_DUP_VOTING || self.compareWith != nil) && o != w &&
+                              (o.loading || o.jobRunning || o.comparing));
     }
     if (!waiting && !self.snapshotActionsDone)
     {
@@ -2981,6 +3500,10 @@ static void app_window_closed(EeVoterWindow *w);
         {
             [w showVotingTotals:nil];
         }
+        if (self.compareWith != nil)
+        {
+            [w startCompareWith:self.compareWith]; /* (Compare with <file>) */
+        }
         waiting = YES;
     }
     if (waiting)
@@ -2990,9 +3513,27 @@ static void app_window_closed(EeVoterWindow *w);
         });
         return;
     }
+    if (self.compareWith != nil && self.compareShow != nil && g_compare != nil)
+    {
+        /* --compare-show: Show these rows in A or B, then the PNG of that file's window */
+        [g_compare showRow:self.compareShow.intValue inB:[self.compareShow hasSuffix:@":b"]];
+        self.main = [self.compareShow hasSuffix:@":b"] ? self.compareWith : w;
+        self.compareShow = nil;
+        self.compareWith = nil;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+          [self takeSnapshotWhenReady];
+        });
+        return;
+    }
     EeReportWindow *report = self.snapshotReport >= 0 ? [w reportOfKind:self.snapshotReport] : nil;
     EeTotalsWindow *totals = self.snapshotTotals ? w.totalsWindow : nil;
-    if (self.snapshotExport != nil && totals != nil)
+    EeCompareWindow *compared = self.compareWith != nil ? g_compare : nil;
+    if (self.snapshotExport != nil && compared != nil)
+    {
+        [compared exportTo:self.snapshotExport records:YES]; /* (Export All Records..., no sheet) */
+        self.snapshotExport = nil;
+    }
+    else if (self.snapshotExport != nil && totals != nil)
     {
         [totals exportAllTo:self.snapshotExport]; /* (Export All..., without the sheet) */
         self.snapshotExport = nil;
@@ -3008,7 +3549,8 @@ static void app_window_closed(EeVoterWindow *w);
         self.snapshotExport = nil;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-      NSWindow *target = totals != nil               ? totals.window
+      NSWindow *target = compared != nil            ? compared.window
+                         : totals != nil         ? totals.window
                          : report != nil         ? report.window
                          : w.summaryAlert != nil ? w.summaryAlert.window
                          : w.optionsSheet != nil ? w.optionsSheet.sheet
@@ -3139,6 +3681,11 @@ int main(int argc, const char **argv)
             {
                 return EeUiVoters_RosterSelfTest((const char *const *)&argv[i + 1], (uint32_t)(argc - i - 1));
             }
+            if (strcmp(argv[i], "--selftest-compare") == 0 && i + 4 < argc)
+            {
+                return EeUiVoters_CompareSelfTest(strcmp(argv[i + 1], "roster") == 0, argv[i + 2],
+                                                  strcmp(argv[i + 3], "roster") == 0, argv[i + 4]);
+            }
             if (strcmp(argv[i], "--selftest-voting") == 0 && i + 2 < argc)
             {
                 return EeUiVoters_VotingSelfTest(argv[i + 1], (const char *const *)&argv[i + 2],
@@ -3168,6 +3715,16 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--voting-roster") == 0 && i + 1 < argc)
             {
                 [delegate.votingRosters addObject:ns_utf8(argv[++i])];
+            }
+            else if (strcmp(argv[i], "--compare") == 0 && i + 2 < argc)
+            {
+                delegate.compareRoster = strcmp(argv[i + 1], "roster") == 0;
+                delegate.compareFile = ns_utf8(argv[i + 2]);
+                i += 2;
+            }
+            else if (strcmp(argv[i], "--compare-show") == 0 && i + 1 < argc)
+            {
+                delegate.compareShow = ns_utf8(argv[++i]);
             }
             else if (strcmp(argv[i], "--load-summary") == 0)
             {

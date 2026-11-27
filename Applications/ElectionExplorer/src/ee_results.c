@@ -946,6 +946,12 @@ static int __cdecl ent_cmp(const void *pa, const void *pb)
     {
         return a->contest < b->contest ? -1 : 1;
     }
+    /* (then the precincts in the order the files list them, which is each contest's precinct
+     * order: qsort keeps no order among equals, and MSVC's, macOS's and glibc's differ) */
+    if (a->pre != b->pre)
+    {
+        return a->pre < b->pre ? -1 : 1;
+    }
     return 0;
 }
 
@@ -977,7 +983,7 @@ static BOOL b_finish(ResBuilder *b)
         }
         if (!sorted)
         {
-            qsort(b->ent, b->nent, sizeof(ResEntry), ent_cmp); /* contest order only */
+            qsort(b->ent, b->nent, sizeof(ResEntry), ent_cmp); /* contest, then precinct order */
         }
     }
     local = (uint32_t *)malloc(((size_t)r->nprecincts + 1) * sizeof(uint32_t));

@@ -1,0 +1,7 @@
+"line number","contest name","choice name","party name","total votes","percent of votes","registered voters","ballots cast","num Precinct total","num Precinct rptg","over votes","under votes"
+1,"DEM Governor (Vote For 1)","Ann Lee","DEM",80,63.49,1200,270,3,3,"0","0"
+2,"DEM Governor (Vote For 1)","Ben Ortiz","DEM",46,36.51,1200,270,3,3,"0","0"
+3,"REP Governor (Vote For 1)","Cal Diaz","REP",105,79.55,1200,270,3,3,"0","0"
+4,"REP Governor (Vote For 1)","Dee Fox","REP",27,20.45,1200,270,3,3,"0","0"
+5,"City of Sample, Proposition A (Vote For 1)","For","NON",100,68.97,1200,270,2,2,"1","3"
+6,"City of Sample, Proposition A (Vote For 1)","Against","NON",45,31.03,1200,270,2,2,"1","3"

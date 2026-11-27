@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--Election result snapshot (made up)-->
+<ElectionResult>
+<Timestamp>3/4/2026 9:15:00 PM CST</Timestamp>
+<ElectionName>Sample County Joint Primary Election</ElectionName>
+<ElectionDate>3/3/2026</ElectionDate>
+<Region>Sample County</Region>
+<VoterTurnout totalVoters="1200" ballotsCast="270" voterTurnout="22.50"><Precincts>
+<Precinct name="101" totalVoters="500" ballotsCast="120" voterTurnout="24.00" />
+<Precinct name="102" totalVoters="400" ballotsCast="90" voterTurnout="22.50" />
+<Precinct name="103" totalVoters="300" ballotsCast="60" voterTurnout="20.00" />
+</Precincts></VoterTurnout>
+<Contest key="1" text="DEM Governor" voteFor="1" isQuestion="false">
+<Choice key="1" text="Ann Lee" party="DEM" totalVotes="80">
+<VoteType name="Mail" votes="10">
+<Precinct name="101" votes="5" />
+<Precinct name="102" votes="3" />
+<Precinct name="103" votes="2" />
+</VoteType>
+<VoteType name="Early Voting" votes="40">
+<Precinct name="101" votes="20" />
+<Precinct name="102" votes="12" />
+<Precinct name="103" votes="8" />
+</VoteType>
+<VoteType name="Election Day" votes="30">
+<Precinct name="101" votes="15" />
+<Precinct name="102" votes="10" />
+<Precinct name="103" votes="5" />
+</VoteType>
+</Choice>
+<Choice key="2" text="Ben Ortiz" party="DEM" totalVotes="45">
+<VoteType name="Mail" votes="7">
+<Precinct name="101" votes="4" />
+<Precinct name="102" votes="2" />
+<Precinct name="103" votes="1" />
+</VoteType>
+<VoteType name="Early Voting" votes="23">
+<Precinct name="101" votes="10" />
+<Precinct name="102" votes="9" />
+<Precinct name="103" votes="4" />
+</VoteType>
+<VoteType name="Election Day" votes="15">
+<Precinct name="101" votes="6" />
+<Precinct name="102" votes="4" />
+<Precinct name="103" votes="5" />
+</VoteType>
+</Choice>
+</Contest>
+<Contest key="2" text="REP Governor" voteFor="1" isQuestion="false">
+<Choice key="1" text="Cal Diaz" party="REP" totalVotes="105">
+<VoteType name="Mail" votes="13">
+<Precinct name="101" votes="6" />
+<Precinct name="102" votes="4" />
+<Precinct name="103" votes="3" />
+</VoteType>
+<VoteType name="Early Voting" votes="55">
+<Precinct name="101" votes="25" />
+<Precinct name="102" votes="18" />
+<Precinct name="103" votes="12" />
+</VoteType>
+<VoteType name="Election Day" votes="37">
+<Precinct name="101" votes="14" />
+<Precinct name="102" votes="13" />
+<Precinct name="103" votes="10" />
+</VoteType>
+</Choice>
+<Choice key="2" text="Dee Fox" party="REP" totalVotes="27">
+<VoteType name="Mail" votes="3">
+<Precinct name="101" votes="2" />
+<Precinct name="102" votes="1" />
+<Precinct name="103" votes="0" />
+</VoteType>
+<VoteType name="Early Voting" votes="14">
+<Precinct name="101" votes="6" />
+<Precinct name="102" votes="5" />
+<Precinct name="103" votes="3" />
+</VoteType>
+<VoteType name="Election Day" votes="10">
+<Precinct name="101" votes="4" />
+<Precinct name="102" votes="4" />
+<Precinct name="103" votes="2" />
+</VoteType>
+</Choice>
+</Contest>
+<Contest key="3" text="City of Sample, Proposition A" voteFor="1" isQuestion="true">
+<VoteType name="Undervotes" votes="3">
+<Precinct name="101" votes="2" />
+<Precinct name="102" votes="1" />
+</VoteType>
+<VoteType name="Overvotes" votes="1">
+<Precinct name="101" votes="1" />
+<Precinct name="102" votes="0" />
+</VoteType>
+<Choice key="1" text="For" party="NON" totalVotes="100">
+<VoteType name="Mail" votes="13">
+<Precinct name="101" votes="8" />
+<Precinct name="102" votes="5" />
+</VoteType>
+<VoteType name="Early Voting" votes="50">
+<Precinct name="101" votes="30" />
+<Precinct name="102" votes="20" />
+</VoteType>
+<VoteType name="Election Day" votes="37">
+<Precinct name="101" votes="22" />
+<Precinct name="102" votes="15" />
+</VoteType>
+</Choice>
+<Choice key="2" text="Against" party="NON" totalVotes="45">
+<VoteType name="Mail" votes="5">
+<Precinct name="101" votes="3" />
+<Precinct name="102" votes="2" />
+</VoteType>
+<VoteType name="Early Voting" votes="25">
+<Precinct name="101" votes="15" />
+<Precinct name="102" votes="10" />
+</VoteType>
+<VoteType name="Election Day" votes="15">
+<Precinct name="101" votes="10" />
+<Precinct name="102" votes="protected" />
+</VoteType>
+</Choice>
+</Contest>
+</ElectionResult>

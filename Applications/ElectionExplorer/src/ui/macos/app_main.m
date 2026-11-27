@@ -62,6 +62,17 @@
  *   right-click menu does, and the PNG is of that file's window. `--compare-diff` then clicks
  *   Show Differences...: the PNG is of that window, `--sort <column>[:desc]` clicks its heading
  *   and `--export` exports its rows (Export All...).
+ * - `--selftest-results <files...>` loads the files as election results without a window and
+ *   prints what the Election Results window would show.
+ * - `--results` (with --snapshot) opens the files named as election results (File > Open
+ *   Election Results..., results_window.m); the PNG is of the first election's window, after
+ *   `--by-precinct` (View > By Precinct), `--zoom`, `--vote-types 0|1` and `--party-first
+ *   rep|dem` (as the Settings sheet's OK, unsaved) and `--sort <column>[:desc]` (heading
+ *   clicks); `--load-summary` makes it of its Load Summary, `--options-window` of its Settings.
+ *
+ * The menu bar is shared by every window, as AppKit has it: an item's (or a menu's) tag says
+ * which windows show it (EE_MENU_*), so a results window has Windows' results menus (View, and
+ * no Filter or Compare yet) and a voter window its own.
  */
 
 #import <Cocoa/Cocoa.h>
@@ -70,7 +81,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ee_ui_results.h"
 #include "ee_ui_voters.h"
+
+#import "app_mac.h"
 
 static NSString *ns_utf8(const char *s)
 {
@@ -3527,6 +3541,9 @@ static void app_window_closed(EeVoterWindow *w);
 
 @interface EeAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property(strong) EeVoterWindow *main;               /* the first window (the snapshot's) */
+@property(strong) NSMenu *compareMenu;               /* (menuNeedsUpdate: lists the windows) */
+@property(assign) BOOL results;                      /* --results: open the files as election results */
+@property(strong) EeResultsSnapshot *resultsSnapshot; /* --by-precinct, --vote-types, --party-first */
 @property(strong) NSMutableArray<EeVoterWindow *> *windows; /* every open window */
 @property(copy) NSString *pending;  /* a file to open once launched */
 @property(strong) NSMutableArray<NSString *> *pendingFiles; /* the files named (a roster's with --roster) */
@@ -3563,14 +3580,15 @@ static void app_window_closed(EeVoterWindow *w);
     NSMenuItem *appItem = [[NSMenuItem alloc] init], *fileItem = [[NSMenuItem alloc] init],
                *editItem = [[NSMenuItem alloc] init], *filterItem = [[NSMenuItem alloc] init],
                *reportsItem = [[NSMenuItem alloc] init], *winItem = [[NSMenuItem alloc] init],
-               *compareItem = [[NSMenuItem alloc] init];
+               *compareItem = [[NSMenuItem alloc] init], *viewItem = [[NSMenuItem alloc] init];
     NSMenu *app = [[NSMenu alloc] init], *file = [[NSMenu alloc] initWithTitle:@"File"],
            *edit = [[NSMenu alloc] initWithTitle:@"Edit"], *filter = [[NSMenu alloc] initWithTitle:@"Filter"],
            *reports = [[NSMenu alloc] initWithTitle:@"Reports"], *win = [[NSMenu alloc] initWithTitle:@"Window"],
-           *compare = [[NSMenu alloc] initWithTitle:@"Compare"];
+           *compare = [[NSMenu alloc] initWithTitle:@"Compare"], *view = [[NSMenu alloc] initWithTitle:@"View"];
     [bar addItem:appItem];
     [bar addItem:fileItem];
     [bar addItem:editItem];
+    [bar addItem:viewItem];
     [bar addItem:filterItem];
     [bar addItem:reportsItem];
     [bar addItem:compareItem];
@@ -3585,13 +3603,24 @@ static void app_window_closed(EeVoterWindow *w);
     appItem.submenu = app;
     [file addItemWithTitle:@"Open Voter List…" action:@selector(openDocument:) keyEquivalent:@"o"];
     [file addItemWithTitle:@"Open Voter Roster…" action:@selector(openRoster:) keyEquivalent:@""];
-    [file addItemWithTitle:@"Export Voter List…" action:@selector(exportVoters:) keyEquivalent:@""];
+    [file addItemWithTitle:@"Open Election Results…" action:@selector(openResults:) keyEquivalent:@""];
+    [file addItemWithTitle:@"Export Voter List…" action:@selector(exportVoters:) keyEquivalent:@""].tag =
+        EE_MENU_VOTERS;
     [file addItem:[NSMenuItem separatorItem]];
     [file addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];
     fileItem.submenu = file;
     [edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
     [edit addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
     editItem.submenu = edit;
+    /* View (Windows' results menu): Totals, By Precinct; Reset View */
+    [view addItemWithTitle:@"Totals" action:@selector(showTotals:) keyEquivalent:@""];
+    [view addItemWithTitle:@"By Precinct" action:@selector(showByPrecinct:) keyEquivalent:@""];
+    [view addItem:[NSMenuItem separatorItem]];
+    [view addItemWithTitle:@"Reset View" action:@selector(resetSort:) keyEquivalent:@""];
+    viewItem.submenu = view;
+    viewItem.tag = EE_MENU_RESULTS;
+    filterItem.tag = EE_MENU_VOTERS; /* (the results' Filter is still to come) */
+    compareItem.tag = EE_MENU_VOTERS; /* (and their Compare) */
     [filter addItemWithTitle:@"Filter…" action:@selector(showFilter:) keyEquivalent:@"l"]; /* (Ctrl+L on Windows) */
     [filter addItemWithTitle:@"Reset Filter" action:@selector(resetFilter:) keyEquivalent:@""];
     [filter addItemWithTitle:@"Show Duplicate Voter IDs…" action:@selector(showDuplicateVoterIds:) keyEquivalent:@""];
@@ -3601,18 +3630,50 @@ static void app_window_closed(EeVoterWindow *w);
     [filter addItem:[NSMenuItem separatorItem]];
     [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""];
     filterItem.submenu = filter;
-    [reports addItemWithTitle:@"Display Precinct Report…" action:@selector(showPrecinctReport:) keyEquivalent:@""];
-    [reports addItemWithTitle:@"Display Voting Totals…" action:@selector(showVotingTotals:) keyEquivalent:@""];
-    [reports addItemWithTitle:@"Display Address Report…" action:@selector(showAddressReport:) keyEquivalent:@""];
+    [reports addItemWithTitle:@"Display Precinct Report…" action:@selector(showPrecinctReport:) keyEquivalent:@""]
+        .tag = EE_MENU_VOTERS;
+    [reports addItemWithTitle:@"Display Voting Totals…" action:@selector(showVotingTotals:) keyEquivalent:@""].tag =
+        EE_MENU_VOTERS;
+    [reports addItemWithTitle:@"Display Address Report…" action:@selector(showAddressReport:) keyEquivalent:@""].tag =
+        EE_MENU_VOTERS;
     [reports addItemWithTitle:@"Display Load Summary…" action:@selector(showLoadSummary:) keyEquivalent:@""];
     reportsItem.submenu = reports;
     compare.delegate = self; /* (menuNeedsUpdate: lists the other windows, as on Windows) */
     compare.autoenablesItems = NO;
     compareItem.submenu = compare;
+    self.compareMenu = compare;
+    file.delegate = self; /* (menuNeedsUpdate: shows the items of the window in front) */
+    reports.delegate = self;
     [win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
     winItem.submenu = win;
     NSApp.mainMenu = bar;
     NSApp.windowsMenu = win;
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(mainWindowChanged:)
+                                               name:NSWindowDidBecomeMainNotification
+                                             object:nil];
+    [self showMenusFor:EE_MENU_VOTERS];
+}
+
+/* which kind of window is in front: a results window (or a sheet on it), or a voter window */
+- (NSInteger)frontKind
+{
+    id d = NSApp.mainWindow.delegate;
+    return [d isKindOfClass:[EeResultsWindow class]] ? EE_MENU_RESULTS : EE_MENU_VOTERS;
+}
+
+/* the menu bar's menus (and @p menu's items, or none) for windows of @p kind */
+- (void)showMenusFor:(NSInteger)kind
+{
+    for (NSMenuItem *top in NSApp.mainMenu.itemArray)
+    {
+        top.hidden = top.tag != EE_MENU_ALL && top.tag != kind;
+    }
+}
+
+- (void)mainWindowChanged:(NSNotification *)note
+{
+    [self showMenusFor:[self frontKind]];
 }
 
 /* a new window, kept until it closes */
@@ -3636,6 +3697,10 @@ static void app_window_closed(EeVoterWindow *w);
 - (EeVoterWindow *)currentWindow
 {
     id d = (NSApp.keyWindow ?: NSApp.mainWindow).delegate;
+    if ([self frontKind] == EE_MENU_RESULTS)
+    {
+        return nil; /* (a results window: a list opens in a window of its own) */
+    }
     if ([d isKindOfClass:[EeVoterWindow class]])
     {
         return d;
@@ -3661,6 +3726,17 @@ static void app_window_closed(EeVoterWindow *w);
 {
     EeVoterWindow *w = [self currentWindow];
     char label[600];
+    if (menu != self.compareMenu)
+    {
+        /* (File, Reports: the items of the window in front; a voter window's own validation then
+         * hides those of the other kind of voter window) */
+        NSInteger kind = [self frontKind];
+        for (NSMenuItem *item in menu.itemArray)
+        {
+            item.hidden = item.tag != EE_MENU_ALL && item.tag != kind;
+        }
+        return;
+    }
     [menu removeAllItems];
     for (EeVoterWindow *o in self.windows)
     {
@@ -3703,6 +3779,19 @@ static void app_window_closed(EeVoterWindow *w);
     [self buildMenu];
     self.windows = [NSMutableArray array];
     self.main = [self addWindowRoster:NO];
+    if (self.results && self.pendingFiles.count > 0)
+    {
+        /* (each election in a window of its own, as Open Election Results... opens them; the
+         * empty voter list window stays, as on Windows; the first results window makes the
+         * --snapshot) */
+        [self.main.window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        self.resultsSnapshot.png = self.snapshot;
+        [EeResultsWindow openPaths:self.pendingFiles
+                              over:self.main.window
+                          snapshot:self.snapshot != nil ? self.resultsSnapshot : nil];
+        return;
+    }
     if (self.roster && self.pendingFiles.count > 0)
     {
         /* (the roster's own window, as Open Voter Roster... opens it; the empty voter list
@@ -4016,6 +4105,18 @@ static void app_window_closed(EeVoterWindow *w);
     }
 }
 
+/* File > Open Election Results...: one or more files; each election in a window of its own, as
+ * on Windows */
+- (void)openResults:(id)sender
+{
+    NSWindow *over = NSApp.mainWindow;
+    if (over == nil || !over.visible)
+    {
+        over = self.main.window.visible ? self.main.window : nil;
+    }
+    [EeResultsWindow chooseOver:over];
+}
+
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
 {
     return YES;
@@ -4060,6 +4161,10 @@ int main(int argc, const char **argv)
                 return EeUiVoters_VotingSelfTest(argv[i + 1], (const char *const *)&argv[i + 2],
                                                  (uint32_t)(argc - i - 2));
             }
+            if (strcmp(argv[i], "--selftest-results") == 0)
+            {
+                return EeUiResults_SelfTest((const char *const *)&argv[i + 1], (uint32_t)(argc - i - 1));
+            }
         }
         [NSApplication sharedApplication];
         NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
@@ -4071,6 +4176,11 @@ int main(int argc, const char **argv)
         delegate.snapshotQuick = [NSMutableArray array];
         delegate.pendingFiles = [NSMutableArray array];
         delegate.votingRosters = [NSMutableArray array];
+        delegate.resultsSnapshot = [[EeResultsSnapshot alloc] init];
+        delegate.resultsSnapshot.sort = -1;
+        delegate.resultsSnapshot.ascending = YES;
+        delegate.resultsSnapshot.voteTypes = -1;
+        delegate.resultsSnapshot.partyFirst = -1;
         for (i = 1; i < argc; i++)
         {
             if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc)
@@ -4080,6 +4190,23 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--roster") == 0)
             {
                 delegate.roster = YES;
+            }
+            else if (strcmp(argv[i], "--results") == 0)
+            {
+                delegate.results = YES;
+            }
+            else if (strcmp(argv[i], "--by-precinct") == 0)
+            {
+                delegate.resultsSnapshot.byPrecinct = YES;
+            }
+            else if (strcmp(argv[i], "--vote-types") == 0 && i + 1 < argc)
+            {
+                delegate.resultsSnapshot.voteTypes = atoi(argv[++i]) != 0;
+            }
+            else if (strcmp(argv[i], "--party-first") == 0 && i + 1 < argc)
+            {
+                i++;
+                delegate.resultsSnapshot.partyFirst = strcmp(argv[i], "dem") == 0 ? EE_UI_PARTY_DEM : EE_UI_PARTY_REP;
             }
             else if (strcmp(argv[i], "--voting-roster") == 0 && i + 1 < argc)
             {
@@ -4102,6 +4229,7 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--load-summary") == 0)
             {
                 delegate.snapshotSummary = YES;
+                delegate.resultsSnapshot.loadSummary = YES;
             }
             else if (strcmp(argv[i], "--voting-totals") == 0)
             {
@@ -4113,6 +4241,8 @@ int main(int argc, const char **argv)
                 i++;
                 delegate.snapshotSort = atoi(argv[i]);
                 delegate.snapshotAscending = strstr(argv[i], ":desc") == NULL;
+                delegate.resultsSnapshot.sort = delegate.snapshotSort;
+                delegate.resultsSnapshot.ascending = delegate.snapshotAscending;
             }
             else if ((strcmp(argv[i], "--include") == 0 || strcmp(argv[i], "--exclude") == 0) && i + 1 < argc)
             {
@@ -4144,6 +4274,7 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--zoom") == 0 && i + 1 < argc)
             {
                 delegate.snapshotZoom = atoi(argv[++i]);
+                delegate.resultsSnapshot.zoom = delegate.snapshotZoom;
             }
             else if (strcmp(argv[i], "--names") == 0 && i + 1 < argc)
             {
@@ -4153,6 +4284,7 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--options-window") == 0)
             {
                 delegate.snapshotOptionsWindow = YES;
+                delegate.resultsSnapshot.optionsWindow = YES;
             }
             else if (strcmp(argv[i], "--load-filter") == 0 && i + 1 < argc)
             {

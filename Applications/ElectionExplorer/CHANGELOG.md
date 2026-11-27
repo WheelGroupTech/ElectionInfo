@@ -30,6 +30,17 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-27 — macOS and Linux: the Election Results window (step 1)
+- **What:** File > Open Election Results... in the macOS and Linux windows, as on Windows: the files load behind a progress window with Cancel, and each election opens a window of its own with Windows' rows and columns, View > Totals / By Precinct, Reset View, heading sort (counts largest first), Copy, Reports > Display Load Summary... (open by itself when the files disagree) and Options (zoom, vote-type columns, party first). Filter, the Turnout report, Export and Compare come next. Engine fix: within a contest, a results file's precincts now keep the file's order on every platform (`ent_cmp` left ties to `qsort`; ES&S precinct reports came out in a scrambled precinct order on Windows and the Mac).
+- **Where:**
+  - `src/ui/ee_ui_results.{h,c}` (new): the bridge over `EeResults` (Windows' `Res_BuildRows`, `Res_BuildColumns`, `Res_CellText`, `Res_Sort`, `Res_UpdateStatus`, `Res_CopySelected`, `App_ShowResultsLoadSummary`); `EeUiResults_SelfTest`.
+  - `src/ui/gtk/results_window.c` (new), `src/ui/gtk/app_gtk.h` (new; the row model and helpers shared with `app_main.c`); `app_main.c`: Open Election Results..., `choose_voter_list` / `choose_roster` for other windows, `ee_gtk_window_png`, `--results`.
+  - `src/ui/macos/results_window.m` (new), `src/ui/macos/app_mac.h` (new); `app_main.m`: Open Election Results..., the View menu, menu tags by window kind (`showMenusFor:`), `--results`.
+  - `src/ee_results.c` `ent_cmp`: ties by precinct.
+  - `CMakeLists.txt`; `.github/workflows/election-explorer.yml`: a results self-test step on both runners; `test/sample_results_detail.xml`, `test/sample_results_summary.csv` (made up).
+- **Checked:** Linux and Mac, Debug and Release, no warnings; `--selftest-results` the same on both; the other self-tests unchanged; snapshots of the window, its views, sorts, Load Summary and Options on both. Real files the same on both: Travis G24, Travis G20, Harris P24 (526,831 By Precinct rows, sorted in under 0.6 s). Windows smoke suite and Linux `ctest` pass.
+- **Details:** [cross-platform-design.md, "The Election Results window"](docs/cross-platform-design.md#the-election-results-window-2026-11-27).
+
 ### 2026-11-27 — macOS and Linux: Compare's Show Differences
 - **What:** Show Differences… in the macOS and Linux Compare window, as on Windows: a window of each field that differs for a voter in both files (Voter ID, Field, the value in A and in B), sorted by a heading click (again: the other way), Copy (Ctrl+C / Cmd-C, right-click), Export Selected… / Export All…; one at a time, closed with the Compare window. On the Mac, a file named on the command line is no longer replaced by AppKit's guess at launch.
 - **Where:**

@@ -149,10 +149,12 @@ add_executable(data_check test/data_check.c ${EE_POSIX}/wmain_posix.c)
 target_link_libraries(data_check PRIVATE ee_engine)
 
 # The window, a prototype: the voter list in AppKit on macOS and GTK 4 on Linux, over the
-# plain C bridge src/ui/ee_ui_voters.h.
+# plain C bridges src/ui/ee_ui_voters.h and src/ui/ee_ui_results.h.
 if(APPLE)
-    add_executable(ee_app MACOSX_BUNDLE src/ui/macos/app_main.m src/ui/ee_ui_voters.c)
-    set_source_files_properties(src/ui/macos/app_main.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    add_executable(ee_app MACOSX_BUNDLE src/ui/macos/app_main.m src/ui/macos/results_window.m
+        src/ui/ee_ui_voters.c src/ui/ee_ui_results.c)
+    set_source_files_properties(src/ui/macos/app_main.m src/ui/macos/results_window.m
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_include_directories(ee_app PRIVATE ${EE_SRC}/ui)
     target_link_libraries(ee_app PRIVATE ee_engine "-framework Cocoa")
     set_target_properties(ee_app PROPERTIES
@@ -169,7 +171,8 @@ else()
     endif()
     if(EE_GTK_FOUND)
         message(STATUS "Window: GTK ${EE_GTK_VERSION}")
-        add_executable(ee_app src/ui/gtk/app_main.c src/ui/ee_ui_voters.c)
+        add_executable(ee_app src/ui/gtk/app_main.c src/ui/gtk/results_window.c
+            src/ui/ee_ui_voters.c src/ui/ee_ui_results.c)
         target_include_directories(ee_app PRIVATE ${EE_SRC}/ui ${EE_GTK_INCLUDE_DIRS})
         target_link_libraries(ee_app PRIVATE ee_engine ${EE_GTK_LINK_LIBRARIES})
         set_target_properties(ee_app PROPERTIES OUTPUT_NAME "election-explorer")

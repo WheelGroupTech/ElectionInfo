@@ -65,6 +65,16 @@
  *   right-click menu does, and the PNG is of that file's window. `--compare-diff` then clicks
  *   Show Differences...: the PNG is of that window, `--sort <column>[:desc]` clicks its heading
  *   and `--export` exports its rows (Export All...).
+ * - `--selftest-results <files...>` loads the files as election results without a window and
+ *   prints what the Election Results window would show.
+ * - `--results` (with --snapshot) opens the files named as election results (File > Open
+ *   Election Results..., results_window.c); the PNG is of the first election's window, after
+ *   `--by-precinct` (View > By Precinct), `--zoom`, `--vote-types 0|1` and `--party-first
+ *   rep|dem` (as the Options window's OK, unsaved) and `--sort <column>[:desc]` (heading clicks);
+ *   `--load-summary` makes it of its Load Summary, `--options-window` of its Options.
+ *
+ * File > Open Election Results... opens each election's results in a window of its own
+ * (results_window.c), as on Windows.
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -75,21 +85,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "app_gtk.h"
+#include "ee_ui_results.h"
 #include "ee_ui_voters.h"
 
 /* -------------------------------------------------------------------------- */
 /* Rows: a list model that makes row objects on demand                        */
 /* -------------------------------------------------------------------------- */
 
-#define EE_TYPE_ROW (ee_row_get_type())
-G_DECLARE_FINAL_TYPE(EeRow, ee_row, EE, ROW, GObject)
-
-struct _EeRow
-{
-    GObject parent_instance;
-    guint index; /* display row */
-};
-
+/* (EeRow and EeRows are declared in app_gtk.h: the results window shows its rows with them) */
 G_DEFINE_TYPE(EeRow, ee_row, G_TYPE_OBJECT)
 
 static void ee_row_class_init(EeRowClass *klass)
@@ -101,15 +105,6 @@ static void ee_row_init(EeRow *self)
 {
     self->index = 0;
 }
-
-#define EE_TYPE_ROWS (ee_rows_get_type())
-G_DECLARE_FINAL_TYPE(EeRows, ee_rows, EE, ROWS, GObject)
-
-struct _EeRows
-{
-    GObject parent_instance;
-    guint count;
-};
 
 static GType ee_rows_item_type(GListModel *list)
 {
@@ -156,7 +151,7 @@ static void ee_rows_init(EeRows *self)
     self->count = 0;
 }
 
-static EeRows *ee_rows_new(guint count)
+EeRows *ee_rows_new(guint count)
 {
     EeRows *rows = g_object_new(EE_TYPE_ROWS, NULL);
     rows->count = count;
@@ -784,7 +779,7 @@ static void reset_view(VoterWindow *w)
 }
 
 /* a column view's selected rows (below @p count), in order */
-static uint32_t *view_selection(GtkColumnView *view, guint count, guint *n)
+uint32_t *view_selection(GtkColumnView *view, guint count, guint *n)
 {
     GtkSelectionModel *model = gtk_column_view_get_model(view);
     GtkBitset *set;
@@ -1244,7 +1239,7 @@ static int no_compare(gconstpointer a, gconstpointer b, gpointer user)
 }
 
 /* (measured with the tables' digits of one width: see add_table_css) */
-static int text_width(GtkWidget *widget, const char *text)
+int text_width(GtkWidget *widget, const char *text)
 {
     PangoLayout *layout = gtk_widget_create_pango_layout(widget, text);
     PangoAttrList *attrs = pango_attr_list_new();
@@ -2127,7 +2122,7 @@ static void on_report_menu_closed(GtkPopover *popover, gpointer user)
     g_idle_add(report_drop_menu, rw); /* (later: the menu's action runs after "closed") */
 }
 
-static void menu_section(GMenu *menu, GMenu *section)
+void menu_section(GMenu *menu, GMenu *section)
 {
     g_menu_append_section(menu, NULL, G_MENU_MODEL(section));
     g_object_unref(section);
@@ -3978,7 +3973,7 @@ struct OptionsDialog
 /* The tables' digits all of one width ("tnum"), as Windows' Segoe UI has them, so IDs and
  * counts line up whatever the font: Ubuntu's own has them so, but not every font does. Once
  * for the display, for the voter list and the report windows. */
-static void add_table_css(GdkDisplay *display)
+void add_table_css(GdkDisplay *display)
 {
     static GdkDisplay *added;
     GtkCssProvider *css;
@@ -4363,11 +4358,7 @@ static gboolean take_snapshot(gpointer user)
                         : w->options_dialog != NULL                 ? w->options_dialog->win
                         : w->filter_dialog != NULL                  ? w->filter_dialog->win
                                                                     : w->window;
-    GtkWidget *content = gtk_window_get_child(target);
-    int width = gtk_widget_get_width(content), height = gtk_widget_get_height(content);
-    GdkPaintable *paint;
-    GtkSnapshot *snap;
-    GskRenderNode *node;
+    int wrote;
     if (w->job != NULL || (shown != NULL && shown->job != NULL) || g_compare_job != NULL)
     {
         return G_SOURCE_CONTINUE; /* (a sort, filter or compare is still running) */
@@ -4397,8 +4388,29 @@ static gboolean take_snapshot(gpointer user)
         export_to(w, w->snapshot_export, NULL, 0, FALSE);
         g_clear_pointer(&w->snapshot_export, g_free);
     }
-    paint = gtk_widget_paintable_new(content);
-    snap = gtk_snapshot_new();
+    wrote = ee_gtk_window_png(target, w->snapshot);
+    if (wrote == 0)
+    {
+        /* (nothing yet: a sort or filter that just finished has not been laid out; try again
+         * on the next tick, for up to 12 s) */
+        if (++w->snapshot_tries < 15)
+        {
+            return G_SOURCE_CONTINUE;
+        }
+        fprintf(stderr, "nothing to write: the window has not drawn\n");
+    }
+    g_application_quit(G_APPLICATION(w->app));
+    return G_SOURCE_REMOVE;
+}
+
+int ee_gtk_window_png(GtkWindow *target, const char *png)
+{
+    GtkWidget *content = gtk_window_get_child(target);
+    int width = gtk_widget_get_width(content), height = gtk_widget_get_height(content);
+    GdkPaintable *paint = gtk_widget_paintable_new(content);
+    GtkSnapshot *snap = gtk_snapshot_new();
+    GskRenderNode *node;
+    int wrote = 0;
     gdk_paintable_snapshot(paint, GDK_SNAPSHOT(snap), width, height);
     node = gtk_snapshot_free_to_node(snap);
     if (node != NULL)
@@ -4406,27 +4418,17 @@ static gboolean take_snapshot(gpointer user)
         GskRenderer *renderer = gtk_native_get_renderer(GTK_NATIVE(target));
         GdkTexture *tex =
             gsk_renderer_render_texture(renderer, node, &GRAPHENE_RECT_INIT(0, 0, width, height));
-        if (!gdk_texture_save_to_png(tex, w->snapshot))
+        wrote = 1;
+        if (!gdk_texture_save_to_png(tex, png))
         {
-            fprintf(stderr, "could not write %s\n", w->snapshot);
+            fprintf(stderr, "could not write %s\n", png);
+            wrote = -1;
         }
         g_object_unref(tex);
         gsk_render_node_unref(node);
     }
-    else
-    {
-        /* (nothing yet: a sort or filter that just finished has not been laid out; try again
-         * on the next tick, for up to 12 s) */
-        g_object_unref(paint);
-        if (++w->snapshot_tries < 15)
-        {
-            return G_SOURCE_CONTINUE;
-        }
-        fprintf(stderr, "nothing to write: the window has not drawn (%d x %d)\n", width, height);
-    }
     g_object_unref(paint);
-    g_application_quit(G_APPLICATION(w->app));
-    return G_SOURCE_REMOVE;
+    return wrote;
 }
 
 /* --snapshot with --sort / --include / --exclude: what a heading click and the right-click
@@ -4801,30 +4803,47 @@ static VoterWindow *open_roster(VoterWindow *w, GPtrArray *paths)
 /* Commands                                                                   */
 /* -------------------------------------------------------------------------- */
 
+/* whom a file dialog opens for: a voter window, or (from another window) the application */
+typedef struct OpenFor
+{
+    GtkApplication *app;
+    VoterWindow *w; /* NULL: a window of its own */
+} OpenFor;
+
 static void on_open_chosen(GObject *source, GAsyncResult *result, gpointer user)
 {
-    VoterWindow *w = (VoterWindow *)user;
+    OpenFor *of = (OpenFor *)user;
     GFile *file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
     if (file != NULL)
     {
         char *path = g_file_get_path(file);
         if (path != NULL)
         {
-            open_path(w, path);
+            if (of->w != NULL)
+            {
+                open_path(of->w, path);
+            }
+            else
+            {
+                VoterWindow *nw = voter_window_new(of->app, FALSE);
+                gtk_window_present(nw->window);
+                start_load(nw, path, NULL);
+            }
             g_free(path);
         }
         g_object_unref(file);
     }
+    g_free(of);
 }
 
-static void action_open(GSimpleAction *action, GVariant *param, gpointer user)
+static void choose_voter_list(GtkApplication *app, GtkWindow *parent, VoterWindow *w)
 {
-    VoterWindow *w = (VoterWindow *)user;
+    OpenFor *of = g_new0(OpenFor, 1);
     GtkFileDialog *d = gtk_file_dialog_new();
     GtkFileFilter *lists = gtk_file_filter_new(), *all = gtk_file_filter_new();
     GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
-    (void)action;
-    (void)param;
+    of->app = app;
+    of->w = w;
     gtk_file_filter_set_name(lists, "Voter lists (CSV, TSV, TXT, XLSX)");
     gtk_file_filter_add_suffix(lists, "csv");
     gtk_file_filter_add_suffix(lists, "tsv");
@@ -4836,19 +4855,35 @@ static void action_open(GSimpleAction *action, GVariant *param, gpointer user)
     g_list_store_append(filters, all);
     gtk_file_dialog_set_title(d, "Open Voter List");
     gtk_file_dialog_set_filters(d, G_LIST_MODEL(filters));
-    gtk_file_dialog_open(d, w->window, NULL, on_open_chosen, w);
+    gtk_file_dialog_open(d, parent, NULL, on_open_chosen, of);
     g_object_unref(filters);
     g_object_unref(lists);
     g_object_unref(all);
     g_object_unref(d);
 }
 
-static void on_roster_chosen(GObject *source, GAsyncResult *result, gpointer user)
+static void action_open(GSimpleAction *action, GVariant *param, gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
+    (void)action;
+    (void)param;
+    choose_voter_list(w->app, w->window, w);
+}
+
+void ee_gtk_choose_voter_list(GtkApplication *app, GtkWindow *parent)
+{
+    choose_voter_list(app, parent, NULL);
+}
+
+static void on_roster_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    OpenFor *of = (OpenFor *)user;
+    VoterWindow *w = of->w;
+    GtkApplication *app = of->app;
     GListModel *files = gtk_file_dialog_open_multiple_finish(GTK_FILE_DIALOG(source), result, NULL);
     GPtrArray *paths;
     guint i, n;
+    g_free(of);
     if (files == NULL)
     {
         return;
@@ -4866,25 +4901,34 @@ static void on_roster_chosen(GObject *source, GAsyncResult *result, gpointer use
         g_object_unref(f);
     }
     g_object_unref(files);
-    if (paths->len == 0 || w->closed)
+    if (paths->len == 0 || (w != NULL && w->closed))
     {
         g_ptr_array_unref(paths);
         return;
     }
-    open_roster(w, paths);
+    if (w != NULL)
+    {
+        open_roster(w, paths);
+    }
+    else
+    {
+        VoterWindow *rw = voter_window_new(app, TRUE); /* (no opener: its errors over itself) */
+        gtk_window_present(rw->window);
+        start_load(rw, (const char *)g_ptr_array_index(paths, 0), paths);
+    }
 }
 
 /* File > Open Voter Roster...: one or more files (Windows' list of types) */
-static void action_open_roster(GSimpleAction *action, GVariant *param, gpointer user)
+static void choose_roster(GtkApplication *app, GtkWindow *parent, VoterWindow *w)
 {
-    VoterWindow *w = (VoterWindow *)user;
+    OpenFor *of = g_new0(OpenFor, 1);
     GtkFileDialog *d = gtk_file_dialog_new();
     GtkFileFilter *rosters = gtk_file_filter_new(), *all = gtk_file_filter_new();
     GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
     static const char *const suffixes[] = {"zip", "xlsx", "xls", "csv", "tsv", "txt", "pdf"};
     size_t i;
-    (void)action;
-    (void)param;
+    of->app = app;
+    of->w = w;
     gtk_file_filter_set_name(rosters, "Voter rosters (ZIP, XLSX, XLS, CSV, TSV, TXT, PDF)");
     for (i = 0; i < G_N_ELEMENTS(suffixes); i++)
     {
@@ -4896,11 +4940,33 @@ static void action_open_roster(GSimpleAction *action, GVariant *param, gpointer 
     g_list_store_append(filters, all);
     gtk_file_dialog_set_title(d, "Open Voter Roster");
     gtk_file_dialog_set_filters(d, G_LIST_MODEL(filters));
-    gtk_file_dialog_open_multiple(d, w->window, NULL, on_roster_chosen, w);
+    gtk_file_dialog_open_multiple(d, parent, NULL, on_roster_chosen, of);
     g_object_unref(filters);
     g_object_unref(rosters);
     g_object_unref(all);
     g_object_unref(d);
+}
+
+static void action_open_roster(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    (void)action;
+    (void)param;
+    choose_roster(w->app, w->window, w);
+}
+
+void ee_gtk_choose_roster(GtkApplication *app, GtkWindow *parent)
+{
+    choose_roster(app, parent, NULL);
+}
+
+/* File > Open Election Results...: a window of its own for each election, as on Windows */
+static void action_open_results(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    VoterWindow *w = (VoterWindow *)user;
+    (void)action;
+    (void)param;
+    ee_gtk_choose_results(w->app, w->window);
 }
 
 static void action_close(GSimpleAction *action, GVariant *param, gpointer user)
@@ -5048,7 +5114,12 @@ static void action_about(GSimpleAction *action, GVariant *param, gpointer user)
     VoterWindow *w = (VoterWindow *)user;
     (void)action;
     (void)param;
-    gtk_show_about_dialog(w->window,
+    ee_gtk_show_about(w->window);
+}
+
+void ee_gtk_show_about(GtkWindow *parent)
+{
+    gtk_show_about_dialog(parent,
                           "program-name",
                           "Election Explorer",
                           "version",
@@ -5150,6 +5221,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
         {"show-in-maps", action_show_in_maps, NULL, NULL, NULL, {0}},
         {"open-link", action_open_link, NULL, NULL, NULL, {0}},
         {"about", action_about, NULL, NULL, NULL, {0}},
+        {"open-results", action_open_results, NULL, NULL, NULL, {0}},
     };
     const char *open_accels[] = {"<Control>o", NULL}, *close_accels[] = {"<Control>w", NULL},
                *quit_accels[] = {"<Control>q", NULL}, *filter_accels[] = {"<Control>l", NULL},
@@ -5189,6 +5261,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
      * Load Summary. */
     g_menu_append(file, "Open Voter List\xE2\x80\xA6", "win.open");
     g_menu_append(file, "Open Voter Roster\xE2\x80\xA6", "win.open-roster");
+    g_menu_append(file, "Open Election Results\xE2\x80\xA6", "win.open-results");
     g_menu_append(file,
                   roster ? "Export Voter Roster\xE2\x80\xA6" : "Export Voter List\xE2\x80\xA6",
                   "win.export");
@@ -5310,6 +5383,10 @@ typedef struct AppArgs
     gboolean load_summary;     /* --load-summary, with --snapshot */
     gboolean voting_totals;    /* --voting-totals, with --snapshot */
     GPtrArray *voting_rosters; /* --voting-roster <file>: each opened as a roster first */
+    gboolean results;          /* --results: open the files as election results */
+    gboolean by_precinct;      /* --by-precinct, with --results */
+    int vote_types;            /* --vote-types 0|1, with --results: -1 for none */
+    int party_first;           /* --party-first rep|dem, with --results: -1 for none */
     struct
     {
         int roster;       /* --compare list|roster <file>: 1 for a roster */
@@ -5323,6 +5400,24 @@ static void on_activate(GtkApplication *app, gpointer user)
 {
     AppArgs *args = (AppArgs *)user;
     VoterWindow *w = voter_window_new(app, FALSE), *first = w;
+    if (args->results && args->files->len > 0)
+    {
+        /* (each election in a window of its own, as Open Election Results... opens them; the
+         * empty voter list window stays, as on Windows) */
+        EeGtkResultsSnapshot snap;
+        snap.png = args->snapshot;
+        snap.by_precinct = args->by_precinct;
+        snap.sort = args->sort_column;
+        snap.ascending = args->sort_ascending;
+        snap.load_summary = args->load_summary;
+        snap.options_window = args->options_window;
+        snap.zoom = args->zoom;
+        snap.vote_types = args->vote_types;
+        snap.party_first = args->party_first;
+        gtk_window_present(first->window);
+        ee_gtk_open_results(app, first->window, args->files, &snap);
+        return;
+    }
     if (args->roster && args->files->len > 0)
     {
         /* (the roster's own window, as Open Voter Roster... opens it; the empty voter list
@@ -5421,6 +5516,10 @@ int main(int argc, char **argv)
                     FALSE,
                     FALSE,
                     NULL,
+                    FALSE,
+                    FALSE,
+                    -1,
+                    -1,
                     {0, NULL, NULL, FALSE}};
     GtkApplication *app;
     int status, i;
@@ -5454,9 +5553,31 @@ int main(int argc, char **argv)
                 argv[i + 4],
                 !(i + 5 < argc && strcmp(argv[i + 5], "--counts") == 0));
         }
+        else if (strcmp(argv[i], "--selftest-results") == 0 && i + 1 < argc)
+        {
+            return EeUiResults_SelfTest((const char *const *)&argv[i + 1],
+                                        (uint32_t)(argc - i - 1));
+        }
         else if (strcmp(argv[i], "--roster") == 0)
         {
             args.roster = TRUE;
+        }
+        else if (strcmp(argv[i], "--results") == 0)
+        {
+            args.results = TRUE;
+        }
+        else if (strcmp(argv[i], "--by-precinct") == 0)
+        {
+            args.by_precinct = TRUE;
+        }
+        else if (strcmp(argv[i], "--vote-types") == 0 && i + 1 < argc)
+        {
+            args.vote_types = atoi(argv[++i]) != 0;
+        }
+        else if (strcmp(argv[i], "--party-first") == 0 && i + 1 < argc)
+        {
+            i++;
+            args.party_first = strcmp(argv[i], "dem") == 0 ? EE_UI_PARTY_DEM : EE_UI_PARTY_REP;
         }
         else if (strcmp(argv[i], "--voting-roster") == 0 && i + 1 < argc)
         {

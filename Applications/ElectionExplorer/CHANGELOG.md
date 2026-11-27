@@ -30,6 +30,16 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-25 — macOS and Linux: the roster's Voting Totals
+- **What:** Reports > Display Voting Totals… in the macOS and Linux Voter Roster window, as on Windows: voters per Date Voted (and Party) and Voting Method over every loaded record, each Voter ID counted once; "All parties" and Total rows in bold, "not available" / "not loaded" methods, the status line, right-click Copy / Export Selected… / Export All… (`-Voting_Totals.csv`), Cmd-C / Ctrl+C. Not sortable, and closed with its roster window, as on Windows.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiVoters_Totals` and `EeUiTotals_*` (`totals_build`, `totals_count`, `group_digits`, `totals_text`); the roster keeps `method_read` / `method_source`; `selftest_totals` in `--selftest-roster`.
+  - `src/ui/gtk/app_main.c`: `TotalsWindow`, `show_totals`, `action_report_totals` (the roster menu), `close_reports`; `--voting-totals`.
+  - `src/ui/macos/app_main.m`: `EeTotalsWindow`, `showVotingTotals:` (hidden in a voter list window by `validateMenuItem:`), `totalsClosed:`; `--voting-totals`.
+  - `.github/workflows/election-explorer.yml`: four totals lines in the roster step on both runners.
+- **Checked:** Linux and Mac, Debug and Release, no warnings; `--selftest-roster` the same on both; the list self-tests unchanged; snapshots of the made-up roster's and the P26 primary's totals on both. Real Travis rosters on Linux: counted voters plus later records equal the records loaded (G26 552,315 + 49; P26 274,182 + 1; 11-04 with mail 550,560 + 17,876).
+- **Details:** [cross-platform-design.md, "The Voter Roster window"](docs/cross-platform-design.md#the-voter-list-window-prototype-2026-11-22).
+
 ### 2026-11-25 — macOS and Linux: the Voter Roster window
 - **What:** File > Open Voter Roster… in the macOS and Linux windows opens one or more roster files in a Voter Roster window of its own, as on Windows: Windows' roster columns (Voter ID, Precinct, Name, Voting Method, Date Voted, the roster's other columns), "voter records", Export Voter Roster… (its own columns, `-Roster.csv` names, no Export Options), Copy without the normalized fields, Filter and Show Duplicate Voter IDs, the Precinct report, Display Load Summary… (opened by itself when the load found something to say), and Options with the names and the zoom only. Open Voter List… now opens a second list in a new window, as Windows does, instead of replacing the first.
 - **Where:**

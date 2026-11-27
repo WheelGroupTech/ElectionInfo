@@ -79,6 +79,10 @@ jobs:
           grep -qF "roster filter file: loaded 1, 1 rule on column 3" roster.txt
           grep -qF "Showing 2 duplicate Voter IDs of 11 voter records" roster.txt
           grep -qF "Precinct report: 3 unique precincts" roster.txt
+          grep -qF "voting totals: 8 rows, 7 columns" roster.txt
+          grep -qF "totals row 7 (bold): Total | 3 | 4 | 2 | 1 | not available | 10 |" roster.txt
+          grep -qF "totals status: 10 voters, each counted once (1 later record of 1 Voter ID not counted)" roster.txt
+          grep -qF "totals export: 8 rows, BOM 1" roster.txt
           grep -qF "load summary (notable 1):" roster.txt
 
   macos:
@@ -134,4 +138,8 @@ jobs:
           grep -qF "roster filter file: loaded 1, 1 rule on column 3" roster.txt
           grep -qF "Showing 2 duplicate Voter IDs of 11 voter records" roster.txt
           grep -qF "Precinct report: 3 unique precincts" roster.txt
+          grep -qF "voting totals: 8 rows, 7 columns" roster.txt
+          grep -qF "totals row 7 (bold): Total | 3 | 4 | 2 | 1 | not available | 10 |" roster.txt
+          grep -qF "totals status: 10 voters, each counted once (1 later record of 1 Voter ID not counted)" roster.txt
+          grep -qF "totals export: 8 rows, BOM 1" roster.txt
           grep -qF "load summary (notable 1):" roster.txt

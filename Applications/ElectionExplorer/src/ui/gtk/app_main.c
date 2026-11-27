@@ -15,7 +15,8 @@
  *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns, menus and words (no duplicate voters,
- * Address report, Copy prefix or map; Display Load Summary...). Open Voter List... loads into
+ * Address report, Copy prefix or map; Display Voting Totals... and Display Load Summary...).
+ * Open Voter List... loads into
  * the window while it is an empty voter list window, else into a new one, as on Windows.
  *
  * The rows are a GListModel of our own that makes a small row object only for the rows on
@@ -43,7 +44,8 @@
  *   as the Options window's OK does (without saving them), and `--options-window` makes the
  *   PNG of the Options window.
  *   `--roster` opens the files named as one voter roster (Open Voter Roster...), and the PNG is
- *   of its window; `--load-summary` makes it of its Load Summary.
+ *   of its window; `--load-summary` makes it of its Load Summary, and `--voting-totals` of its
+ *   Voting Totals (then `--export` exports them, as Export All... does).
  * - `--selftest-roster <files...>` loads the files as a roster without a window and prints what
  *   the Voter Roster window would show.
  *
@@ -150,6 +152,7 @@ static EeRows *ee_rows_new(guint count)
 
 typedef struct FilterDialog FilterDialog;
 typedef struct ReportWindow ReportWindow;
+typedef struct TotalsWindow TotalsWindow;
 typedef struct OptionsDialog OptionsDialog;
 
 typedef struct VoterWindow
@@ -196,6 +199,7 @@ typedef struct VoterWindow
 
     FilterDialog *filter_dialog;
     ReportWindow *reports[EE_UI_REPORT_COUNT]; /* the open Precinct / Address reports */
+    TotalsWindow *totals;                      /* a roster's open Voting Totals */
     OptionsDialog *options_dialog;
     EeUiOptions opts;                /* Edit > Options... (loaded at start, saved on OK) */
     GtkCssProvider *zoom_css;        /* the list's text size */
@@ -216,6 +220,7 @@ typedef struct VoterWindow
     const char *snapshot_load_filter;   /* --load-filter: Load Filter... in the Filter window */
     const char *snapshot_export_filter; /* --export-filter: then Export Filter... */
     gboolean snapshot_summary;          /* --load-summary: the PNG is of the Load Summary */
+    gboolean snapshot_totals;           /* --voting-totals: the PNG is of the Voting Totals */
     int snapshot_tries;
 } VoterWindow;
 
@@ -2216,6 +2221,380 @@ static void show_report(VoterWindow *w, int kind)
     gtk_window_present(rw->win);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Voting Totals (a roster's Reports > Display Voting Totals..., as on Windows) */
+/* -------------------------------------------------------------------------- */
+
+struct TotalsWindow
+{
+    VoterWindow *w;
+    int refs; /* the window, and each export dialog or menu still to finish */
+    gboolean closed;
+    GtkWindow *win;
+    GtkColumnView *view;
+    GtkWidget *menu; /* the right-click menu while it is open */
+    EeUiTotals *totals;
+    EeRows *rows;
+    char *list_path;
+};
+
+static void totals_unref(TotalsWindow *tw)
+{
+    if (--tw->refs == 0)
+    {
+        EeUiTotals_Free(tw->totals);
+        g_clear_object(&tw->rows);
+        g_free(tw->list_path);
+        g_free(tw);
+    }
+}
+
+/* Copy (Ctrl+C or the right-click menu): a heading line, then the selected rows, as on
+ * Windows */
+static void totals_copy(TotalsWindow *tw)
+{
+    guint n = 0;
+    uint32_t *rows = view_selection(tw->view, tw->rows->count, &n);
+    char *text = n > 0 ? EeUiTotals_CopyText(tw->totals, rows, n, NULL) : NULL;
+    if (text != NULL)
+    {
+        gdk_clipboard_set_text(gtk_widget_get_clipboard(GTK_WIDGET(tw->win)), text);
+        free(text);
+    }
+    g_free(rows);
+}
+
+static void totals_export_to(TotalsWindow *tw, const char *path, const uint32_t *rows, guint n)
+{
+    char err[256];
+    long wrote = EeUiTotals_Export(tw->totals, path, rows, n, export_delim(path), err, sizeof(err));
+    if (wrote < 0)
+    {
+        GtkAlertDialog *d = gtk_alert_dialog_new("%s", err);
+        fprintf(stderr, "voting totals export: %s\n", err);
+        gtk_alert_dialog_show(d, tw->win);
+        g_object_unref(d);
+        return;
+    }
+    fprintf(stderr, "exported %ld voting totals rows\n", wrote);
+}
+
+typedef struct TotalsExport
+{
+    TotalsWindow *tw;
+    uint32_t *rows; /* NULL: all */
+    guint n;
+} TotalsExport;
+
+static void on_totals_export_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    TotalsExport *e = (TotalsExport *)user;
+    GFile *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, NULL);
+    if (file != NULL)
+    {
+        char *path = g_file_get_path(file);
+        if (path != NULL && !e->tw->closed)
+        {
+            char *named = export_named(path);
+            totals_export_to(e->tw, named, e->rows, e->n);
+            g_free(named);
+        }
+        g_free(path);
+        g_object_unref(file);
+    }
+    totals_unref(e->tw);
+    g_free(e->rows);
+    g_free(e);
+}
+
+/* Export Selected... / Export All...: where to save it, then the file */
+static void totals_export(TotalsWindow *tw, gboolean selection)
+{
+    TotalsExport *e = g_new0(TotalsExport, 1);
+    GtkFileDialog *d;
+    GListModel *filters;
+    char name[512];
+    if (selection)
+    {
+        e->rows = view_selection(tw->view, tw->rows->count, &e->n);
+        if (e->n == 0)
+        {
+            g_free(e->rows);
+            g_free(e);
+            return;
+        }
+    }
+    e->tw = tw;
+    tw->refs++;
+    d = gtk_file_dialog_new();
+    filters = export_filters();
+    EeUiTotals_ExportName(tw->totals, tw->list_path, selection, name, sizeof(name));
+    gtk_file_dialog_set_title(d, "Export");
+    gtk_file_dialog_set_filters(d, filters);
+    gtk_file_dialog_set_initial_name(d, name);
+    gtk_file_dialog_save(d, tw->win, NULL, on_totals_export_chosen, e);
+    g_object_unref(filters);
+    g_object_unref(d);
+}
+
+static void totals_action(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    const char *name = g_action_get_name(G_ACTION(action));
+    (void)param;
+    if (tw->closed)
+    {
+        return;
+    }
+    if (strcmp(name, "copy") == 0)
+    {
+        totals_copy(tw);
+    }
+    else if (strcmp(name, "export-selected") == 0 || strcmp(name, "export-all") == 0)
+    {
+        totals_export(tw, name[7] == 's');
+    }
+}
+
+static gboolean totals_drop_menu(gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    if (!tw->closed && tw->menu != NULL && !gtk_widget_get_visible(tw->menu))
+    {
+        gtk_widget_unparent(tw->menu);
+        tw->menu = NULL;
+    }
+    totals_unref(tw);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_totals_menu_closed(GtkPopover *popover, gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    (void)popover;
+    tw->refs++;
+    g_idle_add(totals_drop_menu, tw); /* (later: the menu's action runs after "closed") */
+}
+
+/* the right-click menu, as on Windows: Copy; Export Selected..., Export All... */
+static void on_totals_right_click(GtkGestureClick *g,
+                                  int n_press,
+                                  double x,
+                                  double y,
+                                  gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    GtkWidget *label = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(g));
+    GtkSelectionModel *model = gtk_column_view_get_model(tw->view);
+    guint row = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(label), "row"));
+    GMenu *menu, *section;
+    graphene_point_t at;
+    (void)n_press;
+    if (tw->closed || row >= tw->rows->count)
+    {
+        return;
+    }
+    if (!gtk_selection_model_is_selected(model, row))
+    {
+        gtk_selection_model_select_item(model, row, TRUE); /* (as on Windows) */
+    }
+    menu = g_menu_new();
+    section = g_menu_new();
+    g_menu_append(section, "Copy", "totals.copy");
+    menu_section(menu, section);
+    section = g_menu_new();
+    g_menu_append(section, "Export Selected\xE2\x80\xA6", "totals.export-selected");
+    g_menu_append(section, "Export All\xE2\x80\xA6", "totals.export-all");
+    menu_section(menu, section);
+    if (tw->menu != NULL)
+    {
+        gtk_widget_unparent(tw->menu);
+    }
+    tw->menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    gtk_widget_set_parent(tw->menu, GTK_WIDGET(tw->view));
+    gtk_popover_set_has_arrow(GTK_POPOVER(tw->menu), FALSE);
+    gtk_widget_set_halign(tw->menu, GTK_ALIGN_START);
+    g_signal_connect(tw->menu, "closed", G_CALLBACK(on_totals_menu_closed), tw);
+    g_object_unref(menu);
+    if (gtk_widget_compute_point(label,
+                                 GTK_WIDGET(tw->view),
+                                 &GRAPHENE_POINT_INIT((float)x, (float)y),
+                                 &at))
+    {
+        GdkRectangle r = {(int)at.x, (int)at.y, 1, 1};
+        gtk_popover_set_pointing_to(GTK_POPOVER(tw->menu), &r);
+    }
+    gtk_popover_popup(GTK_POPOVER(tw->menu));
+    gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static void totals_cell_setup(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    GtkWidget *label = gtk_label_new(NULL);
+    GtkGesture *click = gtk_gesture_click_new();
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    /* (as on Windows: the date and party at the left, the counts at the right) */
+    gtk_label_set_xalign(GTK_LABEL(label), EeUiTotals_IsTextColumn(tw->totals, c) ? 0.0f : 1.0f);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_single_line_mode(GTK_LABEL(label), TRUE);
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+    g_signal_connect(click, "pressed", G_CALLBACK(on_totals_right_click), tw);
+    gtk_widget_add_controller(label, GTK_EVENT_CONTROLLER(click));
+    gtk_list_item_set_child(item, label);
+}
+
+static void totals_cell_bind(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    EeRow *row = EE_ROW(gtk_list_item_get_item(item));
+    GtkWidget *label = gtk_list_item_get_child(item);
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    char text[256];
+    g_object_set_data(G_OBJECT(label), "row", GUINT_TO_POINTER(row->index));
+    EeUiTotals_Cell(tw->totals, row->index, c, 1, text, sizeof(text));
+    gtk_label_set_text(GTK_LABEL(label), text);
+    if (EeUiTotals_IsBold(tw->totals, row->index))
+    {
+        /* (the Total and All parties rows in bold, as on Windows) */
+        PangoAttrList *bold = pango_attr_list_new();
+        pango_attr_list_insert(bold, pango_attr_weight_new(PANGO_WEIGHT_BOLD));
+        gtk_label_set_attributes(GTK_LABEL(label), bold);
+        pango_attr_list_unref(bold);
+    }
+    else
+    {
+        gtk_label_set_attributes(GTK_LABEL(label), NULL);
+    }
+}
+
+static void on_totals_destroy(GtkWidget *widget, gpointer user)
+{
+    TotalsWindow *tw = (TotalsWindow *)user;
+    (void)widget;
+    tw->closed = TRUE;
+    if (tw->menu != NULL)
+    {
+        gtk_widget_unparent(tw->menu);
+        tw->menu = NULL;
+    }
+    if (tw->w->totals == tw)
+    {
+        tw->w->totals = NULL;
+    }
+    totals_unref(tw);
+}
+
+/* Reports > Display Voting Totals... (a roster): a window of its own (the open one is brought
+ * forward), not sortable; it closes when the roster window closes, as on Windows */
+static void show_totals(VoterWindow *w)
+{
+    static const GActionEntry actions[] = {
+        {"copy", totals_action, NULL, NULL, NULL, {0}},
+        {"export-selected", totals_action, NULL, NULL, NULL, {0}},
+        {"export-all", totals_action, NULL, NULL, NULL, {0}},
+    };
+    char err[256], text[600];
+    EeUiTotals *totals;
+    TotalsWindow *tw;
+    GSimpleActionGroup *group;
+    GtkEventController *keys;
+    GtkWidget *box, *scroll;
+    GtkLabel *status;
+    GtkSelectionModel *sel;
+    guint c;
+    int total_width = 24; /* (the window: the columns and the scroll bar) */
+    gint64 started = g_get_monotonic_time();
+    if (w->voters == NULL || w->worker != NULL || !EeUiVoters_IsRoster(w->voters))
+    {
+        return;
+    }
+    if (w->totals != NULL)
+    {
+        gtk_window_present(w->totals->win);
+        return;
+    }
+    totals = EeUiVoters_Totals(w->voters, err, sizeof(err));
+    if (totals == NULL)
+    {
+        alert(w, err, NULL);
+        return;
+    }
+    fprintf(stderr,
+            "voting totals: %u rows in %.2f s\n",
+            EeUiTotals_Rows(totals),
+            (g_get_monotonic_time() - started) / 1e6);
+    tw = g_new0(TotalsWindow, 1);
+    tw->w = w;
+    tw->refs = 1;
+    tw->totals = totals;
+    tw->list_path = g_strdup(w->path);
+    tw->rows = ee_rows_new(EeUiTotals_Rows(totals));
+    w->totals = tw;
+
+    tw->win = GTK_WINDOW(gtk_window_new());
+    EeUiTotals_WindowTitle(totals, w->path, text, sizeof(text));
+    gtk_window_set_title(tw->win, text);
+    group = g_simple_action_group_new();
+    g_action_map_add_action_entries(G_ACTION_MAP(group), actions, G_N_ELEMENTS(actions), tw);
+    gtk_widget_insert_action_group(GTK_WIDGET(tw->win), "totals", G_ACTION_GROUP(group));
+    g_object_unref(group);
+    keys = gtk_shortcut_controller_new();
+    gtk_shortcut_controller_add_shortcut(
+        GTK_SHORTCUT_CONTROLLER(keys),
+        gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_c, GDK_CONTROL_MASK),
+                         gtk_named_action_new("totals.copy")));
+    gtk_shortcut_controller_set_scope(GTK_SHORTCUT_CONTROLLER(keys), GTK_SHORTCUT_SCOPE_GLOBAL);
+    gtk_widget_add_controller(GTK_WIDGET(tw->win), keys);
+
+    tw->view = GTK_COLUMN_VIEW(gtk_column_view_new(NULL));
+    gtk_column_view_set_show_column_separators(tw->view, TRUE);
+    gtk_column_view_set_show_row_separators(tw->view, TRUE); /* (Windows' grid lines) */
+    gtk_column_view_set_reorderable(tw->view, FALSE);
+    gtk_widget_add_css_class(GTK_WIDGET(tw->view), "data-table");
+    for (c = 0; c < EeUiTotals_Columns(totals); c++)
+    {
+        GtkListItemFactory *f = gtk_signal_list_item_factory_new();
+        GtkColumnViewColumn *col;
+        const char *title = EeUiTotals_Title(totals, c);
+        int width = EeUiTotals_ColumnWidth(totals, c), need;
+        g_object_set_data(G_OBJECT(f), "column", GUINT_TO_POINTER(c));
+        g_signal_connect(f, "setup", G_CALLBACK(totals_cell_setup), tw);
+        g_signal_connect(f, "bind", G_CALLBACK(totals_cell_bind), tw);
+        col = gtk_column_view_column_new(title, f);
+        gtk_column_view_column_set_resizable(col, TRUE);
+        /* (the heading fits: it is bold, with the header's padding) */
+        need = text_width(GTK_WIDGET(tw->view), title) * 11 / 10 + 32;
+        width = need > width ? need : width;
+        total_width += width;
+        gtk_column_view_column_set_fixed_width(col, width);
+        gtk_column_view_append_column(tw->view, col);
+        g_object_unref(col);
+    }
+    gtk_window_set_default_size(tw->win, total_width, 600);
+    sel = GTK_SELECTION_MODEL(gtk_multi_selection_new(G_LIST_MODEL(g_object_ref(tw->rows))));
+    gtk_column_view_set_model(tw->view, sel);
+    g_object_unref(sel);
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), GTK_WIDGET(tw->view));
+    gtk_widget_set_vexpand(scroll, TRUE);
+
+    EeUiTotals_StatusText(totals, text, sizeof(text));
+    status = GTK_LABEL(gtk_label_new(text));
+    gtk_label_set_xalign(status, 0.0f);
+    gtk_label_set_ellipsize(status, PANGO_ELLIPSIZE_END);
+    gtk_widget_set_margin_start(GTK_WIDGET(status), 8);
+    gtk_widget_set_margin_end(GTK_WIDGET(status), 8);
+    gtk_widget_set_margin_top(GTK_WIDGET(status), 4);
+    gtk_widget_set_margin_bottom(GTK_WIDGET(status), 4);
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(box), scroll);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(status));
+    gtk_window_set_child(tw->win, box);
+    g_signal_connect(tw->win, "destroy", G_CALLBACK(on_totals_destroy), tw);
+    gtk_window_present(tw->win);
+}
+
 static void close_reports(VoterWindow *w)
 {
     int k;
@@ -2226,12 +2605,19 @@ static void close_reports(VoterWindow *w)
             gtk_window_destroy(w->reports[k]->win); /* (on_report_destroy clears the slot) */
         }
     }
+    if (w->totals != NULL)
+    {
+        gtk_window_destroy(w->totals->win); /* (on_totals_destroy clears the slot) */
+    }
 }
 
 /* the Reports items: only with a list loaded (Windows grays them) */
 static void enable_reports(VoterWindow *w, gboolean on)
 {
-    static const char *const names[] = {"report-precinct", "report-address", "report-summary"};
+    static const char *const names[] = {"report-precinct",
+                                        "report-address",
+                                        "report-totals",
+                                        "report-summary"};
     size_t i;
     for (i = 0; i < G_N_ELEMENTS(names); i++)
     {
@@ -2630,7 +3016,9 @@ static gboolean take_snapshot(gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
     ReportWindow *rw = w->snapshot_report >= 0 ? w->reports[w->snapshot_report] : NULL;
-    GtkWindow *target = rw != NULL                                  ? rw->win
+    TotalsWindow *tw = w->snapshot_totals ? w->totals : NULL;
+    GtkWindow *target = tw != NULL                                  ? tw->win
+                        : rw != NULL                                ? rw->win
                         : w->snapshot_summary && w->summary != NULL ? w->summary
                         : w->options_dialog != NULL                 ? w->options_dialog->win
                         : w->filter_dialog != NULL                  ? w->filter_dialog->win
@@ -2644,7 +3032,12 @@ static gboolean take_snapshot(gpointer user)
     {
         return G_SOURCE_CONTINUE; /* (a sort or filter is still running) */
     }
-    if (w->snapshot_export != NULL && rw != NULL)
+    if (w->snapshot_export != NULL && tw != NULL)
+    {
+        totals_export_to(tw, w->snapshot_export, NULL, 0); /* (Export All..., no dialog) */
+        g_clear_pointer(&w->snapshot_export, g_free);
+    }
+    else if (w->snapshot_export != NULL && rw != NULL)
     {
         report_export_to(rw, w->snapshot_export, NULL, 0); /* (Export All..., no dialog) */
         g_clear_pointer(&w->snapshot_export, g_free);
@@ -2781,6 +3174,10 @@ static void snapshot_actions(VoterWindow *w)
     if (w->snapshot_summary && w->summary == NULL)
     {
         show_load_summary(w);
+    }
+    if (w->snapshot_totals)
+    {
+        show_totals(w);
     }
     g_timeout_add(800, take_snapshot, w); /* (time for the window to lay out and draw) */
 }
@@ -3194,6 +3591,13 @@ static void action_report_summary(GSimpleAction *action, GVariant *param, gpoint
     show_load_summary((VoterWindow *)user);
 }
 
+static void action_report_totals(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    (void)action;
+    (void)param;
+    show_totals((VoterWindow *)user);
+}
+
 static void action_quick_include(GSimpleAction *action, GVariant *param, gpointer user)
 {
     VoterWindow *w = (VoterWindow *)user;
@@ -3314,6 +3718,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
         {"report-precinct", action_report_precinct, NULL, NULL, NULL, {0}},
         {"report-address", action_report_address, NULL, NULL, NULL, {0}},
         {"report-summary", action_report_summary, NULL, NULL, NULL, {0}},
+        {"report-totals", action_report_totals, NULL, NULL, NULL, {0}},
         {"quick-include", action_quick_include, NULL, NULL, NULL, {0}},
         {"quick-exclude", action_quick_exclude, NULL, NULL, NULL, {0}},
         {"options", action_options, NULL, NULL, NULL, {0}},
@@ -3370,6 +3775,7 @@ static VoterWindow *voter_window_new(GtkApplication *app, gboolean roster)
     g_menu_append(reports, "Display Precinct Report\xE2\x80\xA6", "win.report-precinct");
     if (roster)
     {
+        g_menu_append(reports, "Display Voting Totals\xE2\x80\xA6", "win.report-totals");
         g_menu_append(reports, "Display Load Summary\xE2\x80\xA6", "win.report-summary");
     }
     else
@@ -3464,6 +3870,7 @@ typedef struct AppArgs
     GPtrArray *files;          /* the files named (a roster's with --roster) */
     gboolean roster;           /* --roster: open the files as one voter roster */
     gboolean load_summary;     /* --load-summary, with --snapshot */
+    gboolean voting_totals;    /* --voting-totals, with --snapshot */
 } AppArgs;
 
 static void on_activate(GtkApplication *app, gpointer user)
@@ -3494,6 +3901,7 @@ static void on_activate(GtkApplication *app, gpointer user)
         w->snapshot_load_filter = args->load_filter;
         w->snapshot_export_filter = args->export_filter;
         w->snapshot_summary = args->load_summary;
+        w->snapshot_totals = args->voting_totals;
     }
     gtk_window_present(w->window);
     if (w->roster)
@@ -3529,6 +3937,7 @@ int main(int argc, char **argv)
                     NULL,
                     NULL,
                     FALSE,
+                    FALSE,
                     FALSE};
     GtkApplication *app;
     int status, i;
@@ -3552,6 +3961,10 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--load-summary") == 0)
         {
             args.load_summary = TRUE;
+        }
+        else if (strcmp(argv[i], "--voting-totals") == 0)
+        {
+            args.voting_totals = TRUE;
         }
         else if (strcmp(argv[i], "--snapshot") == 0 && i + 1 < argc)
         {

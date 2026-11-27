@@ -34,6 +34,8 @@ struct EeUiVoters
     uint32_t cols[EE_MAX_COLUMNS];
     char *summary;        /* a roster's load summary (UTF-8), or NULL */
     BOOL summary_notable; /* it says more than the counts (Windows opens it after loading) */
+    BOOL method_read[EE_VM_COUNT];   /* a roster sheet of that method was read */
+    BOOL method_source[EE_VM_COUNT]; /* a file of that method was present (read or not) */
 };
 
 /* the table's column for shown column @p c, or UINT32_MAX */
@@ -329,6 +331,11 @@ EeUiVoters *EeUiVoters_LoadRoster(const char *const *paths_utf8,
         }
         v->summary = s;
         v->summary_notable = roster_notable(&info);
+    }
+    if (st == EeLoadStatus_Ok)
+    {
+        memcpy(v->method_read, info.method_read, sizeof(v->method_read));
+        memcpy(v->method_source, info.method_source, sizeof(v->method_source));
     }
     EeRoster_FreeInfo(&info);
     if (!loaded(v, st, werr, L"Could not load the voter roster.", err, errcap))
@@ -1683,6 +1690,534 @@ char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row, int engine)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Voting Totals (Windows' RosterTotalsWindow, main.c)                        */
+/* -------------------------------------------------------------------------- */
+
+#define TOT_TOTAL_ROW   UINT32_MAX /* a Total row's date */
+#define TOT_ALL_PARTIES (-1)       /* an all-parties row's party */
+
+enum
+{
+    TOT_AVAIL = 0,     /* counts shown */
+    TOT_NOT_AVAILABLE, /* no file or record of this method */
+    TOT_NOT_LOADED     /* its files were found but not read (PDF) */
+};
+
+struct EeUiTotals
+{
+    EeRosterTotals tot;
+    uint32_t *row_date;          /* row -> date index, or TOT_TOTAL_ROW */
+    int32_t *row_party;          /* row -> party index, or TOT_ALL_PARTIES */
+    uint32_t nrows;
+    int method_col[EE_VM_COUNT]; /* the column of each method, or -1 */
+    int avail[EE_VM_COUNT];      /* TOT_* */
+    int col_party;               /* -1 when the roster has no parties */
+    int col_total;
+    int ncols;
+};
+
+/* voters for a (date, party) group and method @p m (-1: all); TOT_TOTAL_ROW and
+ * TOT_ALL_PARTIES sum over every date / party (Windows' RosterTotals_Count) */
+static uint32_t totals_count(const EeUiTotals *t, uint32_t date, int32_t party, int m)
+{
+    const EeRosterTotals *r = &t->tot;
+    uint32_t d0 = date == TOT_TOTAL_ROW ? 0 : date,
+             d1 = date == TOT_TOTAL_ROW ? r->ndates : date + 1;
+    uint32_t p0 = party == TOT_ALL_PARTIES ? 0 : (uint32_t)party;
+    uint32_t p1 = party == TOT_ALL_PARTIES ? r->nparties : (uint32_t)party + 1;
+    uint32_t sum = 0, d, p;
+    int k;
+    for (d = d0; d < d1; d++)
+    {
+        for (p = p0; p < p1; p++)
+        {
+            const uint32_t *c = &r->counts[((size_t)d * r->nparties + p) * EE_VM_COUNT];
+            for (k = 0; k < EE_VM_COUNT; k++)
+            {
+                if (m < 0 || k == m)
+                {
+                    sum += c[k];
+                }
+            }
+        }
+    }
+    return sum;
+}
+
+/* "1234567" -> "1,234,567" (Windows' RosterTotals_Group) */
+static void group_digits(uint32_t value, char *out, size_t cap)
+{
+    char raw[16];
+    size_t n, i, o = 0;
+    if (cap == 0)
+    {
+        return;
+    }
+    StringCchPrintfA(raw, sizeof(raw), "%u", value);
+    n = strlen(raw);
+    for (i = 0; i < n && o + 1 < cap; i++)
+    {
+        if (i > 0 && (n - i) % 3 == 0 && o + 2 < cap)
+        {
+            out[o++] = ',';
+        }
+        out[o++] = raw[i];
+    }
+    out[o] = '\0';
+}
+
+void EeUiTotals_Free(EeUiTotals *t)
+{
+    if (t == NULL)
+    {
+        return;
+    }
+    EeRoster_FreeTotals(&t->tot);
+    free(t->row_date);
+    free(t->row_party);
+    free(t);
+}
+
+/* the columns and rows, as Windows' RosterTotals_Build lays them out: a row per date (per
+ * party, and an all-parties row when several parties voted that day), then the Total rows */
+static BOOL totals_build(EeUiTotals *t, const EeUiVoters *v)
+{
+    static const int order[] =
+        {EE_VM_MAIL, EE_VM_EARLY, EE_VM_ELECTION_DAY, EE_VM_PROVISIONAL, EE_VM_LIMITED, EE_VM_NONE};
+    const EeRosterTotals *r = &t->tot;
+    size_t cap, k;
+    uint32_t d, p;
+    int col = 1;
+    t->col_party = r->has_party ? col++ : -1;
+    for (k = 0; k < ARRAYSIZE(order); k++)
+    {
+        int m = order[k];
+        t->method_col[m] = -1;
+        if (m == EE_VM_NONE && !r->method_present[EE_VM_NONE])
+        {
+            continue; /* ("Other" only for Voting Method values that are none of the five) */
+        }
+        t->method_col[m] = col++;
+        if (r->method_present[m] || v->method_read[m])
+        {
+            t->avail[m] = TOT_AVAIL;
+        }
+        else
+        {
+            t->avail[m] = v->method_source[m] ? TOT_NOT_LOADED : TOT_NOT_AVAILABLE;
+        }
+    }
+    t->col_total = col++;
+    t->ncols = col;
+    cap = (size_t)r->ndates * (r->nparties + 1u) + r->nparties + 2u;
+    t->row_date = (uint32_t *)malloc(cap * sizeof(uint32_t));
+    t->row_party = (int32_t *)malloc(cap * sizeof(int32_t));
+    if (t->row_date == NULL || t->row_party == NULL)
+    {
+        return FALSE;
+    }
+    for (d = 0; d < r->ndates; d++)
+    {
+        uint32_t shown = 0;
+        if (!r->has_party)
+        {
+            t->row_date[t->nrows] = d;
+            t->row_party[t->nrows++] = TOT_ALL_PARTIES;
+            continue;
+        }
+        for (p = 0; p < r->nparties; p++)
+        {
+            if (totals_count(t, d, (int32_t)p, -1) > 0)
+            {
+                t->row_date[t->nrows] = d;
+                t->row_party[t->nrows++] = (int32_t)p;
+                shown++;
+            }
+        }
+        if (shown > 1)
+        {
+            t->row_date[t->nrows] = d;
+            t->row_party[t->nrows++] = TOT_ALL_PARTIES;
+        }
+    }
+    for (p = 0; r->has_party && p < r->nparties; p++)
+    {
+        t->row_date[t->nrows] = TOT_TOTAL_ROW;
+        t->row_party[t->nrows++] = (int32_t)p;
+    }
+    t->row_date[t->nrows] = TOT_TOTAL_ROW;
+    t->row_party[t->nrows++] = TOT_ALL_PARTIES;
+    return TRUE;
+}
+
+EeUiTotals *EeUiVoters_Totals(const EeUiVoters *v, char *err, size_t errcap)
+{
+    EeUiTotals *t;
+    set_err(err, errcap, "");
+    if (v == NULL || !v->roster || v->t.row_count == 0)
+    {
+        set_err(err, errcap, "No voter roster loaded.");
+        return NULL;
+    }
+    t = (EeUiTotals *)calloc(1, sizeof(EeUiTotals));
+    if (t == NULL || !EeRoster_ComputeTotals(&v->t, &t->tot) || !totals_build(t, v))
+    {
+        EeUiTotals_Free(t);
+        set_err(err,
+                errcap,
+                "Could not compute the voting totals (out of memory, or the roster has no Voting "
+                "Method column).");
+        return NULL;
+    }
+    return t;
+}
+
+uint32_t EeUiTotals_Rows(const EeUiTotals *t)
+{
+    return t != NULL ? t->nrows : 0;
+}
+
+uint32_t EeUiTotals_Columns(const EeUiTotals *t)
+{
+    return t != NULL ? (uint32_t)t->ncols : 0;
+}
+
+const char *EeUiTotals_Title(const EeUiTotals *t, uint32_t c)
+{
+    static const char *const titles[EE_VM_COUNT] = {"Other",
+                                                    "Mail Ballot",
+                                                    "Early Vote In-Person",
+                                                    "Election Day In-Person",
+                                                    "Provisional",
+                                                    "Limited"};
+    int m;
+    if (t == NULL || c >= (uint32_t)t->ncols)
+    {
+        return "";
+    }
+    if (c == 0)
+    {
+        return "Date Voted";
+    }
+    if ((int)c == t->col_party)
+    {
+        return "Party";
+    }
+    if ((int)c == t->col_total)
+    {
+        return "Total";
+    }
+    for (m = 0; m < EE_VM_COUNT; m++)
+    {
+        if (t->method_col[m] == (int)c)
+        {
+            return titles[m];
+        }
+    }
+    return "";
+}
+
+int EeUiTotals_IsTextColumn(const EeUiTotals *t, uint32_t c)
+{
+    return t != NULL && (c == 0 || (int)c == t->col_party);
+}
+
+int EeUiTotals_ColumnWidth(const EeUiTotals *t, uint32_t c)
+{
+    if (t == NULL || c >= (uint32_t)t->ncols)
+    {
+        return 0;
+    }
+    if (c == 0)
+    {
+        return 110;
+    }
+    if ((int)c == t->col_party || (int)c == t->col_total)
+    {
+        return 100;
+    }
+    if ((int)c == t->method_col[EE_VM_EARLY] || (int)c == t->method_col[EE_VM_ELECTION_DAY])
+    {
+        return 165;
+    }
+    return 120;
+}
+
+void EeUiTotals_Cell(const EeUiTotals *t,
+                     uint32_t row,
+                     uint32_t c,
+                     int display,
+                     char *out,
+                     size_t cap)
+{
+    uint32_t date;
+    int32_t party;
+    int m;
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    out[0] = '\0';
+    if (t == NULL || row >= t->nrows || c >= (uint32_t)t->ncols)
+    {
+        return;
+    }
+    date = t->row_date[row];
+    party = t->row_party[row];
+    if (c == 0)
+    {
+        if (date == TOT_TOTAL_ROW)
+        {
+            StringCchCopyA(out, cap, "Total");
+        }
+        else if (t->tot.dates[date] == 0)
+        {
+            StringCchCopyA(out, cap, "(no date)");
+        }
+        else
+        {
+            uint32_t ymd = t->tot.dates[date];
+            StringCchPrintfA(out,
+                             cap,
+                             "%02u/%02u/%04u",
+                             (ymd / 100u) % 100u,
+                             ymd % 100u,
+                             ymd / 10000u);
+        }
+        return;
+    }
+    if ((int)c == t->col_party)
+    {
+        if (party == TOT_ALL_PARTIES)
+        {
+            StringCchCopyA(out, cap, "All parties");
+        }
+        else
+        {
+            const char *name = t->tot.parties[party];
+            StringCchCopyA(out, cap, name[0] != '\0' ? name : k_blank);
+        }
+        return;
+    }
+    m = -1;
+    if ((int)c != t->col_total)
+    {
+        for (m = 0; m < EE_VM_COUNT && t->method_col[m] != (int)c; m++)
+        {
+        }
+        if (m == EE_VM_COUNT)
+        {
+            return;
+        }
+        if (t->avail[m] != TOT_AVAIL)
+        {
+            StringCchCopyA(out,
+                           cap,
+                           t->avail[m] == TOT_NOT_LOADED ? "not loaded" : "not available");
+            return;
+        }
+    }
+    if (display)
+    {
+        group_digits(totals_count(t, date, party, m), out, cap);
+    }
+    else
+    {
+        StringCchPrintfA(out, cap, "%u", totals_count(t, date, party, m));
+    }
+}
+
+int EeUiTotals_IsBold(const EeUiTotals *t, uint32_t row)
+{
+    return t != NULL && row < t->nrows &&
+           (t->row_date[row] == TOT_TOTAL_ROW ||
+            (t->tot.has_party && t->row_party[row] == TOT_ALL_PARTIES));
+}
+
+void EeUiTotals_StatusText(const EeUiTotals *t, char *out, size_t cap)
+{
+    char a[32], b[32], c[32];
+    int m;
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    out[0] = '\0';
+    if (t == NULL)
+    {
+        return;
+    }
+    group_digits(t->tot.counted, a, sizeof(a));
+    if (t->tot.repeats > 0)
+    {
+        group_digits(t->tot.repeats, b, sizeof(b));
+        group_digits(t->tot.repeated_ids, c, sizeof(c));
+        StringCchPrintfA(out,
+                         cap,
+                         "%s voters, each counted once (%s later record%s of %s Voter ID%s not "
+                         "counted)",
+                         a,
+                         b,
+                         t->tot.repeats == 1 ? "" : "s",
+                         c,
+                         t->tot.repeated_ids == 1 ? "" : "s");
+    }
+    else
+    {
+        StringCchPrintfA(out, cap, "%s voters", a);
+    }
+    for (m = 0; m < EE_VM_COUNT; m++)
+    {
+        if (t->method_col[m] >= 0 && t->avail[m] == TOT_NOT_LOADED)
+        {
+            StringCchCatA(out, cap, " \xE2\x80\x94 not loaded = PDF rosters that cannot be read");
+            break;
+        }
+    }
+    StringCchCatA(out, cap, " \xE2\x80\x94 right-click to copy or export");
+}
+
+void EeUiTotals_WindowTitle(const EeUiTotals *t, const char *list_path, char *out, size_t cap)
+{
+    char name[256];
+    (void)t;
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(list_path, TRUE, name, sizeof(name));
+    StringCchPrintfA(out, cap, "Voting Totals - %s", name[0] != '\0' ? name : "(voter roster)");
+}
+
+/* the heading and rows @p rows (NULL: all) with plain numbers, as Windows' Copy and Export */
+static BOOL totals_text(const EeUiTotals *t,
+                        const uint32_t *rows,
+                        uint32_t n,
+                        char delim,
+                        TextBuf *b,
+                        uint32_t *wrote)
+{
+    uint32_t i, c, count = rows != NULL ? n : EeUiTotals_Rows(t);
+    char cell[512];
+    *wrote = 0;
+    for (c = 0; c < EeUiTotals_Columns(t); c++)
+    {
+        if (c > 0)
+        {
+            tb_add(b, &delim, 1);
+        }
+        tb_field(b, EeUiTotals_Title(t, c), delim);
+    }
+    tb_add(b, "\r\n", 2);
+    for (i = 0; i < count; i++)
+    {
+        uint32_t row = rows != NULL ? rows[i] : i;
+        if (row >= EeUiTotals_Rows(t))
+        {
+            continue;
+        }
+        for (c = 0; c < EeUiTotals_Columns(t); c++)
+        {
+            if (c > 0)
+            {
+                tb_add(b, &delim, 1);
+            }
+            EeUiTotals_Cell(t, row, c, 0, cell, sizeof(cell));
+            tb_field(b, cell, delim);
+        }
+        tb_add(b, "\r\n", 2);
+        (*wrote)++;
+    }
+    return !b->failed;
+}
+
+char *EeUiTotals_CopyText(const EeUiTotals *t, const uint32_t *rows, uint32_t n, size_t *len)
+{
+    TextBuf b = {NULL, 0, 0, FALSE};
+    uint32_t wrote;
+    if (len != NULL)
+    {
+        *len = 0;
+    }
+    if (t == NULL || rows == NULL || n == 0)
+    {
+        return NULL;
+    }
+    if (!totals_text(t, rows, n, '\t', &b, &wrote))
+    {
+        free(b.data);
+        return NULL;
+    }
+    if (len != NULL)
+    {
+        *len = b.len;
+    }
+    return b.data;
+}
+
+long EeUiTotals_Export(const EeUiTotals *t,
+                       const char *path_utf8,
+                       const uint32_t *rows,
+                       uint32_t n,
+                       char delim,
+                       char *err,
+                       size_t errcap)
+{
+    static const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
+    TextBuf b = {NULL, 0, 0, FALSE};
+    uint32_t wrote = 0;
+    FILE *f;
+    BOOL ok;
+    set_err(err, errcap, "");
+    if (t == NULL || path_utf8 == NULL)
+    {
+        return -1;
+    }
+    if (!totals_text(t, rows, n, delim == '\t' ? '\t' : ',', &b, &wrote))
+    {
+        free(b.data);
+        set_err(err, errcap, "Out of memory building the export.");
+        return -1;
+    }
+    f = fopen(path_utf8, "wb");
+    if (f == NULL)
+    {
+        free(b.data);
+        set_err(err, errcap, "Could not create the export file.");
+        return -1;
+    }
+    ok = fwrite(bom, 1, sizeof(bom), f) == sizeof(bom) && fwrite(b.data, 1, b.len, f) == b.len;
+    if (fclose(f) != 0)
+    {
+        ok = FALSE;
+    }
+    free(b.data);
+    if (!ok)
+    {
+        set_err(err, errcap, "Could not write the export file.");
+        remove(path_utf8);
+        return -1;
+    }
+    return (long)wrote;
+}
+
+void EeUiTotals_ExportName(const EeUiTotals *t,
+                           const char *list_path,
+                           int selection,
+                           char *out,
+                           size_t cap)
+{
+    char name[256];
+    (void)t;
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(list_path, FALSE, name, sizeof(name));
+    StringCchPrintfA(out, cap, "%s-%sVoting_Totals.csv", name, selection ? "Selected_" : "");
+}
+
+/* -------------------------------------------------------------------------- */
 /* Options                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -2308,6 +2843,76 @@ static int selftest_column(const EeUiVoters *v, const char *title)
     return -1;
 }
 
+/* Display Voting Totals...: every cell as shown, the bold rows, the status, Copy and Export
+ * (to @p scratch, removed after) */
+static void selftest_totals(const EeUiVoters *v, const char *scratch)
+{
+    char err[256], text[600], cell[128];
+    EeUiTotals *t = EeUiVoters_Totals(v, err, sizeof(err));
+    uint32_t r, c, rows[2];
+    char *copy;
+    long wrote;
+    FILE *f;
+    if (t == NULL)
+    {
+        printf("voting totals: %s\n", err);
+        return;
+    }
+    EeUiTotals_WindowTitle(t, "rosters/sample_roster.csv", text, sizeof(text));
+    printf("voting totals: %u rows, %u columns, \"%s\"\n",
+           EeUiTotals_Rows(t),
+           EeUiTotals_Columns(t),
+           text);
+    printf("totals columns:");
+    for (c = 0; c < EeUiTotals_Columns(t); c++)
+    {
+        printf(" \"%s\"%s %d,",
+               EeUiTotals_Title(t, c),
+               EeUiTotals_IsTextColumn(t, c) ? " (left)" : "",
+               EeUiTotals_ColumnWidth(t, c));
+    }
+    printf("\n");
+    for (r = 0; r < EeUiTotals_Rows(t); r++)
+    {
+        printf("totals row %u%s:", r, EeUiTotals_IsBold(t, r) ? " (bold)" : "");
+        for (c = 0; c < EeUiTotals_Columns(t); c++)
+        {
+            EeUiTotals_Cell(t, r, c, 1, cell, sizeof(cell));
+            printf(" %s |", cell);
+        }
+        printf("\n");
+    }
+    EeUiTotals_StatusText(t, text, sizeof(text));
+    printf("totals status: %s\n", text);
+    rows[0] = 0;
+    rows[1] = EeUiTotals_Rows(t) - 1;
+    copy = EeUiTotals_CopyText(t, rows, 2, NULL);
+    printf("totals copy:\n%s", copy != NULL ? copy : "(none)\n");
+    free(copy);
+    EeUiTotals_ExportName(t, "rosters/sample_roster.csv", 0, text, sizeof(text));
+    printf("totals export names: \"%s\"", text);
+    EeUiTotals_ExportName(t, "rosters/sample_roster.csv", 1, text, sizeof(text));
+    printf(", \"%s\"\n", text);
+    wrote = EeUiTotals_Export(t, scratch, NULL, 0, ',', err, sizeof(err));
+    printf("totals export: %ld rows%s%s", wrote, err[0] ? ", " : "", err);
+    if ((f = fopen(scratch, "rb")) != NULL)
+    {
+        size_t got = fread(text, 1, 120, f);
+        text[got] = '\0';
+        fclose(f);
+        printf(", BOM %d, heading: %.*s\n",
+               (unsigned char)text[0] == 0xEF,
+               (int)strcspn(text + 3, "\r\n"),
+               text + 3);
+    }
+    else
+    {
+        printf("\n");
+    }
+    remove(scratch);
+    EeUiTotals_Free(t);
+}
+
 int EeUiVoters_RosterSelfTest(const char *const *paths_utf8, uint32_t n)
 {
     char err[1024] = "", text[256], path[640], msg[256], detail[512];
@@ -2386,6 +2991,9 @@ int EeUiVoters_RosterSelfTest(const char *const *paths_utf8, uint32_t n)
     selftest_marks(v, EE_UI_MARKS_DUP_IDS, EE_UI_COLUMN_VOTER_ID);
     EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, NULL, 0, EE_UI_MARKS_NONE));
     selftest_report(v, EE_UI_REPORT_PRECINCT);
+    /* (a filter does not change the totals: they count every loaded record) */
+    EeUiVoters_SetView(v, EeUiVoters_ComputeView(v, -1, 1, &rule, 1, EE_UI_MARKS_NONE));
+    selftest_totals(v, path);
     link = EeUiVoters_CellLink(v, 0, "see https://example.org/roster.");
     printf("roster link in the Voter ID column: %s\n", link != NULL ? link : "(none)");
     free(link);

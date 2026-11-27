@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-25. **The Voter Roster window is in the macOS/Linux port (uncommitted until the user commits it); next: its Voting Totals.**
+**Last updated:** 2026-11-25. **The roster's Voting Totals are in the macOS/Linux port (uncommitted until the user commits them); next: Show Duplicate Voters Voting.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -43,13 +43,16 @@
   Summary…, Options with names and zoom only). Open Voter List… now opens a second list in a new
   window, as on Windows. Bridge: shown columns, `EeUiVoters_LoadRoster`, `--selftest-roster`;
   made-up `test/sample_roster*.csv`. Checked by self-test and snapshots on both, and on real Travis
-  rosters (G26 552,364 records in 3.4 s). **Not yet tried by hand:** the Open Voter Roster dialog
-  (several files), the windows' menus, the Load Summary's OK, the roster Settings.
+  rosters (G26 552,364 records in 3.4 s). Tried by hand on Linux and the Mac.
+- **Voting Totals (2026-11-25):** Reports > Display Voting Totals… in the roster window, as on
+  Windows (`EeUiVoters_Totals`, `EeUiTotals_*`; GTK `show_totals`, Mac `EeTotalsWindow`;
+  `--voting-totals`). Checked by self-test, snapshots on both (made-up and P26 with parties) and
+  real Travis rosters. **Not yet tried by hand:** the right-click Copy / Export, Cmd-C / Ctrl+C,
+  the menu item showing only in roster windows on the Mac.
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options, saved-filter and link lines on
   `sample_duplicates.csv`, and the link count on `sample_links.csv`.
 - **Next steps:**
-  - the roster's Display Voting Totals…;
   - Show Duplicate Voters Voting in the voter list window (needs an open roster window);
   - the roster Compare menu, later;
   - the other windows (results, CVRs, audit logs);

@@ -15,9 +15,9 @@
  *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns and words; the menu bar, shared by every
- * window, hides Show Duplicate Voters and the Address report there and shows Display Load
- * Summary... Open Voter List... loads into the window in front while it is an empty voter list
- * window, else into a new one, as on Windows.
+ * window, hides Show Duplicate Voters and the Address report there and shows Display Voting
+ * Totals... and Display Load Summary... Open Voter List... loads into the window in front while
+ * it is an empty voter list window, else into a new one, as on Windows.
  *
  * Sorting and filtering are the engine's, computed on a background queue
  * (EeUiVoters_ComputeView) while the table keeps showing the old order, then swapped in on the
@@ -40,7 +40,8 @@
  *   `--load-filter <file>` does what the Filter sheet's Load Filter... does, and
  *   `--export-filter <file>` its Export Filter... (without the panels; either opens the sheet).
  *   `--roster` opens the files named as one voter roster (Open Voter Roster...), and the PNG is
- *   of its window; `--load-summary` makes it of its Load Summary.
+ *   of its window; `--load-summary` makes it of its Load Summary, and `--voting-totals` of its
+ *   Voting Totals (then `--export` exports them, as Export All... does).
  * - `--selftest-roster <files...>` loads the files as a roster without a window and prints what
  *   the Voter Roster window would show.
  */
@@ -61,6 +62,7 @@ static NSString *ns_utf8(const char *s)
 @class EeFilterSheet;
 @class EeOptionsSheet;
 @class EeReportWindow;
+@class EeTotalsWindow;
 
 /* an export's field separator, as on Windows: a typed .csv or .tsv wins, else the chosen type
  * (0 CSV, 1 TSV), whose extension is then added to *path */
@@ -132,6 +134,7 @@ static void export_type_changed(NSPopUpButton *type)
 @property(strong) EeFilterSheet *filterSheet;
 @property(strong) EeReportWindow *precinctReport; /* the open reports */
 @property(strong) EeReportWindow *addressReport;
+@property(strong) EeTotalsWindow *totalsWindow; /* a roster's open Voting Totals */
 @property(strong) EeOptionsSheet *optionsSheet;
 @property(assign) EeUiOptions options; /* Settings... (loaded at start, saved on OK) */
 @property(assign) int zoomShown;       /* the zoom the columns are sized for */
@@ -149,6 +152,8 @@ static void export_type_changed(NSPopUpButton *type)
 - (void)showReport:(int)kind;
 - (EeReportWindow *)reportOfKind:(int)kind;
 - (void)reportClosed:(EeReportWindow *)report;
+- (IBAction)showVotingTotals:(id)sender;
+- (void)totalsClosed:(EeTotalsWindow *)totals;
 - (void)addQuickRuleColumn:(uint32_t)column value:(NSString *)value exclude:(BOOL)exclude;
 - (void)sortByColumn:(int)column ascending:(BOOL)ascending;
 - (void)showDuplicates:(int)marks;
@@ -1216,6 +1221,307 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 
 @end
 
+/* -------------------------------------------------------------------------- */
+/* Voting Totals (a roster's Reports > Display Voting Totals..., as on        */
+/* Windows: voters per Date Voted, Party and Voting Method; not sortable)     */
+/* -------------------------------------------------------------------------- */
+
+@interface EeTotalsWindow
+    : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation>
+@property(weak) EeVoterWindow *owner;
+@property(strong) NSWindow *window;
+@property(strong) NSTableView *table;
+@property(strong) NSTextField *status;
+@property(assign) EeUiTotals *totals;
+@property(copy) NSString *listPath;
+@property(strong) NSFont *font;
+@property(strong) NSFont *boldFont; /* the Total and All parties rows, as on Windows */
+- (instancetype)initWithOwner:(EeVoterWindow *)owner totals:(EeUiTotals *)totals path:(NSString *)path;
+- (BOOL)exportAllTo:(NSString *)path;
+- (void)close;
+@end
+
+@implementation EeTotalsWindow
+
+- (instancetype)initWithOwner:(EeVoterWindow *)owner totals:(EeUiTotals *)totals path:(NSString *)path
+{
+    NSScrollView *scroll;
+    NSView *content;
+    NSRect frame;
+    CGFloat width = 20; /* (the columns, and room for the scroll bar) */
+    char text[600];
+    uint32_t c;
+    self = [super init];
+    if (self == nil)
+    {
+        EeUiTotals_Free(totals);
+        return nil;
+    }
+    self.owner = owner;
+    self.totals = totals;
+    self.listPath = path;
+    /* (digits of one width, as Windows' Segoe UI has them, so the counts line up) */
+    self.font = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightRegular];
+    self.boldFont = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightBold];
+
+    self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.allowsColumnReordering = NO;
+    self.table.allowsColumnResizing = YES;
+    self.table.allowsColumnSelection = NO;
+    self.table.allowsMultipleSelection = YES;
+    self.table.usesAlternatingRowBackgroundColors = YES;
+    self.table.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
+    self.table.gridStyleMask = NSTableViewSolidVerticalGridLineMask | NSTableViewSolidHorizontalGridLineMask;
+    if (@available(macOS 11.0, *))
+    {
+        self.table.style = NSTableViewStylePlain; /* (rows from edge to edge, as on Windows) */
+    }
+    self.table.menu = [[NSMenu alloc] initWithTitle:@""];
+    self.table.menu.delegate = self;
+    for (c = 0; c < EeUiTotals_Columns(totals); c++)
+    {
+        NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%u", c]];
+        NSTextFieldCell *cell = [[NSTextFieldCell alloc] initTextCell:@""];
+        /* (as on Windows: the date and party at the left, the counts at the right) */
+        NSTextAlignment align = EeUiTotals_IsTextColumn(totals, c) ? NSTextAlignmentLeft : NSTextAlignmentRight;
+        col.title = ns_utf8(EeUiTotals_Title(totals, c));
+        col.headerCell.alignment = align;
+        cell.font = self.font;
+        cell.lineBreakMode = NSLineBreakByTruncatingTail;
+        cell.alignment = align;
+        col.dataCell = cell;
+        col.minWidth = 40;
+        col.resizingMask = NSTableColumnUserResizingMask;
+        /* (Windows' width, or the heading's when it is wider) */
+        col.width = MAX(EeUiTotals_ColumnWidth(totals, c), ceil(col.headerCell.cellSize.width) + 16);
+        width += col.width + self.table.intercellSpacing.width;
+        [self.table addTableColumn:col];
+    }
+    self.table.rowHeight = self.boldFont.boundingRectForFont.size.height + 3;
+
+    self.window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, width, 600)
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    EeUiTotals_WindowTitle(totals, path.fileSystemRepresentation, text, sizeof(text));
+    self.window.title = ns_utf8(text);
+    self.window.delegate = self;
+    self.window.releasedWhenClosed = NO;
+    /* (as on Windows: below and right of the roster's corner, and not kept above it) */
+    frame = owner.window.frame;
+    [self.window setFrameTopLeftPoint:NSMakePoint(NSMinX(frame) + 48, NSMaxY(frame) - 48)];
+    content = self.window.contentView;
+
+    scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.documentView = self.table;
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = YES;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    EeUiTotals_StatusText(totals, text, sizeof(text));
+    self.status = [NSTextField labelWithString:ns_utf8(text)];
+    self.status.lineBreakMode = NSLineBreakByTruncatingTail;
+    self.status.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.status setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [content addSubview:scroll];
+    [content addSubview:self.status];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:self.status.topAnchor constant:-6],
+        [self.status.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:10],
+        [self.status.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor constant:-10],
+        [self.status.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-6],
+    ]];
+    [self.window makeKeyAndOrderFront:nil];
+    return self;
+}
+
+- (void)dealloc
+{
+    EeUiTotals_Free(_totals);
+}
+
+- (void)close
+{
+    [self.window close]; /* (windowWillClose: tells the owner) */
+}
+
+- (void)windowWillClose:(NSNotification *)note
+{
+    [self.owner totalsClosed:self];
+}
+
+- (void)alert:(NSString *)message
+{
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = message;
+    [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+/* ---- the table ---- */
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    return EeUiTotals_Rows(self.totals);
+}
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    char text[256];
+    EeUiTotals_Cell(self.totals, (uint32_t)row, (uint32_t)column.identifier.integerValue, 1, text, sizeof(text));
+    return ns_utf8(text);
+}
+
+- (void)tableView:(NSTableView *)tableView
+    willDisplayCell:(id)cell
+     forTableColumn:(NSTableColumn *)column
+                row:(NSInteger)row
+{
+    ((NSTextFieldCell *)cell).font = EeUiTotals_IsBold(self.totals, (uint32_t)row) ? self.boldFont : self.font;
+}
+
+- (BOOL)tableView:(NSTableView *)tableView shouldEditTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    return NO;
+}
+
+- (NSMutableData *)selectedRows
+{
+    NSMutableData *rows = [NSMutableData data];
+    [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger i, BOOL *stop) {
+      uint32_t r = (uint32_t)i;
+      [rows appendBytes:&r length:sizeof(r)];
+    }];
+    return rows;
+}
+
+/* ---- commands ---- */
+
+/* Copy (Cmd-C or the right-click menu): a heading line, then the selected rows, as on Windows */
+- (IBAction)copy:(id)sender
+{
+    NSMutableData *rows = [self selectedRows];
+    char *text;
+    if (rows.length == 0)
+    {
+        return;
+    }
+    text = EeUiTotals_CopyText(self.totals, (const uint32_t *)rows.bytes, (uint32_t)(rows.length / sizeof(uint32_t)),
+                               NULL);
+    if (text != NULL)
+    {
+        [NSPasteboard.generalPasteboard clearContents];
+        [NSPasteboard.generalPasteboard setString:ns_utf8(text) forType:NSPasteboardTypeString];
+        free(text);
+    }
+}
+
+/* Export Selected... / Export All...: a save sheet with the file type */
+- (void)exportRows:(BOOL)selection
+{
+    NSSavePanel *panel;
+    NSView *extra;
+    NSPopUpButton *type;
+    NSMutableData *rows = nil;
+    char name[512];
+    if (selection)
+    {
+        rows = [self selectedRows];
+        if (rows.length == 0)
+        {
+            return;
+        }
+    }
+    panel = [NSSavePanel savePanel];
+    panel.title = @"Export";
+    EeUiTotals_ExportName(self.totals, self.listPath.fileSystemRepresentation, selection, name, sizeof(name));
+    panel.nameFieldStringValue = ns_utf8(name);
+    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 36)];
+    type = export_type_popup(extra, self);
+    panel.accessoryView = extra;
+    [panel beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse r) {
+                    NSString *path = panel.URL.path;
+                    char delim, err[256];
+                    if (r != NSModalResponseOK || path == nil)
+                    {
+                        return;
+                    }
+                    delim = export_delim(&path, type.indexOfSelectedItem);
+                    if (EeUiTotals_Export(self.totals, path.fileSystemRepresentation,
+                                          rows != nil ? (const uint32_t *)rows.bytes : NULL,
+                                          (uint32_t)(rows.length / sizeof(uint32_t)), delim, err, sizeof(err)) < 0)
+                    {
+                        [self alert:ns_utf8(err)];
+                    }
+                  }];
+}
+
+- (void)exportTypeChanged:(NSPopUpButton *)type
+{
+    export_type_changed(type);
+}
+
+- (IBAction)exportSelected:(id)sender
+{
+    [self exportRows:YES];
+}
+
+- (IBAction)exportAll:(id)sender
+{
+    [self exportRows:NO];
+}
+
+/* --export with --voting-totals: Export All..., as a CSV, without the sheet */
+- (BOOL)exportAllTo:(NSString *)path
+{
+    char err[256];
+    long wrote = EeUiTotals_Export(self.totals, path.fileSystemRepresentation, NULL, 0, ',', err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "voting totals export: %s\n", err);
+        return NO;
+    }
+    fprintf(stderr, "exported %ld voting totals rows\n", wrote);
+    return YES;
+}
+
+/* the right-click menu, as on Windows: Copy; Export Selected..., Export All... */
+- (void)menuNeedsUpdate:(NSMenu *)menu
+{
+    NSInteger row = self.table.clickedRow;
+    [menu removeAllItems];
+    if (row < 0)
+    {
+        return;
+    }
+    if (![self.table.selectedRowIndexes containsIndex:(NSUInteger)row])
+    {
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+    }
+    [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""].target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"Export Selected…" action:@selector(exportSelected:) keyEquivalent:@""].target = self;
+    [menu addItemWithTitle:@"Export All…" action:@selector(exportAll:) keyEquivalent:@""].target = self;
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if (item.action == @selector(copy:) || item.action == @selector(exportSelected:))
+    {
+        return self.table.numberOfSelectedRows > 0;
+    }
+    return YES;
+}
+
+@end
+
 static void app_window_closed(EeVoterWindow *w);
 
 @implementation EeVoterWindow
@@ -1726,10 +2032,50 @@ static void app_window_closed(EeVoterWindow *w);
     });
 }
 
+/* Reports > Display Voting Totals... (a roster): a window of its own (the open one is brought
+ * forward); it closes when the roster is reloaded or this window closes, as on Windows */
+- (IBAction)showVotingTotals:(id)sender
+{
+    EeUiTotals *totals;
+    char err[256];
+    CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    if (self.voters == NULL || self.loading || !self.roster)
+    {
+        return;
+    }
+    if (self.totalsWindow != nil)
+    {
+        [self.totalsWindow.window makeKeyAndOrderFront:nil];
+        return;
+    }
+    totals = EeUiVoters_Totals(self.voters, err, sizeof(err));
+    if (totals == NULL)
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = ns_utf8(err);
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+        return;
+    }
+    fprintf(stderr, "voting totals: %u rows in %.2f s\n", EeUiTotals_Rows(totals), CFAbsoluteTimeGetCurrent() - started);
+    self.totalsWindow = [[EeTotalsWindow alloc] initWithOwner:self totals:totals path:self.path];
+}
+
+- (void)totalsClosed:(EeTotalsWindow *)totals
+{
+    if (self.totalsWindow == totals)
+    {
+        self.totalsWindow = nil;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      (void)totals; /* (kept until its window has finished closing) */
+    });
+}
+
 - (void)closeReports
 {
     [self.precinctReport close];
     [self.addressReport close];
+    [self.totalsWindow close];
 }
 
 - (void)windowWillClose:(NSNotification *)note
@@ -2227,6 +2573,11 @@ static void app_window_closed(EeVoterWindow *w);
         item.hidden = !self.roster;
         return self.roster && self.voters != NULL && !self.loading && self.window.attachedSheet == nil;
     }
+    if (item.action == @selector(showVotingTotals:))
+    {
+        item.hidden = !self.roster;
+        return self.roster && self.voters != NULL && !self.loading;
+    }
     if (item.action == @selector(showOptions:))
     {
         return self.optionsSheet == nil && self.filterSheet == nil; /* (Windows: any time) */
@@ -2268,6 +2619,7 @@ static void app_window_closed(EeVoterWindow *w);
 @property(strong) NSMutableArray<NSString *> *pendingFiles; /* the files named (a roster's with --roster) */
 @property(assign) BOOL roster;      /* --roster: open the files as one voter roster */
 @property(assign) BOOL snapshotSummary; /* --load-summary: the PNG is of the Load Summary */
+@property(assign) BOOL snapshotTotals;  /* --voting-totals: the PNG is of the Voting Totals */
 @property(copy) NSString *snapshot; /* --snapshot: write the window here as PNG once loaded, then quit */
 @property(assign) int snapshotSort; /* --sort: -1 for none */
 @property(assign) BOOL snapshotAscending;
@@ -2326,6 +2678,7 @@ static void app_window_closed(EeVoterWindow *w);
     [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""];
     filterItem.submenu = filter;
     [reports addItemWithTitle:@"Display Precinct Report…" action:@selector(showPrecinctReport:) keyEquivalent:@""];
+    [reports addItemWithTitle:@"Display Voting Totals…" action:@selector(showVotingTotals:) keyEquivalent:@""];
     [reports addItemWithTitle:@"Display Address Report…" action:@selector(showAddressReport:) keyEquivalent:@""];
     [reports addItemWithTitle:@"Display Load Summary…" action:@selector(showLoadSummary:) keyEquivalent:@""];
     reportsItem.submenu = reports;
@@ -2363,6 +2716,10 @@ static void app_window_closed(EeVoterWindow *w);
     if ([d isKindOfClass:[EeReportWindow class]] && ((EeReportWindow *)d).owner != nil)
     {
         return ((EeReportWindow *)d).owner;
+    }
+    if ([d isKindOfClass:[EeTotalsWindow class]] && ((EeTotalsWindow *)d).owner != nil)
+    {
+        return ((EeTotalsWindow *)d).owner;
     }
     return self.windows.lastObject;
 }
@@ -2478,6 +2835,10 @@ static void app_window_closed(EeVoterWindow *w);
         {
             [w showLoadSummary:nil];
         }
+        if (self.snapshotTotals)
+        {
+            [w showVotingTotals:nil];
+        }
         waiting = YES;
     }
     if (waiting)
@@ -2488,7 +2849,13 @@ static void app_window_closed(EeVoterWindow *w);
         return;
     }
     EeReportWindow *report = self.snapshotReport >= 0 ? [w reportOfKind:self.snapshotReport] : nil;
-    if (self.snapshotExport != nil && report != nil)
+    EeTotalsWindow *totals = self.snapshotTotals ? w.totalsWindow : nil;
+    if (self.snapshotExport != nil && totals != nil)
+    {
+        [totals exportAllTo:self.snapshotExport]; /* (Export All..., without the sheet) */
+        self.snapshotExport = nil;
+    }
+    else if (self.snapshotExport != nil && report != nil)
     {
         [report exportAllTo:self.snapshotExport]; /* (Export All..., without the sheet) */
         self.snapshotExport = nil;
@@ -2499,7 +2866,8 @@ static void app_window_closed(EeVoterWindow *w);
         self.snapshotExport = nil;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-      NSWindow *target = report != nil               ? report.window
+      NSWindow *target = totals != nil               ? totals.window
+                         : report != nil         ? report.window
                          : w.summaryAlert != nil ? w.summaryAlert.window
                          : w.optionsSheet != nil ? w.optionsSheet.sheet
                          : w.filterSheet != nil  ? w.filterSheet.sheet
@@ -2652,6 +3020,10 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--load-summary") == 0)
             {
                 delegate.snapshotSummary = YES;
+            }
+            else if (strcmp(argv[i], "--voting-totals") == 0)
+            {
+                delegate.snapshotTotals = YES;
             }
             else if (strcmp(argv[i], "--sort") == 0 && i + 1 < argc)
             {

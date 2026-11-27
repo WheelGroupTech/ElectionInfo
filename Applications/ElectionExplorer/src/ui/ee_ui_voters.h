@@ -379,6 +379,83 @@ extern "C"
     char *EeUiReport_MapUrl(const EeUiReport *r, uint32_t row, int engine);
 
     /* ---------------------------------------------------------------------- */
+    /* Voting Totals (a roster's Reports > Display Voting Totals...)            */
+    /* ---------------------------------------------------------------------- */
+
+    typedef struct EeUiTotals EeUiTotals;
+
+    /**
+     * Display Voting Totals..., as on Windows (EeRoster_ComputeTotals): voters per Date Voted
+     * (and Party, when the roster has one) and Voting Method over ALL loaded records (the
+     * filter is left out), each Voter ID counted once, on its earliest record. A row per date
+     * (per party, with an "All parties" row when several voted that day), then the Total rows.
+     * Columns: Date Voted, Party (only with parties), Mail Ballot, Early Vote In-Person,
+     * Election Day In-Person, Provisional, Limited, Other (only for other Voting Method values),
+     * Total. A method with no file reads "not available"; one whose files could not be read
+     * (PDF) "not loaded". Not sortable, as on Windows. Returns NULL with Windows' message in
+     * @p err when the list is not a roster or memory runs out. Keeps its own copy.
+     */
+    EeUiTotals *EeUiVoters_Totals(const EeUiVoters *v, char *err, size_t errcap);
+
+    void EeUiTotals_Free(EeUiTotals *t);
+
+    uint32_t EeUiTotals_Rows(const EeUiTotals *t);
+    uint32_t EeUiTotals_Columns(const EeUiTotals *t);
+    const char *EeUiTotals_Title(const EeUiTotals *t, uint32_t c);
+
+    /** 1 for Date Voted and Party (shown at the left); the counts are at the right. */
+    int EeUiTotals_IsTextColumn(const EeUiTotals *t, uint32_t c);
+
+    /** Windows' column width at 100% (pixels). */
+    int EeUiTotals_ColumnWidth(const EeUiTotals *t, uint32_t c);
+
+    /**
+     * The cell at row @p row, column @p c: "11/03/2026", "(no date)", "Total", a party,
+     * "(blank)", "All parties", a count ("1,234" when @p display, "1234" for Copy and Export),
+     * "not available" or "not loaded".
+     */
+    void EeUiTotals_Cell(const EeUiTotals *t,
+                         uint32_t row,
+                         uint32_t c,
+                         int display,
+                         char *out,
+                         size_t cap);
+
+    /** 1 for a Total row and, with parties, an "All parties" row (Windows draws them bold). */
+    int EeUiTotals_IsBold(const EeUiTotals *t, uint32_t row);
+
+    /**
+     * The status line: "11 voters, each counted once (1 later record of 1 Voter ID not
+     * counted) — right-click to copy or export".
+     */
+    void EeUiTotals_StatusText(const EeUiTotals *t, char *out, size_t cap);
+
+    /** "Voting Totals - <file name>". */
+    void EeUiTotals_WindowTitle(const EeUiTotals *t, const char *list_path, char *out, size_t cap);
+
+    /** Copy: a heading line, then rows @p rows, tab-separated, plain numbers, "\r\n" lines. */
+    char *EeUiTotals_CopyText(const EeUiTotals *t, const uint32_t *rows, uint32_t n, size_t *len);
+
+    /**
+     * Export rows @p rows (NULL: all) as Windows does: UTF-8 with a byte order mark, the
+     * headings, plain numbers. Returns the rows written, or -1 with a message in @p err.
+     */
+    long EeUiTotals_Export(const EeUiTotals *t,
+                           const char *path_utf8,
+                           const uint32_t *rows,
+                           uint32_t n,
+                           char delim,
+                           char *err,
+                           size_t errcap);
+
+    /** "<list name>-Voting_Totals.csv", "-Selected_Voting_Totals.csv". */
+    void EeUiTotals_ExportName(const EeUiTotals *t,
+                               const char *list_path,
+                               int selection,
+                               char *out,
+                               size_t cap);
+
+    /* ---------------------------------------------------------------------- */
     /* Options (Windows' Edit > Options...), kept between runs                 */
     /* ---------------------------------------------------------------------- */
 

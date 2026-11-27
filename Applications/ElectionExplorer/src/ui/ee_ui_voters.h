@@ -584,6 +584,72 @@ extern "C"
     /** "<A>-vs-<B>-Compare_Summary.csv" (@p records 0) or "-Compare_Records.csv". */
     void EeUiCompare_ExportName(const EeUiCompare *c, int records, char *out, size_t cap);
 
+    /** Show Differences...: a row per differing field of each voter matched in both files. */
+    typedef struct EeUiDiff EeUiDiff;
+
+    /**
+     * Show Differences... (Windows' App_ShowDifferences): for compare @p c of lists @p a and
+     * @p b (unchanged since), a row per field that differs for a voter in both files (Name,
+     * Address, Precinct, Voting Method, Date Voted, as compared), in the files' order. The
+     * rows read the two lists' cells, so they must outlive it (Windows closes the window
+     * with the Compare window, and it with either file's). UI thread. NULL with @p err in
+     * Windows' words: "A file changed since the comparison was run. Run Compare again.",
+     * "Could not collect the differences.", "No differing voters found."
+     */
+    EeUiDiff *EeUiCompare_Differences(const EeUiCompare *c,
+                                      const EeUiVoters *a,
+                                      const EeUiVoters *b,
+                                      char *err,
+                                      size_t errcap);
+
+    void EeUiDiff_Free(EeUiDiff *d);
+
+    /** The rows, and a row's cell: 0 Voter ID, 1 Field, 2 the value in A, 3 the value in B. */
+    uint32_t EeUiDiff_Rows(const EeUiDiff *d);
+    const char *EeUiDiff_Cell(const EeUiDiff *d, uint32_t row, uint32_t column);
+
+    /** The headings ("Voter ID", "Field", A's and B's file names, "file A" / "file B" without
+     * one) and Windows' widths at 100% (pixels). */
+    const char *EeUiDiff_Title(const EeUiDiff *d, uint32_t column);
+    int EeUiDiff_ColumnWidth(uint32_t column);
+
+    /** "Differences - <A> vs <B>". */
+    void EeUiDiff_WindowTitle(const EeUiDiff *d, char *out, size_t cap);
+
+    /** "12 differing field(s) — click a header to sort, Ctrl+C to copy" (Windows' words; the
+     * Mac's say Cmd-C). */
+    void EeUiDiff_StatusText(const EeUiDiff *d, int mac, char *out, size_t cap);
+
+    /**
+     * A heading click, as on Windows (Diff_Sort): by @p column ascending, or the other way when
+     * it is already the sort column. Voter IDs of digits sort as numbers; the others ignore
+     * case; ties go by Voter ID, so a voter's fields stay together.
+     */
+    void EeUiDiff_Sort(EeUiDiff *d, uint32_t column);
+
+    /** The sort column (-1: the files' order), and whether it is ascending. */
+    int EeUiDiff_SortColumn(const EeUiDiff *d, int *ascending);
+
+    /** Copy: the rows @p rows, tab-separated (Voter ID, Field, A, B), no heading, as on
+     * Windows. NULL when there are none or out of memory; free() it. */
+    char *EeUiDiff_CopyText(const EeUiDiff *d, const uint32_t *rows, uint32_t n, size_t *len);
+
+    /**
+     * Export Selected... (@p rows) or Export All... (@p rows NULL), in the order shown, with
+     * the headings, UTF-8 with a BOM, @p delim ',' or '\t', as on Windows. Returns the rows
+     * written, or -1 with @p err.
+     */
+    long EeUiDiff_Export(const EeUiDiff *d,
+                         const char *path_utf8,
+                         const uint32_t *rows,
+                         uint32_t n,
+                         char delim,
+                         char *err,
+                         size_t errcap);
+
+    /** "<A>-vs-<B>-Differences.csv", "-Selected_Differences.csv". */
+    void EeUiDiff_ExportName(const EeUiDiff *d, int selection, char *out, size_t cap);
+
     /* ---------------------------------------------------------------------- */
     /* Options (Windows' Edit > Options...), kept between runs                 */
     /* ---------------------------------------------------------------------- */
@@ -693,13 +759,15 @@ extern "C"
     /**
      * The windows' `--selftest-compare list|roster <file A> list|roster <file B>`: load the two
      * files, then print the Compare menu's item, the summary window (title, rows, counts),
-     * Show these rows in each file and the exports, as the windows would show them (counts
-     * and Voter IDs only). Returns 0, or 1 when a load or the compare fails.
+     * Show these rows in each file, the exports and Show Differences... (its rows, sorted,
+     * copied and exported), as the windows would show them. With @p cells 0 it prints counts
+     * and Voter IDs only (a real file's cells are voters' data). Returns 0, or 1 when a load or the compare fails.
      */
     int EeUiVoters_CompareSelfTest(int roster_a,
                                    const char *a_utf8,
                                    int roster_b,
-                                   const char *b_utf8);
+                                   const char *b_utf8,
+                                   int cells);
 
 #ifdef __cplusplus
 }

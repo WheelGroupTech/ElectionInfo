@@ -16,8 +16,9 @@
  *
  * The Compare menu lists the other windows, as on Windows: a compare matches the two files by
  * Voter ID (in the background, behind a progress sheet, for large files) and opens the Compare
- * window of categories and counts, with Show these rows in either file, Export Summary... and
- * Export All Records...
+ * window of categories and counts, with Show these rows in either file, Export Summary...,
+ * Export All Records... and Show Differences... (a window of each differing field, sortable,
+ * with Copy and Export).
  *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns and words; the menu bar, shared by every
@@ -53,12 +54,14 @@
  *   the Voter Roster window would show.
  * - `--selftest-voting <list> <roster files...>` prints Show Duplicate Voters Voting of the list
  *   in that roster, as the voter list window would show it.
- * - `--selftest-compare list|roster <file A> list|roster <file B>` prints the compare of the two
- *   files as the Compare window shows it.
+ * - `--selftest-compare list|roster <file A> list|roster <file B> [--counts]` prints the compare
+ *   of the two files as the Compare window and Show Differences... show it (--counts: no cells).
  * - `--compare list|roster <file>` (with --snapshot) opens that file in a second window, then
  *   compares the first with it; the PNG is of the Compare window, and `--export` exports all
  *   records. `--compare-show <row>[:b]` then shows that row's voters in file A (or B), as the
- *   right-click menu does, and the PNG is of that file's window.
+ *   right-click menu does, and the PNG is of that file's window. `--compare-diff` then clicks
+ *   Show Differences...: the PNG is of that window, `--sort <column>[:desc]` clicks its heading
+ *   and `--export` exports its rows (Export All...).
  */
 
 #import <Cocoa/Cocoa.h>
@@ -1545,6 +1548,311 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 @end
 
 /* -------------------------------------------------------------------------- */
+/* Show Differences (Windows' Differences window: one at a time, closed with  */
+/* the Compare window)                                                         */
+/* -------------------------------------------------------------------------- */
+
+@interface EeDiffWindow : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation>
+@property(strong) NSWindow *window;
+@property(strong) NSTableView *table;
+@property(assign) EeUiDiff *diff;
+- (instancetype)initWithDiff:(EeUiDiff *)diff over:(NSWindow *)over;
+- (void)clickColumn:(int)column;
+- (BOOL)exportAllTo:(NSString *)path;
+- (void)close;
+@end
+
+static EeDiffWindow *g_diff; /* (the open one) */
+
+@implementation EeDiffWindow
+
+- (instancetype)initWithDiff:(EeUiDiff *)diff over:(NSWindow *)over
+{
+    NSScrollView *scroll;
+    NSView *content;
+    NSTextField *status;
+    NSRect frame;
+    NSFont *font = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightRegular];
+    CGFloat width = 20;
+    char text[600];
+    uint32_t c;
+    self = [super init];
+    if (self == nil)
+    {
+        EeUiDiff_Free(diff);
+        return nil;
+    }
+    self.diff = diff;
+    self.table = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.allowsColumnReordering = NO;
+    self.table.allowsColumnSelection = NO;
+    self.table.allowsMultipleSelection = YES;
+    self.table.usesAlternatingRowBackgroundColors = YES;
+    self.table.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
+    self.table.gridStyleMask = NSTableViewSolidVerticalGridLineMask | NSTableViewSolidHorizontalGridLineMask;
+    if (@available(macOS 11.0, *))
+    {
+        self.table.style = NSTableViewStylePlain;
+    }
+    self.table.menu = [[NSMenu alloc] initWithTitle:@""];
+    self.table.menu.delegate = self;
+    for (c = 0; c < 4; c++)
+    {
+        NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%u", c]];
+        NSTextFieldCell *cell = [[NSTextFieldCell alloc] initTextCell:@""];
+        col.title = ns_utf8(EeUiDiff_Title(diff, c));
+        cell.font = font;
+        cell.lineBreakMode = NSLineBreakByTruncatingTail;
+        col.dataCell = cell;
+        col.minWidth = 40;
+        col.resizingMask = NSTableColumnUserResizingMask;
+        /* (Windows' width, or the heading's and its arrow's when wider) */
+        col.width = MAX(EeUiDiff_ColumnWidth(c), ceil(col.headerCell.cellSize.width) + 24);
+        width += col.width + self.table.intercellSpacing.width;
+        [self.table addTableColumn:col];
+    }
+
+    self.window = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, MAX(width, 720), 460)
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    EeUiDiff_WindowTitle(diff, text, sizeof(text));
+    self.window.title = ns_utf8(text);
+    self.window.delegate = self;
+    self.window.releasedWhenClosed = NO;
+    /* (as on Windows: below and right of the Compare window) */
+    frame = over.frame;
+    [self.window setFrameTopLeftPoint:NSMakePoint(NSMinX(frame) + 40, NSMaxY(frame) - 40)];
+    content = self.window.contentView;
+    scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.documentView = self.table;
+    scroll.hasVerticalScroller = YES;
+    scroll.hasHorizontalScroller = YES;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    EeUiDiff_StatusText(diff, 1, text, sizeof(text));
+    status = [NSTextField labelWithString:ns_utf8(text)];
+    status.lineBreakMode = NSLineBreakByTruncatingTail;
+    status.translatesAutoresizingMaskIntoConstraints = NO;
+    [status setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [content addSubview:scroll];
+    [content addSubview:status];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:status.topAnchor constant:-6],
+        [status.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:10],
+        [status.trailingAnchor constraintLessThanOrEqualToAnchor:content.trailingAnchor constant:-10],
+        [status.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-6],
+    ]];
+    [self.window makeKeyAndOrderFront:nil];
+    return self;
+}
+
+- (void)dealloc
+{
+    EeUiDiff_Free(_diff);
+}
+
+- (void)close
+{
+    [self.window close];
+}
+
+- (void)windowWillClose:(NSNotification *)note
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+      /* (kept until its window has finished closing) */
+      if (g_diff == self)
+      {
+          g_diff = nil;
+      }
+    });
+}
+
+- (void)alert:(NSString *)message
+{
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = message;
+    [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
+{
+    return EeUiDiff_Rows(self.diff);
+}
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    return ns_utf8(EeUiDiff_Cell(self.diff, (uint32_t)row, (uint32_t)column.identifier.integerValue));
+}
+
+- (BOOL)tableView:(NSTableView *)tableView shouldEditTableColumn:(NSTableColumn *)column row:(NSInteger)row
+{
+    return NO;
+}
+
+/* a heading click (the same one again reverses it), as on Windows: sorted here */
+- (void)clickColumn:(int)column
+{
+    int asc = 1, sorted;
+    EeUiDiff_Sort(self.diff, (uint32_t)column);
+    sorted = EeUiDiff_SortColumn(self.diff, &asc);
+    for (NSTableColumn *col in self.table.tableColumns)
+    {
+        BOOL is = col.identifier.integerValue == sorted;
+        [self.table
+            setIndicatorImage:(is ? [NSImage imageNamed:asc ? @"NSAscendingSortIndicator" : @"NSDescendingSortIndicator"]
+                                  : nil)
+                inTableColumn:col];
+        if (is)
+        {
+            self.table.highlightedTableColumn = col;
+        }
+    }
+    [self.table deselectAll:nil];
+    [self.table reloadData];
+}
+
+- (void)tableView:(NSTableView *)tableView didClickTableColumn:(NSTableColumn *)column
+{
+    [self clickColumn:(int)column.identifier.integerValue];
+}
+
+- (NSMutableData *)selectedRows
+{
+    NSMutableData *rows = [NSMutableData data];
+    [self.table.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger i, BOOL *stop) {
+      uint32_t r = (uint32_t)i;
+      [rows appendBytes:&r length:sizeof(r)];
+    }];
+    return rows;
+}
+
+/* Copy (Cmd-C or the right-click menu): the selected rows, tab-separated, as on Windows */
+- (IBAction)copy:(id)sender
+{
+    NSMutableData *rows = [self selectedRows];
+    char *text;
+    if (rows.length == 0)
+    {
+        return;
+    }
+    text = EeUiDiff_CopyText(self.diff, (const uint32_t *)rows.bytes, (uint32_t)(rows.length / sizeof(uint32_t)), NULL);
+    if (text != NULL)
+    {
+        [NSPasteboard.generalPasteboard clearContents];
+        [NSPasteboard.generalPasteboard setString:ns_utf8(text) forType:NSPasteboardTypeString];
+        free(text);
+    }
+}
+
+/* Export Selected... / Export All...: in the order shown, a save sheet with the file type */
+- (void)exportRows:(BOOL)selection
+{
+    NSSavePanel *panel;
+    NSView *extra;
+    NSPopUpButton *type;
+    NSMutableData *rows = nil;
+    char name[600];
+    if (selection)
+    {
+        rows = [self selectedRows];
+        if (rows.length == 0)
+        {
+            return;
+        }
+    }
+    panel = [NSSavePanel savePanel];
+    panel.title = @"Export";
+    EeUiDiff_ExportName(self.diff, selection, name, sizeof(name));
+    panel.nameFieldStringValue = ns_utf8(name);
+    extra = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 36)];
+    type = export_type_popup(extra, self);
+    panel.accessoryView = extra;
+    [panel beginSheetModalForWindow:self.window
+                  completionHandler:^(NSModalResponse r) {
+                    NSString *path = panel.URL.path;
+                    char delim, err[256];
+                    if (r != NSModalResponseOK || path == nil)
+                    {
+                        return;
+                    }
+                    delim = export_delim(&path, type.indexOfSelectedItem);
+                    if (EeUiDiff_Export(self.diff, path.fileSystemRepresentation,
+                                        rows != nil ? (const uint32_t *)rows.bytes : NULL,
+                                        (uint32_t)(rows.length / sizeof(uint32_t)), delim, err, sizeof(err)) < 0)
+                    {
+                        [self alert:ns_utf8(err)];
+                    }
+                  }];
+}
+
+- (void)exportTypeChanged:(NSPopUpButton *)type
+{
+    export_type_changed(type);
+}
+
+- (IBAction)exportSelected:(id)sender
+{
+    [self exportRows:YES];
+}
+
+- (IBAction)exportAll:(id)sender
+{
+    [self exportRows:NO];
+}
+
+/* --export with --compare-diff: Export All..., as a CSV, without the sheet */
+- (BOOL)exportAllTo:(NSString *)path
+{
+    char err[256];
+    long wrote = EeUiDiff_Export(self.diff, path.fileSystemRepresentation, NULL, 0, ',', err, sizeof(err));
+    if (wrote < 0)
+    {
+        fprintf(stderr, "differences export: %s\n", err);
+        return NO;
+    }
+    fprintf(stderr, "exported %ld differences\n", wrote);
+    return YES;
+}
+
+/* the right-click menu, as on Windows: Copy; Export Selected..., Export All... */
+- (void)menuNeedsUpdate:(NSMenu *)menu
+{
+    NSInteger row = self.table.clickedRow;
+    [menu removeAllItems];
+    if (row < 0)
+    {
+        return;
+    }
+    if (![self.table.selectedRowIndexes containsIndex:(NSUInteger)row])
+    {
+        [self.table selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row] byExtendingSelection:NO];
+    }
+    [menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@""].target = self;
+    [menu addItem:[NSMenuItem separatorItem]];
+    [menu addItemWithTitle:@"Export Selected…" action:@selector(exportSelected:) keyEquivalent:@""].target = self;
+    [menu addItemWithTitle:@"Export All…" action:@selector(exportAll:) keyEquivalent:@""].target = self;
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if (item.action == @selector(copy:) || item.action == @selector(exportSelected:))
+    {
+        return self.table.numberOfSelectedRows > 0;
+    }
+    return YES;
+}
+
+@end
+
+/* -------------------------------------------------------------------------- */
 /* The Compare window (Windows' Compare Summary: one at a time)               */
 /* -------------------------------------------------------------------------- */
 
@@ -1558,6 +1866,7 @@ static int on_progress(void *user, unsigned percent, unsigned rows)
 - (instancetype)initWithA:(EeVoterWindow *)a b:(EeVoterWindow *)b compare:(EeUiCompare *)compare;
 - (void)showRow:(NSInteger)row inB:(BOOL)inB;
 - (BOOL)exportTo:(NSString *)path records:(BOOL)records;
+- (IBAction)showDifferences:(id)sender;
 - (void)close;
 @end
 
@@ -1570,7 +1879,7 @@ static EeCompareWindow *g_compare; /* (the open one) */
     static const CGFloat widths[3] = {170, 150, 150}; /* (Windows' at 100%) */
     NSScrollView *scroll;
     NSView *content;
-    NSButton *summary, *records;
+    NSButton *summary, *records, *diff;
     NSTextField *status;
     NSRect frame;
     NSFont *font = [NSFont monospacedDigitSystemFontOfSize:NSFont.smallSystemFontSize weight:NSFontWeightRegular];
@@ -1647,8 +1956,10 @@ static EeCompareWindow *g_compare; /* (the open one) */
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
     summary = [NSButton buttonWithTitle:@"Export Summary…" target:self action:@selector(exportSummary:)];
     records = [NSButton buttonWithTitle:@"Export All Records…" target:self action:@selector(exportRecords:)];
+    diff = [NSButton buttonWithTitle:@"Show Differences…" target:self action:@selector(showDifferences:)];
     summary.translatesAutoresizingMaskIntoConstraints = NO;
     records.translatesAutoresizingMaskIntoConstraints = NO;
+    diff.translatesAutoresizingMaskIntoConstraints = NO;
     status = [NSTextField labelWithString:ns_utf8(EeUiCompare_StatusText())];
     status.lineBreakMode = NSLineBreakByTruncatingTail;
     status.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1657,13 +1968,16 @@ static EeCompareWindow *g_compare; /* (the open one) */
     [content addSubview:scroll];
     [content addSubview:summary];
     [content addSubview:records];
+    [content addSubview:diff];
     [content addSubview:status];
     [NSLayoutConstraint activateConstraints:@[
         [scroll.topAnchor constraintEqualToAnchor:content.topAnchor],
         [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
         [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
         [scroll.bottomAnchor constraintEqualToAnchor:records.topAnchor constant:-8],
-        [records.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-10],
+        [diff.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-10],
+        [diff.centerYAnchor constraintEqualToAnchor:records.centerYAnchor],
+        [records.trailingAnchor constraintEqualToAnchor:diff.leadingAnchor constant:-8],
         [summary.trailingAnchor constraintEqualToAnchor:records.leadingAnchor constant:-8],
         [summary.centerYAnchor constraintEqualToAnchor:records.centerYAnchor],
         [records.bottomAnchor constraintEqualToAnchor:status.topAnchor constant:-8],
@@ -1687,6 +2001,7 @@ static EeCompareWindow *g_compare; /* (the open one) */
 
 - (void)windowWillClose:(NSNotification *)note
 {
+    [g_diff close]; /* (as on Windows: it details this comparison) */
     dispatch_async(dispatch_get_main_queue(), ^{
       /* (kept until its window has finished closing) */
       if (g_compare == self)
@@ -1851,6 +2166,27 @@ static EeCompareWindow *g_compare; /* (the open one) */
 - (IBAction)exportRecords:(id)sender
 {
     [self exportRows:YES];
+}
+
+/* Show Differences... (Windows' App_ShowDifferences): replaces the one open */
+- (IBAction)showDifferences:(id)sender
+{
+    char err[256];
+    EeUiDiff *d;
+    CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    if (self.a == nil || self.b == nil)
+    {
+        return;
+    }
+    d = EeUiCompare_Differences(self.compare, self.a.voters, self.b.voters, err, sizeof(err));
+    if (d == NULL)
+    {
+        [self alert:ns_utf8(err)];
+        return;
+    }
+    fprintf(stderr, "differences: %u rows in %.2f s\n", EeUiDiff_Rows(d), CFAbsoluteTimeGetCurrent() - started);
+    [g_diff close];
+    g_diff = [[EeDiffWindow alloc] initWithDiff:d over:self.window];
 }
 
 @end
@@ -3202,6 +3538,7 @@ static void app_window_closed(EeVoterWindow *w);
 @property(copy) NSString *compareFile;
 @property(strong) EeVoterWindow *compareWith;  /* (its window) */
 @property(copy) NSString *compareShow;         /* --compare-show <row>[:b] */
+@property(assign) BOOL compareDiff;            /* --compare-diff: the PNG is of Show Differences... */
 @property(copy) NSString *snapshot; /* --snapshot: write the window here as PNG once loaded, then quit */
 @property(assign) int snapshotSort; /* --sort: -1 for none */
 @property(assign) BOOL snapshotAscending;
@@ -3528,7 +3865,30 @@ static void app_window_closed(EeVoterWindow *w);
     EeReportWindow *report = self.snapshotReport >= 0 ? [w reportOfKind:self.snapshotReport] : nil;
     EeTotalsWindow *totals = self.snapshotTotals ? w.totalsWindow : nil;
     EeCompareWindow *compared = self.compareWith != nil ? g_compare : nil;
-    if (self.snapshotExport != nil && compared != nil)
+    EeDiffWindow *diffs = nil;
+    if (compared != nil && self.compareDiff)
+    {
+        /* --compare-diff: Show Differences..., with --sort its heading clicked (twice: :desc) */
+        if (g_diff == nil)
+        {
+            [compared showDifferences:nil];
+            if (g_diff != nil && self.snapshotSort >= 0 && self.snapshotSort < 4)
+            {
+                [g_diff clickColumn:self.snapshotSort];
+                if (!self.snapshotAscending)
+                {
+                    [g_diff clickColumn:self.snapshotSort];
+                }
+            }
+        }
+        diffs = g_diff;
+    }
+    if (self.snapshotExport != nil && diffs != nil)
+    {
+        [diffs exportAllTo:self.snapshotExport]; /* (Export All..., without the sheet) */
+        self.snapshotExport = nil;
+    }
+    else if (self.snapshotExport != nil && compared != nil)
     {
         [compared exportTo:self.snapshotExport records:YES]; /* (Export All Records..., no sheet) */
         self.snapshotExport = nil;
@@ -3549,7 +3909,8 @@ static void app_window_closed(EeVoterWindow *w);
         self.snapshotExport = nil;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-      NSWindow *target = compared != nil            ? compared.window
+      NSWindow *target = diffs != nil               ? diffs.window
+                         : compared != nil       ? compared.window
                          : totals != nil         ? totals.window
                          : report != nil         ? report.window
                          : w.summaryAlert != nil ? w.summaryAlert.window
@@ -3580,7 +3941,13 @@ static void app_window_closed(EeVoterWindow *w);
 {
     if (self.windows == nil)
     {
-        self.pending = filename; /* (before launching finished: the file named at start) */
+        /* (before launching finished: the file the Finder opens with. AppKit also offers the
+         * command line's paths, some taken as an option's value, so the file main() found
+         * there stays) */
+        if (self.pending == nil)
+        {
+            self.pending = filename;
+        }
     }
     else
     {
@@ -3683,8 +4050,10 @@ int main(int argc, const char **argv)
             }
             if (strcmp(argv[i], "--selftest-compare") == 0 && i + 4 < argc)
             {
+                /* (with --counts after the files: counts and Voter IDs only, for real files) */
                 return EeUiVoters_CompareSelfTest(strcmp(argv[i + 1], "roster") == 0, argv[i + 2],
-                                                  strcmp(argv[i + 3], "roster") == 0, argv[i + 4]);
+                                                  strcmp(argv[i + 3], "roster") == 0, argv[i + 4],
+                                                  !(i + 5 < argc && strcmp(argv[i + 5], "--counts") == 0));
             }
             if (strcmp(argv[i], "--selftest-voting") == 0 && i + 2 < argc)
             {
@@ -3725,6 +4094,10 @@ int main(int argc, const char **argv)
             else if (strcmp(argv[i], "--compare-show") == 0 && i + 1 < argc)
             {
                 delegate.compareShow = ns_utf8(argv[++i]);
+            }
+            else if (strcmp(argv[i], "--compare-diff") == 0)
+            {
+                delegate.compareDiff = YES;
             }
             else if (strcmp(argv[i], "--load-summary") == 0)
             {

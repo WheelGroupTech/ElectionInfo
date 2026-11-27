@@ -2935,6 +2935,396 @@ void EeUiCompare_ExportName(const EeUiCompare *c, int records, char *out, size_t
 }
 
 /* -------------------------------------------------------------------------- */
+/* Show Differences (Windows' App_ShowDifferences and Differences window)      */
+/* -------------------------------------------------------------------------- */
+
+/* the fields, in Windows' order (DIFF_FIELD_*) */
+enum
+{
+    DIFF_NAME = 0,
+    DIFF_ADDRESS,
+    DIFF_PRECINCT,
+    DIFF_METHOD,
+    DIFF_DATE,
+    DIFF_COUNT
+};
+
+static const char *const k_diff_field[DIFF_COUNT] = {"Name",
+                                                     "Address",
+                                                     "Precinct",
+                                                     "Voting Method",
+                                                     "Date Voted"};
+
+/* one differing field of one voter (Windows' DiffRow) */
+typedef struct DiffRow
+{
+    uint32_t row_a, row_b; /* physical rows */
+    uint32_t col_a, col_b; /* the field's column in A and B */
+    int field;             /* DIFF_* */
+} DiffRow;
+
+struct EeUiDiff
+{
+    const EeVoterTable *a, *b; /* the lists compared (read, not owned) */
+    DiffRow *rows;
+    uint32_t count;
+    int sort_col; /* -1: the files' order */
+    BOOL sort_asc;
+    char name[2][256];
+    char path[2][1024];
+};
+
+EeUiDiff *EeUiCompare_Differences(const EeUiCompare *c,
+                                  const EeUiVoters *a,
+                                  const EeUiVoters *b,
+                                  char *err,
+                                  size_t errcap)
+{
+    EeCompareOptions opts;
+    EeCompareDiff *diffs = NULL;
+    uint32_t ndiffs = 0, i;
+    int vote_a[2], vote_b[2];
+    EeUiDiff *d;
+    set_err(err, errcap, "");
+    if (c == NULL || a == NULL || b == NULL)
+    {
+        return NULL;
+    }
+    if (a->t.row_count != c->rows[0] || b->t.row_count != c->rows[1])
+    {
+        set_err(err, errcap, "A file changed since the comparison was run. Run Compare again.");
+        return NULL;
+    }
+    compare_options(c->roster[0], c->roster[1], &opts);
+    vote_a[0] = EeVoterTable_FindColumnByTitle(&a->t, L"Voting Method");
+    vote_a[1] = EeVoterTable_FindColumnByTitle(&a->t, L"Date Voted");
+    vote_b[0] = EeVoterTable_FindColumnByTitle(&b->t, L"Voting Method");
+    vote_b[1] = EeVoterTable_FindColumnByTitle(&b->t, L"Date Voted");
+    if (!EeVoterTable_CollectDifferencesEx(&a->t, &b->t, &opts, &diffs, &ndiffs, NULL, NULL, NULL))
+    {
+        set_err(err, errcap, "Could not collect the differences.");
+        return NULL;
+    }
+    d = (EeUiDiff *)calloc(1, sizeof(EeUiDiff));
+    if (d != NULL && ndiffs > 0)
+    {
+        d->rows = (DiffRow *)malloc((size_t)ndiffs * DIFF_COUNT * sizeof(DiffRow));
+    }
+    if (d == NULL || d->rows == NULL)
+    {
+        free(diffs);
+        free(d);
+        set_err(err,
+                errcap,
+                ndiffs == 0 || d != NULL ? "No differing voters found." : "Out of memory.");
+        return NULL;
+    }
+    /* a display row per differing field (Windows' expansion) */
+    for (i = 0; i < ndiffs; i++)
+    {
+        static const uint16_t masks[DIFF_COUNT] = {EE_CMP_NAME_MINOR | EE_CMP_NAME_MAJOR,
+                                                   EE_CMP_ADDR_MINOR | EE_CMP_ADDR_MAJOR,
+                                                   EE_CMP_PCT_CHANGED,
+                                                   EE_CMP_METHOD_CHANGED,
+                                                   EE_CMP_DATE_CHANGED};
+        const int cols_a[DIFF_COUNT] = {EE_COL_NAME,
+                                        EE_COL_ADDRESS,
+                                        EE_COL_PRECINCT,
+                                        vote_a[0],
+                                        vote_a[1]};
+        const int cols_b[DIFF_COUNT] = {EE_COL_NAME,
+                                        EE_COL_ADDRESS,
+                                        EE_COL_PRECINCT,
+                                        vote_b[0],
+                                        vote_b[1]};
+        int k;
+        for (k = 0; k < DIFF_COUNT; k++)
+        {
+            if ((diffs[i].bits & masks[k]) && cols_a[k] >= 0 && cols_b[k] >= 0)
+            {
+                DiffRow *r = &d->rows[d->count++];
+                r->row_a = diffs[i].row_a;
+                r->row_b = diffs[i].row_b;
+                r->col_a = (uint32_t)cols_a[k];
+                r->col_b = (uint32_t)cols_b[k];
+                r->field = k;
+            }
+        }
+    }
+    free(diffs);
+    d->a = &a->t;
+    d->b = &b->t;
+    d->sort_col = -1;
+    d->sort_asc = TRUE;
+    memcpy(d->name, c->name, sizeof(d->name));
+    StringCchCopyA(d->path[0], sizeof(d->path[0]), c->path[0]);
+    StringCchCopyA(d->path[1], sizeof(d->path[1]), c->path[1]);
+    return d;
+}
+
+void EeUiDiff_Free(EeUiDiff *d)
+{
+    if (d != NULL)
+    {
+        free(d->rows);
+        free(d);
+    }
+}
+
+uint32_t EeUiDiff_Rows(const EeUiDiff *d)
+{
+    return d != NULL ? d->count : 0;
+}
+
+const char *EeUiDiff_Cell(const EeUiDiff *d, uint32_t row, uint32_t column)
+{
+    const DiffRow *r;
+    if (d == NULL || row >= d->count)
+    {
+        return "";
+    }
+    r = &d->rows[row];
+    switch (column)
+    {
+        case 0:
+            return EeVoterTable_GetCellUtf8(d->a, r->row_a, EE_COL_VOTER_ID);
+        case 1:
+            return k_diff_field[r->field];
+        case 2:
+            return EeVoterTable_GetCellUtf8(d->a, r->row_a, r->col_a);
+        case 3:
+            return EeVoterTable_GetCellUtf8(d->b, r->row_b, r->col_b);
+        default:
+            return "";
+    }
+}
+
+const char *EeUiDiff_Title(const EeUiDiff *d, uint32_t column)
+{
+    switch (column)
+    {
+        case 0:
+            return "Voter ID";
+        case 1:
+            return "Field";
+        case 2:
+            return d != NULL && d->name[0][0] != '\0' ? d->name[0] : "file A";
+        default:
+            return d != NULL && d->name[1][0] != '\0' ? d->name[1] : "file B";
+    }
+}
+
+int EeUiDiff_ColumnWidth(uint32_t column)
+{
+    static const int widths[4] = {120, 80, 230, 230};
+    return column < 4 ? widths[column] : 100;
+}
+
+void EeUiDiff_WindowTitle(const EeUiDiff *d, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    StringCchPrintfA(out,
+                     cap,
+                     "Differences - %s vs %s",
+                     d != NULL && d->name[0][0] != '\0' ? d->name[0] : "(A)",
+                     d != NULL && d->name[1][0] != '\0' ? d->name[1] : "(B)");
+}
+
+void EeUiDiff_StatusText(const EeUiDiff *d, int mac, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    StringCchPrintfA(out,
+                     cap,
+                     "%u differing field(s) \xE2\x80\x94 click a header to sort, %s to copy",
+                     EeUiDiff_Rows(d),
+                     mac ? "Cmd-C" : "Ctrl+C");
+}
+
+/* Windows' diff_cmp_ids: numbers when both are all digits, else ignoring case */
+static int diff_cmp_ids(const char *a, const char *b)
+{
+    if (a[0] != '\0' && b[0] != '\0')
+    {
+        char *ea = NULL, *eb = NULL;
+        unsigned long long na = _strtoui64(a, &ea, 10), nb = _strtoui64(b, &eb, 10);
+        if (ea != NULL && *ea == '\0' && eb != NULL && *eb == '\0')
+        {
+            return na < nb ? -1 : na > nb ? 1 : 0;
+        }
+    }
+    return _stricmp(a, b);
+}
+
+typedef struct DiffSortCx
+{
+    const EeUiDiff *d;
+    uint32_t col;
+    BOOL asc;
+} DiffSortCx;
+
+/* Windows' diff_sort_cmp */
+static int diff_cmp(void *cxv, const void *pa, const void *pb)
+{
+    const DiffSortCx *cx = (const DiffSortCx *)cxv;
+    const DiffRow *ra = (const DiffRow *)pa, *rb = (const DiffRow *)pb;
+    const EeUiDiff *d = cx->d;
+    const char *ida = EeVoterTable_GetCellUtf8(d->a, ra->row_a, EE_COL_VOTER_ID);
+    const char *idb = EeVoterTable_GetCellUtf8(d->a, rb->row_a, EE_COL_VOTER_ID);
+    int c;
+    switch (cx->col)
+    {
+        case 0:
+            c = diff_cmp_ids(ida, idb);
+            break;
+        case 1:
+            c = _stricmp(k_diff_field[ra->field], k_diff_field[rb->field]);
+            break;
+        case 2:
+            c = _stricmp(EeVoterTable_GetCellUtf8(d->a, ra->row_a, ra->col_a),
+                         EeVoterTable_GetCellUtf8(d->a, rb->row_a, rb->col_a));
+            break;
+        default:
+            c = _stricmp(EeVoterTable_GetCellUtf8(d->b, ra->row_b, ra->col_b),
+                         EeVoterTable_GetCellUtf8(d->b, rb->row_b, rb->col_b));
+            break;
+    }
+    if (c == 0)
+    {
+        c = diff_cmp_ids(ida, idb); /* (a voter's fields stay together) */
+    }
+    return cx->asc ? c : -c;
+}
+
+void EeUiDiff_Sort(EeUiDiff *d, uint32_t column)
+{
+    DiffSortCx cx;
+    if (d == NULL || column > 3)
+    {
+        return;
+    }
+    if (d->sort_col == (int)column)
+    {
+        d->sort_asc = !d->sort_asc;
+    }
+    else
+    {
+        d->sort_col = (int)column;
+        d->sort_asc = TRUE;
+    }
+    cx.d = d;
+    cx.col = column;
+    cx.asc = d->sort_asc;
+    if (d->count > 1)
+    {
+        qsort_s(d->rows, d->count, sizeof(DiffRow), diff_cmp, &cx);
+    }
+}
+
+int EeUiDiff_SortColumn(const EeUiDiff *d, int *ascending)
+{
+    if (ascending != NULL)
+    {
+        *ascending = d != NULL && d->sort_asc;
+    }
+    return d != NULL ? d->sort_col : -1;
+}
+
+char *EeUiDiff_CopyText(const EeUiDiff *d, const uint32_t *rows, uint32_t n, size_t *len)
+{
+    TextBuf b = {NULL, 0, 0, FALSE};
+    uint32_t i, c;
+    if (len != NULL)
+    {
+        *len = 0;
+    }
+    if (d == NULL || rows == NULL || n == 0)
+    {
+        return NULL;
+    }
+    for (i = 0; i < n; i++)
+    {
+        if (rows[i] >= d->count)
+        {
+            continue;
+        }
+        for (c = 0; c < 4; c++)
+        {
+            const char *cell = EeUiDiff_Cell(d, rows[i], c);
+            tb_add(&b, cell, strlen(cell)); /* (as Windows' Diff_CopySelected: no quoting) */
+            tb_add(&b, c < 3 ? "\t" : "\r\n", c < 3 ? 1 : 2);
+        }
+    }
+    if (b.failed || b.data == NULL)
+    {
+        free(b.data);
+        return NULL;
+    }
+    if (len != NULL)
+    {
+        *len = b.len;
+    }
+    return b.data;
+}
+
+long EeUiDiff_Export(const EeUiDiff *d,
+                     const char *path_utf8,
+                     const uint32_t *rows,
+                     uint32_t n,
+                     char delim,
+                     char *err,
+                     size_t errcap)
+{
+    TextBuf b = {NULL, 0, 0, FALSE};
+    const char *f[4];
+    uint32_t i, c, count, wrote = 0;
+    set_err(err, errcap, "");
+    if (d == NULL || path_utf8 == NULL)
+    {
+        return -1;
+    }
+    delim = delim == '\t' ? '\t' : ',';
+    f[0] = "Voter ID";
+    f[1] = "Field";
+    f[2] = d->name[0]; /* (Windows' headings: the file names, empty without one) */
+    f[3] = d->name[1];
+    tb_line(&b, f, 4, delim);
+    count = rows != NULL ? n : d->count;
+    for (i = 0; i < count; i++)
+    {
+        uint32_t row = rows != NULL ? rows[i] : i;
+        if (row >= d->count)
+        {
+            continue;
+        }
+        for (c = 0; c < 4; c++)
+        {
+            f[c] = EeUiDiff_Cell(d, row, c);
+        }
+        tb_line(&b, f, 4, delim);
+        wrote++;
+    }
+    return write_export(path_utf8, &b, (long)wrote, err, errcap);
+}
+
+void EeUiDiff_ExportName(const EeUiDiff *d, int selection, char *out, size_t cap)
+{
+    char a[96], b[96];
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    file_name(d != NULL ? d->path[0] : "", FALSE, a, sizeof(a));
+    file_name(d != NULL ? d->path[1] : "", FALSE, b, sizeof(b));
+    StringCchPrintfA(out, cap, "%s-vs-%s-%sDifferences.csv", a, b, selection ? "Selected_" : "");
+}
+
+/* -------------------------------------------------------------------------- */
 /* Options                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -3868,7 +4258,108 @@ static void selftest_export_file(const char *what, const char *path, long wrote)
     remove(path);
 }
 
-int EeUiVoters_CompareSelfTest(int roster_a, const char *a_utf8, int roster_b, const char *b_utf8)
+/* Show Differences...: the rows (their cells only with @p cells), the sorts, Copy and Export */
+static void selftest_diff(const EeUiCompare *c,
+                          const EeUiVoters *a,
+                          const EeUiVoters *b,
+                          int cells,
+                          const char *scratch)
+{
+    char err[256], text[600];
+    EeUiDiff *d = EeUiCompare_Differences(c, a, b, err, sizeof(err));
+    uint32_t r, k, rows[2] = {0, 1};
+    int asc = 0, sorted;
+    size_t len = 0;
+    char *copy;
+    long wrote;
+    if (d == NULL)
+    {
+        printf("differences: %s\n", err);
+        return;
+    }
+    EeUiDiff_WindowTitle(d, text, sizeof(text));
+    printf("differences window: \"%s\", %u rows, columns %s (%d) | %s (%d) | %s (%d) | %s (%d)\n",
+           text,
+           EeUiDiff_Rows(d),
+           EeUiDiff_Title(d, 0),
+           EeUiDiff_ColumnWidth(0),
+           EeUiDiff_Title(d, 1),
+           EeUiDiff_ColumnWidth(1),
+           EeUiDiff_Title(d, 2),
+           EeUiDiff_ColumnWidth(2),
+           EeUiDiff_Title(d, 3),
+           EeUiDiff_ColumnWidth(3));
+    EeUiDiff_StatusText(d, 0, text, sizeof(text));
+    printf("differences status: %s\n", text);
+    for (k = 0; k < 5; k++)
+    {
+        /* the files' order, then the heading clicks Field, Field again, Voter ID, B's value */
+        static const int clicks[5] = {-1, 1, 1, 0, 3};
+        if (clicks[k] >= 0)
+        {
+            EeUiDiff_Sort(d, (uint32_t)clicks[k]);
+        }
+        sorted = EeUiDiff_SortColumn(d, &asc);
+        printf("differences sorted by %d, ascending %d:", sorted, asc);
+        for (r = 0; r < EeUiDiff_Rows(d) && r < 8; r++)
+        {
+            if (cells)
+            {
+                printf(" [%s | %s | %s | %s]",
+                       EeUiDiff_Cell(d, r, 0),
+                       EeUiDiff_Cell(d, r, 1),
+                       EeUiDiff_Cell(d, r, 2),
+                       EeUiDiff_Cell(d, r, 3));
+            }
+            else
+            {
+                printf(" %s", EeUiDiff_Cell(d, r, 1)); /* (the field only) */
+            }
+        }
+        printf("%s\n", EeUiDiff_Rows(d) > 8 ? " ..." : "");
+    }
+    copy = EeUiDiff_CopyText(d, rows, EeUiDiff_Rows(d) < 2 ? EeUiDiff_Rows(d) : 2, &len);
+    if (copy != NULL)
+    {
+        size_t tabs = 0, lines = 0, i;
+        for (i = 0; i < len; i++)
+        {
+            tabs += copy[i] == '\t';
+            lines += copy[i] == '\n';
+        }
+        printf("differences copy: %u bytes, %u lines, %u tabs%s%.*s\n",
+               (unsigned)len,
+               (unsigned)lines,
+               (unsigned)tabs,
+               cells ? ": " : "",
+               cells ? (int)strcspn(copy, "\r\n") : 0,
+               copy);
+        free(copy);
+    }
+    EeUiDiff_ExportName(d, 0, text, sizeof(text));
+    printf("differences export names: \"%s\"", text);
+    EeUiDiff_ExportName(d, 1, text, sizeof(text));
+    printf(", \"%s\"\n", text);
+    wrote = EeUiDiff_Export(d, scratch, rows, 1, ',', err, sizeof(err));
+    printf("differences export selected: %ld\n", wrote);
+    remove(scratch);
+    wrote = EeUiDiff_Export(d, scratch, NULL, 0, '\t', err, sizeof(err));
+    if (wrote >= 0)
+    {
+        selftest_export_file("differences export", scratch, wrote);
+    }
+    else
+    {
+        printf("differences export failed: %s\n", err);
+    }
+    EeUiDiff_Free(d);
+}
+
+int EeUiVoters_CompareSelfTest(int roster_a,
+                               const char *a_utf8,
+                               int roster_b,
+                               const char *b_utf8,
+                               int cells)
 {
     char err[512], text[600], path[640];
     const char *tmp = getenv("TMPDIR");
@@ -4004,6 +4495,21 @@ int EeUiVoters_CompareSelfTest(int roster_a, const char *a_utf8, int roster_b, c
     else
     {
         printf("records export failed: %s\n", err);
+    }
+    {
+        struct timespec d0, d1;
+        clock_gettime(CLOCK_MONOTONIC, &d0);
+        selftest_diff(c, v[0], v[1], cells, path);
+        clock_gettime(CLOCK_MONOTONIC, &d1);
+        fprintf(stderr,
+                "differences in %.2f s\n",
+                (double)(d1.tv_sec - d0.tv_sec) + (double)(d1.tv_nsec - d0.tv_nsec) / 1e9);
+    }
+    if (EeUiVoters_TotalRows(v[0]) != EeUiVoters_TotalRows(v[1]))
+    {
+        EeUiDiff *d = EeUiCompare_Differences(c, v[1], v[0], err, sizeof(err));
+        printf("differences of a changed file: %s\n", d == NULL ? err : "(rows)");
+        EeUiDiff_Free(d);
     }
     EeUiCompare_Free(c);
     EeUiVoters_Free(v[0]);

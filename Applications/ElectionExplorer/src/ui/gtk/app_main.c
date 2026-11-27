@@ -16,7 +16,8 @@
  * The Compare section of the menu lists the other windows, as Windows' Compare menu does: a
  * compare matches the two files by Voter ID (in the background, with a progress window, for
  * large files) and opens the Compare window of categories and counts, with Show these rows in
- * either file, Export Summary... and Export All Records...
+ * either file, Export Summary..., Export All Records... and Show Differences... (a window of
+ * each differing field, sortable, with Copy and Export).
  *
  * File > Open Voter Roster... opens a roster's files in a Voter Roster window of its own, as on
  * Windows: the same window with Windows' roster columns, menus and words (no duplicate voters,
@@ -56,12 +57,14 @@
  *   the Voter Roster window would show.
  * - `--selftest-voting <list> <roster files...>` prints Show Duplicate Voters Voting of the list
  *   in that roster, as the voter list window would show it.
- * - `--selftest-compare list|roster <file A> list|roster <file B>` prints the compare of the two
- *   files as the Compare window shows it.
+ * - `--selftest-compare list|roster <file A> list|roster <file B> [--counts]` prints the compare
+ *   of the two files as the Compare window and Show Differences... show it (--counts: no cells).
  * - `--compare list|roster <file>` (with --snapshot) opens that file in a second window, then
  *   compares the first with it; the PNG is of the Compare window, and `--export` exports all
  *   records. `--compare-show <row>[:b]` then shows that row's voters in file A (or B), as the
- *   right-click menu does, and the PNG is of that file's window.
+ *   right-click menu does, and the PNG is of that file's window. `--compare-diff` then clicks
+ *   Show Differences...: the PNG is of that window, `--sort <column>[:desc]` clicks its heading
+ *   and `--export` exports its rows (Export All...).
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -169,6 +172,7 @@ typedef struct ReportWindow ReportWindow;
 typedef struct TotalsWindow TotalsWindow;
 typedef struct OptionsDialog OptionsDialog;
 typedef struct CompareWindow CompareWindow;
+typedef struct DiffWindow DiffWindow;
 
 typedef struct VoterWindow
 {
@@ -248,6 +252,7 @@ typedef struct VoterWindow
     struct VoterWindow *snapshot_compare;
     int snapshot_compare_row;
     gboolean snapshot_compare_b;
+    gboolean snapshot_compare_diff; /* --compare-diff: the PNG is of Show Differences... */
 } VoterWindow;
 
 typedef struct LoadDone
@@ -2829,6 +2834,417 @@ struct CompareWindow
 
 static CompareWindow *g_compare;
 
+/* Show Differences... (Windows' Differences window: one at a time, closed with the Compare
+ * window) */
+struct DiffWindow
+{
+    int refs;            /* the window, and each export dialog or menu still to finish */
+    gboolean closed;
+    gboolean rebuilding; /* the heading's arrow set without a click */
+    GtkWindow *win;
+    GtkColumnView *view;
+    GtkWidget *menu;
+    EeUiDiff *diff;
+    EeRows *rows;
+};
+
+static DiffWindow *g_diff;
+
+static void diff_unref(DiffWindow *dw)
+{
+    if (--dw->refs == 0)
+    {
+        EeUiDiff_Free(dw->diff);
+        g_clear_object(&dw->rows);
+        g_free(dw);
+    }
+}
+
+/* Copy (Ctrl+C or the right-click menu): the selected rows, tab-separated, as on Windows */
+static void diff_copy(DiffWindow *dw)
+{
+    guint n = 0;
+    uint32_t *rows = view_selection(dw->view, dw->rows->count, &n);
+    char *text = n > 0 ? EeUiDiff_CopyText(dw->diff, rows, n, NULL) : NULL;
+    if (text != NULL)
+    {
+        gdk_clipboard_set_text(gtk_widget_get_clipboard(GTK_WIDGET(dw->win)), text);
+        free(text);
+    }
+    g_free(rows);
+}
+
+static void diff_export_to(DiffWindow *dw, const char *path, const uint32_t *rows, guint n)
+{
+    char err[256];
+    long wrote = EeUiDiff_Export(dw->diff, path, rows, n, export_delim(path), err, sizeof(err));
+    if (wrote < 0)
+    {
+        GtkAlertDialog *d = gtk_alert_dialog_new("%s", err);
+        fprintf(stderr, "differences export: %s\n", err);
+        gtk_alert_dialog_show(d, dw->win);
+        g_object_unref(d);
+        return;
+    }
+    fprintf(stderr, "exported %ld differences\n", wrote);
+}
+
+typedef struct DiffExport
+{
+    DiffWindow *dw;
+    uint32_t *rows; /* NULL: all */
+    guint n;
+} DiffExport;
+
+static void on_diff_export_chosen(GObject *source, GAsyncResult *result, gpointer user)
+{
+    DiffExport *e = (DiffExport *)user;
+    GFile *file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source), result, NULL);
+    if (file != NULL)
+    {
+        char *path = g_file_get_path(file);
+        if (path != NULL && !e->dw->closed)
+        {
+            char *named = export_named(path);
+            diff_export_to(e->dw, named, e->rows, e->n);
+            g_free(named);
+        }
+        g_free(path);
+        g_object_unref(file);
+    }
+    diff_unref(e->dw);
+    g_free(e->rows);
+    g_free(e);
+}
+
+/* Export Selected... / Export All...: in the order shown */
+static void diff_export(DiffWindow *dw, gboolean selection)
+{
+    DiffExport *e = g_new0(DiffExport, 1);
+    GtkFileDialog *d;
+    GListModel *filters;
+    char name[600];
+    if (selection)
+    {
+        e->rows = view_selection(dw->view, dw->rows->count, &e->n);
+        if (e->n == 0)
+        {
+            g_free(e->rows);
+            g_free(e);
+            return;
+        }
+    }
+    e->dw = dw;
+    dw->refs++;
+    d = gtk_file_dialog_new();
+    filters = export_filters();
+    EeUiDiff_ExportName(dw->diff, selection, name, sizeof(name));
+    gtk_file_dialog_set_title(d, "Export");
+    gtk_file_dialog_set_filters(d, filters);
+    gtk_file_dialog_set_initial_name(d, name);
+    gtk_file_dialog_save(d, dw->win, NULL, on_diff_export_chosen, e);
+    g_object_unref(filters);
+    g_object_unref(d);
+}
+
+static void diff_action(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    const char *name = g_action_get_name(G_ACTION(action));
+    (void)param;
+    if (dw->closed)
+    {
+        return;
+    }
+    if (strcmp(name, "copy") == 0)
+    {
+        diff_copy(dw);
+    }
+    else if (strcmp(name, "export-selected") == 0 || strcmp(name, "export-all") == 0)
+    {
+        diff_export(dw, name[7] == 's');
+    }
+}
+
+static gboolean diff_drop_menu(gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    if (!dw->closed && dw->menu != NULL && !gtk_widget_get_visible(dw->menu))
+    {
+        gtk_widget_unparent(dw->menu);
+        dw->menu = NULL;
+    }
+    diff_unref(dw);
+    return G_SOURCE_REMOVE;
+}
+
+static void on_diff_menu_closed(GtkPopover *popover, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    (void)popover;
+    dw->refs++;
+    g_idle_add(diff_drop_menu, dw); /* (later: the menu's action runs after "closed") */
+}
+
+/* the right-click menu, as on Windows: Copy; Export Selected..., Export All... */
+static void on_diff_right_click(GtkGestureClick *g, int n_press, double x, double y, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    GtkWidget *label = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(g));
+    GtkSelectionModel *model = gtk_column_view_get_model(dw->view);
+    guint row = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(label), "row"));
+    GMenu *menu, *section;
+    graphene_point_t at;
+    (void)n_press;
+    if (dw->closed || row >= dw->rows->count)
+    {
+        return;
+    }
+    if (!gtk_selection_model_is_selected(model, row))
+    {
+        gtk_selection_model_select_item(model, row, TRUE); /* (as on Windows) */
+    }
+    menu = g_menu_new();
+    section = g_menu_new();
+    g_menu_append(section, "Copy", "diff.copy");
+    menu_section(menu, section);
+    section = g_menu_new();
+    g_menu_append(section, "Export Selected\xE2\x80\xA6", "diff.export-selected");
+    g_menu_append(section, "Export All\xE2\x80\xA6", "diff.export-all");
+    menu_section(menu, section);
+    if (dw->menu != NULL)
+    {
+        gtk_widget_unparent(dw->menu);
+    }
+    dw->menu = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    gtk_widget_set_parent(dw->menu, GTK_WIDGET(dw->view));
+    gtk_popover_set_has_arrow(GTK_POPOVER(dw->menu), FALSE);
+    gtk_widget_set_halign(dw->menu, GTK_ALIGN_START);
+    g_signal_connect(dw->menu, "closed", G_CALLBACK(on_diff_menu_closed), dw);
+    g_object_unref(menu);
+    if (gtk_widget_compute_point(label,
+                                 GTK_WIDGET(dw->view),
+                                 &GRAPHENE_POINT_INIT((float)x, (float)y),
+                                 &at))
+    {
+        GdkRectangle r = {(int)at.x, (int)at.y, 1, 1};
+        gtk_popover_set_pointing_to(GTK_POPOVER(dw->menu), &r);
+    }
+    gtk_popover_popup(GTK_POPOVER(dw->menu));
+    gtk_gesture_set_state(GTK_GESTURE(g), GTK_EVENT_SEQUENCE_CLAIMED);
+}
+
+static void diff_cell_setup(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    GtkWidget *label = gtk_label_new(NULL);
+    GtkGesture *click = gtk_gesture_click_new();
+    (void)f;
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f); /* (Windows: every column at the left) */
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+    gtk_label_set_single_line_mode(GTK_LABEL(label), TRUE);
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+    g_signal_connect(click, "pressed", G_CALLBACK(on_diff_right_click), dw);
+    gtk_widget_add_controller(label, GTK_EVENT_CONTROLLER(click));
+    gtk_list_item_set_child(item, label);
+}
+
+static void diff_cell_bind(GtkSignalListItemFactory *f, GtkListItem *item, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    EeRow *row = EE_ROW(gtk_list_item_get_item(item));
+    GtkWidget *label = gtk_list_item_get_child(item);
+    guint c = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(f), "column"));
+    g_object_set_data(G_OBJECT(label), "row", GUINT_TO_POINTER(row->index));
+    gtk_label_set_text(GTK_LABEL(label), EeUiDiff_Cell(dw->diff, row->index, c));
+}
+
+/* a heading clicked: sort the rows (Windows' Diff_Sort, on the UI thread), one arrow only */
+static void on_diff_sorter_changed(GtkSorter *sorter, GtkSorterChange change, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    GtkColumnViewSorter *cvs = GTK_COLUMN_VIEW_SORTER(sorter);
+    GtkColumnViewColumn *col;
+    guint n = dw->rows->count, column;
+    gboolean ascending;
+    int asc = 0;
+    (void)change;
+    if (dw->rebuilding || dw->closed)
+    {
+        return;
+    }
+    col = gtk_column_view_sorter_get_primary_sort_column(cvs);
+    if (col == NULL)
+    {
+        return;
+    }
+    column = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(col), "column"));
+    ascending = gtk_column_view_sorter_get_primary_sort_order(cvs) == GTK_SORT_ASCENDING;
+    if (gtk_column_view_sorter_get_n_sort_columns(cvs) > 1)
+    {
+        dw->rebuilding = TRUE;
+        gtk_column_view_sort_by_column(dw->view, NULL, GTK_SORT_ASCENDING); /* (one arrow only) */
+        gtk_column_view_sort_by_column(dw->view,
+                                       col,
+                                       ascending ? GTK_SORT_ASCENDING : GTK_SORT_DESCENDING);
+        dw->rebuilding = FALSE;
+    }
+    if (EeUiDiff_SortColumn(dw->diff, &asc) != (int)column)
+    {
+        EeUiDiff_Sort(dw->diff, column); /* (a new column: ascending) */
+    }
+    EeUiDiff_SortColumn(dw->diff, &asc);
+    if ((asc != 0) != (ascending != 0))
+    {
+        EeUiDiff_Sort(dw->diff, column); /* (the other way) */
+    }
+    gtk_selection_model_unselect_all(gtk_column_view_get_model(dw->view));
+    g_list_model_items_changed(G_LIST_MODEL(dw->rows), 0, n, n);
+}
+
+/* --sort with --compare-diff: a heading click (twice for :desc) */
+static void diff_click_heading(DiffWindow *dw, guint column, gboolean ascending)
+{
+    GtkColumnViewColumn *col = g_list_model_get_item(gtk_column_view_get_columns(dw->view), column);
+    if (col != NULL)
+    {
+        gtk_column_view_sort_by_column(dw->view,
+                                       col,
+                                       ascending ? GTK_SORT_ASCENDING : GTK_SORT_DESCENDING);
+        g_object_unref(col);
+    }
+}
+
+static void on_diff_destroy(GtkWidget *widget, gpointer user)
+{
+    DiffWindow *dw = (DiffWindow *)user;
+    (void)widget;
+    dw->closed = TRUE;
+    if (dw->menu != NULL)
+    {
+        gtk_widget_unparent(dw->menu);
+        dw->menu = NULL;
+    }
+    if (g_diff == dw)
+    {
+        g_diff = NULL;
+    }
+    diff_unref(dw);
+}
+
+/* Show Differences... (Windows' App_ShowDifferences): a window of each differing field of the
+ * voters in both files, replacing the one open */
+static void show_differences(VoterWindow *a, VoterWindow *b, const EeUiCompare *c, GtkWindow *over)
+{
+    static const GActionEntry actions[] = {
+        {"copy", diff_action, NULL, NULL, NULL, {0}},
+        {"export-selected", diff_action, NULL, NULL, NULL, {0}},
+        {"export-all", diff_action, NULL, NULL, NULL, {0}},
+    };
+    char err[256], text[600];
+    EeUiDiff *diff;
+    DiffWindow *dw;
+    GSimpleActionGroup *group;
+    GtkEventController *keys;
+    GtkWidget *box, *scroll;
+    GtkLabel *status;
+    GtkSelectionModel *sel;
+    guint k;
+    int total_width = 24;
+    gint64 started = g_get_monotonic_time();
+    diff = EeUiCompare_Differences(c, a->voters, b->voters, err, sizeof(err));
+    if (diff == NULL)
+    {
+        GtkAlertDialog *d = gtk_alert_dialog_new("%s", err);
+        gtk_alert_dialog_show(d, over);
+        g_object_unref(d);
+        return;
+    }
+    fprintf(stderr,
+            "differences: %u rows in %.2f s\n",
+            EeUiDiff_Rows(diff),
+            (g_get_monotonic_time() - started) / 1e6);
+    if (g_diff != NULL)
+    {
+        gtk_window_destroy(g_diff->win); /* (on_diff_destroy clears g_diff) */
+    }
+    dw = g_new0(DiffWindow, 1);
+    dw->refs = 1;
+    dw->diff = diff;
+    dw->rows = ee_rows_new(EeUiDiff_Rows(diff));
+    g_diff = dw;
+
+    dw->win = GTK_WINDOW(gtk_window_new());
+    EeUiDiff_WindowTitle(diff, text, sizeof(text));
+    gtk_window_set_title(dw->win, text);
+    group = g_simple_action_group_new();
+    g_action_map_add_action_entries(G_ACTION_MAP(group), actions, G_N_ELEMENTS(actions), dw);
+    gtk_widget_insert_action_group(GTK_WIDGET(dw->win), "diff", G_ACTION_GROUP(group));
+    g_object_unref(group);
+    keys = gtk_shortcut_controller_new();
+    gtk_shortcut_controller_add_shortcut(
+        GTK_SHORTCUT_CONTROLLER(keys),
+        gtk_shortcut_new(gtk_keyval_trigger_new(GDK_KEY_c, GDK_CONTROL_MASK),
+                         gtk_named_action_new("diff.copy")));
+    gtk_shortcut_controller_set_scope(GTK_SHORTCUT_CONTROLLER(keys), GTK_SHORTCUT_SCOPE_GLOBAL);
+    gtk_widget_add_controller(GTK_WIDGET(dw->win), keys);
+
+    dw->view = GTK_COLUMN_VIEW(gtk_column_view_new(NULL));
+    gtk_column_view_set_show_column_separators(dw->view, TRUE);
+    gtk_column_view_set_show_row_separators(dw->view, TRUE); /* (Windows' grid lines) */
+    gtk_column_view_set_reorderable(dw->view, FALSE);
+    gtk_widget_add_css_class(GTK_WIDGET(dw->view), "data-table");
+    for (k = 0; k < 4; k++)
+    {
+        GtkListItemFactory *f = gtk_signal_list_item_factory_new();
+        GtkColumnViewColumn *col;
+        GtkSorter *sorter;
+        const char *title = EeUiDiff_Title(diff, k);
+        int width = EeUiDiff_ColumnWidth(k);
+        int need = text_width(GTK_WIDGET(dw->view), title) * 11 / 10 + 40; /* (and the arrow) */
+        width = need > width ? need : width;
+        total_width += width;
+        g_object_set_data(G_OBJECT(f), "column", GUINT_TO_POINTER(k));
+        g_signal_connect(f, "setup", G_CALLBACK(diff_cell_setup), dw);
+        g_signal_connect(f, "bind", G_CALLBACK(diff_cell_bind), dw);
+        col = gtk_column_view_column_new(title, f);
+        g_object_set_data(G_OBJECT(col), "column", GUINT_TO_POINTER(k));
+        gtk_column_view_column_set_resizable(col, TRUE);
+        gtk_column_view_column_set_fixed_width(col, width);
+        sorter = GTK_SORTER(gtk_custom_sorter_new(no_compare, NULL, NULL));
+        gtk_column_view_column_set_sorter(col, sorter);
+        g_object_unref(sorter);
+        gtk_column_view_append_column(dw->view, col);
+        g_object_unref(col);
+    }
+    sel = GTK_SELECTION_MODEL(gtk_multi_selection_new(G_LIST_MODEL(g_object_ref(dw->rows))));
+    gtk_column_view_set_model(dw->view, sel);
+    g_object_unref(sel);
+    g_signal_connect(gtk_column_view_get_sorter(dw->view),
+                     "changed",
+                     G_CALLBACK(on_diff_sorter_changed),
+                     dw); /* (unsorted at first: the files' order, as on Windows) */
+    scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), GTK_WIDGET(dw->view));
+    gtk_widget_set_vexpand(scroll, TRUE);
+
+    EeUiDiff_StatusText(diff, 0, text, sizeof(text));
+    status = GTK_LABEL(gtk_label_new(text));
+    gtk_label_set_xalign(status, 0.0f);
+    gtk_label_set_ellipsize(status, PANGO_ELLIPSIZE_END);
+    gtk_widget_set_margin_start(GTK_WIDGET(status), 8);
+    gtk_widget_set_margin_end(GTK_WIDGET(status), 8);
+    gtk_widget_set_margin_top(GTK_WIDGET(status), 4);
+    gtk_widget_set_margin_bottom(GTK_WIDGET(status), 4);
+    box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_box_append(GTK_BOX(box), scroll);
+    gtk_box_append(GTK_BOX(box), GTK_WIDGET(status));
+    gtk_window_set_child(dw->win, box);
+    gtk_window_set_default_size(dw->win, total_width > 720 ? total_width : 720, 460);
+    g_signal_connect(dw->win, "destroy", G_CALLBACK(on_diff_destroy), dw);
+    gtk_window_present(dw->win);
+}
+
 typedef struct CompareJob
 {
     VoterWindow *a, *b;
@@ -3123,6 +3539,10 @@ static void on_compare_destroy(GtkWidget *widget, gpointer user)
     CompareWindow *cw = (CompareWindow *)user;
     (void)widget;
     cw->closed = TRUE;
+    if (g_diff != NULL)
+    {
+        gtk_window_destroy(g_diff->win); /* (as on Windows: it details this comparison) */
+    }
     if (cw->menu != NULL)
     {
         gtk_widget_unparent(cw->menu);
@@ -3138,9 +3558,18 @@ static void on_compare_destroy(GtkWidget *widget, gpointer user)
 static void on_compare_button(GtkButton *button, gpointer user)
 {
     CompareWindow *cw = (CompareWindow *)user;
-    if (!cw->closed)
+    const char *what = (const char *)g_object_get_data(G_OBJECT(button), "what");
+    if (cw->closed)
     {
-        compare_export(cw, g_object_get_data(G_OBJECT(button), "records") != NULL);
+        return;
+    }
+    if (strcmp(what, "diff") == 0)
+    {
+        show_differences(cw->a, cw->b, cw->c, cw->win);
+    }
+    else
+    {
+        compare_export(cw, strcmp(what, "records") == 0);
     }
 }
 
@@ -3156,7 +3585,7 @@ static void show_compare_window(VoterWindow *a, VoterWindow *b, EeUiCompare *c)
     static const int widths[3] = {170, 150, 150}; /* (Windows' at 100%) */
     CompareWindow *cw;
     GSimpleActionGroup *group;
-    GtkWidget *box, *scroll, *buttons, *summary, *records;
+    GtkWidget *box, *scroll, *buttons, *summary, *records, *diff;
     GtkLabel *status;
     GtkSelectionModel *sel;
     GtkGesture *empty;
@@ -3231,14 +3660,19 @@ static void show_compare_window(VoterWindow *a, VoterWindow *b, EeUiCompare *c)
     buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     summary = gtk_button_new_with_label("Export Summary\xE2\x80\xA6");
     records = gtk_button_new_with_label("Export All Records\xE2\x80\xA6");
-    g_object_set_data(G_OBJECT(records), "records", GINT_TO_POINTER(1));
+    diff = gtk_button_new_with_label("Show Differences\xE2\x80\xA6");
+    g_object_set_data(G_OBJECT(summary), "what", (gpointer) "summary");
+    g_object_set_data(G_OBJECT(records), "what", (gpointer) "records");
+    g_object_set_data(G_OBJECT(diff), "what", (gpointer) "diff");
     g_signal_connect(summary, "clicked", G_CALLBACK(on_compare_button), cw);
     g_signal_connect(records, "clicked", G_CALLBACK(on_compare_button), cw);
+    g_signal_connect(diff, "clicked", G_CALLBACK(on_compare_button), cw);
     gtk_widget_set_halign(buttons, GTK_ALIGN_END);
     gtk_widget_set_margin_top(buttons, 6);
     gtk_widget_set_margin_end(buttons, 8);
     gtk_box_append(GTK_BOX(buttons), summary);
     gtk_box_append(GTK_BOX(buttons), records);
+    gtk_box_append(GTK_BOX(buttons), diff); /* (Windows' order, Show Differences... last) */
 
     status = GTK_LABEL(gtk_label_new(EeUiCompare_StatusText()));
     gtk_label_set_xalign(status, 0.0f);
@@ -3916,10 +4350,12 @@ static gboolean take_snapshot(gpointer user)
     ReportWindow *rw = w->snapshot_report >= 0 ? w->reports[w->snapshot_report] : NULL;
     TotalsWindow *tw = w->snapshot_totals ? w->totals : NULL;
     CompareWindow *cw = w->snapshot_compare != NULL ? g_compare : NULL;
+    DiffWindow *dw = cw != NULL && w->snapshot_compare_diff ? g_diff : NULL;
     VoterWindow *shown = cw != NULL && w->snapshot_compare_row >= 0
                              ? (w->snapshot_compare_b ? cw->b : cw->a)
                              : NULL; /* (--compare-show: the file the rows are shown in) */
     GtkWindow *target = shown != NULL                               ? shown->window
+                        : dw != NULL                                ? dw->win
                         : cw != NULL                                ? cw->win
                         : tw != NULL                                ? tw->win
                         : rw != NULL                                ? rw->win
@@ -3936,7 +4372,12 @@ static gboolean take_snapshot(gpointer user)
     {
         return G_SOURCE_CONTINUE; /* (a sort, filter or compare is still running) */
     }
-    if (w->snapshot_export != NULL && cw != NULL && shown == NULL)
+    if (w->snapshot_export != NULL && dw != NULL)
+    {
+        diff_export_to(dw, w->snapshot_export, NULL, 0); /* (Export All..., no dialog) */
+        g_clear_pointer(&w->snapshot_export, g_free);
+    }
+    else if (w->snapshot_export != NULL && cw != NULL && shown == NULL)
     {
         compare_export_to(cw, w->snapshot_export, TRUE); /* (Export All Records..., no dialog) */
         g_clear_pointer(&w->snapshot_export, g_free);
@@ -4119,6 +4560,18 @@ static void snapshot_actions(VoterWindow *w)
         if (g_compare != NULL && w->snapshot_compare_row >= 0)
         {
             compare_show_row(g_compare, (guint)w->snapshot_compare_row, w->snapshot_compare_b);
+        }
+        else if (g_compare != NULL && w->snapshot_compare_diff)
+        {
+            show_differences(g_compare->a, g_compare->b, g_compare->c, g_compare->win);
+            if (g_diff != NULL && w->snapshot_sort >= 0 && w->snapshot_sort < 4)
+            {
+                diff_click_heading(g_diff, (guint)w->snapshot_sort, TRUE);
+                if (!w->snapshot_ascending)
+                {
+                    diff_click_heading(g_diff, (guint)w->snapshot_sort, FALSE);
+                }
+            }
         }
     }
     g_timeout_add(800, take_snapshot, w); /* (time for the window to lay out and draw) */
@@ -4862,6 +5315,7 @@ typedef struct AppArgs
         int roster;       /* --compare list|roster <file>: 1 for a roster */
         const char *file; /* (NULL: none) */
         const char *show; /* --compare-show <row>[:b] */
+        gboolean diff;    /* --compare-diff */
     } compare;
 } AppArgs;
 
@@ -4910,6 +5364,7 @@ static void on_activate(GtkApplication *app, gpointer user)
         w->snapshot_compare_row = args->compare.show != NULL ? atoi(args->compare.show) : -1;
         w->snapshot_compare_b =
             args->compare.show != NULL && strstr(args->compare.show, ":b") != NULL;
+        w->snapshot_compare_diff = args->compare.diff;
     }
     if (args->snapshot != NULL)
     {
@@ -4966,7 +5421,7 @@ int main(int argc, char **argv)
                     FALSE,
                     FALSE,
                     NULL,
-                    {0, NULL, NULL}};
+                    {0, NULL, NULL, FALSE}};
     GtkApplication *app;
     int status, i;
     args.quick = g_ptr_array_new_with_free_func(g_free);
@@ -4991,10 +5446,13 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--selftest-compare") == 0 && i + 4 < argc)
         {
-            return EeUiVoters_CompareSelfTest(strcmp(argv[i + 1], "roster") == 0,
-                                              argv[i + 2],
-                                              strcmp(argv[i + 3], "roster") == 0,
-                                              argv[i + 4]);
+            /* (with --counts after the files: counts and Voter IDs only, for real files) */
+            return EeUiVoters_CompareSelfTest(
+                strcmp(argv[i + 1], "roster") == 0,
+                argv[i + 2],
+                strcmp(argv[i + 3], "roster") == 0,
+                argv[i + 4],
+                !(i + 5 < argc && strcmp(argv[i + 5], "--counts") == 0));
         }
         else if (strcmp(argv[i], "--roster") == 0)
         {
@@ -5013,6 +5471,10 @@ int main(int argc, char **argv)
         else if (strcmp(argv[i], "--compare-show") == 0 && i + 1 < argc)
         {
             args.compare.show = argv[++i];
+        }
+        else if (strcmp(argv[i], "--compare-diff") == 0)
+        {
+            args.compare.diff = TRUE;
         }
         else if (strcmp(argv[i], "--load-summary") == 0)
         {

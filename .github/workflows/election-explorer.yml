@@ -96,7 +96,7 @@ jobs:
           grep -qF "voting reset: 9 voters" voting.txt
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-voting test/sample_duplicates.csv test/sample_roster.csv > none.txt
           grep -qF "voting: No voters with the same name and date of birth voted under different Voter IDs in sample_roster.csv." none.txt
-      - name: Compare self-test (made-up lists and rosters)
+      - name: Compare and Show Differences self-test (made-up lists and rosters)
         run: |
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-compare list test/sample_voters.csv list test/sample_voters_later.csv > compare.txt
           cat compare.txt
@@ -108,12 +108,17 @@ jobs:
           grep -qF "show row 1 in A: No voters in that category." compare.txt
           grep -qF "summary export: Identical,1,1" compare.txt
           grep -qF "records export: 11 rows, BOM 1" compare.txt
+          grep -qF "differences window: \"Differences - sample_voters.csv vs sample_voters_later.csv\", 5 rows" compare.txt
+          grep -qF "differences sorted by 1, ascending 0: [100004 | Precinct | 203 | 204]" compare.txt
+          grep -qF "differences export: 5 rows, BOM 1" compare.txt
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-compare roster test/sample_roster.csv roster test/sample_roster_mail.csv > compare_rosters.txt
           grep -qF "compare row 5: Voting Method changed | 1 | 1" compare_rosters.txt
           grep -qF "compare row 6: Date Voted changed | 1 | 1" compare_rosters.txt
+          grep -qF "differences sorted by -1, ascending 1: [1000000105 | Voting Method | Election Day In-Person | Mail Ballot]" compare_rosters.txt
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-compare roster test/sample_roster_voting.csv list test/sample_duplicates.csv > compare_mixed.txt
           grep -qF "compare menu in A: Compare with sample_duplicates.csv (voter list)" compare_mixed.txt
           grep -qF "compare row 5: Identical | 6 | 6" compare_mixed.txt
+          grep -qF "differences: No differing voters found." compare_mixed.txt
 
   macos:
     name: macOS (Apple Silicon, Apple Vision)
@@ -185,7 +190,7 @@ jobs:
           grep -qF "voting reset: 9 voters" voting.txt
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-voting test/sample_duplicates.csv test/sample_roster.csv > none.txt
           grep -qF "voting: No voters with the same name and date of birth voted under different Voter IDs in sample_roster.csv." none.txt
-      - name: Compare self-test (made-up lists and rosters)
+      - name: Compare and Show Differences self-test (made-up lists and rosters)
         run: |
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-compare list test/sample_voters.csv list test/sample_voters_later.csv > compare.txt
           cat compare.txt
@@ -197,9 +202,14 @@ jobs:
           grep -qF "show row 1 in A: No voters in that category." compare.txt
           grep -qF "summary export: Identical,1,1" compare.txt
           grep -qF "records export: 11 rows, BOM 1" compare.txt
+          grep -qF "differences window: \"Differences - sample_voters.csv vs sample_voters_later.csv\", 5 rows" compare.txt
+          grep -qF "differences sorted by 1, ascending 0: [100004 | Precinct | 203 | 204]" compare.txt
+          grep -qF "differences export: 5 rows, BOM 1" compare.txt
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-compare roster test/sample_roster.csv roster test/sample_roster_mail.csv > compare_rosters.txt
           grep -qF "compare row 5: Voting Method changed | 1 | 1" compare_rosters.txt
           grep -qF "compare row 6: Date Voted changed | 1 | 1" compare_rosters.txt
+          grep -qF "differences sorted by -1, ascending 1: [1000000105 | Voting Method | Election Day In-Person | Mail Ballot]" compare_rosters.txt
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-compare roster test/sample_roster_voting.csv list test/sample_duplicates.csv > compare_mixed.txt
           grep -qF "compare menu in A: Compare with sample_duplicates.csv (voter list)" compare_mixed.txt
           grep -qF "compare row 5: Identical | 6 | 6" compare_mixed.txt
+          grep -qF "differences: No differing voters found." compare_mixed.txt

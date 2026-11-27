@@ -30,6 +30,16 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-27 — macOS and Linux: Compare's Show Differences
+- **What:** Show Differences… in the macOS and Linux Compare window, as on Windows: a window of each field that differs for a voter in both files (Voter ID, Field, the value in A and in B), sorted by a heading click (again: the other way), Copy (Ctrl+C / Cmd-C, right-click), Export Selected… / Export All…; one at a time, closed with the Compare window. On the Mac, a file named on the command line is no longer replaced by AppKit's guess at launch.
+- **Where:**
+  - `src/ui/ee_ui_voters.{h,c}`: `EeUiCompare_Differences`, `EeUiDiff_*` (`diff_cmp` is Windows' `diff_sort_cmp`); `EeUiVoters_CompareSelfTest` prints them (`selftest_diff`; `--counts` for real files).
+  - `src/ui/gtk/app_main.c`: `DiffWindow`, `show_differences`, `on_diff_sorter_changed`, `diff_copy`, `diff_export`; the Compare window's Show Differences… button; `--compare-diff`.
+  - `src/ui/macos/app_main.m`: `EeDiffWindow`, `showDifferences:`; `--compare-diff`; `application:openFile:` keeps the file `main()` found.
+  - `.github/workflows/election-explorer.yml`: five Show Differences lines in the compare step on both runners.
+- **Checked:** Linux and Mac, Debug and Release, no warnings; `--selftest-compare` the same on both; the other self-tests unchanged; snapshots of the window, sorted, and its export on both. Real Travis lists: 2,154 differing fields in 1.4 s, adding up to the Compare window's Name, Address and Precinct counts.
+- **Details:** [cross-platform-design.md, "The Voter Roster window"](docs/cross-platform-design.md#the-voter-list-window-prototype-2026-11-22).
+
 ### 2026-11-27 — macOS and Linux: Compare (the menu and the Compare window)
 - **What:** Windows' Compare menu in the macOS and Linux windows: Compare with any other open list or roster, matched by Voter ID with what Windows compares for the pair; large files in the background behind Windows' progress window (Cancel), smaller at once. The Compare window of categories and counts for A and B, with Show these rows in <file> (right-click, or a double click), Export Summary… and Export All Records…, as on Windows; it closes with either file's window. Show Differences… is not yet in.
 - **Where:**

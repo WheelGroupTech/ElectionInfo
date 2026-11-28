@@ -6,6 +6,7 @@
  */
 #include "ee_ui_results.h"
 #include "ee_results.h"
+#include "filter.h"
 #include "settings.h"
 
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include <string.h>
 #include <strsafe.h>
 #include <time.h> /* (clock_gettime: the self-test's times, on stderr; the bridge is POSIX-only) */
+#include <unistd.h> /* (getpid: the self-test's scratch file) */
 #include <wctype.h>
 
 /* Kinds of column (Windows' RC_*). */
@@ -74,10 +76,14 @@ struct EeUiResults
     int64_t *und;    /* ncontests */
     int64_t *ctot;   /* ncontests: the known choice totals' sum, for percentages */
     int tab_exact;
+    /* Filter: is / is not rules on the EE_UI_RF_* columns (Windows' rw->filters). Precinct and
+     * vote type rules choose what is counted; contest, choice and party rules hide rows. */
+    EeFilterSet filters;
     int filt_active;
     uint8_t *pmask; /* nprecincts: counted precincts (NULL = all) */
     uint8_t *vmask; /* nvt: counted vote types (NULL = all) */
     uint32_t pre_included;
+    char *base;     /* the first file's name without its extension, for the files it names */
 };
 
 /* -------------------------------------------------------------------------- */
@@ -330,6 +336,8 @@ void EeUiResults_Free(EeUiResults *r)
     free(r->path);
     free(r->title);
     free(r->summary);
+    free(r->base);
+    EeFilter_Clear(&r->filters);
     EeResults_Clear(&r->res);
     free(r);
 }
@@ -351,6 +359,7 @@ static EeUiResults *results_new(EeResults *res)
     u->sort_asc = 1;
     u->show_vt = 1;
     u->party_first = EE_UI_PARTY_REP;
+    EeFilter_Init(&u->filters);
     first = u->res.nsources > 0 && u->res.sources[0].path != NULL ? u->res.sources[0].path : L"";
     StringCchPrintfW(title,
                      320,
@@ -358,7 +367,12 @@ static EeUiResults *results_new(EeResults *res)
                      u->res.election_name != NULL ? u->res.election_name : base_name(first));
     u->path = utf8_of(first);
     u->title = utf8_of(title);
-    if (u->path == NULL || u->title == NULL || !tabulate(u) ||
+    u->base = utf8_of(base_name(first));
+    if (u->base != NULL && strrchr(u->base, '.') != NULL && strrchr(u->base, '.') != u->base)
+    {
+        *strrchr(u->base, '.') = '\0'; /* (Windows' App_BaseNameNoExt) */
+    }
+    if (u->path == NULL || u->title == NULL || u->base == NULL || !tabulate(u) ||
         !EeUiResults_SetView(u, 0, u->show_vt, u->party_first))
     {
         EeUiResults_Free(u);
@@ -645,15 +659,70 @@ static int party_rank(const EeUiResults *u, const EeResultsContest *c)
     return rep ? 0 : 1;
 }
 
-/* Is a row shown under the contest / choice / party rules? (Windows' Res_RowPasses; every row
- * until the filter arrives.) */
+/* One column's rules on @p value (Windows' Filter_ColumnAccepts, ProcMon-style): an enabled
+ * exclude that matches rejects; when the column has enabled includes, one must match. Rules
+ * on other columns are left out (each column filters its own dimension). */
+static int column_accepts(const EeFilterSet *set, uint32_t column, const wchar_t *value)
+{
+    uint32_t i;
+    int any_include = 0, included = 0;
+    for (i = 0; i < set->count; i++)
+    {
+        const EeFilterRule *r = &set->rules[i];
+        int eq;
+        if (!r->enabled || r->column != column)
+        {
+            continue;
+        }
+        eq = CompareStringOrdinal(value, -1, r->value, -1, TRUE) == CSTR_EQUAL;
+        if (r->relation == EeRel_IsNot)
+        {
+            eq = !eq;
+        }
+        if (r->action == EeFilt_Exclude)
+        {
+            if (eq)
+            {
+                return 0;
+            }
+        }
+        else
+        {
+            any_include = 1;
+            included = included || eq;
+        }
+    }
+    return !any_include || included;
+}
+
+/* Is a row shown under the contest / choice / party rules? (Windows' Res_RowPasses) */
 static int row_passes(const EeUiResults *u, uint32_t contest, uint8_t kind, uint32_t choice)
 {
-    (void)u;
-    (void)contest;
-    (void)kind;
-    (void)choice;
-    return 1;
+    const EeResultsContest *ct = &u->res.contests[contest];
+    const wchar_t *name, *party = L"";
+    if (!u->filt_active)
+    {
+        return 1;
+    }
+    if (kind == RR_OVER)
+    {
+        name = L"Over Votes";
+    }
+    else if (kind == RR_UNDER)
+    {
+        name = L"Under Votes";
+    }
+    else
+    {
+        name = u->res.choices[ct->first_choice + choice].name;
+        if (u->res.choices[ct->first_choice + choice].party != NULL)
+        {
+            party = u->res.choices[ct->first_choice + choice].party;
+        }
+    }
+    return column_accepts(&u->filters, EE_UI_RF_CONTEST, ct->title != NULL ? ct->title : L"") &&
+           column_accepts(&u->filters, EE_UI_RF_CHOICE, name != NULL ? name : L"") &&
+           column_accepts(&u->filters, EE_UI_RF_PARTY, party);
 }
 
 /* Does a contest's district include a counted precinct? (Windows' Res_ContestHasPrecinct) */
@@ -1381,6 +1450,512 @@ char *EeUiResults_CopyText(const EeUiResults *r, const uint32_t *rows, uint32_t 
 }
 
 /* -------------------------------------------------------------------------- */
+/* Filter                                                                     */
+/* -------------------------------------------------------------------------- */
+
+static const wchar_t *const k_filter_titles[EE_UI_RF_COUNT] = {L"Precinct",
+                                                               L"Contest",
+                                                               L"Choice",
+                                                               L"Party",
+                                                               L"Vote Type"};
+
+/* Windows' rw->filt_hidden: no Precinct without precinct detail, no Vote Type without vote
+ * types */
+static int filter_offered(const EeUiResults *r, uint32_t column)
+{
+    if (r == NULL || column >= EE_UI_RF_COUNT)
+    {
+        return 0;
+    }
+    if (column == EE_UI_RF_PRECINCT)
+    {
+        return EeResults_HasPrecinctDetail(&r->res) ? 1 : 0;
+    }
+    if (column == EE_UI_RF_VOTETYPE)
+    {
+        return r->res.nvt > 0;
+    }
+    return 1;
+}
+
+const char *EeUiResults_FilterTitle(const EeUiResults *r, uint32_t column)
+{
+    static const char *const titles[EE_UI_RF_COUNT] = {"Precinct",
+                                                       "Contest",
+                                                       "Choice",
+                                                       "Party",
+                                                       "Vote Type"};
+    return filter_offered(r, column) ? titles[column] : NULL;
+}
+
+/* add @p v unless it is there already (ignoring case: Windows' Res_AddValue) */
+static int add_value(const wchar_t ***vals, uint32_t *n, size_t *cap, const wchar_t *v)
+{
+    uint32_t i;
+    if (v == NULL || v[0] == L'\0' || *n >= EE_FILTER_MAX_DISTINCT)
+    {
+        return 1;
+    }
+    for (i = 0; i < *n; i++)
+    {
+        if (CompareStringOrdinal((*vals)[i], -1, v, -1, TRUE) == CSTR_EQUAL)
+        {
+            return 1;
+        }
+    }
+    if (*n + 1 > *cap)
+    {
+        size_t nc = *cap ? *cap * 2 : 64;
+        const wchar_t **nv = (const wchar_t **)realloc((void *)*vals, nc * sizeof(wchar_t *));
+        if (nv == NULL)
+        {
+            return 0;
+        }
+        *vals = nv;
+        *cap = nc;
+    }
+    (*vals)[(*n)++] = v;
+    return 1;
+}
+
+static int value_cmp(const void *pa, const void *pb)
+{
+    return compare_text(*(const wchar_t *const *)pa, *(const wchar_t *const *)pb);
+}
+
+/* Windows' Res_FilterCollect: the column's distinct values, sorted (precincts as numbers),
+ * the vote types in file order */
+char **EeUiResults_FilterValues(const EeUiResults *u, uint32_t column, uint32_t *n)
+{
+    const EeResults *r;
+    const wchar_t **vals = NULL;
+    size_t cap = 0;
+    uint32_t i, k = 0;
+    int ok = 1;
+    char **out;
+    if (n != NULL)
+    {
+        *n = 0;
+    }
+    if (u == NULL || n == NULL || !filter_offered(u, column))
+    {
+        return NULL;
+    }
+    r = &u->res;
+    switch (column)
+    {
+        case EE_UI_RF_PRECINCT:
+            for (i = 0; i < r->nprecincts && ok; i++)
+            {
+                ok = add_value(&vals, &k, &cap, r->precincts[i].name);
+            }
+            break;
+        case EE_UI_RF_CONTEST:
+            for (i = 0; i < r->ncontests && ok; i++)
+            {
+                ok = add_value(&vals, &k, &cap, r->contests[i].title);
+            }
+            break;
+        case EE_UI_RF_CHOICE:
+            for (i = 0; i < r->nchoices && ok; i++)
+            {
+                ok = add_value(&vals, &k, &cap, r->choices[i].name);
+            }
+            for (i = 0; i < r->ncontests && ok; i++)
+            {
+                if (r->contests[i].has_over_under)
+                {
+                    ok = add_value(&vals, &k, &cap, L"Over Votes") &&
+                         add_value(&vals, &k, &cap, L"Under Votes");
+                    break;
+                }
+            }
+            break;
+        case EE_UI_RF_PARTY:
+            for (i = 0; i < r->nchoices && ok; i++)
+            {
+                ok = add_value(&vals, &k, &cap, r->choices[i].party);
+            }
+            break;
+        default: /* EE_UI_RF_VOTETYPE */
+            for (i = 0; i < r->nvt && ok; i++)
+            {
+                ok = add_value(&vals, &k, &cap, r->vote_types[i]);
+            }
+            break;
+    }
+    if (k > 1 && column != EE_UI_RF_VOTETYPE)
+    {
+        qsort((void *)vals, k, sizeof(wchar_t *), value_cmp);
+    }
+    out = ok ? (char **)calloc(k + 1, sizeof(char *)) : NULL;
+    for (i = 0; out != NULL && i < k; i++)
+    {
+        out[i] = utf8_of(vals[i]);
+        if (out[i] == NULL)
+        {
+            EeUiResults_FreeValues(out, i);
+            out = NULL;
+        }
+    }
+    free((void *)vals);
+    if (out != NULL)
+    {
+        *n = k;
+    }
+    return out;
+}
+
+void EeUiResults_FreeValues(char **values, uint32_t n)
+{
+    uint32_t i;
+    for (i = 0; values != NULL && i < n; i++)
+    {
+        free(values[i]);
+    }
+    free(values);
+}
+
+int EeUiResults_RuleIsValid(const EeUiRule *rule, char *why, size_t whycap)
+{
+    if (why != NULL && whycap > 0)
+    {
+        why[0] = '\0';
+    }
+    if (rule == NULL || rule->value[0] == '\0')
+    {
+        if (why != NULL && whycap > 0)
+        {
+            StringCchCopyA(why, whycap, "Choose a value to filter on."); /* (Windows' words) */
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static void to_engine_rule(const EeUiRule *r, EeFilterRule *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->column = r->column;
+    out->relation = r->relation == EE_UI_REL_IS_NOT ? EeRel_IsNot : EeRel_Is;
+    out->action = r->exclude ? EeFilt_Exclude : EeFilt_Include;
+    out->enabled = r->enabled ? TRUE : FALSE;
+    if (MultiByteToWideChar(CP_UTF8, 0, r->value, -1, out->value, EE_FILTER_VALUE_CCH) <= 0)
+    {
+        /* (too long: as much as fits) */
+        wchar_t *w = wide_of(r->value);
+        StringCchCopyW(out->value, EE_FILTER_VALUE_CCH, w != NULL ? w : L"");
+        free(w);
+    }
+}
+
+static void from_engine_rule(const EeFilterRule *r, EeUiRule *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->column = r->column;
+    out->relation = r->relation == EeRel_IsNot ? EE_UI_REL_IS_NOT : EE_UI_REL_IS;
+    out->exclude = r->action == EeFilt_Exclude;
+    out->enabled = r->enabled != FALSE;
+    utf8_into(r->value, out->value, sizeof(out->value));
+}
+
+/* Windows' Res_ApplyFilter: the precinct and vote type masks, the totals again, the rows */
+static int apply_filter(EeUiResults *u)
+{
+    const EeResults *r = &u->res;
+    uint32_t i, j;
+    int has_pre = 0, has_vt = 0;
+    free(u->pmask);
+    free(u->vmask);
+    u->pmask = NULL;
+    u->vmask = NULL;
+    u->pre_included = r->nprecincts;
+    u->filt_active = EeFilter_HasEnabled(&u->filters) ? 1 : 0;
+    for (i = 0; i < u->filters.count; i++)
+    {
+        if (u->filters.rules[i].enabled)
+        {
+            has_pre = has_pre || u->filters.rules[i].column == EE_UI_RF_PRECINCT;
+            has_vt = has_vt || u->filters.rules[i].column == EE_UI_RF_VOTETYPE;
+        }
+    }
+    if (has_pre && r->nprecincts > 0)
+    {
+        u->pmask = (uint8_t *)malloc(r->nprecincts);
+        if (u->pmask != NULL)
+        {
+            u->pre_included = 0;
+            for (j = 0; j < r->nprecincts; j++)
+            {
+                u->pmask[j] = (uint8_t)column_accepts(
+                    &u->filters,
+                    EE_UI_RF_PRECINCT,
+                    r->precincts[j].name != NULL ? r->precincts[j].name : L"");
+                u->pre_included += u->pmask[j];
+            }
+        }
+    }
+    if (has_vt && r->nvt > 0)
+    {
+        u->vmask = (uint8_t *)malloc(r->nvt);
+        if (u->vmask != NULL)
+        {
+            for (j = 0; j < r->nvt; j++)
+            {
+                u->vmask[j] =
+                    (uint8_t)column_accepts(&u->filters,
+                                            EE_UI_RF_VOTETYPE,
+                                            r->vote_types[j] != NULL ? r->vote_types[j] : L"");
+            }
+        }
+    }
+    if (!tabulate(u))
+    {
+        return 0;
+    }
+    return EeUiResults_SetView(u, u->by_precinct, u->show_vt, u->party_first);
+}
+
+int EeUiResults_SetRules(EeUiResults *u, const EeUiRule *rules, uint32_t n)
+{
+    EeFilterSet set;
+    uint32_t i;
+    int ok = 1;
+    if (u == NULL)
+    {
+        return 0;
+    }
+    EeFilter_Init(&set);
+    for (i = 0; ok && rules != NULL && i < n; i++)
+    {
+        EeFilterRule r;
+        to_engine_rule(&rules[i], &r);
+        ok = EeFilter_Add(&set, &r) ? 1 : 0;
+    }
+    if (ok)
+    {
+        EeFilter_Clear(&u->filters);
+        u->filters = set; /* (moved) */
+        return apply_filter(u);
+    }
+    EeFilter_Clear(&set);
+    return 0;
+}
+
+uint32_t EeUiResults_RuleCount(const EeUiResults *r)
+{
+    return r != NULL ? r->filters.count : 0;
+}
+
+int EeUiResults_GetRule(const EeUiResults *r, uint32_t i, EeUiRule *out)
+{
+    if (r == NULL || out == NULL || i >= r->filters.count)
+    {
+        return 0;
+    }
+    from_engine_rule(&r->filters.rules[i], out);
+    return 1;
+}
+
+int EeUiResults_IsFiltered(const EeUiResults *r)
+{
+    return r != NULL && r->filt_active;
+}
+
+void EeUiResults_FilterFileName(const EeUiResults *r, char *out, size_t cap)
+{
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    StringCchPrintfA(out,
+                     cap,
+                     "%s Filter.filter.csv",
+                     r != NULL && r->base != NULL && r->base[0] != '\0' ? r->base
+                                                                        : "Election Results");
+}
+
+/* the offered columns by title, as Windows' Filter window gives them to a saved filter */
+static void filter_columns(const EeUiResults *r, EeFilterColumnRef *cols)
+{
+    uint32_t c;
+    for (c = 0; c < EE_UI_RF_COUNT; c++)
+    {
+        cols[c].column = c;
+        cols[c].title = filter_offered(r, c) ? k_filter_titles[c] : L"";
+    }
+}
+
+/* the engine's message, UTF-8, without its "\r" or a last line end */
+static void message_utf8(const wchar_t *w, char *out, size_t cap)
+{
+    char *d;
+    const char *p;
+    if (out == NULL || cap == 0)
+    {
+        return;
+    }
+    utf8_into(w, out, cap);
+    for (p = out, d = out; *p; p++)
+    {
+        if (*p != '\r')
+        {
+            *d++ = *p;
+        }
+    }
+    while (d > out && d[-1] == '\n')
+    {
+        d--;
+    }
+    *d = '\0';
+}
+
+int EeUiResults_SaveFilter(const EeUiResults *r,
+                           const char *path_utf8,
+                           const EeUiRule *rules,
+                           uint32_t n,
+                           char delim,
+                           char *err,
+                           size_t errcap)
+{
+    EeFilterColumnRef cols[EE_UI_RF_COUNT];
+    EeFilterSet set;
+    wchar_t *path, werr[256] = L"";
+    uint32_t i;
+    int ok = 1;
+    if (err != NULL && errcap > 0)
+    {
+        err[0] = '\0';
+    }
+    if (n == 0 || rules == NULL)
+    {
+        StringCchCopyA(err, errcap, "There are no filter rules to export."); /* (Windows' words) */
+        return 0;
+    }
+    if (r == NULL || path_utf8 == NULL || (path = wide_of(path_utf8)) == NULL)
+    {
+        StringCchCopyA(err, errcap, "Could not create the filter file.");
+        return 0;
+    }
+    filter_columns(r, cols);
+    EeFilter_Init(&set);
+    for (i = 0; ok && i < n; i++)
+    {
+        EeFilterRule e;
+        to_engine_rule(&rules[i], &e);
+        ok = EeFilter_Add(&set, &e) ? 1 : 0;
+    }
+    if (!ok)
+    {
+        StringCchCopyA(err, errcap, "Out of memory saving the filter.");
+    }
+    else if (!EeFilter_SaveFile(path,
+                                &set,
+                                cols,
+                                EE_UI_RF_COUNT,
+                                delim == '\t' ? L'\t' : L',',
+                                werr,
+                                256))
+    {
+        message_utf8(werr[0] ? werr : L"Could not write the filter file.", err, errcap);
+        ok = 0;
+    }
+    EeFilter_Clear(&set);
+    free(path);
+    return ok;
+}
+
+int EeUiResults_LoadFilter(const EeUiResults *r,
+                           const char *path_utf8,
+                           EeUiRule **rules,
+                           uint32_t *n,
+                           char *msg,
+                           size_t msgcap,
+                           char *detail,
+                           size_t detailcap)
+{
+    EeFilterColumnRef cols[EE_UI_RF_COUNT];
+    EeFilterSet loaded;
+    EeUiRule *out = NULL;
+    wchar_t *path, werr[256] = L"", skipped[2048] = L"";
+    uint32_t nskip = 0, i;
+    if (msg != NULL && msgcap > 0)
+    {
+        msg[0] = '\0';
+    }
+    if (detail != NULL && detailcap > 0)
+    {
+        detail[0] = '\0';
+    }
+    if (rules != NULL)
+    {
+        *rules = NULL;
+    }
+    if (n != NULL)
+    {
+        *n = 0;
+    }
+    if (r == NULL || path_utf8 == NULL || rules == NULL || n == NULL ||
+        (path = wide_of(path_utf8)) == NULL)
+    {
+        StringCchCopyA(msg, msgcap, "Could not open the filter file.");
+        return -1;
+    }
+    filter_columns(r, cols);
+    EeFilter_Init(&loaded);
+    if (!EeFilter_LoadFile(path,
+                           cols,
+                           EE_UI_RF_COUNT,
+                           EE_FILTER_REL_EQUALITY, /* (is / is not, as Windows' results filter) */
+                           &loaded,
+                           &nskip,
+                           skipped,
+                           2048,
+                           werr,
+                           256))
+    {
+        message_utf8(werr[0] ? werr : L"Could not read the filter file.", msg, msgcap);
+        free(path);
+        return -1;
+    }
+    free(path);
+    if (loaded.count == 0 && nskip == 0)
+    {
+        StringCchCopyA(msg, msgcap, "The file holds no filter rules.");
+        EeFilter_Clear(&loaded);
+        return 0;
+    }
+    if (loaded.count > 0 && (out = (EeUiRule *)calloc(loaded.count, sizeof(EeUiRule))) == NULL)
+    {
+        StringCchCopyA(msg, msgcap, "Out of memory loading the filter.");
+        EeFilter_Clear(&loaded);
+        return -1;
+    }
+    for (i = 0; i < loaded.count; i++)
+    {
+        from_engine_rule(&loaded.rules[i], &out[i]);
+    }
+    if (nskip > 0)
+    {
+        if (msg != NULL && msgcap > 0)
+        {
+            StringCchPrintfA(msg,
+                             msgcap,
+                             "Loaded %u rule%s. %u rule%s could not be used here:",
+                             loaded.count,
+                             loaded.count == 1 ? "" : "s",
+                             nskip,
+                             nskip == 1 ? "" : "s");
+        }
+        message_utf8(skipped, detail, detailcap);
+    }
+    *rules = out;
+    *n = loaded.count;
+    EeFilter_Clear(&loaded);
+    return 1;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Self-test                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -1432,6 +2007,136 @@ static void st_first(const EeUiResults *r, const char *what)
            EeUiResults_Cell(r, 0, 0, a, sizeof(a)),
            EeUiResults_Cell(r, 0, 2, b, sizeof(b)),
            EeUiResults_Cell(r, 0, tc, t, sizeof(t)));
+}
+
+static void st_rule(EeUiRule *r, uint32_t column, int relation, const char *value, int exclude)
+{
+    memset(r, 0, sizeof(*r));
+    r->column = column;
+    r->relation = relation;
+    r->exclude = exclude;
+    r->enabled = 1;
+    StringCchCopyA(r->value, sizeof(r->value), value);
+}
+
+static double st_now(void);
+
+static void st_set(EeUiResults *r,
+                   const char *what,
+                   const EeUiRule *rules,
+                   uint32_t n,
+                   uint32_t rows)
+{
+    double t0 = st_now();
+    int ok = EeUiResults_SetRules(r, rules, n);
+    fprintf(stderr, "time: filter %s %.3f s\n", what, st_now() - t0);
+    printf("filter %s: ok %d, filtered %d, %u rows\n",
+           what,
+           ok,
+           EeUiResults_IsFiltered(r),
+           EeUiResults_Rows(r));
+    printf("status: %s\n", EeUiResults_StatusText(r));
+    st_rows(r, rows);
+}
+
+/* the Filter window's columns and values, rules on each kind of column, a saved filter */
+static void st_filter(EeUiResults *r)
+{
+    EeUiRule rules[6], *loaded = NULL;
+    uint32_t c, i, n = 0, nl = 0;
+    char path[256], name[300], err[256], msg[256], detail[1024];
+    for (c = 0; c < EE_UI_RF_COUNT; c++)
+    {
+        char **vals = EeUiResults_FilterValues(r, c, &n);
+        const char *title = EeUiResults_FilterTitle(r, c);
+        printf("filter column %u: %s:", c, title != NULL ? title : "(not offered)");
+        for (i = 0; i < n && i < 12; i++)
+        {
+            printf(" %s%s", vals[i], i + 1 < n && i + 1 < 12 ? " |" : "");
+        }
+        printf("%s (%u)\n", n > 12 ? " ..." : "", n);
+        EeUiResults_FreeValues(vals, n);
+    }
+    st_rule(&rules[0], EE_UI_RF_CHOICE, EE_UI_REL_IS, "", 0);
+    printf("rule without a value: %d %s\n",
+           EeUiResults_RuleIsValid(&rules[0], err, sizeof(err)),
+           err);
+    /* a precinct: everything counted again from it (the withheld count: some totals cannot be) */
+    st_rule(&rules[0], EE_UI_RF_PRECINCT, EE_UI_REL_IS, "102", 0);
+    st_set(r, "precinct is 102", rules, 1, 12);
+    /* and a vote type left out: its column goes, the totals follow */
+    st_rule(&rules[1], EE_UI_RF_VOTETYPE, EE_UI_REL_IS_NOT, "Mail", 0);
+    st_set(r, "and vote type is not Mail", rules, 2, 3);
+    /* rows hidden: a party's contests, without the over and under votes (excludes win) */
+    st_rule(&rules[0], EE_UI_RF_PARTY, EE_UI_REL_IS, "DEM", 0);
+    st_rule(&rules[1], EE_UI_RF_PARTY, EE_UI_REL_IS, "NON", 0);
+    st_rule(&rules[2], EE_UI_RF_CHOICE, EE_UI_REL_IS, "over votes", 1);
+    st_set(r, "party DEM or NON, choice not Over Votes", rules, 3, 8);
+    st_rule(&rules[0], EE_UI_RF_CONTEST, EE_UI_REL_IS, "REP Governor", 0);
+    rules[1] = rules[0];
+    rules[1].enabled = 0; /* (off: counts for nothing) */
+    StringCchCopyA(rules[1].value, sizeof(rules[1].value), "DEM Governor");
+    st_set(r, "contest REP Governor, a rule off", rules, 2, 4);
+    for (i = 0; i < EeUiResults_RuleCount(r); i++)
+    {
+        EeUiRule g;
+        EeUiResults_GetRule(r, i, &g);
+        printf("rule %u: column %u, relation %d, exclude %d, enabled %d, \"%s\"\n",
+               i,
+               g.column,
+               g.relation,
+               g.exclude,
+               g.enabled,
+               g.value);
+    }
+    /* Export Filter... and Load Filter... */
+    EeUiResults_FilterFileName(r, name, sizeof(name));
+    printf("filter file name: %s\n", name);
+    StringCchPrintfA(path, sizeof(path), "/tmp/ee_results_selftest_%ld.filter.csv", (long)getpid());
+    st_rule(&rules[0], EE_UI_RF_PRECINCT, EE_UI_REL_IS, "101", 0);
+    st_rule(&rules[1], EE_UI_RF_VOTETYPE, EE_UI_REL_IS, "Early Voting", 1);
+    st_rule(&rules[2], EE_UI_RF_CHOICE, EE_UI_REL_IS_NOT, "Ann Lee", 0);
+    rules[2].enabled = 0;
+    printf("save filter: %d %s\n",
+           EeUiResults_SaveFilter(r, path, rules, 3, ',', err, sizeof(err)),
+           err);
+    printf("load filter: %d %s",
+           EeUiResults_LoadFilter(r, path, &loaded, &nl, msg, sizeof(msg), detail, sizeof(detail)),
+           msg);
+    printf(", %u rules\n", nl);
+    for (i = 0; i < nl; i++)
+    {
+        printf("loaded rule %u: column %u, relation %d, exclude %d, enabled %d, \"%s\"\n",
+               i,
+               loaded[i].column,
+               loaded[i].relation,
+               loaded[i].exclude,
+               loaded[i].enabled,
+               loaded[i].value);
+    }
+    free(loaded);
+    loaded = NULL;
+    /* a saved filter with rules results cannot use: a voter list's column, a "contains" rule */
+    {
+        FILE *f = fopen(path, "wb");
+        if (f != NULL)
+        {
+            fputs("Column,Relation,Value,Action,Enabled\r\nParty,is,DEM,Include,Yes\r\n"
+                  "Voter ID,is,1,Include,Yes\r\nChoice,contains,Ann,Include,Yes\r\n",
+                  f);
+            fclose(f);
+        }
+    }
+    printf("load other filter: %d %s",
+           EeUiResults_LoadFilter(r, path, &loaded, &nl, msg, sizeof(msg), detail, sizeof(detail)),
+           msg);
+    printf(", %u rules\n%s\n", nl, detail);
+    free(loaded);
+    remove(path);
+    printf("save no rules: %d %s\n",
+           EeUiResults_SaveFilter(r, path, rules, 0, ',', err, sizeof(err)),
+           err);
+    st_set(r, "reset", NULL, 0, 0);
 }
 
 static double st_now(void)
@@ -1542,6 +2247,8 @@ int EeUiResults_SelfTest(const char *const *paths_utf8, uint32_t n)
         EeUiResults_SetView(r, 0, 1, EE_UI_PARTY_DEM);
         printf("democratic first: party first %d\n", EeUiResults_PartyFirst(r));
         st_rows(r, 3);
+        EeUiResults_SetView(r, 0, 1, EE_UI_PARTY_REP);
+        st_filter(r);
         printf("load summary:\n%s\n", EeUiResults_LoadSummary(r));
         EeUiResults_Free(r);
     }

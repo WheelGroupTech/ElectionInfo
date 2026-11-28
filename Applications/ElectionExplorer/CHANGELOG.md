@@ -30,6 +30,16 @@ a bullet each.
 
 ## Unreleased (after 1.6.1.0)
 
+### 2026-11-27 — macOS and Linux: the Election Results Filter (step 2)
+- **What:** Filter > Filter... (Ctrl+L / Cmd-L) and Reset Filter in the macOS and Linux results window, as on Windows: "is" / "is not" rules on Precinct, Contest, Choice, Party and Vote Type, each value chosen from the column's; precinct and vote type rules recount every figure, the others hide rows; Export Filter... / Load Filter.... The voter list's Filter window now serves any window through a host interface, so results (and later CVRs and audit logs) share it; voter lists see no change.
+- **Where:**
+  - `src/ui/ee_ui_results.{h,c}`: `EE_UI_RF_*`, `EeUiResults_FilterTitle`, `FilterValues`, `RuleIsValid`, `SetRules` (`apply_filter`, `column_accepts`: Windows' `Res_ApplyFilter`, `Filter_ColumnAccepts`), `GetRule`, `FilterFileName`, `SaveFilter`, `LoadFilter`; the self-test's `st_filter`.
+  - `src/ui/gtk/app_main.c`: the Filter window behind `EeGtkFilterHost` (`ee_gtk_filter_window`; a value drop-down when the host offers values; relations per column); the voter window as a host. `app_gtk.h`: the host. `results_window.c`: Filter..., Reset Filter, the host, `--include`/`--exclude`/`--filter-window`/`--load-filter`/`--export-filter` with `--results`.
+  - `src/ui/macos/app_main.m`: `EeFilterSheet` behind the `EeFilterHost` protocol (`app_mac.h`); the voter window as a host; the Filter menu for results windows too. `results_window.m`: the host, Filter..., Reset Filter, the snapshot flags.
+  - `.github/workflows/election-explorer.yml`: eight filter lines in the results step on both runners.
+- **Checked:** Linux and Mac, Debug and Release, no warnings; `--selftest-results` the same on both; snapshots of the filtered window and the Filter window on both; the voter list's Filter window and saved filters unchanged. Filtering takes about 1 ms on Harris P24.
+- **Details:** [cross-platform-design.md, "The Election Results window"](docs/cross-platform-design.md#the-election-results-window-2026-11-27).
+
 ### 2026-11-27 — macOS and Linux: the Election Results window (step 1)
 - **What:** File > Open Election Results... in the macOS and Linux windows, as on Windows: the files load behind a progress window with Cancel, and each election opens a window of its own with Windows' rows and columns, View > Totals / By Precinct, Reset View, heading sort (counts largest first), Copy, Reports > Display Load Summary... (open by itself when the files disagree) and Options (zoom, vote-type columns, party first). Filter, the Turnout report, Export and Compare come next. Engine fix: within a contest, a results file's precincts now keep the file's order on every platform (`ent_cmp` left ties to `qsort`; ES&S precinct reports came out in a scrambled precinct order on Windows and the Mac).
 - **Where:**

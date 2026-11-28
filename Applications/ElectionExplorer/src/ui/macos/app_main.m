@@ -69,10 +69,14 @@
  *   `--by-precinct` (View > By Precinct), `--zoom`, `--vote-types 0|1` and `--party-first
  *   rep|dem` (as the Settings sheet's OK, unsaved) and `--sort <column>[:desc]` (heading
  *   clicks); `--load-summary` makes it of its Load Summary, `--options-window` of its Settings.
+ *   `--include` / `--exclude <column>=<value>` apply "is" rules as the Filter sheet's OK does
+ *   (0 Precinct, 1 Contest, 2 Choice, 3 Party, 4 Vote Type), and `--filter-window`,
+ *   `--load-filter` and `--export-filter` work on its Filter sheet as on a list's.
  *
  * The menu bar is shared by every window, as AppKit has it: an item's (or a menu's) tag says
- * which windows show it (EE_MENU_*), so a results window has Windows' results menus (View, and
- * no Filter or Compare yet) and a voter window its own.
+ * which windows show it (EE_MENU_*), so a results window has Windows' results menus (View; Filter
+ * with Filter... and Reset Filter only; no Compare yet) and a voter window its own. The Filter
+ * sheet serves both through its host (EeFilterHost, app_mac.h).
  */
 
 #import <Cocoa/Cocoa.h>
@@ -143,8 +147,8 @@ static void export_type_changed(NSPopUpButton *type)
 /* The voter list window                                                      */
 /* -------------------------------------------------------------------------- */
 
-@interface EeVoterWindow
-    : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate, NSMenuItemValidation>
+@interface EeVoterWindow : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate,
+                                     NSMenuItemValidation, EeFilterHost>
 @property(strong) NSWindow *window;
 @property(strong) NSTableView *table;
 @property(strong) NSTextField *status;
@@ -207,18 +211,19 @@ static void export_type_changed(NSPopUpButton *type)
 /* conditions:", column / relation / value / then Include or Exclude)        */
 /* -------------------------------------------------------------------------- */
 
-@interface EeFilterSheet : NSObject <NSTableViewDataSource, NSTableViewDelegate>
-@property(weak) EeVoterWindow *owner;
-@property(strong) NSWindow *sheet;
+@interface EeFilterSheet () <NSTableViewDataSource, NSTableViewDelegate>
+@property(weak) id<EeFilterHost> host;
 @property(strong) NSPopUpButton *column;
 @property(strong) NSPopUpButton *relation;
 @property(strong) NSPopUpButton *action;
-@property(strong) NSTextField *value;
+@property(strong) NSTextField *value;   /* a typed value (a column the host offers no values for) */
+@property(strong) NSPopUpButton *choice; /* else the value, chosen from the column's values */
 @property(strong) NSTableView *list;
 @property(strong) NSMutableData *draft; /* EeUiRule[] */
+@property(strong) NSMutableArray<NSNumber *> *cols; /* the column at each place of Column */
+@property(strong) NSMutableArray<NSNumber *> *rels; /* the relation at each place of Relation */
+@property(assign) uint32_t shownColumn; /* the column the Relation and value fields are for */
 @property(assign) BOOL filePanelOpen;   /* an Export / Load Filter panel or question is open */
-- (void)loadFilterFrom:(NSString *)path;
-- (void)exportFilterTo:(NSString *)chosen type:(NSInteger)type;
 @end
 
 static NSURL *g_filterFolder; /* the last exported or loaded filter's folder (this run) */
@@ -242,48 +247,58 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     return b;
 }
 
-- (instancetype)initWithOwner:(EeVoterWindow *)owner
+- (instancetype)initWithHost:(id<EeFilterHost>)host rules:(const EeUiRule *)rules count:(NSUInteger)n
 {
     NSView *v;
     NSTextField *prompt, *then;
     NSScrollView *scroll;
     NSTableColumn *on, *text;
     NSButton *reset, *add, *remove, *ok, *cancel, *apply, *exportFilter, *loadFilter;
-    uint32_t c;
-    int i;
+    uint32_t c, ncols = [host filterColumnCount];
     self = [super init];
     if (self == nil)
     {
         return nil;
     }
-    self.owner = owner;
-    self.draft = [owner.rules mutableCopy];
+    self.host = host;
+    self.draft = [NSMutableData dataWithBytes:rules length:n * sizeof(EeUiRule)];
+    self.cols = [NSMutableArray array];
+    self.rels = [NSMutableArray array];
     self.sheet = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 760, 420)
                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskResizable
                                                backing:NSBackingStoreBuffered
                                                  defer:NO];
-    self.sheet.title = @"Filter";
+    self.sheet.title = [host filterTitle];
     v = self.sheet.contentView;
 
-    prompt = [NSTextField labelWithString:@"Display entries matching these conditions:"];
+    prompt = [NSTextField labelWithString:[host filterPrompt]];
     self.column = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    for (c = 0; c < EeUiVoters_Columns(owner.voters); c++)
+    for (c = 0; c < ncols; c++)
     {
+        const char *title = [host filterColumnTitle:c];
+        if (title == NULL)
+        {
+            continue; /* (not offered) */
+        }
         /* (addItemWithTitle drops a duplicate title; a menu item each keeps the indexes) */
-        [self.column.menu addItem:[[NSMenuItem alloc] initWithTitle:ns_utf8(EeUiVoters_Title(owner.voters, c))
-                                                             action:nil
-                                                      keyEquivalent:@""]];
+        [self.column.menu addItem:[[NSMenuItem alloc] initWithTitle:ns_utf8(title) action:nil keyEquivalent:@""]];
+        [self.cols addObject:@(c)];
     }
+    self.column.target = self;
+    self.column.action = @selector(columnChosen:);
     self.relation = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    for (i = 0; i < EE_UI_REL_COUNT; i++)
-    {
-        [self.relation.menu addItem:[[NSMenuItem alloc] initWithTitle:ns_utf8(EeUiVoters_RelationName(i))
-                                                               action:nil
-                                                        keyEquivalent:@""]];
-    }
+    /* (the relation keeps its own width; the value takes the rest of the row) */
+    [self.relation setContentHuggingPriority:NSLayoutPriorityDefaultHigh
+                              forOrientation:NSLayoutConstraintOrientationHorizontal];
     self.value = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.value.target = self;
     self.value.action = @selector(add:);
+    [self.value setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.choice = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    /* (the values' pop-up lies over the value box, as wide as it, whatever its titles) */
+    [self.choice setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.choice setContentCompressionResistancePriority:1
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
     then = [NSTextField labelWithString:@"then"];
     self.action = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.action addItemsWithTitles:@[ @"Include", @"Exclude" ]];
@@ -319,7 +334,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     exportFilter = sheet_button(@"Export Filter…", self, @selector(exportFilter:));
     loadFilter = sheet_button(@"Load Filter…", self, @selector(loadFilter:));
 
-    for (NSView *sub in @[ prompt, self.column, self.relation, self.value, then, self.action, scroll ])
+    for (NSView *sub in @[ prompt, self.column, self.relation, self.value, self.choice, then, self.action, scroll ])
     {
         sub.translatesAutoresizingMaskIntoConstraints = NO;
         [v addSubview:sub];
@@ -338,6 +353,9 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         [self.relation.leadingAnchor constraintEqualToAnchor:self.column.trailingAnchor constant:6],
         [self.value.centerYAnchor constraintEqualToAnchor:self.column.centerYAnchor],
         [self.value.leadingAnchor constraintEqualToAnchor:self.relation.trailingAnchor constant:6],
+        [self.choice.centerYAnchor constraintEqualToAnchor:self.column.centerYAnchor],
+        [self.choice.leadingAnchor constraintEqualToAnchor:self.value.leadingAnchor],
+        [self.choice.trailingAnchor constraintEqualToAnchor:self.value.trailingAnchor],
         [then.centerYAnchor constraintEqualToAnchor:self.column.centerYAnchor],
         [then.leadingAnchor constraintEqualToAnchor:self.value.trailingAnchor constant:6],
         [self.action.centerYAnchor constraintEqualToAnchor:self.column.centerYAnchor],
@@ -365,8 +383,61 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         [loadFilter.centerYAnchor constraintEqualToAnchor:apply.centerYAnchor],
         [loadFilter.leadingAnchor constraintEqualToAnchor:exportFilter.trailingAnchor constant:6],
     ]];
+    [self showColumn:self.cols.count > 0 ? self.cols[0].unsignedIntValue : 0];
     [self.list reloadData];
     return self;
+}
+
+- (uint32_t)chosenColumn
+{
+    NSInteger i = self.column.indexOfSelectedItem;
+    return i >= 0 && (NSUInteger)i < self.cols.count ? self.cols[(NSUInteger)i].unsignedIntValue : 0;
+}
+
+/* the Relation and value fields for @p column: its relations (all of them, or Windows' "is" /
+ * "is not" for results), and its values to choose from, or a box to type one */
+- (void)showColumn:(uint32_t)column
+{
+    unsigned mask = [self.host filterRelations:column];
+    NSArray<NSString *> *values = [self.host filterValues:column];
+    NSInteger was = self.relation.indexOfSelectedItem;
+    int chosen = was >= 0 && (NSUInteger)was < self.rels.count ? self.rels[(NSUInteger)was].intValue : EE_UI_REL_IS;
+    NSInteger keep = 0;
+    int i;
+    [self.relation removeAllItems];
+    [self.rels removeAllObjects];
+    for (i = 0; i < EE_UI_REL_COUNT; i++)
+    {
+        if (mask & (1u << i))
+        {
+            if (i == chosen)
+            {
+                keep = (NSInteger)self.rels.count; /* (the relation chosen stays, when offered) */
+            }
+            [self.relation.menu addItem:[[NSMenuItem alloc] initWithTitle:ns_utf8(EeUiVoters_RelationName(i))
+                                                                   action:nil
+                                                            keyEquivalent:@""]];
+            [self.rels addObject:@(i)];
+        }
+    }
+    [self.relation selectItemAtIndex:keep];
+    [self.choice removeAllItems];
+    for (NSString *value in values)
+    {
+        [self.choice.menu addItem:[[NSMenuItem alloc] initWithTitle:value action:nil keyEquivalent:@""]];
+    }
+    if (values != nil)
+    {
+        [self.choice selectItemAtIndex:0]; /* (as on Windows: the first value) */
+    }
+    self.choice.hidden = values == nil;
+    self.value.hidden = values != nil;
+    self.shownColumn = column;
+}
+
+- (void)columnChosen:(id)sender
+{
+    [self showColumn:[self chosenColumn]];
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
@@ -381,7 +452,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     {
         return @(r->enabled != 0);
     }
-    return [NSString stringWithFormat:@"%@ %@ \"%@\" then %@", ns_utf8(EeUiVoters_Title(self.owner.voters, r->column)),
+    return [NSString stringWithFormat:@"%@ %@ \"%@\" then %@", ns_utf8([self.host filterColumnTitle:r->column]),
                                       ns_utf8(EeUiVoters_RelationName(r->relation)), ns_utf8(r->value),
                                       r->exclude ? @"Exclude" : @"Include"];
 }
@@ -412,10 +483,21 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         return;
     }
     r = [self rule:(NSUInteger)row];
-    [self.column selectItemAtIndex:(NSInteger)r->column];
-    [self.relation selectItemAtIndex:r->relation];
+    [self.column selectItemAtIndex:(NSInteger)[self.cols indexOfObject:@(r->column)]];
+    if (self.shownColumn != r->column)
+    {
+        [self showColumn:r->column];
+    }
+    [self.relation selectItemAtIndex:(NSInteger)[self.rels indexOfObject:@(r->relation)]];
     [self.action selectItemAtIndex:r->exclude ? 1 : 0];
-    self.value.stringValue = ns_utf8(r->value);
+    if (!self.choice.hidden)
+    {
+        [self.choice selectItemWithTitle:ns_utf8(r->value)];
+    }
+    else
+    {
+        self.value.stringValue = ns_utf8(r->value);
+    }
 }
 
 - (void)alert:(NSString *)message detail:(NSString *)detail
@@ -440,8 +522,12 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
 - (void)saveFilterTo:(NSString *)path delim:(char)delim
 {
     char err[256];
-    if (!EeUiVoters_SaveFilter(self.owner.voters, path.fileSystemRepresentation, (const EeUiRule *)self.draft.bytes,
-                               (uint32_t)[self count], delim, err, sizeof(err)))
+    if (![self.host saveFilterTo:path.fileSystemRepresentation
+                           rules:(const EeUiRule *)self.draft.bytes
+                           count:(uint32_t)[self count]
+                           delim:delim
+                           error:err
+                             cap:sizeof(err)])
     {
         [self alert:ns_utf8(err)];
         return;
@@ -480,7 +566,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
         [a beginSheetModalForWindow:self.sheet
                   completionHandler:^(NSModalResponse r) {
                     self.filePanelOpen = NO;
-                    if (r == NSAlertSecondButtonReturn && self.owner.voters != NULL)
+                    if (r == NSAlertSecondButtonReturn && self.host != nil)
                     {
                         [self saveFilterTo:file delim:delim];
                     }
@@ -512,7 +598,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     }
     panel = [NSSavePanel savePanel];
     panel.title = @"Export Filter";
-    EeUiFilterFile_Name(self.owner.path.fileSystemRepresentation, name, sizeof(name));
+    [self.host filterFileName:name cap:sizeof(name)];
     panel.nameFieldStringValue = ns_utf8(name);
     if (g_filterFolder != nil)
     {
@@ -530,7 +616,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     [panel beginSheetModalForWindow:self.sheet
                   completionHandler:^(NSModalResponse r) {
                     self.filePanelOpen = NO;
-                    if (r == NSModalResponseOK && panel.URL.path != nil && self.owner.voters != NULL)
+                    if (r == NSModalResponseOK && panel.URL.path != nil && self.host != nil)
                     {
                         /* (after the panel has gone, so a question can take its place) */
                         NSString *chosen = panel.URL.path;
@@ -549,8 +635,13 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     EeUiRule *rules = NULL;
     uint32_t n = 0;
     char msg[256], detail[2048];
-    int r = EeUiVoters_LoadFilter(self.owner.voters, path.fileSystemRepresentation, &rules, &n, msg, sizeof(msg),
-                                  detail, sizeof(detail));
+    int r = [self.host loadFilterFrom:path.fileSystemRepresentation
+                                rules:&rules
+                                count:&n
+                              message:msg
+                                  cap:sizeof(msg)
+                               detail:detail
+                                  cap:sizeof(detail)];
     g_filterFolder = [NSURL fileURLWithPath:path.stringByDeletingLastPathComponent isDirectory:YES];
     if (r <= 0)
     {
@@ -590,7 +681,7 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     [panel beginSheetModalForWindow:self.sheet
                   completionHandler:^(NSModalResponse r) {
                     self.filePanelOpen = NO;
-                    if (r == NSModalResponseOK && panel.URL.path != nil && self.owner.voters != NULL)
+                    if (r == NSModalResponseOK && panel.URL.path != nil && self.host != nil)
                     {
                         NSString *path = panel.URL.path;
                         dispatch_async(dispatch_get_main_queue(), ^{
@@ -605,13 +696,16 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
     EeUiRule r;
     char why[256];
     NSUInteger i;
+    NSInteger rel = self.relation.indexOfSelectedItem;
     memset(&r, 0, sizeof(r));
-    r.column = (uint32_t)MAX(self.column.indexOfSelectedItem, 0);
-    r.relation = (int)MAX(self.relation.indexOfSelectedItem, 0);
+    r.column = [self chosenColumn];
+    r.relation = rel >= 0 && (NSUInteger)rel < self.rels.count ? self.rels[(NSUInteger)rel].intValue : EE_UI_REL_IS;
     r.exclude = self.action.indexOfSelectedItem == 1;
     r.enabled = 1;
-    strncpy(r.value, self.value.stringValue.UTF8String ?: "", sizeof(r.value) - 1);
-    if (!EeUiVoters_RuleIsValid(self.owner.voters, &r, why, sizeof(why)))
+    strncpy(r.value,
+            (self.choice.hidden ? self.value.stringValue : self.choice.titleOfSelectedItem).UTF8String ?: "",
+            sizeof(r.value) - 1);
+    if (![self.host filterRule:&r isValid:why cap:sizeof(why)])
     {
         [self alert:ns_utf8(why)];
         return;
@@ -651,13 +745,13 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
 
 - (void)apply:(id)sender
 {
-    [self.owner setRules:(const EeUiRule *)self.draft.bytes count:[self count]];
+    [self.host applyFilterRules:(const EeUiRule *)self.draft.bytes count:[self count]];
 }
 
 - (void)close
 {
-    [self.owner.window endSheet:self.sheet];
-    self.owner.filterSheet = nil;
+    [self.host.window endSheet:self.sheet];
+    [self.host filterSheetClosed];
 }
 
 - (void)ok:(id)sender
@@ -3456,8 +3550,83 @@ static void app_window_closed(EeVoterWindow *w);
     {
         return;
     }
-    self.filterSheet = [[EeFilterSheet alloc] initWithOwner:self];
+    self.filterSheet = [[EeFilterSheet alloc] initWithHost:self
+                                                     rules:(const EeUiRule *)self.rules.bytes
+                                                     count:self.rules.length / sizeof(EeUiRule)];
     [self.window beginSheet:self.filterSheet.sheet completionHandler:nil];
+}
+
+/* ---- the Filter sheet's host: Windows' Filter window for a voter list or roster ---- */
+
+- (NSString *)filterTitle
+{
+    return @"Filter";
+}
+
+- (NSString *)filterPrompt
+{
+    return @"Display entries matching these conditions:";
+}
+
+- (uint32_t)filterColumnCount
+{
+    return EeUiVoters_Columns(self.voters);
+}
+
+- (const char *)filterColumnTitle:(uint32_t)column
+{
+    return EeUiVoters_Title(self.voters, column);
+}
+
+- (unsigned)filterRelations:(uint32_t)column
+{
+    return (1u << EE_UI_REL_COUNT) - 1u; /* (every relation) */
+}
+
+- (NSArray<NSString *> *)filterValues:(uint32_t)column
+{
+    return nil; /* (a typed value) */
+}
+
+- (BOOL)filterRule:(const EeUiRule *)rule isValid:(char *)why cap:(size_t)cap
+{
+    return EeUiVoters_RuleIsValid(self.voters, rule, why, cap) != 0;
+}
+
+- (void)applyFilterRules:(const EeUiRule *)rules count:(NSUInteger)n
+{
+    [self setRules:rules count:n];
+}
+
+- (void)filterFileName:(char *)out cap:(size_t)cap
+{
+    EeUiFilterFile_Name(self.path.fileSystemRepresentation, out, cap);
+}
+
+- (int)saveFilterTo:(const char *)path
+              rules:(const EeUiRule *)rules
+              count:(uint32_t)n
+              delim:(char)delim
+              error:(char *)err
+                cap:(size_t)cap
+{
+    return EeUiVoters_SaveFilter(self.voters, path, rules, n, delim, err, cap);
+}
+
+- (int)loadFilterFrom:(const char *)path
+                rules:(EeUiRule **)rules
+                count:(uint32_t *)n
+              message:(char *)msg
+                  cap:(size_t)msgcap
+               detail:(char *)detail
+                  cap:(size_t)detailcap
+{
+    return EeUiVoters_LoadFilter(self.voters, path, rules, n, msg, msgcap, detail, detailcap);
+}
+
+- (void)filterSheetClosed
+{
+    self.filterSheet = nil;
 }
 
 /* Reset Filter / Reset View: all rows (no rules, no duplicates view), as on Windows */
@@ -3619,16 +3788,25 @@ static void app_window_closed(EeVoterWindow *w);
     [view addItemWithTitle:@"Reset View" action:@selector(resetSort:) keyEquivalent:@""];
     viewItem.submenu = view;
     viewItem.tag = EE_MENU_RESULTS;
-    filterItem.tag = EE_MENU_VOTERS; /* (the results' Filter is still to come) */
-    compareItem.tag = EE_MENU_VOTERS; /* (and their Compare) */
+    compareItem.tag = EE_MENU_VOTERS; /* (the results' Compare is still to come) */
+    /* Filter: Filter... and Reset Filter for every window; the duplicates views and Reset View...
+     * for the voter windows (the results' Reset View is in View) */
     [filter addItemWithTitle:@"Filter…" action:@selector(showFilter:) keyEquivalent:@"l"]; /* (Ctrl+L on Windows) */
     [filter addItemWithTitle:@"Reset Filter" action:@selector(resetFilter:) keyEquivalent:@""];
-    [filter addItemWithTitle:@"Show Duplicate Voter IDs…" action:@selector(showDuplicateVoterIds:) keyEquivalent:@""];
-    [filter addItemWithTitle:@"Show Duplicate Voters…" action:@selector(showDuplicateVoters:) keyEquivalent:@""];
+    [filter addItemWithTitle:@"Show Duplicate Voter IDs…" action:@selector(showDuplicateVoterIds:) keyEquivalent:@""]
+        .tag = EE_MENU_VOTERS;
+    [filter addItemWithTitle:@"Show Duplicate Voters…" action:@selector(showDuplicateVoters:) keyEquivalent:@""].tag =
+        EE_MENU_VOTERS;
     [filter addItemWithTitle:@"Show Duplicate Voters Voting…" action:@selector(showDuplicateVotersVoting:)
-               keyEquivalent:@""];
-    [filter addItem:[NSMenuItem separatorItem]];
-    [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""];
+               keyEquivalent:@""]
+        .tag = EE_MENU_VOTERS;
+    {
+        NSMenuItem *sep = [NSMenuItem separatorItem];
+        sep.tag = EE_MENU_VOTERS;
+        [filter addItem:sep];
+    }
+    [filter addItemWithTitle:@"Reset View…" action:@selector(resetView:) keyEquivalent:@""].tag = EE_MENU_VOTERS;
+    filter.delegate = self;
     filterItem.submenu = filter;
     [reports addItemWithTitle:@"Display Precinct Report…" action:@selector(showPrecinctReport:) keyEquivalent:@""]
         .tag = EE_MENU_VOTERS;
@@ -3787,6 +3965,10 @@ static void app_window_closed(EeVoterWindow *w);
         [self.main.window makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         self.resultsSnapshot.png = self.snapshot;
+        self.resultsSnapshot.filterWindow = self.snapshotFilterWindow;
+        self.resultsSnapshot.rules = self.snapshotQuick;
+        self.resultsSnapshot.loadFilter = self.snapshotLoadFilter;
+        self.resultsSnapshot.exportFilter = self.snapshotExportFilter;
         [EeResultsWindow openPaths:self.pendingFiles
                               over:self.main.window
                           snapshot:self.snapshot != nil ? self.resultsSnapshot : nil];

@@ -5,7 +5,8 @@
  *        Cancel, and each election opens a window of its own: a row per contest and choice
  *        (Over Votes and Under Votes too when the files give them), View > Totals or By
  *        Precinct, Reset View, a heading click to sort (again to reverse; counts largest first),
- *        Copy (Cmd-C, or the right-click menu), Reports > Display Load Summary... (open by itself
+ *        Copy (Cmd-C, or the right-click menu), Filter... (Cmd-L; the shared Filter sheet,
+ *        Windows' results rules) and Reset Filter, Reports > Display Load Summary... (open by itself
  *        when the files disagree), Settings... (Windows' Options: zoom, a column per vote type,
  *        the party shown first in a primary) and Windows' status line. The rows come from the
  *        engine through ee_ui_results.h (plain C). Compiled with ARC.
@@ -37,13 +38,14 @@ static NSButton *sheet_button(NSString *title, id target, SEL action)
 @class EeResultsOptionsSheet;
 
 @interface EeResultsWindow () <NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, NSMenuDelegate,
-                               NSMenuItemValidation>
+                               NSMenuItemValidation, EeFilterHost>
 @property(strong) NSTableView *table;
 @property(strong) NSTextField *status;
 @property(assign) EeUiResults *res;
 @property(assign) int zoom;                          /* the list's text size (Settings) */
 @property(strong) NSAlert *summaryAlert;             /* the Load Summary while it is open */
 @property(strong) EeResultsOptionsSheet *optionsSheet; /* Settings while it is open */
+@property(strong) EeFilterSheet *filterSheet;          /* the Filter sheet while it is open */
 @property(strong) EeResultsSnapshot *snap;           /* --snapshot (nil: none) */
 - (void)setOptions:(EeUiResultsOptions)o save:(BOOL)save;
 @end
@@ -508,6 +510,126 @@ static NSMutableArray<EeResultsWindow *> *g_results; /* every open results windo
               }];
 }
 
+/* ---- Filter (Windows' results Filter window: the shared Filter sheet) ---- */
+
+/* the rules applied (OK, Apply, Reset Filter): what is counted and shown, made again */
+- (void)setRules:(const EeUiRule *)rules count:(NSUInteger)n
+{
+    if (!EeUiResults_SetRules(self.res, rules, (uint32_t)n))
+    {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = @"Out of memory.";
+        [a beginSheetModalForWindow:self.window completionHandler:nil];
+    }
+    [self.table deselectAll:nil];
+    [self rebuildColumns]; /* (a vote type rule takes its column away) */
+}
+
+/* Filter > Filter... (Cmd-L, as Ctrl+L on Windows): "Election Explorer Results Filter" */
+- (IBAction)showFilter:(id)sender
+{
+    uint32_t i, n = EeUiResults_RuleCount(self.res);
+    NSMutableData *rules = [NSMutableData dataWithLength:n * sizeof(EeUiRule)];
+    if (self.filterSheet != nil || self.window.attachedSheet != nil)
+    {
+        return;
+    }
+    for (i = 0; i < n; i++)
+    {
+        EeUiResults_GetRule(self.res, i, (EeUiRule *)rules.mutableBytes + i);
+    }
+    self.filterSheet = [[EeFilterSheet alloc] initWithHost:self rules:(const EeUiRule *)rules.bytes count:n];
+    [self.window beginSheet:self.filterSheet.sheet completionHandler:nil];
+}
+
+/* Filter > Reset Filter: every rule removed */
+- (IBAction)resetFilter:(id)sender
+{
+    if (EeUiResults_RuleCount(self.res) > 0)
+    {
+        [self setRules:NULL count:0];
+    }
+}
+
+- (NSString *)filterTitle
+{
+    return @"Election Explorer Results Filter";
+}
+
+- (NSString *)filterPrompt
+{
+    return @"Count and display results matching these conditions:";
+}
+
+- (uint32_t)filterColumnCount
+{
+    return EE_UI_RF_COUNT;
+}
+
+- (const char *)filterColumnTitle:(uint32_t)column
+{
+    return EeUiResults_FilterTitle(self.res, column);
+}
+
+- (unsigned)filterRelations:(uint32_t)column
+{
+    return (1u << EE_UI_REL_IS) | (1u << EE_UI_REL_IS_NOT); /* (Windows' results filter) */
+}
+
+- (NSArray<NSString *> *)filterValues:(uint32_t)column
+{
+    uint32_t n = 0, i;
+    char **vals = EeUiResults_FilterValues(self.res, column, &n);
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:n];
+    for (i = 0; i < n; i++)
+    {
+        [out addObject:ns_utf8(vals[i])];
+    }
+    EeUiResults_FreeValues(vals, n);
+    return out;
+}
+
+- (BOOL)filterRule:(const EeUiRule *)rule isValid:(char *)why cap:(size_t)cap
+{
+    return EeUiResults_RuleIsValid(rule, why, cap) != 0;
+}
+
+- (void)applyFilterRules:(const EeUiRule *)rules count:(NSUInteger)n
+{
+    [self setRules:rules count:n];
+}
+
+- (void)filterFileName:(char *)out cap:(size_t)cap
+{
+    EeUiResults_FilterFileName(self.res, out, cap);
+}
+
+- (int)saveFilterTo:(const char *)path
+              rules:(const EeUiRule *)rules
+              count:(uint32_t)n
+              delim:(char)delim
+              error:(char *)err
+                cap:(size_t)cap
+{
+    return EeUiResults_SaveFilter(self.res, path, rules, n, delim, err, cap);
+}
+
+- (int)loadFilterFrom:(const char *)path
+                rules:(EeUiRule **)rules
+                count:(uint32_t *)n
+              message:(char *)msg
+                  cap:(size_t)msgcap
+               detail:(char *)detail
+                  cap:(size_t)detailcap
+{
+    return EeUiResults_LoadFilter(self.res, path, rules, n, msg, msgcap, detail, detailcap);
+}
+
+- (void)filterSheetClosed
+{
+    self.filterSheet = nil;
+}
+
 /* Settings... (Windows' Edit > Options...) */
 - (IBAction)showOptions:(id)sender
 {
@@ -559,9 +681,13 @@ static NSMutableArray<EeResultsWindow *> *g_results; /* every open results windo
         item.hidden = NO;
         return self.window.attachedSheet == nil;
     }
-    if (item.action == @selector(showOptions:))
+    if (item.action == @selector(showOptions:) || item.action == @selector(showFilter:))
     {
         return self.window.attachedSheet == nil;
+    }
+    if (item.action == @selector(resetFilter:))
+    {
+        return self.window.attachedSheet == nil && EeUiResults_RuleCount(self.res) > 0;
     }
     return YES;
 }
@@ -600,6 +726,29 @@ static NSMutableArray<EeResultsWindow *> *g_results; /* every open results windo
             }
         }
     }
+    if (s.rules.count > 0)
+    {
+        /* --include / --exclude <column>=<value>: rules "is", as the Filter sheet's OK applies
+         * them (the column: 0 Precinct, 1 Contest, 2 Choice, 3 Party, 4 Vote Type) */
+        NSMutableData *rules = [NSMutableData data];
+        for (NSString *q in s.rules)
+        {
+            NSRange eq = [q rangeOfString:@"="];
+            EeUiRule r;
+            if (eq.location == NSNotFound)
+            {
+                continue;
+            }
+            memset(&r, 0, sizeof(r));
+            r.column = (uint32_t)[q substringWithRange:NSMakeRange(1, eq.location - 1)].intValue;
+            r.relation = EE_UI_REL_IS;
+            r.exclude = [q hasPrefix:@"-"];
+            r.enabled = 1;
+            strncpy(r.value, [q substringFromIndex:eq.location + 1].UTF8String ?: "", sizeof(r.value) - 1);
+            [rules appendBytes:&r length:sizeof(r)];
+        }
+        [self setRules:(const EeUiRule *)rules.bytes count:rules.length / sizeof(EeUiRule)];
+    }
     if (s.loadSummary && self.summaryAlert == nil)
     {
         [self showLoadSummary:nil];
@@ -608,9 +757,22 @@ static NSMutableArray<EeResultsWindow *> *g_results; /* every open results windo
     {
         [self showOptions:nil];
     }
+    else if (s.filterWindow || s.loadFilter != nil || s.exportFilter != nil)
+    {
+        [self showFilter:nil];
+        if (s.loadFilter != nil)
+        {
+            [self.filterSheet loadFilterFrom:s.loadFilter];
+        }
+        if (s.exportFilter != nil)
+        {
+            [self.filterSheet exportFilterTo:s.exportFilter type:0];
+        }
+    }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
       NSWindow *target = s.loadSummary && self.summaryAlert != nil    ? self.summaryAlert.window
                          : s.optionsWindow && self.optionsSheet != nil ? self.optionsSheet.sheet
+                         : self.filterSheet != nil                     ? self.filterSheet.sheet
                                                                        : self.window;
       NSView *v = target.contentView.superview ?: target.contentView;
       NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds];
@@ -619,6 +781,10 @@ static NSMutableArray<EeResultsWindow *> *g_results; /* every open results windo
       if (self.optionsSheet != nil)
       {
           [self.optionsSheet close]; /* (terminate: does nothing while a sheet is open) */
+      }
+      if (self.filterSheet != nil)
+      {
+          [self.filterSheet close];
       }
       if (self.window.attachedSheet != nil)
       {

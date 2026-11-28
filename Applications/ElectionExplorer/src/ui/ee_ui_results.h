@@ -156,11 +156,84 @@ extern "C"
      */
     char *EeUiResults_CopyText(const EeUiResults *r, const uint32_t *rows, uint32_t n);
 
+    /* ---------------------------------------------------------------------- */
+    /* Filter (Windows' results Filter window: "is" / "is not" rules, each     */
+    /* chosen from the column's values, then Include or Exclude)               */
+    /* ---------------------------------------------------------------------- */
+
+    /** The filter's columns (EeUiRule.column). Precinct and Vote Type rules choose what is
+     * counted, so every total, percentage and Over/Under Votes figure is recomputed; Contest,
+     * Choice and Party rules hide rows. */
+    enum
+    {
+        EE_UI_RF_PRECINCT = 0,
+        EE_UI_RF_CONTEST,
+        EE_UI_RF_CHOICE,
+        EE_UI_RF_PARTY,
+        EE_UI_RF_VOTETYPE,
+        EE_UI_RF_COUNT
+    };
+
+    /** A filter column's title, or NULL when it is not offered (Precinct without precinct
+     * detail, Vote Type without vote types), as on Windows. */
+    const char *EeUiResults_FilterTitle(const EeUiResults *r, uint32_t column);
+
+    /**
+     * The column's distinct values to choose from (Windows' Res_FilterCollect: sorted, whole
+     * numbers as numbers; the vote types in file order; Choice also offers Over Votes and Under
+     * Votes when a contest has them). UTF-8, malloc()'d; free with EeUiResults_FreeValues. NULL
+     * (and 0) for a column not offered.
+     */
+    char **EeUiResults_FilterValues(const EeUiResults *r, uint32_t column, uint32_t *n);
+    void EeUiResults_FreeValues(char **values, uint32_t n);
+
+    /** 0 with Windows' "Choose a value to filter on." when the rule has no value. */
+    int EeUiResults_RuleIsValid(const EeUiRule *rule, char *why, size_t whycap);
+
+    /**
+     * Filter by these rules (EE_UI_REL_IS or _IS_NOT; Windows' Res_ApplyFilter): rules on one
+     * column are alternatives (any included value passes), rules on different columns all apply,
+     * a matching Exclude always wins, rules turned off count for nothing. The totals and rows
+     * are made again, keeping the view and the sort. Returns 0 when out of memory.
+     */
+    int EeUiResults_SetRules(EeUiResults *r, const EeUiRule *rules, uint32_t n);
+
+    uint32_t EeUiResults_RuleCount(const EeUiResults *r);
+    int EeUiResults_GetRule(const EeUiResults *r, uint32_t i, EeUiRule *out);
+
+    /** 1 while a rule is on (the status line says "filtered"). */
+    int EeUiResults_IsFiltered(const EeUiResults *r);
+
+    /** Export Filter's suggested name: "<first file's name> Filter.filter.csv". */
+    void EeUiResults_FilterFileName(const EeUiResults *r, char *out, size_t cap);
+
+    /** Save @p rules (Export Filter...: all listed, on or off) to @p path_utf8, columns by
+     * title. Returns 1, or 0 with Windows' message in @p err. */
+    int EeUiResults_SaveFilter(const EeUiResults *r,
+                               const char *path_utf8,
+                               const EeUiRule *rules,
+                               uint32_t n,
+                               char delim,
+                               char *err,
+                               size_t errcap);
+
+    /** Load Filter...: as EeUiVoters_LoadFilter, for these results' columns (a saved filter
+     * from another results window loads; "is" / "is not" rules only). */
+    int EeUiResults_LoadFilter(const EeUiResults *r,
+                               const char *path_utf8,
+                               EeUiRule **rules,
+                               uint32_t *n,
+                               char *msg,
+                               size_t msgcap,
+                               char *detail,
+                               size_t detailcap);
+
     /**
      * The windows' `--selftest-results <files...>`: load the files, then print for each
      * election its title, status line, columns, cells, a sort, the By Precinct view, the view
-     * without vote types, the other party first, Copy and the load summary, as the Election
-     * Results window would show them. Returns 0, or 1 when the load fails.
+     * without vote types, the other party first, Copy, the filter (its columns and values,
+     * precinct, vote type and contest rules, a saved filter) and the load summary, as the
+     * Election Results window would show them. Returns 0, or 1 when the load fails.
      */
     int EeUiResults_SelfTest(const char *const *paths_utf8, uint32_t n);
 

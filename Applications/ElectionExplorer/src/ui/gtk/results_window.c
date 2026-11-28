@@ -5,7 +5,8 @@
  *        with Cancel, and each election opens a window of its own: a row per contest and
  *        choice (Over Votes and Under Votes too when the files give them), View > Totals or
  *        By Precinct, Reset View, a heading click to sort (again to reverse; counts largest
- *        first), Copy (Ctrl+C, or the right-click menu), Reports > Display Load Summary...
+ *        first), Copy (Ctrl+C, or the right-click menu), Filter... (Ctrl+L; the shared Filter
+ *        window, Windows' results rules) and Reset Filter, Reports > Display Load Summary...
  *        (open by itself when the files disagree), Edit > Options... (zoom, a column per vote
  *        type, the party shown first in a primary) and Windows' status line. The rows come
  *        from the engine through ee_ui_results.h (plain C).
@@ -31,6 +32,7 @@ struct ResultsWindow
     GtkLabel *status;
     GtkWindow *summary;        /* the Load Summary while it is open */
     ResOptions *options;       /* the Options window while it is open */
+    FilterDialog *filter;      /* the Filter window while it is open */
     GtkWidget *menu;           /* the right-click menu while it is open */
     int zoom;                  /* the list's text size (Options) */
     gboolean rebuilding;       /* columns being replaced, or the arrow set: ignore the sorter */
@@ -659,6 +661,160 @@ static void action_about(GSimpleAction *action, GVariant *param, gpointer user)
 }
 
 /* -------------------------------------------------------------------------- */
+/* Filter (Windows' results Filter window, the shared one of app_main.c)      */
+/* -------------------------------------------------------------------------- */
+
+/* Filter > Reset Filter: available while rules are listed, as on Windows */
+static void show_filter_state(ResultsWindow *rw)
+{
+    g_simple_action_set_enabled(
+        G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(rw->window), "reset-filter")),
+        EeUiResults_RuleCount(rw->res) > 0);
+}
+
+/* the rules applied (OK, Apply, Reset Filter): what is counted and shown, made again */
+static void set_rules(ResultsWindow *rw, const EeUiRule *rules, uint32_t n)
+{
+    if (!EeUiResults_SetRules(rw->res, rules, n))
+    {
+        alert(rw->window, "Out of memory.");
+    }
+    rebuild(rw); /* (a vote type rule takes its column away) */
+    show_filter_state(rw);
+}
+
+static const char *filter_title(void *ctx, uint32_t column)
+{
+    return EeUiResults_FilterTitle(((ResultsWindow *)ctx)->res, column);
+}
+
+static unsigned filter_relations(void *ctx, uint32_t column)
+{
+    (void)ctx;
+    (void)column;
+    return (1u << EE_UI_REL_IS) | (1u << EE_UI_REL_IS_NOT); /* (Windows' results filter) */
+}
+
+static char **filter_values(void *ctx, uint32_t column)
+{
+    uint32_t n = 0, i;
+    char **vals = EeUiResults_FilterValues(((ResultsWindow *)ctx)->res, column, &n);
+    char **out = g_new0(char *, n + 1);
+    for (i = 0; i < n; i++)
+    {
+        out[i] = g_strdup(vals[i]);
+    }
+    EeUiResults_FreeValues(vals, n);
+    return out;
+}
+
+static int filter_rule_is_valid(void *ctx, const EeUiRule *rule, char *why, size_t whycap)
+{
+    (void)ctx;
+    return EeUiResults_RuleIsValid(rule, why, whycap);
+}
+
+static void filter_apply(void *ctx, const EeUiRule *rules, uint32_t n)
+{
+    ResultsWindow *rw = (ResultsWindow *)ctx;
+    if (!rw->closed)
+    {
+        set_rules(rw, rules, n);
+    }
+}
+
+static void filter_file_name(void *ctx, char *out, size_t cap)
+{
+    EeUiResults_FilterFileName(((ResultsWindow *)ctx)->res, out, cap);
+}
+
+static int filter_save(void *ctx,
+                       const char *path,
+                       const EeUiRule *rules,
+                       uint32_t n,
+                       char delim,
+                       char *err,
+                       size_t errcap)
+{
+    return EeUiResults_SaveFilter(((ResultsWindow *)ctx)->res, path, rules, n, delim, err, errcap);
+}
+
+static int filter_load(void *ctx,
+                       const char *path,
+                       EeUiRule **rules,
+                       uint32_t *n,
+                       char *msg,
+                       size_t msgcap,
+                       char *detail,
+                       size_t detailcap)
+{
+    return EeUiResults_LoadFilter(((ResultsWindow *)ctx)->res,
+                                  path,
+                                  rules,
+                                  n,
+                                  msg,
+                                  msgcap,
+                                  detail,
+                                  detailcap);
+}
+
+static void filter_closed(void *ctx)
+{
+    ResultsWindow *rw = (ResultsWindow *)ctx;
+    rw->filter = NULL;
+    results_unref(rw);
+}
+
+/* Filter > Filter... (Ctrl+L): Windows' "Election Explorer Results Filter" */
+static void show_filter(ResultsWindow *rw)
+{
+    EeGtkFilterHost host;
+    EeUiRule *rules;
+    uint32_t i, n = EeUiResults_RuleCount(rw->res);
+    if (rw->filter != NULL)
+    {
+        gtk_window_present(ee_gtk_filter_window_widget(rw->filter));
+        return;
+    }
+    memset(&host, 0, sizeof(host));
+    host.title = "Election Explorer Results Filter";
+    host.prompt = "Count and display results matching these conditions:";
+    host.ncols = EE_UI_RF_COUNT;
+    host.column_title = filter_title;
+    host.relations = filter_relations;
+    host.values = filter_values;
+    host.rule_is_valid = filter_rule_is_valid;
+    host.apply = filter_apply;
+    host.file_name = filter_file_name;
+    host.save = filter_save;
+    host.load = filter_load;
+    host.closed = filter_closed;
+    host.ctx = rw;
+    rules = g_new0(EeUiRule, n > 0 ? n : 1);
+    for (i = 0; i < n; i++)
+    {
+        EeUiResults_GetRule(rw->res, i, &rules[i]);
+    }
+    rw->refs++; /* (filter_closed) */
+    rw->filter = ee_gtk_filter_window(rw->window, &host, rules, n);
+    g_free(rules);
+}
+
+static void action_filter(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    (void)action;
+    (void)param;
+    show_filter((ResultsWindow *)user);
+}
+
+static void action_reset_filter(GSimpleAction *action, GVariant *param, gpointer user)
+{
+    (void)action;
+    (void)param;
+    set_rules((ResultsWindow *)user, NULL, 0);
+}
+
+/* -------------------------------------------------------------------------- */
 /* The window                                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -722,6 +878,32 @@ static gboolean snapshot_actions(gpointer user)
         }
         g_clear_object(&col);
     }
+    if (s->rules != NULL && s->rules->len > 0)
+    {
+        /* --include / --exclude <column>=<value>: rules "is", as the Filter window's OK applies
+         * them (the column: 0 Precinct, 1 Contest, 2 Choice, 3 Party, 4 Vote Type) */
+        GArray *rules = g_array_new(FALSE, TRUE, sizeof(EeUiRule));
+        guint i;
+        for (i = 0; i < s->rules->len; i++)
+        {
+            const char *q = (const char *)g_ptr_array_index(s->rules, i);
+            const char *eq = strchr(q, '=');
+            EeUiRule r;
+            if (eq == NULL)
+            {
+                continue;
+            }
+            memset(&r, 0, sizeof(r));
+            r.column = (uint32_t)atoi(q + 1);
+            r.relation = EE_UI_REL_IS;
+            r.exclude = q[0] == '-';
+            r.enabled = 1;
+            g_strlcpy(r.value, eq + 1, sizeof(r.value));
+            g_array_append_val(rules, r);
+        }
+        set_rules(rw, (const EeUiRule *)(void *)rules->data, rules->len);
+        g_array_unref(rules);
+    }
     if (s->load_summary)
     {
         show_load_summary(rw);
@@ -729,6 +911,18 @@ static gboolean snapshot_actions(gpointer user)
     else if (s->options_window)
     {
         show_options(rw);
+    }
+    else if (s->filter_window || s->load_filter != NULL || s->export_filter != NULL)
+    {
+        show_filter(rw);
+        if (s->load_filter != NULL)
+        {
+            ee_gtk_filter_load(rw->filter, s->load_filter);
+        }
+        if (s->export_filter != NULL)
+        {
+            ee_gtk_filter_export(rw->filter, s->export_filter);
+        }
     }
     g_timeout_add(500, snapshot_png, rw); /* (once drawn) */
     return G_SOURCE_REMOVE;
@@ -739,7 +933,8 @@ static gboolean snapshot_png(gpointer user)
     ResultsWindow *rw = (ResultsWindow *)user;
     GtkWindow *target = rw->snap.load_summary && rw->summary != NULL     ? rw->summary
                         : rw->snap.options_window && rw->options != NULL ? rw->options->win
-                                                                         : rw->window;
+                        : rw->filter != NULL ? ee_gtk_filter_window_widget(rw->filter)
+                                             : rw->window;
     int wrote = rw->closed ? -1 : ee_gtk_window_png(target, rw->snap_png);
     if (wrote == 0 && ++rw->snap_tries < 15)
     {
@@ -770,14 +965,18 @@ static ResultsWindow *results_window_new(GtkApplication *app,
         {"view-totals", NULL, NULL, "true", action_view, {0}},
         {"view-precinct", NULL, NULL, "false", action_view, {0}},
         {"reset-view", action_reset_view, NULL, NULL, NULL, {0}},
+        {"filter", action_filter, NULL, NULL, NULL, {0}},
+        {"reset-filter", action_reset_filter, NULL, NULL, NULL, {0}},
         {"report-summary", action_summary, NULL, NULL, NULL, {0}},
         {"about", action_about, NULL, NULL, NULL, {0}},
     };
     const char *open_accels[] = {"<Control>o", NULL}, *close_accels[] = {"<Control>w", NULL},
-               *quit_accels[] = {"<Control>q", NULL}, *copy_accels[] = {"<Control>c", NULL};
+               *quit_accels[] = {"<Control>q", NULL}, *copy_accels[] = {"<Control>c", NULL},
+               *filter_accels[] = {"<Control>l", NULL};
     ResultsWindow *rw = g_new0(ResultsWindow, 1);
     GMenu *menu = g_menu_new(), *file = g_menu_new(), *edit = g_menu_new(), *view = g_menu_new(),
-          *reset = g_menu_new(), *reports = g_menu_new(), *help = g_menu_new();
+          *reset = g_menu_new(), *filt = g_menu_new(), *reports = g_menu_new(),
+          *help = g_menu_new();
     GtkWidget *header = gtk_header_bar_new(), *menu_button = gtk_menu_button_new();
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0), *scroll = gtk_scrolled_window_new();
     EeUiResultsOptions o;
@@ -802,10 +1001,13 @@ static ResultsWindow *results_window_new(GtkApplication *app,
     gtk_application_set_accels_for_action(app, "win.close", close_accels);
     gtk_application_set_accels_for_action(app, "win.quit", quit_accels);
     gtk_application_set_accels_for_action(app, "win.copy", copy_accels);
+    gtk_application_set_accels_for_action(app,
+                                          "win.filter",
+                                          filter_accels); /* (Ctrl+L, as on Windows) */
     a = g_action_map_lookup_action(G_ACTION_MAP(rw->window), "view-precinct");
     g_simple_action_set_enabled(G_SIMPLE_ACTION(a), EeUiResults_HasPrecinctDetail(res));
 
-    /* the menu: Windows' File, Edit, View and Reports (Filter, Turnout, Export and Compare are
+    /* the menu: Windows' File, Edit, View, Filter and Reports (Turnout, Export and Compare are
      * still to come) */
     g_menu_append(file, "Open Voter List\xE2\x80\xA6", "win.open");
     g_menu_append(file, "Open Voter Roster\xE2\x80\xA6", "win.open-roster");
@@ -817,12 +1019,15 @@ static ResultsWindow *results_window_new(GtkApplication *app,
     g_menu_append(view, "Totals", "win.view-totals");
     g_menu_append(view, "By Precinct", "win.view-precinct");
     g_menu_append(reset, "Reset View", "win.reset-view");
+    g_menu_append(filt, "Filter\xE2\x80\xA6", "win.filter");
+    g_menu_append(filt, "Reset Filter", "win.reset-filter");
     g_menu_append(reports, "Display Load Summary\xE2\x80\xA6", "win.report-summary");
     g_menu_append(help, "About Election Explorer", "win.about");
     g_menu_append_section(menu, NULL, G_MENU_MODEL(file));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(edit));
     g_menu_append_section(menu, "View", G_MENU_MODEL(view));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(reset));
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(filt));
     g_menu_append_section(menu, "Reports", G_MENU_MODEL(reports));
     g_menu_append_section(menu, NULL, G_MENU_MODEL(help));
     gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(menu_button), G_MENU_MODEL(menu));
@@ -834,6 +1039,7 @@ static ResultsWindow *results_window_new(GtkApplication *app,
     g_object_unref(edit);
     g_object_unref(view);
     g_object_unref(reset);
+    g_object_unref(filt);
     g_object_unref(reports);
     g_object_unref(help);
 
@@ -867,6 +1073,7 @@ static ResultsWindow *results_window_new(GtkApplication *app,
 
     /* the saved options' view (Totals) */
     set_view(rw, FALSE, o.show_vote_types, o.party_first);
+    show_filter_state(rw);
     gtk_window_present(rw->window);
     if (EeUiResults_HasDifferences(res))
     {

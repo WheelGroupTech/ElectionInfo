@@ -72,9 +72,13 @@
  *   `--by-precinct` (View > By Precinct), `--zoom`, `--vote-types 0|1` and `--party-first
  *   rep|dem` (as the Options window's OK, unsaved) and `--sort <column>[:desc]` (heading clicks);
  *   `--load-summary` makes it of its Load Summary, `--options-window` of its Options.
+ *   `--include` / `--exclude <column>=<value>` apply "is" rules as the Filter window's OK does
+ *   (0 Precinct, 1 Contest, 2 Choice, 3 Party, 4 Vote Type), and `--filter-window`,
+ *   `--load-filter` and `--export-filter` work on its Filter window as on a list's.
  *
  * File > Open Election Results... opens each election's results in a window of its own
- * (results_window.c), as on Windows.
+ * (results_window.c), as on Windows. Its Filter window is the voter list's, through a host
+ * (EeGtkFilterHost): "is" / "is not" rules on a value chosen from the column's.
  *
  * Needs GTK 4.12 or later (Ubuntu 24.04 has 4.14).
  */
@@ -1314,15 +1318,21 @@ static void rebuild_columns(VoterWindow *w)
 
 struct FilterDialog
 {
-    VoterWindow *w;
+    EeGtkFilterHost host; /* the window filtered: a voter list, roster or results window */
     GtkWindow *win;
     GtkDropDown *column;
     GtkDropDown *relation;
     GtkDropDown *action;
-    GtkEntry *value;
+    GtkEntry *value;           /* a typed value (a column the host offers no values for) */
+    GtkDropDown *choice;       /* else the value, chosen from the column's values */
     GtkListBox *list;
-    GArray *draft;         /* EeUiRule */
-    GCancellable *pending; /* an Export / Load Filter file dialog or question that is open */
+    GArray *draft;             /* EeUiRule */
+    GCancellable *pending;     /* an Export / Load Filter file dialog or question that is open */
+    GArray *cols;              /* uint32_t: the column at each place of the Column drop-down */
+    int rels[EE_UI_REL_COUNT]; /* the relation at each place of the Relation drop-down */
+    guint nrels;
+    guint shown_column;        /* the column the Relation and value fields were made for */
+    gboolean filling;          /* the fields being set from a rule: no "notify::selected" */
 };
 
 static void fd_alert_detail(FilterDialog *d, const char *message, const char *detail)
@@ -1411,13 +1421,13 @@ static char *fd_finish_path(GFile *file, GError *error, FilterDialog *d, gboolea
 static gboolean fd_save(FilterDialog *d, const char *path, char delim)
 {
     char err[256];
-    if (!EeUiVoters_SaveFilter(d->w->voters,
-                               path,
-                               (const EeUiRule *)(void *)d->draft->data,
-                               d->draft->len,
-                               delim,
-                               err,
-                               sizeof(err)))
+    if (!d->host.save(d->host.ctx,
+                      path,
+                      (const EeUiRule *)(void *)d->draft->data,
+                      d->draft->len,
+                      delim,
+                      err,
+                      sizeof(err)))
     {
         fd_alert(d, err);
         return FALSE;
@@ -1521,7 +1531,7 @@ static void fd_on_export(GtkWidget *button, gpointer user)
     filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
     fd_add_filter(filters, "Election Explorer filter, CSV (*.filter.csv)", csv);
     fd_add_filter(filters, "Election Explorer filter, tab-delimited (*.filter.tsv)", tsv);
-    EeUiFilterFile_Name(d->w->path, name, sizeof(name));
+    d->host.file_name(d->host.ctx, name, sizeof(name));
     dlg = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dlg, "Export Filter");
     gtk_file_dialog_set_filters(dlg, G_LIST_MODEL(filters));
@@ -1534,20 +1544,13 @@ static void fd_on_export(GtkWidget *button, gpointer user)
 }
 
 /* Load Filter's file: its rules replace the listed ones (they take effect on Apply or OK); the
- * rules this list cannot use are listed, as on Windows */
+ * rules this window cannot use are listed, as on Windows */
 static void fd_load(FilterDialog *d, const char *path)
 {
     EeUiRule *rules = NULL;
     uint32_t n = 0;
     char msg[256], detail[2048];
-    int r = EeUiVoters_LoadFilter(d->w->voters,
-                                  path,
-                                  &rules,
-                                  &n,
-                                  msg,
-                                  sizeof(msg),
-                                  detail,
-                                  sizeof(detail));
+    int r = d->host.load(d->host.ctx, path, &rules, &n, msg, sizeof(msg), detail, sizeof(detail));
     fd_remember_folder(path);
     if (r <= 0)
     {
@@ -1607,6 +1610,83 @@ static void fd_on_load(GtkWidget *button, gpointer user)
     g_object_unref(filters);
 }
 
+/* -------------------------------------------------------------------------- */
+/* The fields: column, relation, value                                        */
+/* -------------------------------------------------------------------------- */
+
+static const char *fd_title(FilterDialog *d, uint32_t column)
+{
+    const char *t = d->host.column_title(d->host.ctx, column);
+    return t != NULL ? t : "";
+}
+
+static uint32_t fd_column(FilterDialog *d)
+{
+    guint pos = gtk_drop_down_get_selected(d->column);
+    return pos < d->cols->len ? g_array_index(d->cols, uint32_t, pos) : 0;
+}
+
+/* the Relation and value fields for @p column: its relations (all of them, or Windows' "is" /
+ * "is not" for a results window), and its values to choose from, or a box to type one */
+static void fd_show_column(FilterDialog *d, uint32_t column)
+{
+    unsigned mask = d->host.relations != NULL ? d->host.relations(d->host.ctx, column)
+                                              : (1u << EE_UI_REL_COUNT) - 1u;
+    GtkStringList *rels = gtk_string_list_new(NULL);
+    char **values = d->host.values != NULL ? d->host.values(d->host.ctx, column) : NULL;
+    guint was = gtk_drop_down_get_selected(d->relation), keep = 0;
+    int i, chosen = was < d->nrels ? d->rels[was] : EE_UI_REL_IS;
+    d->nrels = 0;
+    for (i = 0; i < EE_UI_REL_COUNT; i++)
+    {
+        if (mask & (1u << i))
+        {
+            if (i == chosen)
+            {
+                keep = d->nrels; /* (the relation chosen stays, when this column has it too) */
+            }
+            d->rels[d->nrels++] = i;
+            gtk_string_list_append(rels, EeUiVoters_RelationName(i));
+        }
+    }
+    gtk_drop_down_set_model(d->relation, G_LIST_MODEL(rels));
+    g_object_unref(rels);
+    gtk_drop_down_set_selected(d->relation, keep);
+    if (values != NULL)
+    {
+        GtkStringList *list = gtk_string_list_new((const char *const *)values);
+        gtk_drop_down_set_model(d->choice, G_LIST_MODEL(list));
+        g_object_unref(list);
+        gtk_drop_down_set_selected(d->choice, 0); /* (as on Windows: the first value) */
+        g_strfreev(values);
+    }
+    gtk_widget_set_visible(GTK_WIDGET(d->choice), values != NULL);
+    gtk_widget_set_visible(GTK_WIDGET(d->value), values == NULL);
+    d->shown_column = column;
+}
+
+static void fd_on_column_changed(GObject *object, GParamSpec *spec, gpointer user)
+{
+    FilterDialog *d = (FilterDialog *)user;
+    (void)object;
+    (void)spec;
+    if (!d->filling)
+    {
+        fd_show_column(d, fd_column(d));
+    }
+}
+
+/* the value in the fields: the one chosen, or the one typed */
+static const char *fd_value(FilterDialog *d)
+{
+    if (gtk_widget_get_visible(GTK_WIDGET(d->choice)))
+    {
+        GtkStringObject *s = GTK_STRING_OBJECT(gtk_drop_down_get_selected_item(d->choice));
+        return s != NULL ? gtk_string_object_get_string(s) : "";
+    }
+    return gtk_editable_get_text(GTK_EDITABLE(d->value));
+}
+
 static void fd_on_toggled(GtkCheckButton *check, gpointer user)
 {
     FilterDialog *d = (FilterDialog *)user;
@@ -1633,7 +1713,7 @@ static void fd_refresh(FilterDialog *d, int select)
     {
         const EeUiRule *r = &g_array_index(d->draft, EeUiRule, i);
         char *text = g_strdup_printf("%s %s \"%s\" then %s",
-                                     EeUiVoters_Title(d->w->voters, r->column),
+                                     fd_title(d, r->column),
                                      EeUiVoters_RelationName(r->relation),
                                      r->value,
                                      r->exclude ? "Exclude" : "Include");
@@ -1664,6 +1744,7 @@ static void fd_on_row_selected(GtkListBox *list, GtkListBoxRow *row, gpointer us
 {
     FilterDialog *d = (FilterDialog *)user;
     const EeUiRule *r;
+    guint i;
     (void)list;
     if (row == NULL || (guint)gtk_list_box_row_get_index(row) >= d->draft->len)
     {
@@ -1671,10 +1752,48 @@ static void fd_on_row_selected(GtkListBox *list, GtkListBoxRow *row, gpointer us
     }
     /* (as on Windows: a selected rule fills the fields, to change it and Add again) */
     r = &g_array_index(d->draft, EeUiRule, gtk_list_box_row_get_index(row));
-    gtk_drop_down_set_selected(d->column, r->column);
-    gtk_drop_down_set_selected(d->relation, (guint)r->relation);
+    for (i = 0; i < d->cols->len; i++)
+    {
+        if (g_array_index(d->cols, uint32_t, i) == r->column)
+        {
+            d->filling = TRUE;
+            gtk_drop_down_set_selected(d->column, i);
+            d->filling = FALSE;
+            break;
+        }
+    }
+    if (d->shown_column != r->column)
+    {
+        fd_show_column(d, r->column);
+    }
+    for (i = 0; i < d->nrels; i++)
+    {
+        if (d->rels[i] == r->relation)
+        {
+            gtk_drop_down_set_selected(d->relation, i);
+        }
+    }
     gtk_drop_down_set_selected(d->action, r->exclude ? 1 : 0);
-    gtk_editable_set_text(GTK_EDITABLE(d->value), r->value);
+    if (gtk_widget_get_visible(GTK_WIDGET(d->choice)))
+    {
+        GListModel *values = gtk_drop_down_get_model(d->choice);
+        guint n = g_list_model_get_n_items(values);
+        for (i = 0; i < n; i++)
+        {
+            GtkStringObject *s = g_list_model_get_item(values, i);
+            gboolean same = g_ascii_strcasecmp(gtk_string_object_get_string(s), r->value) == 0;
+            g_object_unref(s);
+            if (same)
+            {
+                gtk_drop_down_set_selected(d->choice, i);
+                break;
+            }
+        }
+    }
+    else
+    {
+        gtk_editable_set_text(GTK_EDITABLE(d->value), r->value);
+    }
 }
 
 static void fd_on_add(GtkWidget *button, gpointer user)
@@ -1682,15 +1801,15 @@ static void fd_on_add(GtkWidget *button, gpointer user)
     FilterDialog *d = (FilterDialog *)user;
     EeUiRule r;
     char why[256];
-    guint i;
+    guint i, rel = gtk_drop_down_get_selected(d->relation);
     (void)button;
     memset(&r, 0, sizeof(r));
-    r.column = gtk_drop_down_get_selected(d->column);
-    r.relation = (int)gtk_drop_down_get_selected(d->relation);
+    r.column = fd_column(d);
+    r.relation = rel < d->nrels ? d->rels[rel] : EE_UI_REL_IS;
     r.exclude = gtk_drop_down_get_selected(d->action) == 1;
     r.enabled = 1;
-    g_strlcpy(r.value, gtk_editable_get_text(GTK_EDITABLE(d->value)), sizeof(r.value));
-    if (!EeUiVoters_RuleIsValid(d->w->voters, &r, why, sizeof(why)))
+    g_strlcpy(r.value, fd_value(d), sizeof(r.value));
+    if (!d->host.rule_is_valid(d->host.ctx, &r, why, sizeof(why)))
     {
         fd_alert(d, why);
         return;
@@ -1740,7 +1859,7 @@ static void fd_on_apply(GtkWidget *button, gpointer user)
 {
     FilterDialog *d = (FilterDialog *)user;
     (void)button;
-    set_rules(d->w, (const EeUiRule *)(void *)d->draft->data, d->draft->len);
+    d->host.apply(d->host.ctx, (const EeUiRule *)(void *)d->draft->data, d->draft->len);
 }
 
 static void fd_on_ok(GtkWidget *button, gpointer user)
@@ -1761,10 +1880,7 @@ static void fd_on_destroy(GtkWidget *widget, gpointer user)
 {
     FilterDialog *d = (FilterDialog *)user;
     (void)widget;
-    if (!d->w->closed)
-    {
-        d->w->filter_dialog = NULL;
-    }
+    d->host.closed(d->host.ctx);
     if (d->pending != NULL)
     {
         /* (an open file dialog or question: its answer finds this window gone) */
@@ -1772,6 +1888,7 @@ static void fd_on_destroy(GtkWidget *widget, gpointer user)
         g_clear_object(&d->pending);
     }
     g_array_unref(d->draft);
+    g_array_unref(d->cols);
     g_free(d);
 }
 
@@ -1782,34 +1899,29 @@ static GtkWidget *fd_button(const char *label, GCallback cb, FilterDialog *d)
     return b;
 }
 
-static void show_filter_dialog(VoterWindow *w)
+FilterDialog *ee_gtk_filter_window(GtkWindow *owner,
+                                   const EeGtkFilterHost *host,
+                                   const EeUiRule *rules,
+                                   guint n)
 {
     FilterDialog *d;
     GtkWidget *box, *fields, *buttons, *scroll, *bottom, *prompt, *then, *ok, *spacer;
     GtkStringList *titles;
     GtkExpression *expr;
-    const char *relations[EE_UI_REL_COUNT + 1];
     const char *actions[] = {"Include", "Exclude", NULL};
     uint32_t c;
-    int i;
-    if (w->voters == NULL)
-    {
-        return;
-    }
-    if (w->filter_dialog != NULL)
-    {
-        gtk_window_present(w->filter_dialog->win);
-        return;
-    }
     d = g_new0(FilterDialog, 1);
-    d->w = w;
+    d->host = *host;
     d->draft = g_array_new(FALSE, TRUE, sizeof(EeUiRule));
-    g_array_append_vals(d->draft, w->rules->data, w->rules->len);
-    w->filter_dialog = d;
+    if (n > 0)
+    {
+        g_array_append_vals(d->draft, rules, n);
+    }
+    d->cols = g_array_new(FALSE, TRUE, sizeof(uint32_t));
 
     d->win = GTK_WINDOW(gtk_window_new());
-    gtk_window_set_title(d->win, "Filter");
-    gtk_window_set_transient_for(d->win, w->window);
+    gtk_window_set_title(d->win, host->title);
+    gtk_window_set_transient_for(d->win, owner);
     gtk_window_set_modal(d->win, TRUE);
     gtk_window_set_default_size(d->win, 760, 420);
     gtk_window_set_destroy_with_parent(d->win, TRUE);
@@ -1819,39 +1931,48 @@ static void show_filter_dialog(VoterWindow *w)
     gtk_widget_set_margin_end(box, 12);
     gtk_widget_set_margin_top(box, 12);
     gtk_widget_set_margin_bottom(box, 12);
-    prompt = gtk_label_new("Display entries matching these conditions:");
+    prompt = gtk_label_new(host->prompt);
     gtk_label_set_xalign(GTK_LABEL(prompt), 0.0f);
     gtk_box_append(GTK_BOX(box), prompt);
 
-    /* column / relation / value / then / action */
+    /* column / relation / value / then / action (the columns the host offers) */
     fields = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     titles = gtk_string_list_new(NULL);
-    for (c = 0; c < EeUiVoters_Columns(w->voters); c++)
+    for (c = 0; c < host->ncols; c++)
     {
-        gtk_string_list_append(titles, EeUiVoters_Title(w->voters, c));
+        const char *t = host->column_title(host->ctx, c);
+        if (t != NULL)
+        {
+            g_array_append_val(d->cols, c);
+            gtk_string_list_append(titles, t);
+        }
     }
     d->column = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(titles), NULL));
     expr = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, NULL, "string");
     gtk_drop_down_set_expression(d->column, expr);
     gtk_expression_unref(expr);
     gtk_drop_down_set_enable_search(d->column, TRUE); /* (216 columns in some lists) */
-    for (i = 0; i < EE_UI_REL_COUNT; i++)
-    {
-        relations[i] = EeUiVoters_RelationName(i);
-    }
-    relations[EE_UI_REL_COUNT] = NULL;
-    d->relation = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(relations));
+    d->relation = GTK_DROP_DOWN(gtk_drop_down_new(NULL, NULL));
     d->value = GTK_ENTRY(gtk_entry_new());
     gtk_widget_set_hexpand(GTK_WIDGET(d->value), TRUE);
     g_signal_connect(d->value, "activate", G_CALLBACK(fd_on_add), d);
+    d->choice = GTK_DROP_DOWN(gtk_drop_down_new(NULL, NULL));
+    expr = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, NULL, "string");
+    gtk_drop_down_set_expression(d->choice, expr);
+    gtk_expression_unref(expr);
+    gtk_drop_down_set_enable_search(d->choice, TRUE); /* (hundreds of precincts or choices) */
+    gtk_widget_set_hexpand(GTK_WIDGET(d->choice), TRUE);
     then = gtk_label_new("then");
     d->action = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(actions));
     gtk_box_append(GTK_BOX(fields), GTK_WIDGET(d->column));
     gtk_box_append(GTK_BOX(fields), GTK_WIDGET(d->relation));
     gtk_box_append(GTK_BOX(fields), GTK_WIDGET(d->value));
+    gtk_box_append(GTK_BOX(fields), GTK_WIDGET(d->choice));
     gtk_box_append(GTK_BOX(fields), then);
     gtk_box_append(GTK_BOX(fields), GTK_WIDGET(d->action));
     gtk_box_append(GTK_BOX(box), fields);
+    fd_show_column(d, d->cols->len > 0 ? g_array_index(d->cols, uint32_t, 0) : 0);
+    g_signal_connect(d->column, "notify::selected", G_CALLBACK(fd_on_column_changed), d);
 
     buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(buttons, GTK_ALIGN_END);
@@ -1890,6 +2011,120 @@ static void show_filter_dialog(VoterWindow *w)
     g_signal_connect(d->win, "destroy", G_CALLBACK(fd_on_destroy), d);
     fd_refresh(d, -1);
     gtk_window_present(d->win);
+    return d;
+}
+
+GtkWindow *ee_gtk_filter_window_widget(FilterDialog *d)
+{
+    return d->win;
+}
+
+void ee_gtk_filter_load(FilterDialog *d, const char *path)
+{
+    fd_load(d, path);
+}
+
+void ee_gtk_filter_export(FilterDialog *d, const char *path)
+{
+    if (d->draft->len == 0)
+    {
+        fd_alert(d, "There are no filter rules to export.");
+    }
+    else
+    {
+        fd_save_chosen(d, path);
+    }
+}
+
+/* ---- the voter list's (or roster's) Filter window, as on Windows ---- */
+
+static const char *voter_filter_title(void *ctx, uint32_t column)
+{
+    return EeUiVoters_Title(((VoterWindow *)ctx)->voters, column);
+}
+
+static int voter_rule_is_valid(void *ctx, const EeUiRule *rule, char *why, size_t whycap)
+{
+    return EeUiVoters_RuleIsValid(((VoterWindow *)ctx)->voters, rule, why, whycap);
+}
+
+static void voter_filter_apply(void *ctx, const EeUiRule *rules, uint32_t n)
+{
+    set_rules((VoterWindow *)ctx, rules, n);
+}
+
+static void voter_filter_file_name(void *ctx, char *out, size_t cap)
+{
+    EeUiFilterFile_Name(((VoterWindow *)ctx)->path, out, cap);
+}
+
+static int voter_filter_save(void *ctx,
+                             const char *path,
+                             const EeUiRule *rules,
+                             uint32_t n,
+                             char delim,
+                             char *err,
+                             size_t errcap)
+{
+    return EeUiVoters_SaveFilter(((VoterWindow *)ctx)->voters, path, rules, n, delim, err, errcap);
+}
+
+static int voter_filter_load(void *ctx,
+                             const char *path,
+                             EeUiRule **rules,
+                             uint32_t *n,
+                             char *msg,
+                             size_t msgcap,
+                             char *detail,
+                             size_t detailcap)
+{
+    return EeUiVoters_LoadFilter(((VoterWindow *)ctx)->voters,
+                                 path,
+                                 rules,
+                                 n,
+                                 msg,
+                                 msgcap,
+                                 detail,
+                                 detailcap);
+}
+
+static void voter_filter_closed(void *ctx)
+{
+    VoterWindow *w = (VoterWindow *)ctx;
+    if (!w->closed)
+    {
+        w->filter_dialog = NULL;
+    }
+}
+
+static void show_filter_dialog(VoterWindow *w)
+{
+    EeGtkFilterHost host;
+    if (w->voters == NULL)
+    {
+        return;
+    }
+    if (w->filter_dialog != NULL)
+    {
+        gtk_window_present(w->filter_dialog->win);
+        return;
+    }
+    memset(&host, 0, sizeof(host));
+    host.title = "Filter";
+    host.prompt = "Display entries matching these conditions:";
+    host.ncols = EeUiVoters_Columns(w->voters);
+    host.column_title = voter_filter_title;
+    host.rule_is_valid = voter_rule_is_valid; /* (every relation; a typed value) */
+    host.apply = voter_filter_apply;
+    host.file_name = voter_filter_file_name;
+    host.save = voter_filter_save;
+    host.load = voter_filter_load;
+    host.closed = voter_filter_closed;
+    host.ctx = w;
+    w->filter_dialog = ee_gtk_filter_window(w->window,
+                                            &host,
+                                            (const EeUiRule *)(void *)w->rules->data,
+                                            w->rules->len);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -5414,6 +5649,10 @@ static void on_activate(GtkApplication *app, gpointer user)
         snap.zoom = args->zoom;
         snap.vote_types = args->vote_types;
         snap.party_first = args->party_first;
+        snap.filter_window = args->filter_window;
+        snap.rules = args->quick;
+        snap.load_filter = args->load_filter;
+        snap.export_filter = args->export_filter;
         gtk_window_present(first->window);
         ee_gtk_open_results(app, first->window, args->files, &snap);
         return;

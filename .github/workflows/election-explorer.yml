@@ -119,7 +119,7 @@ jobs:
           grep -qF "compare menu in A: Compare with sample_duplicates.csv (voter list)" compare_mixed.txt
           grep -qF "compare row 5: Identical | 6 | 6" compare_mixed.txt
           grep -qF "differences: No differing voters found." compare_mixed.txt
-      - name: Election Results window self-test (made-up Clarity files)
+      - name: Election Results window and Filter self-test (made-up Clarity files)
         run: |
           ../Build/linux-x64-release/ElectionExplorer/election-explorer --selftest-results test/sample_results_detail.xml test/sample_results_summary.csv > results.txt
           cat results.txt
@@ -133,6 +133,14 @@ jobs:
           grep -qF "precinct sort kept without vote types: sorted by 4, ascending 1: [REP Governor | Cal Diaz | 101]" results.txt
           grep -qF "democratic first: party first 1" results.txt
           grep -qF "• DEM Governor — Ben Ortiz: 46 votes here, 45 in the shown file." results.txt
+          grep -qF "filter column 0: Precinct: 101 | 102 | 103 (3)" results.txt
+          grep -qF "filter precinct is 102: ok 1, filtered 1, 12 rows" results.txt
+          grep -qF "filtered: 1 of 3 precincts (some totals cannot be filtered)" results.txt
+          grep -qF "row 9: City of Sample, Proposition A | 1 | Against | NON | 2 | 10 | 0 | 12 | 23.08%" results.txt
+          grep -qF "filter and vote type is not Mail: ok 1, filtered 1, 12 rows" results.txt
+          grep -qF "filter party DEM or NON, choice not Over Votes: ok 1, filtered 1, 4 rows" results.txt
+          grep -qF "loaded rule 1: column 4, relation 0, exclude 1, enabled 1, \"Early Voting\"" results.txt
+          grep -qF "Rule 3 (Choice contains \"Ann\"): this window filters only with \"is\" and \"is not\"." results.txt
 
   macos:
     name: macOS (Apple Silicon, Apple Vision)
@@ -227,7 +235,7 @@ jobs:
           grep -qF "compare menu in A: Compare with sample_duplicates.csv (voter list)" compare_mixed.txt
           grep -qF "compare row 5: Identical | 6 | 6" compare_mixed.txt
           grep -qF "differences: No differing voters found." compare_mixed.txt
-      - name: Election Results window self-test (made-up Clarity files)
+      - name: Election Results window and Filter self-test (made-up Clarity files)
         run: |
           "../Build/mac-universal-release/ElectionExplorer/Election Explorer.app/Contents/MacOS/Election Explorer" --selftest-results test/sample_results_detail.xml test/sample_results_summary.csv > results.txt
           cat results.txt
@@ -241,3 +249,11 @@ jobs:
           grep -qF "precinct sort kept without vote types: sorted by 4, ascending 1: [REP Governor | Cal Diaz | 101]" results.txt
           grep -qF "democratic first: party first 1" results.txt
           grep -qF "• DEM Governor — Ben Ortiz: 46 votes here, 45 in the shown file." results.txt
+          grep -qF "filter column 0: Precinct: 101 | 102 | 103 (3)" results.txt
+          grep -qF "filter precinct is 102: ok 1, filtered 1, 12 rows" results.txt
+          grep -qF "filtered: 1 of 3 precincts (some totals cannot be filtered)" results.txt
+          grep -qF "row 9: City of Sample, Proposition A | 1 | Against | NON | 2 | 10 | 0 | 12 | 23.08%" results.txt
+          grep -qF "filter and vote type is not Mail: ok 1, filtered 1, 12 rows" results.txt
+          grep -qF "filter party DEM or NON, choice not Over Votes: ok 1, filtered 1, 4 rows" results.txt
+          grep -qF "loaded rule 1: column 4, relation 0, exclude 1, enabled 1, \"Early Voting\"" results.txt
+          grep -qF "Rule 3 (Choice contains \"Ann\"): this window filters only with \"is\" and \"is not\"." results.txt

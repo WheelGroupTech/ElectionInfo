@@ -4,7 +4,7 @@
 > Update this at the end of each session; read it at the start of the next.
 > Keep it short and current — git history is the permanent record.
 
-**Last updated:** 2026-11-27. **The Election Results window, step 1, is in the macOS/Linux port (uncommitted until the user commits it); next: its Filter, Turnout report, Export and Compare.**
+**Last updated:** 2026-11-27. **The Election Results Filter (step 2) is in the macOS/Linux port (uncommitted until the user commits it); next: the results Turnout report, Export and Compare.**
 - **UI decision (user, 2026-11-22):** AppKit (Objective-C) on macOS and GTK 4 (C) on Linux, not
   wxWidgets. Recorded as X7 in `ElectionExplorer/docs/cross-platform-design.md`.
 - **Voter list window prototype** (`src/ui/`, CMake target `ee_app`):
@@ -74,20 +74,25 @@
   `app_mac.h`; menu items tagged by window kind); `--selftest-results`, `--results`; made-up
   `test/sample_results_*`. Engine fix: `ent_cmp` in `ee_results.c` keeps precincts in file order
   (Windows and the Mac scrambled ES&S precinct reports' By Precinct order). Checked by self-test
-  and snapshots on both and on real Travis / Harris / Dallas results. **Not yet tried by hand:**
-  the menus (Mac menu bar per window), Cancel, heading clicks, Copy, Options.
-  Steps to come: Filter (precinct / vote type counted; contest / choice / party shown), the
-  Turnout report, Export (Displayed view / All detail), Compare (results ↔ results, then CVRs).
+  and snapshots on both and on real Travis / Harris / Dallas results. Tried by hand on Linux (the
+  VM needed `sudo apt install libtesseract5 tesseract-ocr-eng`) and the Mac.
+- **Results Filter, step 2 (2026-11-27):** Filter… / Reset Filter, Windows' results rules (is /
+  is not, values from the column; precinct and vote type recount, the others hide rows), Export /
+  Load Filter. The voter Filter window now has a host interface (GTK `EeGtkFilterHost`, Mac
+  `EeFilterHost`) and serves both; voter filtering unchanged. **Not yet tried by hand:** the
+  results Filter window, Reset Filter, Ctrl+L / Cmd-L.
+  Steps to come: the Turnout report, Export (Displayed view / All detail), Compare (results ↔
+  results, then CVRs).
 - **CI:** builds and runs `ctest` plus the window's `--selftest` on Ubuntu 24.04 and `macos-14`;
   it now also checks the duplicates, report, options, saved-filter and link lines on
   `sample_duplicates.csv`, and the link count on `sample_links.csv`.
 - **Next steps:**
-  - the results window's Filter, Turnout report, Export and Compare; then the CVR and audit log
-    windows;
+  - the results window's Turnout report, Export and Compare; then the CVR and audit log windows
+    (their Filter windows: hosts of the shared one);
   - tuning for poor scans (Cameron ERM).
 - **The Mac:** `ssh macmini 'zsh -l -c "..."'`. The clone is `~/dev/WheelGroupTech/ElectionInfo`,
   and `~/ee_check` holds my scripts and a source copy.
-- **Recent commits:** Show Differences, Compare (menu and window), Show Duplicate Voters Voting, roster Voting Totals and the Voter Roster window (all tried on Linux and the Mac); Open link (tried on Linux and the Mac); Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
+- **Recent commits:** the Election Results window (step 1), Show Differences, Compare (menu and window), Show Duplicate Voters Voting, roster Voting Totals and the Voter Roster window (all tried on Linux and the Mac); Open link (tried on Linux and the Mac); Export Filter / Load Filter (tried in the VM and on the Mac); digits of one width (tried on the Mac); Options (tried in the VM and on the Mac); the Precinct and Address reports (tried in the VM and on the Mac); Remove in the Filter window (fixed, tried in the VM); Copy, Export and duplicates; filters and background sorting (d9d1cb7); GTK window checked on Linux;
   voter list window + CI.
 - **Open item:** Henderson's `S21_0928_Canvass Report (PDF)_1.pdf` is still refused. It is a
   court order followed by scanned ES&S reports with an OCR text layer.
